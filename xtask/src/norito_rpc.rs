@@ -1379,7 +1379,7 @@ mod tests {
     fn fixture(name: &str) -> FixtureEntry {
         FixtureEntry {
             name: name.to_string(),
-            authority: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            authority: "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53".into(),
             chain: "00000001".into(),
             creation_time_ms: 1_735_000_000_000,
             encoded_file: format!("{name}.norito"),

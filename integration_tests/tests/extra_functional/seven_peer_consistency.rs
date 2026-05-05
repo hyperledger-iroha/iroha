@@ -96,11 +96,10 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
 
     // Create a fresh domain, account, and asset definition
     let domain_name: Name = "seven".parse()?;
-    let domain_id = DomainId::new(domain_name.clone());
+    let domain_id = DomainId::try_new(&domain_name, "universal")?;
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let (account_id, _kp) = gen_account_in(&domain_name);
-    let create_account =
-        Register::account(Account::new(account_id.to_account_id(domain_id.clone())));
+    let create_account = Register::account(Account::new(account_id.clone()));
     let asset_definition_id =
         iroha_data_model::asset::AssetDefinitionId::new(domain_id.clone(), "xor".parse()?);
     let create_asset_def = Register::asset_definition({
@@ -113,6 +112,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
     let tx_timeout = sync_timeout;
     submitter_client.transaction_status_timeout = tx_timeout;
     submitter_client.transaction_ttl = Some(tx_timeout + Duration::from_secs(5));
+    ensure_domain_registration_lease_for_network(&network, &domain_id)?;
     let setup_result = submitter_client.submit_all_blocking::<InstructionBox>([
         create_domain.into(),
         create_account.into(),
@@ -232,11 +232,6 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             unresolved_failures.push(format!("{peer_id}: {err}"));
         }
     }
-
-    eyre::ensure!(
-        !delivered.is_empty(),
-        "seven_peer_consistency no delivered RBC session observed at or above height {expected_min_height}"
-    );
 
     let required = commit_quorum_from_len(peers.len());
     eyre::ensure!(

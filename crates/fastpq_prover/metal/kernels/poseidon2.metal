@@ -25,6 +25,7 @@ constant ushort FULL_ROUNDS_HALF = 4;
 constant ushort PARTIAL_ROUNDS = 57;
 constant ushort TOTAL_ROUNDS = FULL_ROUNDS_HALF * 2 + PARTIAL_ROUNDS;
 constant ushort STATE_CHUNK = 4;
+constant ulong TRACE_NODE_DOMAIN_SEED = 6068040151459020611ul;
 
 inline ulong3 make_ulong3(ulong a, ulong b, ulong c) {
     ulong3 value;
@@ -462,18 +463,24 @@ kernel void poseidon_trace_fused(device const ulong *payloads [[ buffer(0) ]],
                 has_pending_leaf = true;
                 if (column + 1u >= args.state_count) {
                     thread ulong3 parent_chunk[1];
-                    parent_chunk[0].x = leaf;
+                    parent_chunk[0].x = TRACE_NODE_DOMAIN_SEED;
                     parent_chunk[0].y = leaf;
                     parent_chunk[0].z = 0;
+                    permute_chunk(parent_chunk, 1, shared_rounds, local_mds);
+                    parent_chunk[0].x = add_mod(parent_chunk[0].x, leaf);
+                    parent_chunk[0].y = add_mod(parent_chunk[0].y, 1ul);
                     permute_chunk(parent_chunk, 1, shared_rounds, local_mds);
                     out_hashes[args.parent_offset + pending_index] = parent_chunk[0].x;
                     has_pending_leaf = false;
                 }
             } else if (has_pending_leaf) {
                 thread ulong3 parent_chunk[1];
-                parent_chunk[0].x = pending_leaf;
-                parent_chunk[0].y = leaf;
+                parent_chunk[0].x = TRACE_NODE_DOMAIN_SEED;
+                parent_chunk[0].y = pending_leaf;
                 parent_chunk[0].z = 0;
+                permute_chunk(parent_chunk, 1, shared_rounds, local_mds);
+                parent_chunk[0].x = add_mod(parent_chunk[0].x, leaf);
+                parent_chunk[0].y = add_mod(parent_chunk[0].y, 1ul);
                 permute_chunk(parent_chunk, 1, shared_rounds, local_mds);
                 out_hashes[args.parent_offset + (column >> 1)] = parent_chunk[0].x;
                 has_pending_leaf = false;

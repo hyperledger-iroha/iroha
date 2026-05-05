@@ -2,30 +2,24 @@
 //! Roadmap ADDR-5 coverage ensuring Torii surfaces canonical I105 account IDs.
 
 use std::{
-    collections::BTreeSet,
-    env, fs,
-    path::{Path, PathBuf},
-    str::FromStr,
+    env,
     sync::OnceLock,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox::{
     self, start_network_async_or_skip as sandbox_start_network_async_or_skip,
 };
 use iroha::data_model::{
-    isi::{SetKeyValue, offline::RegisterOfflineAllowance, repo::RepoIsi},
+    isi::{SetKeyValue, repo::RepoIsi},
     kaigi::{
         KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayRegistration,
         kaigi_relay_feedback_key, kaigi_relay_metadata_key,
     },
-    offline::{OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineWalletCertificate},
     prelude::*,
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
 };
-use iroha_crypto::{Hash, Signature};
 use iroha_data_model::account::{AccountDomainSelector, address::AccountAddress};
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::prelude::RepoInstructionBox;
@@ -290,381 +284,6 @@ fn assert_authorities_are_i105(authorities: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn find_offline_allowance_entry<'a>(
-    value: &'a norito::json::Value,
-    controller_id: &str,
-) -> Option<&'a norito::json::Map> {
-    value
-        .as_object()
-        .and_then(|obj| obj.get("items"))
-        .and_then(|items| items.as_array())
-        .and_then(|items| {
-            items.iter().find_map(|entry| {
-                let obj = entry.as_object()?;
-                let literal = obj.get("controller_id")?.as_str()?;
-                if literal == controller_id {
-                    Some(obj)
-                } else {
-                    None
-                }
-            })
-        })
-}
-
-fn load_offline_certificate_fixture() -> Result<OfflineWalletCertificate> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../fixtures/offline_allowance/android-demo");
-
-    for norito_path in [
-        root.join("register_instruction.norito"),
-        root.join("certificate.norito"),
-    ] {
-        if let Ok(bytes) = fs::read(&norito_path) {
-            if let Ok(instruction) = norito::decode_from_bytes::<RegisterOfflineAllowance>(&bytes) {
-                return Ok(instruction.certificate);
-            }
-            if let Ok(instruction) = norito::decode_from_bytes::<InstructionBox>(&bytes) {
-                if let Some(decoded) = instruction
-                    .as_any()
-                    .downcast_ref::<RegisterOfflineAllowance>()
-                {
-                    return Ok(decoded.certificate.clone());
-                }
-            }
-            if let Ok(certificate) = norito::decode_from_bytes::<OfflineWalletCertificate>(&bytes) {
-                return Ok(certificate);
-            }
-        }
-    }
-
-    let path = root.join("register_instruction.json");
-    let raw = fs::read_to_string(&path).wrap_err_with(|| {
-        format!(
-            "failed to read offline allowance fixture `{}`",
-            path.display()
-        )
-    })?;
-    let fixture: norito::json::Value = norito::json::from_str(&raw).map_err(|err| {
-        eyre!(
-            "failed to parse offline allowance fixture `{}`: {err}",
-            path.display()
-        )
-    })?;
-    let certificate_value = fixture
-        .get("certificate")
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing `certificate` field",
-                path.display()
-            )
-        })?
-        .clone();
-    // Fixture JSON uses *_hex/*_b64 shorthands instead of the Norito JSON layout.
-    parse_offline_certificate_fixture(&certificate_value, &path)
-}
-
-fn with_offline_allowance_genesis(
-    mut builder: NetworkBuilder,
-    certificate: &OfflineWalletCertificate,
-) -> NetworkBuilder {
-    let genesis_domain = iroha_genesis::GENESIS_DOMAIN_ID.clone();
-    let wonderland_domain: DomainId = "wonderland"
-        .parse()
-        .expect("default wonderland domain should parse");
-
-    // Seed every domain touched by the fixture so genesis mint/register steps can resolve
-    // asset-definition scopes even when they use non-wonderland domains.
-    let mut required_domains = BTreeSet::new();
-    required_domains.insert(certificate.allowance.asset.definition().domain().clone());
-    for domain in required_domains {
-        if domain != genesis_domain && domain != wonderland_domain {
-            builder = builder.with_genesis_instruction(Register::domain(Domain::new(domain)));
-        }
-    }
-
-    // Seed accounts used by the fixture before minting/registering the allowance.
-    // Default sample genesis already contains these identities, so skip to avoid duplicates.
-    let mut required_accounts = BTreeSet::new();
-    required_accounts.insert(certificate.allowance.asset.account().clone());
-    required_accounts.insert(certificate.controller.clone());
-    required_accounts.insert(certificate.operator.clone());
-    for account in required_accounts {
-        if account != *SAMPLE_GENESIS_ACCOUNT_ID && account != *ALICE_ID && account != *BOB_ID {
-            builder = builder.with_genesis_instruction(Register::account(Account::new(
-                account.to_account_id(wonderland_domain.clone()),
-            )));
-        }
-    }
-
-    let asset_definition_id = certificate.allowance.asset.definition().clone();
-    let scale = certificate.allowance.amount.scale();
-    let asset_definition =
-        AssetDefinition::new(asset_definition_id, NumericSpec::fractional(scale));
-    builder = builder.with_genesis_instruction(Register::asset_definition(asset_definition));
-    builder = builder.with_genesis_instruction(SetKeyValue::asset_definition(
-        certificate.allowance.asset.definition().clone(),
-        OFFLINE_ASSET_ENABLED_METADATA_KEY
-            .parse()
-            .expect("offline.enabled metadata key should parse"),
-        Json::new(true),
-    ));
-    builder.with_genesis_instruction(Mint::asset_numeric(
-        certificate.allowance.amount.clone(),
-        certificate.allowance.asset.clone(),
-    ))
-}
-
-fn parse_offline_certificate_fixture(
-    value: &norito::json::Value,
-    path: &Path,
-) -> Result<OfflineWalletCertificate> {
-    let obj = value.as_object().ok_or_else(|| {
-        eyre!(
-            "offline allowance fixture `{}` certificate must be a JSON object",
-            path.display()
-        )
-    })?;
-
-    let controller = obj
-        .get("controller")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing certificate controller",
-                path.display()
-            )
-        })?;
-    let controller = AccountId::parse_encoded(controller)
-        .map(|parsed| parsed.into_account_id())
-        .map_err(|err| eyre!("failed to parse controller `{controller}`: {err}"))?;
-
-    let operator = obj
-        .get("operator")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing certificate operator",
-                path.display()
-            )
-        })?;
-    let operator = AccountId::parse_encoded(operator)
-        .map(|parsed| parsed.into_account_id())
-        .map_err(|err| eyre!("failed to parse operator `{operator}`: {err}"))?;
-
-    let allowance = obj
-        .get("allowance")
-        .and_then(norito::json::Value::as_object)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing allowance block",
-                path.display()
-            )
-        })?;
-    let allowance_asset = allowance
-        .get("asset")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing allowance asset",
-                path.display()
-            )
-        })?;
-    let asset = allowance_asset
-        .parse()
-        .map_err(|err| eyre!("failed to parse allowance asset `{allowance_asset}`: {err}"))?;
-    let amount_str = allowance
-        .get("amount")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing allowance amount",
-                path.display()
-            )
-        })?;
-    let amount = amount_str
-        .parse()
-        .map_err(|err| eyre!("failed to parse allowance amount `{amount_str}`: {err}"))?;
-    let commitment_hex = allowance
-        .get("commitment_hex")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing allowance commitment_hex",
-                path.display()
-            )
-        })?;
-    let commitment =
-        hex::decode(commitment_hex).map_err(|err| eyre!("commitment_hex decode: {err}"))?;
-
-    let spend_public_key = obj
-        .get("spend_public_key")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing spend_public_key",
-                path.display()
-            )
-        })?;
-    let spend_public_key = spend_public_key
-        .parse()
-        .map_err(|err| eyre!("failed to parse spend_public_key `{spend_public_key}`: {err}"))?;
-
-    let attestation_report_b64 = obj
-        .get("attestation_report_b64")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing attestation_report_b64",
-                path.display()
-            )
-        })?;
-    let attestation_report = BASE64
-        .decode(attestation_report_b64)
-        .map_err(|err| eyre!("attestation_report_b64 decode: {err}"))?;
-
-    let issued_at_ms = obj
-        .get("issued_at_ms")
-        .and_then(norito::json::Value::as_u64)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing issued_at_ms",
-                path.display()
-            )
-        })?;
-    let expires_at_ms = obj
-        .get("expires_at_ms")
-        .and_then(norito::json::Value::as_u64)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing expires_at_ms",
-                path.display()
-            )
-        })?;
-
-    let policy = obj
-        .get("policy")
-        .and_then(norito::json::Value::as_object)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing policy block",
-                path.display()
-            )
-        })?;
-    let max_balance = policy
-        .get("max_balance")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing policy max_balance",
-                path.display()
-            )
-        })?;
-    let max_tx_value = policy
-        .get("max_tx_value")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing policy max_tx_value",
-                path.display()
-            )
-        })?;
-    let policy_expires = policy
-        .get("expires_at_ms")
-        .and_then(norito::json::Value::as_u64)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing policy expires_at_ms",
-                path.display()
-            )
-        })?;
-
-    let operator_signature_hex = obj
-        .get("operator_signature_hex")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| {
-            eyre!(
-                "offline allowance fixture `{}` missing operator_signature_hex",
-                path.display()
-            )
-        })?;
-    let operator_signature = Signature::from_hex(operator_signature_hex)
-        .map_err(|err| eyre!("operator_signature_hex decode: {err}"))?;
-
-    let metadata_value = obj
-        .get("metadata")
-        .cloned()
-        .unwrap_or_else(|| norito::json::Value::Object(Default::default()));
-    let metadata: Metadata =
-        norito::json::from_value(metadata_value).map_err(|err| eyre!("metadata parse: {err}"))?;
-
-    let verdict_id = parse_optional_hash(obj.get("verdict_id_hex"), path, "verdict_id_hex")?;
-    let attestation_nonce = parse_optional_hash(
-        obj.get("attestation_nonce_hex"),
-        path,
-        "attestation_nonce_hex",
-    )?;
-    let refresh_at_ms = obj
-        .get("refresh_at_ms")
-        .and_then(norito::json::Value::as_u64);
-
-    Ok(OfflineWalletCertificate {
-        controller,
-        operator,
-        allowance: iroha_data_model::offline::OfflineAllowanceCommitment {
-            asset,
-            amount,
-            commitment,
-        },
-        spend_public_key,
-        attestation_report,
-        issued_at_ms,
-        expires_at_ms,
-        policy: iroha_data_model::offline::OfflineWalletPolicy {
-            max_balance: max_balance
-                .parse()
-                .map_err(|err| eyre!("policy max_balance parse: {err}"))?,
-            max_tx_value: max_tx_value
-                .parse()
-                .map_err(|err| eyre!("policy max_tx_value parse: {err}"))?,
-            expires_at_ms: policy_expires,
-        },
-        operator_signature,
-        metadata,
-        verdict_id,
-        attestation_nonce,
-        refresh_at_ms,
-    })
-}
-
-fn parse_optional_hash(
-    value: Option<&norito::json::Value>,
-    path: &Path,
-    field: &'static str,
-) -> Result<Option<Hash>> {
-    match value {
-        None => Ok(None),
-        Some(value) if value.is_null() => Ok(None),
-        Some(value) => {
-            let hex = value.as_str().ok_or_else(|| {
-                eyre!(
-                    "offline allowance fixture `{}` `{field}` must be hex string or null",
-                    path.display()
-                )
-            })?;
-            Hash::from_str(hex).map(Some).map_err(|err| {
-                eyre!(
-                    "offline allowance fixture `{}` `{field}`: {err}",
-                    path.display()
-                )
-            })
-        }
-    }
-}
-
-struct OfflineAllowanceSeed {
-    controller_i105: String,
-}
-
 fn find_repo_entry<'a>(
     value: &'a norito::json::Value,
     agreement_id: &str,
@@ -700,19 +319,19 @@ fn i105_bob_literal() -> String {
     account_address.to_i105().expect("I105 address encoding")
 }
 
-fn legacy_dotted_i105_literal(i105_literal: &str) -> String {
+fn dotted_i105_literal(i105_literal: &str) -> String {
     let mut chars = i105_literal.chars();
     let sentinel: String = chars.by_ref().take(4).collect();
     let remainder: String = chars.collect();
     format!("{sentinel}.{remainder}")
 }
 
-fn legacy_dotted_i105_alice_literal() -> String {
-    legacy_dotted_i105_literal(&i105_alice_literal())
+fn dotted_i105_alice_literal() -> String {
+    dotted_i105_literal(&i105_alice_literal())
 }
 
-fn legacy_dotted_i105_bob_literal() -> String {
-    legacy_dotted_i105_literal(&i105_bob_literal())
+fn dotted_i105_bob_literal() -> String {
+    dotted_i105_literal(&i105_bob_literal())
 }
 
 fn local8_literal() -> String {
@@ -724,7 +343,8 @@ fn local8_literal() -> String {
         .expect("canonical hex encoding");
     let canonical = hex::decode(&canonical_hex[2..]).expect("canonical hex decoding succeeds");
 
-    let domain: DomainId = "wonderland".parse().expect("wonderland domain parses");
+    let domain: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("wonderland domain parses");
     let digest = match AccountDomainSelector::from_domain(&domain).expect("selector") {
         AccountDomainSelector::LocalDigest12(bytes) => bytes,
         other => panic!("expected LocalDigest12 selector for legacy local8 fixture, got {other:?}"),
@@ -743,7 +363,7 @@ fn local8_literal() -> String {
 
 fn public_key_literal() -> String {
     let public_key = ALICE_KEYPAIR.public_key().to_string();
-    format!("{public_key}@wonderland")
+    format!("{public_key}@banka.centralbank")
 }
 
 struct KaigiRelaySeed {
@@ -879,10 +499,10 @@ async fn accounts_query_accepts_i105_filter_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn accounts_listing_filter_rejects_legacy_dotted_i105_literals() -> Result<()> {
+async fn accounts_listing_filter_rejects_dotted_i105_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_listing_filter_rejects_legacy_dotted_i105_literals),
+        stringify!(accounts_listing_filter_rejects_dotted_i105_literals),
     )
     .await?
     else {
@@ -890,9 +510,9 @@ async fn accounts_listing_filter_rejects_legacy_dotted_i105_literals() -> Result
     };
     network.ensure_blocks(1).await?;
 
-    let literal = legacy_dotted_i105_alice_literal();
+    let literal = dotted_i105_alice_literal();
     let reason = AccountId::parse_encoded(&literal)
-        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
     let filter = format!(r#"{{"op":"eq","args":["id","{literal}"]}}"#);
@@ -915,7 +535,7 @@ async fn accounts_listing_filter_rejects_legacy_dotted_i105_literals() -> Result
     assert_eq!(
         resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "legacy dotted I105 filter literal should be rejected"
+        "dotted I105 filter literal should be rejected"
     );
     let body = resp.text().await?;
     assert!(
@@ -927,10 +547,10 @@ async fn accounts_listing_filter_rejects_legacy_dotted_i105_literals() -> Result
 }
 
 #[tokio::test]
-async fn accounts_query_rejects_legacy_dotted_i105_filter_literals() -> Result<()> {
+async fn accounts_query_rejects_dotted_i105_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(accounts_query_rejects_legacy_dotted_i105_filter_literals),
+        stringify!(accounts_query_rejects_dotted_i105_filter_literals),
     )
     .await?
     else {
@@ -938,9 +558,9 @@ async fn accounts_query_rejects_legacy_dotted_i105_filter_literals() -> Result<(
     };
     network.ensure_blocks(1).await?;
 
-    let literal = legacy_dotted_i105_alice_literal();
+    let literal = dotted_i105_alice_literal();
     let reason = AccountId::parse_encoded(&literal)
-        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
     let body = format!(
@@ -963,7 +583,7 @@ async fn accounts_query_rejects_legacy_dotted_i105_filter_literals() -> Result<(
     assert_eq!(
         resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "legacy dotted I105 filter literal should be rejected"
+        "dotted I105 filter literal should be rejected"
     );
     let body = resp.text().await?;
     assert!(
@@ -1009,10 +629,10 @@ async fn accounts_listing_supports_i105_response() -> Result<()> {
         ids.iter().any(|id| id == &expected),
         "I105 literal {expected} missing from response {ids:?}"
     );
-    assert!(
-        ids.iter().all(|id| id.starts_with("sora")),
-        "all ids should be I105 in the response: {ids:?}"
-    );
+    for id in &ids {
+        AccountId::parse_encoded(id)
+            .wrap_err_with(|| format!("account id {id} should parse as canonical I105"))?;
+    }
 
     Ok(())
 }
@@ -1071,9 +691,9 @@ async fn account_path_endpoints_reject_i105_literals() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
 
-    let literal = legacy_dotted_i105_alice_literal();
+    let literal = dotted_i105_alice_literal();
     let reason = AccountId::parse_encoded(&literal)
-        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
     let http = http_client();
@@ -1100,7 +720,7 @@ async fn account_path_endpoints_reject_i105_literals() -> Result<()> {
         assert_eq!(
             resp.status(),
             reqwest::StatusCode::BAD_REQUEST,
-            "legacy dotted I105 literal should be rejected for {url}"
+            "dotted I105 literal should be rejected for {url}"
         );
         let body = resp.text().await.unwrap_or_default();
         assert!(
@@ -1264,19 +884,19 @@ async fn asset_holders_get_supports_i105_response() -> Result<()> {
         !ids.is_empty(),
         "expected at least one holder in response for definition {definition_literal}"
     );
-    assert!(
-        ids.iter().all(|id| id.starts_with("sora")),
-        "all holders should render I105 literals: {ids:?}"
-    );
+    for id in &ids {
+        AccountId::parse_encoded(id)
+            .wrap_err_with(|| format!("holder id {id} should parse as canonical I105"))?;
+    }
 
     Ok(())
 }
 
 #[tokio::test]
-async fn asset_holders_query_rejects_legacy_dotted_i105_filter_literals() -> Result<()> {
+async fn asset_holders_query_rejects_dotted_i105_filter_literals() -> Result<()> {
     let Some(network) = start_network_async_or_skip(
         NetworkBuilder::new(),
-        stringify!(asset_holders_query_rejects_legacy_dotted_i105_filter_literals),
+        stringify!(asset_holders_query_rejects_dotted_i105_filter_literals),
     )
     .await?
     else {
@@ -1284,9 +904,9 @@ async fn asset_holders_query_rejects_legacy_dotted_i105_filter_literals() -> Res
     };
     network.ensure_blocks(1).await?;
 
-    let literal = legacy_dotted_i105_alice_literal();
+    let literal = dotted_i105_alice_literal();
     let reason = AccountId::parse_encoded(&literal)
-        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
     let body = format!(
@@ -1322,7 +942,7 @@ async fn asset_holders_query_rejects_legacy_dotted_i105_filter_literals() -> Res
     assert_eq!(
         resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "legacy dotted I105 filter literal should be rejected"
+        "dotted I105 filter literal should be rejected"
     );
     let body = resp.text().await?;
     assert!(
@@ -1419,7 +1039,10 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
             );
             let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
             let authorities = extract_account_transaction_authorities(&parsed);
-            if !authorities.is_empty() {
+            if authorities
+                .iter()
+                .any(|literal| literal == &account_literal)
+            {
                 break authorities;
             }
             if Instant::now() >= deadline {
@@ -1449,7 +1072,7 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected success fetching account transactions with canonical i105, got {}",
+        "expected success fetching account transactions with canonical I105, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -1458,12 +1081,7 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
         authorities.iter().any(|literal| literal == &i105_literal),
         "I105 response should include {i105_literal}, got {authorities:?}"
     );
-    assert!(
-        authorities
-            .iter()
-            .all(|literal| literal.starts_with("sora")),
-        "I105 response should emit only I105 literals; got {authorities:?}"
-    );
+    assert_authorities_are_i105(&authorities)?;
 
     Ok(())
 }
@@ -1540,7 +1158,10 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
             );
             let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
             let authorities = extract_account_transaction_authorities(&parsed);
-            if !authorities.is_empty() {
+            if authorities
+                .iter()
+                .any(|literal| literal == &account_literal)
+            {
                 break authorities;
             }
             if Instant::now() >= deadline {
@@ -1573,7 +1194,7 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected success from account transactions query with canonical i105, got {}",
+        "expected success from account transactions query with canonical I105, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -1582,12 +1203,7 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
         authorities.iter().any(|literal| literal == &i105_literal),
         "I105 query response should include {i105_literal}, got {authorities:?}"
     );
-    assert!(
-        authorities
-            .iter()
-            .all(|literal| literal.starts_with("sora")),
-        "I105 query response should emit only I105 literals; got {authorities:?}"
-    );
+    assert_authorities_are_i105(&authorities)?;
 
     Ok(())
 }
@@ -1676,38 +1292,38 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
     );
     assert!(
         authorities.iter().all(|literal| literal == &i105_literal),
-        "explorer transactions should honour canonical i105; got {authorities:?}"
+        "explorer transactions should honour canonical I105; got {authorities:?}"
     );
 
-    let legacy_dotted_i105_filter = legacy_dotted_i105_literal(&i105_literal);
-    let legacy_dotted_i105_filter_url = {
+    let dotted_i105_filter = dotted_i105_literal(&i105_literal);
+    let dotted_i105_filter_url = {
         let mut url = base;
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &legacy_dotted_i105_filter);
+            qp.append_pair("authority", &dotted_i105_filter);
             qp.append_pair("page", "1");
             qp.append_pair("per_page", "8");
         }
         url
     };
-    let legacy_dotted_i105_reason = AccountId::parse_encoded(&legacy_dotted_i105_filter)
-        .expect_err("legacy dotted I105 authority filter must fail strict parsing")
+    let dotted_i105_reason = AccountId::parse_encoded(&dotted_i105_filter)
+        .expect_err("dotted I105 authority filter must fail strict parsing")
         .reason()
         .to_string();
     let resp = http
-        .get(legacy_dotted_i105_filter_url)
+        .get(dotted_i105_filter_url)
         .header("Accept", "application/json")
         .send()
         .await?;
     assert_eq!(
         resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "explorer transactions should reject legacy dotted I105 authority filters"
+        "explorer transactions should reject dotted I105 authority filters"
     );
     let body = resp.text().await?;
     assert!(
-        body.contains(&legacy_dotted_i105_reason),
-        "response body should mention {legacy_dotted_i105_reason}, got {body}"
+        body.contains(&dotted_i105_reason),
+        "response body should mention {dotted_i105_reason}, got {body}"
     );
 
     Ok(())
@@ -1797,38 +1413,38 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
     );
     assert!(
         authorities.iter().all(|literal| literal == &i105_literal),
-        "explorer instructions should honour canonical i105; got {authorities:?}"
+        "explorer instructions should honour canonical I105; got {authorities:?}"
     );
 
-    let legacy_dotted_i105_filter = legacy_dotted_i105_literal(&i105_literal);
-    let legacy_dotted_i105_filter_url = {
+    let dotted_i105_filter = dotted_i105_literal(&i105_literal);
+    let dotted_i105_filter_url = {
         let mut url = base;
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &legacy_dotted_i105_filter);
+            qp.append_pair("authority", &dotted_i105_filter);
             qp.append_pair("page", "1");
             qp.append_pair("per_page", "8");
         }
         url
     };
-    let legacy_dotted_i105_reason = AccountId::parse_encoded(&legacy_dotted_i105_filter)
-        .expect_err("legacy dotted I105 authority filter must fail strict parsing")
+    let dotted_i105_reason = AccountId::parse_encoded(&dotted_i105_filter)
+        .expect_err("dotted I105 authority filter must fail strict parsing")
         .reason()
         .to_string();
     let resp = http
-        .get(legacy_dotted_i105_filter_url)
+        .get(dotted_i105_filter_url)
         .header("Accept", "application/json")
         .send()
         .await?;
     assert_eq!(
         resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "explorer instructions should reject legacy dotted I105 authority filters"
+        "explorer instructions should reject dotted I105 authority filters"
     );
     let body = resp.text().await?;
     assert!(
-        body.contains(&legacy_dotted_i105_reason),
-        "response body should mention {legacy_dotted_i105_reason}, got {body}"
+        body.contains(&dotted_i105_reason),
+        "response body should mention {dotted_i105_reason}, got {body}"
     );
 
     Ok(())
@@ -1925,7 +1541,7 @@ async fn explorer_account_qr_accepts_i105_hint() -> Result<()> {
         .await?;
     assert!(
         resp.status().is_success(),
-        "expected explorer account QR to respect canonical i105, got {}",
+        "expected explorer account QR to respect canonical I105, got {}",
         resp.status()
     );
     let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
@@ -2040,20 +1656,25 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals() -> Result<()> {
-    let domain_id: DomainId = "aliases".parse()?;
-    let label = AccountLabel::new(domain_id.clone(), "primary".parse()?);
+async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() -> Result<()> {
+    let domain_id: DomainId = DomainId::try_new("aliases", "universal")?;
+    let label = AccountAlias::new(
+        "primary".parse()?,
+        Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+            domain_id.name().clone(),
+        )),
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+    );
     let keypair = KeyPair::random();
     let account_id = AccountId::new(keypair.public_key().clone());
-    let account = Account::new(account_id.clone().to_account_id(domain_id.clone()))
-        .with_label(Some(label.clone()));
+    let account = Account::new(account_id.clone()).with_label(Some(label.clone()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_genesis_instruction(Register::domain(Domain::new(domain_id.clone())))
         .with_genesis_instruction(Register::account(account));
     let Some(network) = start_network_async_or_skip(
         builder,
-        stringify!(accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals),
+        stringify!(accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals),
     )
     .await?
     else {
@@ -2071,7 +1692,7 @@ async fn accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals() -
     wait_for_account_in_query(&http, url.clone(), &expected).await?;
 
     let alias_literal = format!("{}@{}", label.label, domain_id);
-    let i105_literal = legacy_dotted_i105_literal(&account_id.to_string());
+    let i105_literal = dotted_i105_literal(&account_id.to_string());
 
     let alias_body = format!(
         r#"{{"filter":{{"op":"eq","args":["id","{alias_literal}"]}},"sort":[],"pagination":{{"limit":4,"offset":0}},"fetch_size":null,"select":null}}"#
@@ -2083,10 +1704,22 @@ async fn accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals() -
         .body(alias_body)
         .send()
         .await?;
+    let alias_status = alias_resp.status();
+    let alias_body = alias_resp.text().await?;
     assert_eq!(
-        alias_resp.status(),
-        reqwest::StatusCode::BAD_REQUEST,
-        "alias literal should be rejected"
+        alias_status,
+        reqwest::StatusCode::OK,
+        "alias literal should resolve to the canonical account id, got {alias_status} body={alias_body}"
+    );
+    let alias_doc: norito::json::Value = norito::json::from_str(&alias_body)?;
+    let alias_ids = extract_account_ids(&alias_doc);
+    assert!(
+        alias_ids.iter().any(|id| id == &expected),
+        "alias literal should resolve to canonical account id {expected}, got {alias_ids:?}"
+    );
+    assert!(
+        alias_ids.iter().all(|id| !id.contains('@')),
+        "alias query should still return canonical ids, got {alias_ids:?}"
     );
 
     let body = format!(
@@ -2102,13 +1735,13 @@ async fn accounts_query_rejects_alias_and_legacy_dotted_i105_filter_literals() -
     let status = resp.status();
     let body = resp.text().await?;
     let reason = AccountId::parse_encoded(&i105_literal)
-        .expect_err("legacy dotted I105 literal must fail strict parsing")
+        .expect_err("dotted I105 literal must fail strict parsing")
         .reason()
         .to_string();
     assert_eq!(
         status,
         reqwest::StatusCode::BAD_REQUEST,
-        "legacy dotted I105 literal should be rejected, got {status} body={body}"
+        "dotted I105 literal should be rejected, got {status} body={body}"
     );
     assert!(
         body.contains(&reason),
@@ -2124,10 +1757,14 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     init_instruction_registry();
     // Reuse pre-existing asset definitions from the test genesis to avoid permission issues when
     // registering new definitions in the wonderland domain.
-    let cash_def_id: AssetDefinitionId =
-        AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
-    let collateral_def_id: AssetDefinitionId =
-        AssetDefinitionId::new("wonderland".parse()?, "camomile".parse()?);
+    let cash_def_id: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "rose".parse()?,
+    );
+    let collateral_def_id: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "camomile".parse()?,
+    );
     let setup_instructions: Vec<InstructionBox> = vec![
         Mint::asset_numeric(
             numeric!(1500),
@@ -2260,7 +1897,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         .expect("I105 initiator literal must be present");
     assert_eq!(
         initiator, i105_alice,
-        "repo agreements should honour canonical i105 for initiators"
+        "repo agreements should honour canonical I105 for initiators"
     );
     let counterparty = entry
         .get("counterparty")
@@ -2268,7 +1905,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         .expect("I105 counterparty literal must be present");
     assert_eq!(
         counterparty, i105_bob,
-        "repo agreements should honour canonical i105 for counterparties"
+        "repo agreements should honour canonical I105 for counterparties"
     );
 
     let query_url = base.join("/v1/repo/agreements/query")?;
@@ -2296,7 +1933,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         .expect("I105 query initiator literal must be present");
     assert_eq!(
         initiator, i105_alice,
-        "repo agreements query should honour canonical i105"
+        "repo agreements query should honour canonical I105"
     );
     let counterparty = entry
         .get("counterparty")
@@ -2304,7 +1941,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
         .expect("I105 query counterparty literal must be present");
     assert_eq!(
         counterparty, i105_bob,
-        "repo agreements query should honour canonical i105"
+        "repo agreements query should honour canonical I105"
     );
 
     Ok(())
@@ -2315,7 +1952,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
 async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     let relay_id = BOB_ID.clone();
     let reporter_id = ALICE_ID.clone();
-    let domain_id: DomainId = "wonderland".parse()?;
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
 
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),
@@ -2427,7 +2064,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         seed.relay_i105
     );
 
-    let legacy_relay_literal = legacy_dotted_i105_bob_literal();
+    let legacy_relay_literal = dotted_i105_bob_literal();
     let detail_url = base.join(&format!("/v1/kaigi/relays/{legacy_relay_literal}"))?;
     let detail_resp = http
         .get(detail_url)
@@ -2437,12 +2074,12 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     assert_eq!(
         detail_resp.status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "kaigi relay detail should reject legacy dotted I105 literal, got {}",
+        "kaigi relay detail should reject dotted I105 literal, got {}",
         detail_resp.status()
     );
     let body = detail_resp.text().await?;
     let reason = AccountId::parse_encoded(&legacy_relay_literal)
-        .expect_err("legacy dotted I105 relay literal must fail strict parsing")
+        .expect_err("dotted I105 relay literal must fail strict parsing")
         .reason()
         .to_string();
     assert!(
@@ -2458,7 +2095,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         .await?;
     assert!(
         formatted_resp.status().is_success(),
-        "kaigi relay detail with canonical i105 should succeed, got {}",
+        "kaigi relay detail with canonical I105 should succeed, got {}",
         formatted_resp.status()
     );
     let formatted_detail: norito::json::Value =
@@ -2471,7 +2108,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         .ok_or_else(|| eyre!("formatted detail missing relay literal"))?;
     assert_eq!(
         relay_literal, seed.relay_i105,
-        "relay literal should honour canonical i105"
+        "relay literal should honour canonical I105"
     );
     let reported_by_literal = formatted_detail
         .get("reported_by")
@@ -2479,182 +2116,7 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         .ok_or_else(|| eyre!("formatted detail missing reported_by literal"))?;
     assert_eq!(
         reported_by_literal, seed.reporter_i105,
-        "reported_by should honour canonical i105"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn offline_allowances_listing_emit_i105_literals() -> Result<()> {
-    init_instruction_registry();
-    let certificate = match load_offline_certificate_fixture() {
-        Ok(certificate) => certificate,
-        Err(err) => {
-            eprintln!("Skipping offline allowance listing test: {err}");
-            return Ok(());
-        }
-    };
-    let controller = certificate.controller.clone();
-    let controller_i105 = controller.to_string();
-    let instruction = RegisterOfflineAllowance { certificate };
-
-    let builder = with_offline_allowance_genesis(NetworkBuilder::new(), &instruction.certificate)
-        .with_genesis_instruction(instruction);
-
-    let Some(network) = start_network_async_or_skip(
-        builder,
-        stringify!(offline_allowances_listing_emit_i105_literals),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    network.ensure_blocks(1).await?;
-
-    let client = network.client();
-    let seed = OfflineAllowanceSeed { controller_i105 };
-
-    let base = client.torii_url.clone();
-    let http = http_client();
-
-    let default_url = base
-        .join("/v1/offline/allowances?limit=4&include_expired=true")
-        .expect("offline allowances url");
-    let resp = http
-        .get(default_url)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-    assert!(
-        resp.status().is_success(),
-        "offline allowance listing should succeed, got {}",
-        resp.status()
-    );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let default_entry = find_offline_allowance_entry(&parsed, &seed.controller_i105)
-        .ok_or_else(|| eyre!("offline allowance for {} missing", seed.controller_i105))?;
-    let default_display = default_entry
-        .get("controller_display")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("offline allowance missing controller_display field"))?;
-    assert_eq!(
-        default_display, seed.controller_i105,
-        "I105 default should surface canonical literal"
-    );
-
-    let i105_url = base
-        .join("/v1/offline/allowances?limit=4&include_expired=true")
-        .expect("offline allowances url");
-    let resp = http
-        .get(i105_url)
-        .header("Accept", "application/json")
-        .send()
-        .await?;
-    assert!(
-        resp.status().is_success(),
-        "offline allowance listing should succeed, got {}",
-        resp.status()
-    );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let i105_entry = find_offline_allowance_entry(&parsed, &seed.controller_i105)
-        .ok_or_else(|| eyre!("offline allowance for {} missing", seed.controller_i105))?;
-    let i105_display = i105_entry
-        .get("controller_display")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("offline allowance missing controller_display field"))?;
-    assert_eq!(
-        i105_display, seed.controller_i105,
-        "I105 listing should surface I105 literal"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn offline_allowances_query_emit_i105_literals() -> Result<()> {
-    init_instruction_registry();
-    let certificate = match load_offline_certificate_fixture() {
-        Ok(certificate) => certificate,
-        Err(err) => {
-            eprintln!("Skipping offline allowance query test: {err}");
-            return Ok(());
-        }
-    };
-    let controller = certificate.controller.clone();
-    let controller_i105 = controller.to_string();
-    let instruction = RegisterOfflineAllowance { certificate };
-
-    let builder = with_offline_allowance_genesis(NetworkBuilder::new(), &instruction.certificate)
-        .with_genesis_instruction(instruction);
-
-    let Some(network) = start_network_async_or_skip(
-        builder,
-        stringify!(offline_allowances_query_emit_i105_literals),
-    )
-    .await?
-    else {
-        return Ok(());
-    };
-    network.ensure_blocks(1).await?;
-
-    let client = network.client();
-    let seed = OfflineAllowanceSeed { controller_i105 };
-
-    let base = client.torii_url.clone();
-    let http = http_client();
-    let url = base
-        .join("/v1/offline/allowances/query")
-        .expect("offline allowances query url");
-
-    let default_body = r#"{"filter":null,"sort":[],"pagination":{"limit":4,"offset":0},"fetch_size":null,"select":null}"#;
-    let resp = http
-        .post(url.clone())
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(default_body)
-        .send()
-        .await?;
-    assert!(
-        resp.status().is_success(),
-        "offline allowance query should succeed, got {}",
-        resp.status()
-    );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let default_entry = find_offline_allowance_entry(&parsed, &seed.controller_i105)
-        .ok_or_else(|| eyre!("offline allowance for {} missing", seed.controller_i105))?;
-    let default_display = default_entry
-        .get("controller_display")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("offline allowance missing controller_display field"))?;
-    assert_eq!(
-        default_display, seed.controller_i105,
-        "I105 default query should emit canonical literal"
-    );
-
-    let i105_body = r#"{"filter":null,"sort":[],"pagination":{"limit":4,"offset":0},"fetch_size":null,"select":null}"#;
-    let resp = http
-        .post(url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(i105_body)
-        .send()
-        .await?;
-    assert!(
-        resp.status().is_success(),
-        "offline allowance query with canonical i105 should succeed, got {}",
-        resp.status()
-    );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let i105_entry = find_offline_allowance_entry(&parsed, &seed.controller_i105)
-        .ok_or_else(|| eyre!("offline allowance for {} missing", seed.controller_i105))?;
-    let i105_display = i105_entry
-        .get("controller_display")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("offline allowance missing controller_display field"))?;
-    assert_eq!(
-        i105_display, seed.controller_i105,
-        "canonical i105 should rewrite controller_display"
+        "reported_by should honour canonical I105"
     );
 
     Ok(())

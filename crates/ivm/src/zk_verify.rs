@@ -15,6 +15,7 @@ pub fn verify_open_envelope(raw: &[u8]) -> Result<bool, iroha_zkp_halo2::Error> 
         norito::decode_from_bytes(raw).map_err(|_| iroha_zkp_halo2::Error::VerificationFailed)?;
     let decoded = nh::decode_envelope(&env)?;
     let mut tr = Transcript::new(&env.transcript_label);
+    let metadata = env.transcript_metadata();
     let result = match decoded {
         DecodedEnvelope::Pallas {
             params,
@@ -22,14 +23,30 @@ pub fn verify_open_envelope(raw: &[u8]) -> Result<bool, iroha_zkp_halo2::Error> 
             z,
             t,
             p_g,
-        } => pallas::Polynomial::verify_open(params.as_ref(), &mut tr, z, p_g, t, proof.as_ref()),
+        } => pallas::Polynomial::verify_open_with_metadata(
+            params.as_ref(),
+            &mut tr,
+            z,
+            p_g,
+            t,
+            proof.as_ref(),
+            metadata,
+        ),
         DecodedEnvelope::Bn254 {
             params,
             proof,
             z,
             t,
             p_g,
-        } => bn254::Polynomial::verify_open(params.as_ref(), &mut tr, z, p_g, t, proof.as_ref()),
+        } => bn254::Polynomial::verify_open_with_metadata(
+            params.as_ref(),
+            &mut tr,
+            z,
+            p_g,
+            t,
+            proof.as_ref(),
+            metadata,
+        ),
         #[cfg(feature = "goldilocks_backend")]
         DecodedEnvelope::Goldilocks {
             params,
@@ -37,9 +54,15 @@ pub fn verify_open_envelope(raw: &[u8]) -> Result<bool, iroha_zkp_halo2::Error> 
             z,
             t,
             p_g,
-        } => {
-            goldilocks::Polynomial::verify_open(params.as_ref(), &mut tr, z, p_g, t, proof.as_ref())
-        }
+        } => goldilocks::Polynomial::verify_open_with_metadata(
+            params.as_ref(),
+            &mut tr,
+            z,
+            p_g,
+            t,
+            proof.as_ref(),
+            metadata,
+        ),
         #[cfg(not(feature = "goldilocks_backend"))]
         DecodedEnvelope::Goldilocks => {
             return Err(iroha_zkp_halo2::Error::UnsupportedBackend {

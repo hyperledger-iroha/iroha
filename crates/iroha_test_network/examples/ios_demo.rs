@@ -284,11 +284,10 @@ fn main() -> Result<()> {
             .parse()
             .wrap_err_with(|| eyre!("Failed to parse asset id `{asset_id}`"))?;
         let domain_id: DomainId = if let Some(domain_str) = domain {
-            domain_str
-                .parse()
+            DomainId::parse_fully_qualified(&domain_str)
                 .wrap_err_with(|| eyre!("Failed to parse domain `{domain_str}`"))?
         } else {
-            asset_def_id.domain.clone()
+            asset_def_id.domain().clone()
         };
 
         if known_domains.insert(domain_id.clone()) {
@@ -308,7 +307,7 @@ fn main() -> Result<()> {
         let account_id = account_id_from_parts(&public_key)?;
 
         if known_accounts.insert(account_id.clone()) {
-            let mut account_builder = Account::new(account_id.to_account_id(domain_id.clone()));
+            let mut account_builder = Account::new(account_id.clone());
             if let Some(alias) = &name {
                 let mut metadata = Metadata::default();
                 let alias_key = Name::from_str("alias").expect("static alias key");

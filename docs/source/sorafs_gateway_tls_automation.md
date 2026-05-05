@@ -67,6 +67,16 @@ available on the bastion host.
     --json-out fixtures/sorafs_gateway/acme_san/docs.sora.san.json
   ```
 
+  For Taira Soracloud browser gateway hosts, render the same plan with the Mon
+  pretty suffix so the bind-time order covers the exact public host:
+
+  ```bash
+  cargo xtask soradns-acme-plan \
+    --name solswap-indexer.sora \
+    --pretty-suffix mon.taira.sora.net \
+    --json-out fixtures/sorafs_gateway/acme_san/solswap-indexer.sora.mon.san.json
+  ```
+
   Reuse the `san` entries when templating manual ACME orders and attach the JSON
   to DG-3 change tickets so canonical + wildcard pairings do not need to be
   recomputed.

@@ -63,10 +63,10 @@ final class PipelineStatusExtractor {
     if (status instanceof Map) {
       final Object kind = ((Map<?, ?>) status).get("kind");
       if (kind != null) {
-        return Optional.of(kind.toString());
+        return normalizeStatus(kind.toString());
       }
     } else if (status != null) {
-      return Optional.of(status.toString());
+      return normalizeStatus(status.toString());
     }
     return Optional.empty();
   }
@@ -89,6 +89,55 @@ final class PipelineStatusExtractor {
         return reason;
       }
     }
+    final Optional<String> parsedFromStatus = parseReasonFromStatus(record.get("status"));
+    if (parsedFromStatus.isPresent()) {
+      return parsedFromStatus;
+    }
+    final Optional<String> parsedFromKind = parseReasonFromStatus(record.get("kind"));
+    if (parsedFromKind.isPresent()) {
+      return parsedFromKind;
+    }
     return Optional.empty();
+  }
+
+  static Optional<String> normalizeStatus(final String statusLiteral) {
+    if (statusLiteral == null) {
+      return Optional.empty();
+    }
+    final String trimmed = statusLiteral.trim();
+    if (trimmed.isEmpty()) {
+      return Optional.empty();
+    }
+    if (trimmed.startsWith("Queued")) {
+      return Optional.of("Queued");
+    }
+    if (trimmed.startsWith("Approved")) {
+      return Optional.of("Approved");
+    }
+    if (trimmed.startsWith("Committed")) {
+      return Optional.of("Committed");
+    }
+    if (trimmed.startsWith("Applied")) {
+      return Optional.of("Applied");
+    }
+    if (trimmed.startsWith("Rejected")) {
+      return Optional.of("Rejected");
+    }
+    if (trimmed.startsWith("Expired")) {
+      return Optional.of("Expired");
+    }
+    return Optional.of(trimmed);
+  }
+
+  private static Optional<String> parseReasonFromStatus(final Object statusValue) {
+    if (!(statusValue instanceof String)) {
+      return Optional.empty();
+    }
+    final String trimmed = ((String) statusValue).trim();
+    if (!trimmed.startsWith("Rejected(") || !trimmed.endsWith(")")) {
+      return Optional.empty();
+    }
+    final String reason = trimmed.substring("Rejected(".length(), trimmed.length() - 1).trim();
+    return reason.isEmpty() ? Optional.empty() : Optional.of(reason);
   }
 }

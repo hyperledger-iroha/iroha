@@ -153,12 +153,6 @@ public final class MultisigRegisterInstruction implements InstructionTemplate {
       if (spec == null) {
         throw new IllegalStateException("spec must be set");
       }
-      final String signatoryDomain = signatoryDomain(spec);
-      final String controllerDomain = extractDomain(accountId, "accountId");
-      if (!controllerDomain.equals(signatoryDomain)) {
-        throw new IllegalStateException(
-            "multisig account '" + accountId + "' must belong to domain '" + signatoryDomain + "'");
-      }
       if (MultisigSeedHelper.isDeterministicDerivedControllerId(accountId, spec)) {
         throw new IllegalArgumentException(
             "multisig account uses deterministically derived controller id; register with a random controller");
@@ -180,45 +174,7 @@ public final class MultisigRegisterInstruction implements InstructionTemplate {
   }
 
   private static String normalizeAccount(final String accountId, final String field) {
-    if (accountId == null || accountId.isBlank()) {
-      throw new IllegalArgumentException(field + " must not be blank");
-    }
-    return accountId.trim();
+    return org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
+        accountId, field);
   }
-
-  private static String signatoryDomain(final MultisigSpec spec) {
-    String domain = null;
-    for (final String accountId : spec.signatories().keySet()) {
-      final String signatoryDomain = extractDomain(accountId, "signatory");
-      if (domain == null) {
-        domain = signatoryDomain;
-        continue;
-      }
-      if (!domain.equals(signatoryDomain)) {
-        throw new IllegalStateException(
-            "multisig signatory '" + accountId + "' must belong to domain '" + domain + "'");
-      }
-    }
-    if (domain == null) {
-      throw new IllegalStateException("multisig spec must include at least one signatory domain");
-    }
-    return domain;
-  }
-
-  private static String extractDomain(final String accountId, final String field) {
-    if (accountId == null || accountId.isBlank()) {
-      throw new IllegalStateException(field + " must not be blank");
-    }
-    final String trimmed = accountId.trim();
-    final int atIndex = trimmed.lastIndexOf('@');
-    if (atIndex <= 0 || atIndex == trimmed.length() - 1) {
-      throw new IllegalStateException(field + " must include a domain");
-    }
-    final String domain = trimmed.substring(atIndex + 1).trim();
-    if (domain.isBlank()) {
-      throw new IllegalStateException(field + " must include a domain");
-    }
-    return domain;
-  }
-
 }

@@ -30,6 +30,7 @@ use crate::{
     name::Name,
     nft::NftId,
     role::RoleId,
+    rwa::RwaId,
     transaction::signed::SignedTransaction,
     trigger::TriggerId,
 };
@@ -115,6 +116,15 @@ pub struct NftMetadataKey {
     pub key: Name,
 }
 
+/// Metadata entry key for an RWA.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
+pub struct RwaMetadataKey {
+    /// RWA identifier owning the metadata entry.
+    pub id: RwaId,
+    /// Metadata entry name scoped within the RWA.
+    pub key: Name,
+}
+
 /// Metadata entry key for a Trigger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 pub struct TriggerMetadataKey {
@@ -157,6 +167,8 @@ pub enum CanonicalStateKey {
     AssetDefinition(AssetDefinitionId),
     /// Non-fungible token by id.
     Nft(NftId),
+    /// Real-world asset lot by id.
+    Rwa(RwaId),
     /// Trigger by id.
     Trigger(TriggerId),
     /// Role definition by id.
@@ -177,6 +189,8 @@ pub enum CanonicalStateKey {
     AssetMetadata(AssetMetadataKey),
     /// NFT metadata entry `(nft_id, key)`.
     NftMetadata(NftMetadataKey),
+    /// RWA metadata entry `(rwa_id, key)`.
+    RwaMetadata(RwaMetadataKey),
     /// Trigger metadata entry `(trigger_id, key)`.
     TriggerMetadata(TriggerMetadataKey),
 }
@@ -211,6 +225,7 @@ impl_state_json_via_norito_bytes!(
     AssetDefinitionMetadataKey,
     AssetMetadataKey,
     NftMetadataKey,
+    RwaMetadataKey,
     TriggerMetadataKey,
     AccountRoleKey,
     TxQueueKey,
@@ -249,14 +264,20 @@ mod tests {
 
     #[test]
     fn key_roundtrip_and_ordering() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let alice = AccountId::new(KeyPair::random().public_key().clone());
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def.clone(), alice.clone());
-        let nft_id: NftId = "nft0$wonderland".parse().unwrap();
+        let nft_id: NftId = "nft0$wonderland.universal".parse().unwrap();
+        let rwa_id: RwaId = format!(
+            "{}$wonderland.universal",
+            Hash::prehashed([3; Hash::LENGTH])
+        )
+        .parse()
+        .unwrap();
         let trig_id: TriggerId = "trigger0".parse().unwrap();
         let key: Name = "color".parse().unwrap();
         let role_id: RoleId = "auditor".parse().unwrap();
@@ -269,6 +290,7 @@ mod tests {
             CanonicalStateKey::Asset(asset_id.clone()),
             CanonicalStateKey::AssetDefinition(asset_def.clone()),
             CanonicalStateKey::Nft(nft_id.clone()),
+            CanonicalStateKey::Rwa(rwa_id.clone()),
             CanonicalStateKey::Trigger(trig_id.clone()),
             CanonicalStateKey::Role(role_id.clone()),
             CanonicalStateKey::AccountPermissions(alice.clone()),
@@ -295,6 +317,10 @@ mod tests {
             }),
             CanonicalStateKey::NftMetadata(NftMetadataKey {
                 id: nft_id.clone(),
+                key: key.clone(),
+            }),
+            CanonicalStateKey::RwaMetadata(RwaMetadataKey {
+                id: rwa_id,
                 key: key.clone(),
             }),
             CanonicalStateKey::TriggerMetadata(TriggerMetadataKey {
@@ -330,7 +356,7 @@ mod tests {
 
     #[test]
     fn advisory_set_canonicalization_dedups() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let key: Name = "k".parse().unwrap();
         let a = CanonicalStateKey::Domain(domain.clone());
         let b = CanonicalStateKey::DomainMetadata(DomainMetadataKey { id: domain, key });

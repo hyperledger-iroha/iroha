@@ -91,10 +91,24 @@ fn status_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+fn status_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    status_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn hash_literal(hash: HashOf<BlockHeader>) -> String {
+    norito::json::to_value(&hash)
+        .expect("serialize hash literal")
+        .as_str()
+        .expect("hash serializes as JSON string")
+        .to_owned()
+}
+
 #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
 #[tokio::test]
 async fn sumeragi_status_endpoint_shape() {
-    let _guard = status_lock().lock().unwrap();
+    let _guard = status_test_guard();
     let app = build_status_router();
     iroha_core::sumeragi::status::set_effective_timing(
         150,
@@ -161,6 +175,26 @@ async fn sumeragi_status_endpoint_shape() {
         v.get("effective_pacemaker_interval_ms")
             .and_then(norito::json::Value::as_u64),
         Some(750)
+    );
+    let commit_pipeline = v
+        .get("commit_pipeline")
+        .and_then(norito::json::Value::as_object)
+        .expect("commit_pipeline object");
+    assert_eq!(
+        commit_pipeline
+            .get("last_total_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(0)
+    );
+    let round_gap = v
+        .get("round_gap")
+        .and_then(norito::json::Value::as_object)
+        .expect("round_gap object");
+    assert_eq!(
+        round_gap
+            .get("last_deliver_to_next_propose_ms")
+            .and_then(norito::json::Value::as_u64),
+        Some(0)
     );
     assert_eq!(
         v.get("effective_collectors_k")
@@ -282,7 +316,7 @@ async fn sumeragi_status_endpoint_shape() {
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
-    let _guard = status_lock().lock().unwrap();
+    let _guard = status_test_guard();
     let app = build_status_router();
 
     let json_resp = app
@@ -418,7 +452,7 @@ async fn sumeragi_status_endpoint_json_and_norito_payloads_match_semantics() {
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn sumeragi_status_endpoint_locked_qc_monotonic() {
-    let _guard = status_lock().lock().unwrap();
+    let _guard = status_test_guard();
     iroha_core::sumeragi::status::set_locked_qc(0, 0, None);
     let initial_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
@@ -454,7 +488,7 @@ async fn sumeragi_status_endpoint_locked_qc_monotonic() {
         lq.get("subject_block_hash")
             .and_then(norito::json::Value::as_str)
             .map(ToString::to_string),
-        Some(format!("{initial_hash}"))
+        Some(hash_literal(initial_hash))
     );
 
     iroha_core::sumeragi::status::set_locked_qc(9, 5, None);
@@ -505,14 +539,14 @@ async fn sumeragi_status_endpoint_locked_qc_monotonic() {
         lq.get("subject_block_hash")
             .and_then(norito::json::Value::as_str)
             .map(ToString::to_string),
-        Some(format!("{updated_hash}"))
+        Some(hash_literal(updated_hash))
     );
 }
 
 #[allow(clippy::await_holding_lock, clippy::too_many_lines)]
 #[tokio::test]
 async fn sumeragi_status_endpoint_reflects_leader_and_highest_qc() {
-    let _guard = status_lock().lock().unwrap();
+    let _guard = status_test_guard();
     let app = build_status_router();
 
     iroha_core::sumeragi::status::set_leader_index(3);
@@ -626,7 +660,7 @@ async fn sumeragi_status_endpoint_reflects_leader_and_highest_qc() {
 #[allow(clippy::await_holding_lock)]
 #[tokio::test]
 async fn sumeragi_status_endpoint_supports_norito_payload() {
-    let _guard = status_lock().lock().unwrap();
+    let _guard = status_test_guard();
     let app = build_status_router();
     iroha_core::sumeragi::status::set_highest_qc(0, 0);
     iroha_core::sumeragi::status::set_locked_qc(0, 0, None);
@@ -704,6 +738,8 @@ async fn sumeragi_status_endpoint_supports_norito_payload() {
     assert!(wire.validation_rejects.last_reason.is_none());
     assert!(!wire.commit_inflight.active);
     assert_eq!(wire.commit_inflight.timeout_total, 0);
+    assert_eq!(wire.commit_pipeline.last_total_ms, 0);
+    assert_eq!(wire.round_gap.last_deliver_to_next_propose_ms, 0);
     assert_eq!(wire.worker_loop.queue_diagnostics.blocked_total.vote_rx, 0);
     assert_eq!(wire.da_gate.reason, SumeragiDaGateReason::MissingLocalData);
     assert_eq!(

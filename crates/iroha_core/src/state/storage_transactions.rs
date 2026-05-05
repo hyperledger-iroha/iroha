@@ -250,6 +250,14 @@ mod block {
             };
             let current_height = current_block.height.get();
             if expected_current_height != current_height {
+                if !self.revert
+                    && previous_block.is_some_and(|previous_block| {
+                        previous_block.height == current_block.height
+                            && previous_block.transactions == current_block.transactions
+                    })
+                {
+                    return Ok(());
+                }
                 return Err(TransactionsBlockError::HeightMismatch {
                     expected_current_height,
                     actual_current_height: current_height,
@@ -674,6 +682,27 @@ mod tests {
         block.insert_block(payload, value);
 
         block.commit().unwrap();
+    }
+
+    #[test]
+    fn commit_same_block_twice_is_idempotent() {
+        let [key] = get_keys();
+        let [value] = get_values();
+        let storage = TransactionsStorage::new();
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[key], value);
+            block.commit().unwrap();
+        }
+
+        {
+            let mut block = storage.block();
+            insert_keys(&mut block, &[key], value);
+            block.commit().unwrap();
+        }
+
+        assert_eq!(storage.view().get(&key), Some(value));
     }
 
     #[test]

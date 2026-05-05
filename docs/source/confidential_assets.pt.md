@@ -89,7 +89,7 @@ Exemplo de resposta:
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ passo a passo.
 - Hierarquia de derivação de chave por conta:
   - `sk_spend` → `nk` (chave anuladora), `ivk` (chave de visualização de entrada), `ovk` (chave de visualização de saída), `fvk`.
 - Cargas de notas criptografadas usam AEAD com chaves compartilhadas derivadas de ECDH; chaves opcionais de visão do auditor podem ser anexadas às saídas por política de ativos.
-- Adições CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ferramentas de auditoria para descriptografar memorandos e o auxiliar `iroha app zk envelope` para produzir/inspecionar envelopes de memorando Norito offline. Torii expõe o mesmo fluxo de derivação via `POST /v1/confidential/derive-keyset`, retornando os formatos hexadecimal e base64 para que as carteiras possam buscar hierarquias de chaves programaticamente.
+- Adições CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ferramentas de auditoria para descriptografar memorandos e o auxiliar `iroha app zk envelope` para produzir/inspecionar envelopes de memorando Norito offline.
 
 ## Controles de gás, limites e DoS
 - Cronograma determinístico de gás:
@@ -391,7 +391,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -423,8 +423,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -455,7 +455,7 @@ Você pode verificar as métricas localmente antes de conectar Grafana:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Combine isso com `rg 'iroha_confidential_tree_depth'` no mesmo rascunho para confirmar que a profundidade aumenta com novos compromissos, enquanto os contadores de despejo só aumentam quando o histórico limita as entradas. Esses valores devem estar alinhados com a exportação do painel Grafana que você anexa aos pacotes de evidências de governança.

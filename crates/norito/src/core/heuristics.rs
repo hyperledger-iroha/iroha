@@ -90,13 +90,16 @@ impl Heuristics {
     pub const fn canonical() -> Self {
         // Defaults derived from profiling across typical Iroha payloads:
         // - Compress payloads >=256 B (covers genesis instructions) with CPU zstd level 1
-        // - Prefer GPU for 1 MiB+ when available
+        // - Prefer GPU only above the current CUDA validation window. On the
+        //   2026-04-25 RTX 3080 Laptop/WSL run, CUDA zstd was slower than CPU
+        //   from 1 MiB through 8 MiB, so keep automatic offload above that range
+        //   until a broader benchmark justifies lowering it.
         // - Switch CPU to zstd level 3 for payloads >=32 KiB (e.g., SignedBlock bodies)
         Self {
             // Based on profiling of genesis instructions (439–6.3 KiB) where even
             // sub-1 KiB payloads compress to ~45% with zstd level 1.
             min_compress_bytes_cpu: 256,
-            min_compress_bytes_gpu: 1024 * 1024,
+            min_compress_bytes_gpu: 16 * 1024 * 1024,
             zstd_level_small: 1,
             zstd_level_large: 3,
             zstd_level_gpu: 1,
@@ -206,4 +209,65 @@ pub fn select_layout_flags_for_size(len_estimate: usize) -> u8 {
 pub fn select_layout_flags_for_size_with(h: &Heuristics, len_estimate: usize) -> u8 {
     let _ = (h, len_estimate);
     super::default_encode_flags()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct GpuPolicyGuard(bool);
+
+    impl GpuPolicyGuard {
+        fn set(allowed: bool) -> Self {
+            let previous = hw::gpu_policy_allowed();
+            hw::set_gpu_compression_allowed(allowed);
+            Self(previous)
+        }
+    }
+
+    impl Drop for GpuPolicyGuard {
+        fn drop(&mut self) {
+            hw::set_gpu_compression_allowed(self.0);
+        }
+    }
+
+    #[test]
+    fn canonical_gpu_cutoff_stays_above_measured_cuda_window() {
+        let h = get();
+        assert_eq!(h.min_compress_bytes_gpu, 16 * 1024 * 1024);
+        assert!(
+            h.min_compress_bytes_gpu > 8 * 1024 * 1024,
+            "automatic CUDA zstd offload should stay above the measured slow range"
+        );
+    }
+
+    #[test]
+    fn compression_selector_uses_cpu_thresholds_when_gpu_policy_is_disabled() {
+        let _guard = GpuPolicyGuard::set(false);
+        let h = get();
+
+        assert_eq!(
+            select_compression_for_len(h.min_compress_bytes_cpu.saturating_sub(1)),
+            CompressionPlan::None
+        );
+        assert_eq!(
+            select_compression_for_len(h.min_compress_bytes_cpu),
+            CompressionPlan::CpuZstd {
+                level: h.zstd_level_small,
+            }
+        );
+        assert_eq!(
+            select_compression_for_len(h.large_threshold),
+            CompressionPlan::CpuZstd {
+                level: h.zstd_level_large,
+            }
+        );
+        assert_eq!(
+            select_compression_for_len(h.min_compress_bytes_gpu),
+            CompressionPlan::CpuZstd {
+                level: h.zstd_level_large,
+            },
+            "GPU policy disable should force CPU selection even at the GPU cutoff"
+        );
+    }
 }

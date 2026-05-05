@@ -41,7 +41,7 @@ MOCHI-ն ուղարկում է CLI երկուական սարքերը: Համոզ
 Պահեստի արմատից.
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 Այս հրամանը կառուցում է և՛ `mochi-core`, և՛ egui ճակատը: Բաշխվող փաթեթ ստեղծելու համար գործարկեք՝
@@ -57,7 +57,7 @@ cargo xtask mochi-bundle
 Գործարկեք UI-ն անմիջապես բեռից.
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 Լռելյայնորեն MOCHI-ն ստեղծում է մեկ հավասարազոր նախադրյալ ժամանակավոր տվյալների գրացուցակում.
@@ -69,7 +69,7 @@ cargo run -p mochi-ui-egui
 Օգտագործեք CLI դրոշակները՝ գործարկելիս կանխադրվածները վերացնելու համար.
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ crates:
 ./ci/check_mochi.sh
 ```
 
-Օգնականը կատարում է `cargo check`/`cargo test` `mochi-core`, `mochi-ui-egui` և
+Օգնականը կատարում է `cargo check`/`cargo test` `mochi-core`, `mochi-ui` և
 `mochi-integration`, որը որսում է ամրագոտիների դրեյֆը (կանոնական բլոկ/միջոցառումներ) և egui ամրագոտի
 հետընթաց մեկ կրակոցում. Եթե սցենարը հաղորդում է հնացած սարքեր, նորից գործարկեք անտեսված վերականգնման թեստերը,
 օրինակ.

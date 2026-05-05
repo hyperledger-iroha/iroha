@@ -7,7 +7,7 @@ use ivm::{
     IVM, Memory, PointerType,
     instruction::wide,
     mock_wsv::{
-        AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost,
+        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
     },
     syscalls,
 };
@@ -27,10 +27,10 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn account(domain: &str, public_key: &str) -> ScopedAccountId {
-    let domain: DomainId = domain.parse().unwrap();
+fn account(domain: &str, public_key: &str) -> AccountId {
+    let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
-    ScopedAccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 fn run_query(vm: &mut IVM, env: norito::json::Value) -> u64 {
@@ -85,21 +85,18 @@ fn query_get_balance_returns_json_tlv() {
     );
     let caller_value = norito::json::to_value(&caller).expect("serialize caller");
     let caller_literal = caller_value.as_str().expect("caller id string");
-    let alice =
-        ScopedAccountId::parse_encoded(caller_literal).expect("canonical account id must parse");
+    let alice = AccountId::parse_encoded(caller_literal)
+        .expect("canonical I105 account id must parse")
+        .into_account_id();
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let wsv = MockWorldStateView::with_balances(&[(
         (alice.clone(), rose.clone()),
         Numeric::from(42_u64),
     )]);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        Default::default(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), Default::default());
 
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -145,11 +142,7 @@ fn query_list_triggers_returns_all() {
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::ManageTriggers);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        Default::default(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), Default::default());
 
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
@@ -227,9 +220,9 @@ fn query_list_triggers_returns_all() {
 }
 
 #[test]
-fn query_list_domains_for_subject_returns_sorted_domains() {
-    let beta: DomainId = "beta".parse().unwrap();
-    let alpha: DomainId = "alpha".parse().unwrap();
+fn query_list_domains_for_account_returns_sorted_domains() {
+    let beta: DomainId = iroha_data_model::DomainId::try_new("beta", "universal").unwrap();
+    let alpha: DomainId = iroha_data_model::DomainId::try_new("alpha", "universal").unwrap();
     let admin = account(
         "beta",
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
@@ -247,15 +240,13 @@ fn query_list_domains_for_subject_returns_sorted_domains() {
     wsv.add_account_unchecked(admin.clone());
     wsv.grant_permission(&admin, PermissionToken::RegisterDomain);
     wsv.grant_permission(&admin, PermissionToken::RegisterAccount);
-    assert!(wsv.register_account(&admin, linked_beta.clone()));
     assert!(wsv.register_domain(&admin, alpha.clone()));
-    assert!(wsv.register_account(&admin, linked_alpha.clone()));
+    assert!(wsv.register_domain(&admin, beta.clone()));
+    assert!(wsv.register_account(&admin, linked_beta.clone()));
+    assert!(wsv.link_subject_to_domain(linked_beta.clone(), beta.clone()));
+    assert!(wsv.link_subject_to_domain(linked_alpha.clone(), alpha.clone()));
 
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&admin),
-        Default::default(),
-    );
+    let host = WsvHost::new_with_subject(wsv, admin.clone(), Default::default());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -267,7 +258,7 @@ fn query_list_domains_for_subject_returns_sorted_domains() {
     let env = norito::json::object([
         (
             "type",
-            norito::json::to_value("wsv.list_domains_for_subject").expect("serialize type"),
+            norito::json::to_value("wsv.list_domains_for_account").expect("serialize type"),
         ),
         ("payload", payload),
     ])
@@ -289,8 +280,9 @@ fn query_list_domains_for_subject_returns_sorted_domains() {
 
 #[test]
 fn query_list_accounts_for_domain_returns_linked_subjects() {
-    let wonderland: DomainId = "wonderland".parse().unwrap();
-    let other: DomainId = "other".parse().unwrap();
+    let wonderland: DomainId =
+        iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap();
+    let other: DomainId = iroha_data_model::DomainId::try_new("other", "universal").unwrap();
     let admin = account(
         "wonderland",
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
@@ -312,16 +304,16 @@ fn query_list_accounts_for_domain_returns_linked_subjects() {
     wsv.add_account_unchecked(admin.clone());
     wsv.grant_permission(&admin, PermissionToken::RegisterDomain);
     wsv.grant_permission(&admin, PermissionToken::RegisterAccount);
+    assert!(wsv.register_domain(&admin, wonderland.clone()));
+    assert!(wsv.link_subject_to_domain(admin.clone(), wonderland.clone()));
     assert!(wsv.register_account(&admin, alice_wonderland.clone()));
     assert!(wsv.register_account(&admin, bob_wonderland.clone()));
     assert!(wsv.register_domain(&admin, other.clone()));
-    assert!(wsv.register_account(&admin, alice_other.clone()));
+    assert!(wsv.link_subject_to_domain(alice_wonderland.clone(), wonderland.clone()));
+    assert!(wsv.link_subject_to_domain(bob_wonderland.clone(), wonderland.clone()));
+    assert!(wsv.link_subject_to_domain(alice_other.clone(), other.clone()));
 
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&admin),
-        Default::default(),
-    );
+    let host = WsvHost::new_with_subject(wsv, admin.clone(), Default::default());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 

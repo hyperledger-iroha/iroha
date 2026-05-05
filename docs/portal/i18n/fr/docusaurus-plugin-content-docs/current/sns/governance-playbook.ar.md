@@ -54,7 +54,7 @@ Les fonctions de résolution et de passerelle sont également compatibles avec l
 | الميثاق + ملاحق KPI | `docs/source/sns/governance_addenda/` | Vous pouvez également utiliser les KPI et les KPI et les CLI. |
 | مخطط السجل | [`registry-schema.md`](./registry-schema.md) | Norito المرجعية (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | عقد المسجل | [`registrar-api.md`](./registrar-api.md) | Les REST/gRPC sont des hooks `sns_registrar_status_total`. |
-| دليل UX للعناوين | [`address-display-guidelines.md`](./address-display-guidelines.md) | عروض I105 (المفضلة) والمضغوطة (الخيار الثاني) المرجعية التي تعكسها المحافظ/المستكشفات. |
+| دليل UX للعناوين | [`address-display-guidelines.md`](./address-display-guidelines.md) | عروض i105 (المفضلة) والمضغوطة (الخيار الثاني) المرجعية التي تعكسها المحافظ/المستكشفات. |
 | Par SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | اشتقاق المضيفات الحتمي، سير عمل tailer للشفافية، وقواعد التنبيه. |
 | مذكرات تنظيمية | `docs/source/sns/regulatory/` | ملاحظات استقبال حسب الولاية (مثل EU DSA) ، اقرارات steward, ملاحق قوالب. |
 | forets | `ops/drill-log.md` | سجل لتجارب الفوضى وIR المطلوبة قبل الخروج من المراحل. |
@@ -91,7 +91,7 @@ Il s'est écoulé jusqu'au 24 janvier.
    Le résolveur est un outil de résolution de problèmes GAR/zone (version 4.5).
 6. **افصاح العميل:** حدث دفتر المستخدِم (portefeuille/explorateur) et les luminaires sont ici
    [`address-display-guidelines.md`](./address-display-guidelines.md), je suis en train de le faire
-   عروض I105 والمضغوط تتطابق مع توجيهات النص/QR.
+   عروض i105 والمضغوط تتطابق مع توجيهات النص/QR.
 
 ### 4.3 التجديد والفوترة وتسوية الخزينة- **Prix du voyage :** يفرض المسجلون نافذة سماح 30 يوم + نافذة استرداد 60 يوم
   Il s'agit de `SuffixPolicyV1`. Depuis 60 ans, vous avez besoin d'aide
@@ -115,11 +115,11 @@ Il s'est écoulé jusqu'au 24 janvier.
 ### 4.4 Questions et réponses| المرحلة | المالك | الاجراء والدليل | ANS |
 |---------|--------|--------|-----|
 | طلب تجميد soft | intendant / الدعم | قدم تذكرة `SNS-DF-<id>` مع اثباتات الدفع، مرجع bond النزاع، والمحدد/المحددات المتاثرة. | <=4 h من الاستلام. |
-| تذكرة gardien | مجلس gardien | `sns governance freeze --selector <I105> --reason <text> --until <ts>` à `GuardianFreezeTicketV1`. La version JSON est `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h تنفيذ. |
+| تذكرة gardien | مجلس gardien | `sns governance freeze --selector <i105> --reason <text> --until <ts>` à `GuardianFreezeTicketV1`. La version JSON est `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h تنفيذ. |
 | تصديق المجلس | مجلس الحوكمة | يوافق او يرفض التجميدات، ويوثق القرار مع رابط لتذكرة tuteur وبصمة bond النزاع. | جلسة المجلس التالية او تصويت غير متزامن. |
 | لجنة التحكيم | الامتثال + intendant | عقد لجنة من 7 محلفين (حسب roadmap) مع بطاقات تصويت مجزأة عبر `sns governance dispute ballot`. ارفق ايصالات التصويت المجهولة بحزمة الحادث. | الحكم <=7 ايام بعد ايداع lien. |
 | استئناف | tuteur + المجلس | يضاعف الاستئناف bond ويعيد عملية المحلفين; سجل مانيفست Norito `DisputeAppealV1` واربط بالتذكرة الاصلية. | <=10 ايام. |
-| فك التجميد والمعالجة | المسجل + عمليات résolveur | Utilisez `sns governance unfreeze --selector <I105> --ticket <id>` pour utiliser GAR/résolveur. | مباشرة بعد الحكم. |
+| فك التجميد والمعالجة | المسجل + عمليات résolveur | Utilisez `sns governance unfreeze --selector <i105> --ticket <id>` pour utiliser GAR/résolveur. | مباشرة بعد الحكم. |
 
 القوانين الطارئة (تجميدات يطلقها tuteur <=72 h) تتبع نفس التدفق لكنها تتطلب
 مراجعة مجلس بأثر رجعي وملاحظة شفافية تحت `docs/source/sns/regulatory/`.

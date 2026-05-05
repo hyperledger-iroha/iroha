@@ -32,8 +32,8 @@ SDK သည် CLI နှင့် SDK အပြုအမူကြား တူ�
 သရုပ်ပြသော့များမှ ဆင်းသက်လာသည်-
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 ပထမအကောင့်အနည်းငယ်ကို စာရင်းပြုစုခြင်းဖြင့် တန်ဖိုးများကို အတည်ပြုပါ-
@@ -52,7 +52,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts inside wonderland (replace --limit with a higher number if needed)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions that already exist
@@ -69,7 +69,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI သည် တင်ပြထားသော ငွေပေးငွေယူ hash ကို print ထုတ်သည် (ဥပမာ၊
@@ -78,7 +78,7 @@ CLI သည် တင်ပြထားသော ငွေပေးငွေယ�
 ## 3. အော်ပရေတာအကောင့်ထဲသို့ Mint ယူနစ်များ
 
 ပိုင်ဆိုင်မှုပမာဏများသည် `(asset definition, account)` အတွဲအောက်တွင် နေထိုင်ပါသည်။ Mint 250
-`coffee#wonderland` ၏ ယူနစ် `$ADMIN_ACCOUNT` သို့
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` ၏ ယူနစ် `$ADMIN_ACCOUNT` သို့
 
 ```sh
 iroha --config defaults/client.toml asset mint \

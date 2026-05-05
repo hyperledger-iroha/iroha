@@ -15,6 +15,7 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 
@@ -30,7 +31,7 @@ public final class HttpClientTransportStatusTests {
     waitForTransactionStatusFailureIncludesRejectionReason();
     waitForTransactionStatusFailureUsesRejectedStatusContentReason();
     waitForTransactionStatusSurfacesUnexpectedHttpStatusDetails();
-    waitForTransactionStatusFallsBackToCompactJsonMessage();
+    waitForTransactionStatusUsesCompactJsonMessage();
     waitForTransactionStatusUsesNestedJsonErrorMessage();
     waitForTransactionStatusUsesErrorsArrayMessage();
     waitForTransactionStatusTruncatesOversizedErrorBody();
@@ -38,6 +39,7 @@ public final class HttpClientTransportStatusTests {
     waitForTransactionStatusHonoursMaxAttempts();
     waitForTransactionStatusFailsOnInvalidPayload();
     submitTransactionProvidesCanonicalHashForPolling();
+    submitTransactionPrefersAuthoritativeReceiptHashHeaderForPolling();
     System.out.println("[IrohaAndroid] HTTP client status tests passed.");
   }
 
@@ -229,7 +231,7 @@ public final class HttpClientTransportStatusTests {
     assert threw : "Expected waitForTransactionStatus to fail for unexpected HTTP status";
   }
 
-  private static void waitForTransactionStatusFallsBackToCompactJsonMessage() {
+  private static void waitForTransactionStatusUsesCompactJsonMessage() {
     final HttpClientTransport transport = HttpClientTransport.withExecutor(
         request ->
             CompletableFuture.completedFuture(
@@ -252,7 +254,7 @@ public final class HttpClientTransportStatusTests {
           : "Expected TransactionStatusHttpException";
       final TransactionStatusHttpException statusError = (TransactionStatusHttpException) cause;
       assert "{\"code\":\"E123\",\"status\":\"invalid\"}".equals(statusError.responseBody().orElse(null))
-          : "Expected compact sorted JSON fallback";
+          : "Expected compact sorted JSON error body";
       assert cause.getMessage().contains("{\"code\":\"E123\",\"status\":\"invalid\"}")
           : "Expected compact sorted JSON in exception text";
     }
@@ -583,6 +585,37 @@ public final class HttpClientTransportStatusTests {
         : "Status polling must include canonical hash in request URI";
   }
 
+  private static void submitTransactionPrefersAuthoritativeReceiptHashHeaderForPolling() {
+    final SignedTransaction transaction = sampleTransaction((byte) 0x11);
+    final String localHash = SignedTransactionHasher.hashHex(transaction);
+    final String authoritativeHash =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    final TrackingExecutor executor =
+        new TrackingExecutor(authoritativeHash, authoritativeHash.toUpperCase(java.util.Locale.ROOT));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder()
+                .setBaseUri(URI.create("http://localhost:8080"))
+                .setRequestTimeout(Duration.ofSeconds(1))
+                .build());
+
+    final ClientResponse response = transport.submitTransaction(transaction).join();
+    assert !localHash.equals(response.hashHex().orElse(null))
+        : "authoritative Torii receipt hash should override the local fallback hash";
+    assert authoritativeHash.equals(response.hashHex().orElse(null))
+        : "submitTransaction must expose the Torii receipt hash header";
+
+    transport
+        .waitForTransactionStatus(
+            response.hashHex().orElseThrow(),
+            PipelineStatusOptions.builder().intervalMillis(0L).build())
+        .join();
+
+    assert executor.observedExpectedHash()
+        : "Status polling must use the authoritative receipt hash";
+  }
+
   private static TransportResponse newResponse(final int status, final byte[] body) {
     return new TransportResponse(status, body, "", Map.of());
   }
@@ -616,7 +649,7 @@ public final class HttpClientTransportStatusTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", seed))
-            .setAuthority("alice@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x27))
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)
@@ -656,17 +689,27 @@ public final class HttpClientTransportStatusTests {
 
   private static final class TrackingExecutor implements HttpTransportExecutor {
     private final String expectedHash;
+    private final String submitHeaderHash;
     private final AtomicInteger pollCount = new AtomicInteger(0);
     private volatile boolean observedExpectedHash = false;
 
     private TrackingExecutor(final String expectedHash) {
+      this(expectedHash, null);
+    }
+
+    private TrackingExecutor(final String expectedHash, final String submitHeaderHash) {
       this.expectedHash = expectedHash;
+      this.submitHeaderHash = submitHeaderHash;
     }
 
     @Override
     public CompletableFuture<TransportResponse> execute(final TransportRequest request) {
       if ("POST".equals(request.method())) {
-        return CompletableFuture.completedFuture(new TransportResponse(202, new byte[0], "", Map.of()));
+        final Map<String, List<String>> headers =
+            submitHeaderHash == null
+                ? Map.of()
+                : Map.of("x-iroha-transaction-hash", List.of(submitHeaderHash));
+        return CompletableFuture.completedFuture(new TransportResponse(202, new byte[0], "", headers));
       }
       if ("GET".equals(request.method())) {
         final String query = request.uri().getQuery();

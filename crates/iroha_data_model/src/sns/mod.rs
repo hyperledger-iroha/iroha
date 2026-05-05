@@ -17,6 +17,13 @@ use crate::{
 /// Unique identifier assigned to a top-level suffix (e.g., `.sora`).
 pub type SuffixId = u16;
 
+/// Fixed suffix id for full account-alias lease records.
+pub const ACCOUNT_ALIAS_SUFFIX_ID: SuffixId = 0x1001;
+/// Fixed suffix id for domain-name lease records.
+pub const DOMAIN_NAME_SUFFIX_ID: SuffixId = 0x1002;
+/// Fixed suffix id for dataspace-alias lease records.
+pub const DATASPACE_ALIAS_SUFFIX_ID: SuffixId = 0x1003;
+
 /// Canonical selector payload for SNS names.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -206,7 +213,7 @@ pub struct NameTombstoneStateV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct TokenValue {
-    /// Settlement asset identifier (e.g., `xor#sora`).
+    /// Settlement asset-holding identifier (`<asset-definition-id>#<account-id>`).
     pub asset_id: String,
     /// Amount expressed in the asset's native units.
     pub amount: u128,
@@ -421,11 +428,14 @@ pub struct ReservedAssignmentRequestV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct PaymentProofV1 {
-    /// Asset identifier used for settlement (e.g., `xor#sora`).
+    /// Asset identifier used for settlement (e.g., `61CtjvNd9T3THAR65GsMVHr82Bjc`).
     pub asset_id: String,
-    /// Gross amount paid (base price + surcharges) expressed in the asset's native units.
+    /// Gross amount paid (base price + surcharges) in SNS payment units.
+    ///
+    /// Nexus XOR policies use nano-XOR so sub-XOR lease prices can be expressed
+    /// without changing this integer proof format.
     pub gross_amount: u64,
-    /// Net amount forwarded to the registry (after referral rebates).
+    /// Net amount forwarded to the registry (after referral rebates), in SNS payment units.
     pub net_amount: u64,
     /// Settlement transaction hash (canonical hex string or JSON hash encoding).
     pub settlement_tx: Json,
@@ -465,7 +475,7 @@ pub struct PriceTierV1 {
     pub tier_id: u8,
     /// RE2-compatible regex describing eligible labels.
     pub label_regex: String,
-    /// Base one-year price used for calculations.
+    /// Base one-year price used for calculations, in SNS payment units.
     pub base_price: TokenValue,
     /// Auction mode triggered by this tier.
     pub auction_kind: AuctionKind,
@@ -557,7 +567,7 @@ pub struct SuffixPolicyV1 {
     pub referral_cap_bps: u16,
     /// Reserved labels enforced by governance.
     pub reserved_labels: Vec<ReservedNameV1>,
-    /// Asset required for settlement (e.g., `xor#sora`).
+    /// Asset holding required for settlement (`<asset-definition-id>#<account-id>`).
     pub payment_asset_id: String,
     /// Pricing tiers advertised by the steward.
     pub pricing: Vec<PriceTierV1>,
@@ -596,6 +606,7 @@ pub mod fixtures {
     /// Deterministic default policy fixture used in docs/tests.
     pub fn default_policy() -> SuffixPolicyV1 {
         let steward = steward_account();
+        let payment_asset_id = format!("61CtjvNd9T3THAR65GsMVHr82Bjc#{steward}");
         SuffixPolicyV1 {
             suffix_id: 0x0001,
             suffix: "sora".to_string(),
@@ -612,11 +623,11 @@ pub mod fixtures {
                 release_at_ms: None,
                 note: "Protocol reserved".to_string(),
             }],
-            payment_asset_id: "xor#sora".to_string(),
+            payment_asset_id: payment_asset_id.clone(),
             pricing: vec![PriceTierV1 {
                 tier_id: 0,
                 label_regex: "^[a-z0-9]{3,}$".to_string(),
-                base_price: TokenValue::new("xor#sora", 120),
+                base_price: TokenValue::new(payment_asset_id, 500_000_000),
                 auction_kind: AuctionKind::VickreyCommitReveal,
                 dutch_floor: None,
                 min_duration_years: 1,
@@ -653,8 +664,8 @@ mod tests {
 
     #[test]
     fn token_value_new_assigns_fields() {
-        let value = TokenValue::new("xor#sora", 120);
-        assert_eq!(value.asset_id, "xor#sora");
+        let value = TokenValue::new("61CtjvNd9T3THAR65GsMVHr82Bjc", 120);
+        assert_eq!(value.asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc");
         assert_eq!(value.amount, 120);
     }
 
@@ -667,5 +678,18 @@ mod tests {
             "expected reserved labels"
         );
         assert_eq!(policy.status, super::SuffixStatus::Active);
+    }
+
+    #[test]
+    fn default_policy_uses_settlement_holding_for_pricing() {
+        let policy = fixtures::default_policy();
+        assert_eq!(
+            policy.payment_asset_id,
+            format!("61CtjvNd9T3THAR65GsMVHr82Bjc#{}", policy.steward)
+        );
+        assert_eq!(
+            policy.pricing[0].base_price.asset_id,
+            policy.payment_asset_id
+        );
     }
 }

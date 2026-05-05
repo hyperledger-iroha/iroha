@@ -61,7 +61,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000001")
-            .setAuthority("alice@wonderland")
+            .setAuthority(sampleAuthority((byte) 0x01))
             .setCreationTimeMs(1_735_000_000_123L)
             .setExecutable(Executable.ivm(instructions))
             .setTimeToLiveMs(5_000L)
@@ -74,7 +74,7 @@ public final class NoritoCodecAdapterTests {
 
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
     assert decoded.chainId().equals("00000001") : "Chain ID must round-trip";
-    assert decoded.authority().equals("alice@wonderland") : "Authority must round-trip";
+    assert decoded.authority().equals(payload.authority()) : "Authority must round-trip";
     assert decoded.creationTimeMs() == 1_735_000_000_123L : "creation_time_ms must round-trip";
     assert Arrays.equals(instructions, decoded.executable().ivmBytes())
         : "Decoded payload should match original instructions";
@@ -87,15 +87,15 @@ public final class NoritoCodecAdapterTests {
   private static void javaCodecEncodesAccountIdAuthority() throws NoritoException {
     final byte[] publicKey = new byte[32];
     Arrays.fill(publicKey, (byte) 0x3A);
-    final String ih58;
+    final String i105;
     try {
-      ih58 =
-          AccountAddress.fromAccount("wonderland", publicKey, "ed25519")
-              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+      i105 =
+          AccountAddress.fromAccount(publicKey, "ed25519")
+              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build authority address", ex);
     }
-    final String authority = ih58 + "@wonderland";
+    final String authority = i105;
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
@@ -108,32 +108,18 @@ public final class NoritoCodecAdapterTests {
     final byte[] encoded = adapter.encodeTransaction(payload);
     final TransactionPayload decoded = adapter.decodeTransaction(encoded);
 
-    assert authority.equals(decoded.authority()) : "AccountId authority must round-trip with domain";
-    final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
+    assert authority.equals(decoded.authority()) : "AccountId authority must round-trip";
+    final NoritoDecoder decoder = canonicalDecoder(encoded);
     readField(decoder, "payload.chain_id");
     final byte[] authorityField = readField(decoder, "payload.authority");
-    final int expectedStringPayloadLen = 8 + authority.getBytes(StandardCharsets.UTF_8).length;
-    assert authorityField.length != expectedStringPayloadLen
-        : "AccountId authority should encode as struct, not legacy string";
-    final long domainFieldLen = readU64(authorityField, 0, "authority.domain");
-    final long domainNameFieldLen = readU64(authorityField, 8, "authority.domain.name");
-    final long domainStringLen = readU64(authorityField, 16, "authority.domain.name.string");
-    assert domainNameFieldLen == 8 + domainStringLen : "DomainId name must wrap a single string";
-    assert domainFieldLen == 8 + domainNameFieldLen : "Domain field must wrap a DomainId payload";
-    final int controllerFieldOffset = Math.toIntExact(8 + domainFieldLen);
-    final long controllerFieldLen = readU64(authorityField, controllerFieldOffset, "authority.controller");
-    final int controllerPayloadOffset = controllerFieldOffset + 8;
-    final long controllerTag = readU32(authorityField, controllerPayloadOffset, "authority.controller.tag");
+    final NoritoDecoder authorityDecoder = canonicalDecoder(authorityField);
+    final long controllerTag = NoritoAdapters.uint(32).decode(authorityDecoder);
     assert controllerTag == 0L : "AccountController tag must be Single";
-    final long publicKeyFieldLen =
-        readU64(authorityField, controllerPayloadOffset + 4, "authority.controller.public_key");
-    final long publicKeyStringLen =
-        readU64(authorityField, controllerPayloadOffset + 12, "authority.controller.public_key.string");
-    assert publicKeyFieldLen == 8 + publicKeyStringLen
-        : "Public key field must wrap a single string";
-    assert authorityField.length
-        == Math.toIntExact(8 + domainFieldLen + 8 + controllerFieldLen)
-        : "Authority payload must contain domain and controller fields only";
+    final byte[] publicKeyField = readField(authorityDecoder, "authority.controller.public_key");
+    final String publicKeyLiteral =
+        decodeFieldPayload(publicKeyField, NoritoAdapters.stringAdapter(), "authority.controller.public_key");
+    assert !publicKeyLiteral.isBlank() : "Public key field must wrap a single string";
+    assert authorityDecoder.remaining() == 0 : "Authority payload must contain only the controller payload";
   }
 
   private static void javaCodecEncodesMultisigAuthority() throws NoritoException {
@@ -147,15 +133,15 @@ public final class NoritoCodecAdapterTests {
         AccountAddress.MultisigMemberPayload.of(0x01, 2, memberKeyB);
     final AccountAddress.MultisigPolicyPayload policy =
         AccountAddress.MultisigPolicyPayload.of(1, 2, listOf(memberA, memberB));
-    final String ih58;
+    final String i105;
     try {
-      ih58 =
-          AccountAddress.fromMultisigPolicy("wonderland", policy)
-              .toIH58(AccountAddress.DEFAULT_IH58_PREFIX);
+      i105 =
+          AccountAddress.fromMultisigPolicy(policy)
+              .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build multisig authority address", ex);
     }
-    final String authority = ih58 + "@wonderland";
+    final String authority = i105;
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
@@ -170,31 +156,23 @@ public final class NoritoCodecAdapterTests {
 
     assert authority.equals(decoded.authority()) : "Multisig authority must round-trip";
 
-    final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(encoded);
     readField(decoder, "payload.chain_id");
     final byte[] authorityField = readField(decoder, "payload.authority");
-    final long domainFieldLen = readU64(authorityField, 0, "authority.domain");
-    final int controllerFieldOffset = Math.toIntExact(8 + domainFieldLen);
-    final long controllerFieldLen = readU64(authorityField, controllerFieldOffset, "authority.controller");
-    final int controllerPayloadOffset = controllerFieldOffset + 8;
-    final long controllerTag = readU32(authorityField, controllerPayloadOffset, "authority.controller.tag");
+    final NoritoDecoder authorityDecoder = canonicalDecoder(authorityField);
+    final long controllerTag = NoritoAdapters.uint(32).decode(authorityDecoder);
     assert controllerTag == 1L : "AccountController tag must be Multisig";
-    final long policyLen =
-        readU64(authorityField, controllerPayloadOffset + 4, "authority.controller.policy");
-    final int policyOffset = controllerPayloadOffset + 12;
-    assert authorityField.length >= policyOffset + policyLen
-        : "Multisig policy payload must fit within controller field";
+    final byte[] policyField = readField(authorityDecoder, "authority.controller.policy");
+    assert authorityDecoder.remaining() == 0 : "Authority payload must contain only the controller payload";
 
-    int cursor = policyOffset;
-    final int version = authorityField[cursor] & 0xFF;
-    cursor += 1;
-    final int threshold = readU16(authorityField, cursor, "authority.controller.policy.threshold");
-    cursor += 2;
+    final NoritoDecoder policyDecoder = canonicalDecoder(policyField);
+    final int version = Math.toIntExact(NoritoAdapters.uint(8).decode(policyDecoder));
+    final int threshold =
+        Math.toIntExact(NoritoAdapters.uint(16).decode(policyDecoder));
     assert version == 1 : "Multisig policy version must round-trip";
     assert threshold == 2 : "Multisig policy threshold must round-trip";
     final long memberCount =
-        readU64(authorityField, cursor, "authority.controller.policy.members");
-    cursor += 8;
+        policyDecoder.readLength(false);
     assert memberCount == 2L : "Multisig policy member count must round-trip";
 
     final String expectedMemberA =
@@ -202,19 +180,16 @@ public final class NoritoCodecAdapterTests {
     final String expectedMemberB =
         PublicKeyCodec.encodePublicKeyMultihash(0x01, memberKeyB);
 
-    cursor = assertMultisigMember(authorityField, cursor, expectedMemberA, 1, "member[0]");
-    cursor = assertMultisigMember(authorityField, cursor, expectedMemberB, 2, "member[1]");
-
-    assert authorityField.length
-        == Math.toIntExact(8 + domainFieldLen + 8 + controllerFieldLen)
-        : "Authority payload must contain domain and controller fields only";
+    assertMultisigMember(policyDecoder, expectedMemberA, 1, "member[0]");
+    assertMultisigMember(policyDecoder, expectedMemberB, 2, "member[1]");
+    assert policyDecoder.remaining() == 0 : "Multisig policy payload must contain only the policy";
   }
 
   private static void javaCodecEncodesMultisigSignatures() throws NoritoException {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000003")
-            .setAuthority("alice@wonderland")
+            .setAuthority(sampleAuthority((byte) 0x02))
             .setCreationTimeMs(1_735_000_000_789L)
             .setExecutable(Executable.ivm(new byte[] {0x0A, 0x0B}))
             .build();
@@ -240,7 +215,7 @@ public final class NoritoCodecAdapterTests {
         signed.toBuilder().setMultisigSignatures(multisig).build();
     final byte[] encodedSigned = SignedTransactionEncoder.encode(withMultisig);
 
-    final NoritoDecoder decoder = new NoritoDecoder(encodedSigned, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(encodedSigned);
     readField(decoder, "signed.signature");
     readField(decoder, "signed.payload");
     final byte[] attachmentsField = readField(decoder, "signed.attachments");
@@ -252,17 +227,17 @@ public final class NoritoCodecAdapterTests {
     assert decoder.remaining() == 0 : "Signed transaction payload should not have trailing bytes";
 
     final NoritoDecoder multisigDecoder =
-        new NoritoDecoder(multisigPayload, NoritoHeader.MINOR_VERSION);
+        canonicalDecoder(multisigPayload);
     final long count = multisigDecoder.readLength(false);
     assert count == 2 : "Expected two multisig signatures";
     final boolean compact = multisigDecoder.compactLenActive();
     final byte[] firstPayload = readSequenceElement(multisigDecoder, compact, "multisig[0]");
-    final NoritoDecoder firstDecoder = new NoritoDecoder(firstPayload, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder firstDecoder = canonicalDecoder(firstPayload);
     assertMultisigSignaturePayload(firstDecoder, sigA, "multisig[0]");
     assert firstDecoder.remaining() == 0 : "multisig[0] payload should not have trailing bytes";
 
     final byte[] secondPayload = readSequenceElement(multisigDecoder, compact, "multisig[1]");
-    final NoritoDecoder secondDecoder = new NoritoDecoder(secondPayload, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder secondDecoder = canonicalDecoder(secondPayload);
     assertMultisigSignaturePayload(secondDecoder, sigB, "multisig[1]");
     assert secondDecoder.remaining() == 0 : "multisig[1] payload should not have trailing bytes";
     assert multisigDecoder.remaining() == 0 : "Multisig payload should not have trailing bytes";
@@ -273,21 +248,20 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(chainId)
-            .setAuthority("chain@wonderland")
+            .setAuthority(sampleAuthority((byte) 0x03))
             .setCreationTimeMs(1_735_000_000_789L)
             .setExecutable(Executable.ivm(new byte[] {0x01}))
             .build();
 
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
     final byte[] encoded = adapter.encodeTransaction(payload);
-    final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(encoded);
     final byte[] chainField = readField(decoder, "payload.chain_id");
-    final long chainInnerLen = readU64(chainField, 0, "payload.chain_id");
-    assert chainField.length == 8 + chainInnerLen : "ChainId must be a sized struct";
-    final long stringLen = readU64(chainField, 8, "payload.chain_id.string");
-    assert chainInnerLen == 8 + stringLen : "ChainId must wrap a single string";
+    final NoritoDecoder chainDecoder = canonicalDecoder(chainField);
+    final byte[] stringField = readField(chainDecoder, "payload.chain_id.string");
+    assert chainDecoder.remaining() == 0 : "ChainId must wrap a single string";
     final String decodedChain =
-        new String(chainField, 16, Math.toIntExact(stringLen), StandardCharsets.UTF_8);
+        decodeFieldPayload(stringField, NoritoAdapters.stringAdapter(), "payload.chain_id.string");
     assert chainId.equals(decodedChain) : "ChainId must round-trip via layout inspection";
   }
 
@@ -299,7 +273,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000009")
-            .setAuthority("instructions@wonderland")
+            .setAuthority(sampleAuthority((byte) 0x04))
             .setCreationTimeMs(1_735_111_111_000L)
             .setExecutable(
                 Executable.instructions(
@@ -344,7 +318,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000011")
-            .setAuthority("wire@wonderland")
+            .setAuthority(sampleAuthority((byte) 0x05))
             .setCreationTimeMs(1_735_111_111_123L)
             .setExecutable(Executable.instructions(listOf(wireInstruction)))
             .build();
@@ -367,7 +341,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000012")
-            .setAuthority("ivm@wonderland")
+            .setAuthority(sampleAuthority((byte) 0x06))
             .setCreationTimeMs(1_735_222_222_123L)
             .setExecutable(Executable.ivm(ivmBytes))
             .build();
@@ -375,7 +349,7 @@ public final class NoritoCodecAdapterTests {
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
     final byte[] encoded = adapter.encodeTransaction(payload);
 
-    final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(encoded);
     readField(decoder, "payload.chain_id");
     readField(decoder, "payload.authority");
     readField(decoder, "payload.creation_time_ms");
@@ -385,17 +359,16 @@ public final class NoritoCodecAdapterTests {
     readField(decoder, "payload.metadata");
     assert decoder.remaining() == 0 : "Payload has trailing bytes";
 
-    final NoritoDecoder execDecoder = new NoritoDecoder(executableField, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder execDecoder = canonicalDecoder(executableField);
     final TypeAdapter<Long> uint32 = NoritoAdapters.uint(32);
     final long tag = uint32.decode(execDecoder);
-    assert tag == 1L : "Executable should be Ivm";
+    assert tag == 2L : "Executable should be Ivm";
     final byte[] ivmField = readField(execDecoder, "payload.executable.ivm");
     assert execDecoder.remaining() == 0 : "Executable has trailing bytes";
 
-    final long ivmInnerLen = readU64(ivmField, 0, "payload.executable.ivm");
-    assert ivmField.length == 8 + ivmInnerLen : "IVM bytecode must be sized";
-    final byte[] ivmPayload =
-        Arrays.copyOfRange(ivmField, 8, Math.toIntExact(8 + ivmInnerLen));
+    final NoritoDecoder ivmDecoder = canonicalDecoder(ivmField);
+    final byte[] ivmPayload = readField(ivmDecoder, "payload.executable.ivm.bytes");
+    assert ivmDecoder.remaining() == 0 : "IVM bytecode must be sized";
     final byte[] decodedIvm =
         decodeFieldPayload(ivmPayload, RAW_BYTE_VECTOR_ADAPTER, "payload.executable.ivm.bytes");
     assert Arrays.equals(ivmBytes, decodedIvm) : "IVM bytecode bytes should match";
@@ -409,7 +382,7 @@ public final class NoritoCodecAdapterTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000013")
-            .setAuthority("layout@wonderland")
+            .setAuthority(sampleAuthority((byte) 0x07))
             .setCreationTimeMs(1_735_222_333_123L)
             .setExecutable(Executable.instructions(listOf(wireInstruction)))
             .build();
@@ -417,7 +390,7 @@ public final class NoritoCodecAdapterTests {
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
     final byte[] encoded = adapter.encodeTransaction(payload);
 
-    final NoritoDecoder decoder = new NoritoDecoder(encoded, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(encoded);
     readField(decoder, "payload.chain_id");
     readField(decoder, "payload.authority");
     readField(decoder, "payload.creation_time_ms");
@@ -427,14 +400,14 @@ public final class NoritoCodecAdapterTests {
     readField(decoder, "payload.metadata");
     assert decoder.remaining() == 0 : "Payload has trailing bytes";
 
-    final NoritoDecoder execDecoder = new NoritoDecoder(executableField, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder execDecoder = canonicalDecoder(executableField);
     final TypeAdapter<Long> uint32 = NoritoAdapters.uint(32);
     final long tag = uint32.decode(execDecoder);
     assert tag == 0L : "Executable should be Instructions";
     final byte[] instructionsField = readField(execDecoder, "payload.executable.instructions");
     assert execDecoder.remaining() == 0 : "Executable has trailing bytes";
 
-    final NoritoDecoder listDecoder = new NoritoDecoder(instructionsField, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder listDecoder = canonicalDecoder(instructionsField);
     final long count = listDecoder.readLength(false);
     assert count == 1L : "Instruction list should contain one element";
     final long elementLength = listDecoder.readLength(listDecoder.compactLenActive());
@@ -445,7 +418,7 @@ public final class NoritoCodecAdapterTests {
     final byte[] elementPayload = listDecoder.readBytes((int) elementLength);
     assert listDecoder.remaining() == 0 : "Instruction list has trailing bytes";
 
-    final NoritoDecoder elementDecoder = new NoritoDecoder(elementPayload, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder elementDecoder = canonicalDecoder(elementPayload);
     final byte[] nameField = readField(elementDecoder, "instruction.name");
     final byte[] payloadField = readField(elementDecoder, "instruction.payload");
     assert elementDecoder.remaining() == 0 : "Instruction element has trailing bytes";
@@ -497,6 +470,10 @@ public final class NoritoCodecAdapterTests {
     return encoder.toByteArray();
   }
 
+  private static NoritoDecoder canonicalDecoder(final byte[] payload) {
+    return new NoritoDecoder(payload, NoritoCodec.DEFAULT_FLAGS, NoritoHeader.MINOR_VERSION);
+  }
+
   private static long readU64(final byte[] payload, final int offset, final String field) {
     if (offset < 0 || payload.length - offset < 8) {
       throw new IllegalArgumentException(field + " missing u64 payload");
@@ -526,32 +503,25 @@ public final class NoritoCodecAdapterTests {
     return (payload[offset] & 0xFF) | ((payload[offset + 1] & 0xFF) << 8);
   }
 
-  private static int assertMultisigMember(
-      final byte[] payload,
-      final int offset,
+  private static void assertMultisigMember(
+      final NoritoDecoder decoder,
       final String expectedPublicKey,
       final int expectedWeight,
       final String label) {
-    final long memberLen = readU64(payload, offset, "authority.controller.policy." + label);
-    final int memberOffset = offset + 8;
-    final long publicKeyLen =
-        readU64(payload, memberOffset, "authority.controller.policy." + label + ".public_key");
-    final int publicKeyOffset = memberOffset + 8;
-    final int publicKeySize = Math.toIntExact(publicKeyLen);
+    final byte[] memberPayload = readSequenceElement(decoder, decoder.compactLenActive(), label);
+    final NoritoDecoder memberDecoder = canonicalDecoder(memberPayload);
     final String publicKey =
-        new String(payload, publicKeyOffset, publicKeySize, StandardCharsets.UTF_8);
-    final int weightOffset = publicKeyOffset + publicKeySize;
-    final int weight = readU16(payload, weightOffset, "authority.controller.policy." + label + ".weight");
+        NoritoAdapters.stringAdapter().decode(memberDecoder);
+    final int weight =
+        Math.toIntExact(NoritoAdapters.uint(16).decode(memberDecoder));
+    assert memberDecoder.remaining() == 0 : label + " payload should not have trailing bytes";
     assert expectedPublicKey.equals(publicKey) : label + " public key must round-trip";
     assert weight == expectedWeight : label + " weight must round-trip";
-    final int expectedLen = 8 + publicKeySize + 2;
-    assert memberLen == expectedLen : label + " payload size mismatch";
-    return memberOffset + Math.toIntExact(memberLen);
   }
 
   private static <T> T decodeFieldPayload(
       final byte[] payload, final TypeAdapter<T> adapter, final String field) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(payload);
     final T value = adapter.decode(decoder);
     if (decoder.remaining() != 0) {
       throw new IllegalArgumentException(field + ": trailing bytes after field payload");
@@ -570,7 +540,7 @@ public final class NoritoCodecAdapterTests {
     final String payloadHashHex = bytesToHex(Blake2b.digest(encodedBytes));
     final SignedTransaction signedTransaction;
     try {
-      final IrohaKeyManager keyManager = IrohaKeyManager.withSoftwareFallback();
+      final IrohaKeyManager keyManager = IrohaKeyManager.withSoftwareProvider();
       final TransactionBuilder builderHelper = new TransactionBuilder(adapter, keyManager);
       signedTransaction =
           builderHelper.encodeAndSign(
@@ -622,6 +592,17 @@ public final class NoritoCodecAdapterTests {
     return map;
   }
 
+  private static String sampleAuthority(final byte fill) {
+    final byte[] publicKey = new byte[32];
+    Arrays.fill(publicKey, fill);
+    try {
+      return AccountAddress.fromAccount(publicKey, "ed25519")
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final AccountAddress.AccountAddressException ex) {
+      throw new IllegalStateException("Failed to build sample authority", ex);
+    }
+  }
+
   private static byte[] fill(final int value, final int length) {
     final byte[] out = new byte[length];
     Arrays.fill(out, (byte) value);
@@ -630,7 +611,7 @@ public final class NoritoCodecAdapterTests {
 
   private static java.util.Optional<byte[]> decodeOptionPayload(
       final byte[] payload, final String field) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, NoritoHeader.MINOR_VERSION);
+    final NoritoDecoder decoder = canonicalDecoder(payload);
     final int tag = decoder.readByte();
     if (tag == 0) {
       if (decoder.remaining() != 0) {

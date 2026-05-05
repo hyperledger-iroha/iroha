@@ -366,7 +366,7 @@ Content-Type: application/json
 POST /governance/referenda/{id}/vote
 Content-Type: application/json
 
-{ "voter": "i105...", "conviction": 2, "choice": "Aye" }
+{ "voter": "<i105-account-id>", "conviction": 2, "choice": "Aye" }
 ```
 
 - Query enactments (shows execution windows)
@@ -1059,7 +1059,7 @@ struct BridgeReceipt {
   proof_hash: [u8; 32]
   amount: u128
   asset_id: bytes      // canonical Iroha asset id
-  recipient: bytes     // account id / address
+  recipient: bytes     // i105 account id / address
 }
 
 struct BridgeMessage {
@@ -1098,7 +1098,7 @@ BridgeEventFilter {
 {
   "src_chain": "iroha-mainnet",
   "dst_chain": "evm-eth",
-  "payload": { "Mint": { "asset": "wBTC#btc", "to": "i105...", "amount": "100000" } },
+  "payload": { "Mint": { "asset": "wBTC#btc", "to": "<i105-account-id>", "amount": "100000" } },
   "inclusion_path": "0x...",
   "header_hash": "0x..."
 }

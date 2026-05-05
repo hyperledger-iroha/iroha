@@ -1,11 +1,5 @@
 import { getNativeBinding } from "./native.js";
 
-const NORITO_HEADER_LENGTH = 40;
-const MAX_HEADER_PADDING = 64;
-const MAX_SAFE_NORITO_LENGTH = BigInt(Number.MAX_SAFE_INTEGER);
-const utf8Decoder =
-  typeof TextDecoder === "function" ? new TextDecoder("utf-8", { fatal: true }) : null;
-
 function isPlainObject(value) {
   if (value === null || typeof value !== "object") {
     return false;
@@ -40,6 +34,15 @@ function requireSorafsNativeBinding() {
   return binding;
 }
 
+function readPayloadField(object, ...names) {
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(object, name)) {
+      return object[name];
+    }
+  }
+  return undefined;
+}
+
 function formatAssignment(raw) {
   if (!raw || typeof raw !== "object") {
     return {
@@ -48,18 +51,20 @@ function formatAssignment(raw) {
       lane: null,
     };
   }
+  const providerValue = readPayloadField(raw, "provider_id_hex", "providerIdHex");
   const providerIdHex =
-    typeof raw.provider_id_hex === "string" ? raw.provider_id_hex : "";
-  const sliceValue = raw.slice_gib;
+    typeof providerValue === "string" ? providerValue : "";
+  const sliceValue = readPayloadField(raw, "slice_gib", "sliceGib");
+  const laneValue = readPayloadField(raw, "lane");
   return {
     providerIdHex,
     sliceGiB: typeof sliceValue === "number" ? sliceValue : Number(sliceValue ?? 0),
     lane:
-      typeof raw.lane === "string"
-        ? raw.lane
-        : raw.lane === null || raw.lane === undefined
+      typeof laneValue === "string"
+        ? laneValue
+        : laneValue === null || laneValue === undefined
         ? null
-        : String(raw.lane),
+        : String(laneValue),
   };
 }
 
@@ -81,9 +86,21 @@ function formatSla(raw) {
       minPorSuccessPercentMilli: 0,
     };
   }
-  const ingest = raw.ingest_deadline_secs;
-  const availability = raw.min_availability_percent_milli;
-  const por = raw.min_por_success_percent_milli;
+  const ingest = readPayloadField(
+    raw,
+    "ingest_deadline_secs",
+    "ingestDeadlineSecs",
+  );
+  const availability = readPayloadField(
+    raw,
+    "min_availability_percent_milli",
+    "minAvailabilityPercentMilli",
+  );
+  const por = readPayloadField(
+    raw,
+    "min_por_success_percent_milli",
+    "minPorSuccessPercentMilli",
+  );
   return {
     ingestDeadlineSecs: Number(ingest ?? 0),
     minAvailabilityPercentMilli: Number(availability ?? 0),
@@ -144,44 +161,70 @@ export class SorafsGatewayFetchError extends Error {
  */
 export function decodeReplicationOrder(bytes) {
   const buffer = toBuffer(bytes);
-  const binding = getNativeBinding();
-  let payload;
-  if (binding && typeof binding.sorafsDecodeReplicationOrder === "function") {
-    payload = binding.sorafsDecodeReplicationOrder(buffer);
-  } else {
-    payload = decodeReplicationOrderFallback(buffer);
+  const binding = requireSorafsNativeBinding();
+  if (typeof binding.sorafsDecodeReplicationOrder !== "function") {
+    throw new Error("Native binding does not expose sorafsDecodeReplicationOrder");
   }
+  const payload = binding.sorafsDecodeReplicationOrder(buffer);
   const assignments = Array.isArray(payload.assignments)
     ? payload.assignments.map((entry) => formatAssignment(entry))
     : [];
   const metadata = Array.isArray(payload.metadata)
     ? payload.metadata.map((entry) => formatMetadata(entry))
     : [];
-  const schemaVersion = Number(payload.schema_version ?? 0);
-  const orderIdHex =
-    typeof payload.order_id_hex === "string" ? payload.order_id_hex : "";
+  const schemaVersion = Number(
+    readPayloadField(payload, "schema_version", "schemaVersion") ?? 0,
+  );
+  const orderIdValue = readPayloadField(payload, "order_id_hex", "orderIdHex");
+  const orderIdHex = typeof orderIdValue === "string" ? orderIdValue : "";
+  const manifestCidUtf8Value = readPayloadField(
+    payload,
+    "manifest_cid_utf8",
+    "manifestCidUtf8",
+  );
   const manifestCidUtf8 =
-    payload.manifest_cid_utf8 === null
+    manifestCidUtf8Value === null
       ? null
-      : typeof payload.manifest_cid_utf8 === "string"
-      ? payload.manifest_cid_utf8
+      : typeof manifestCidUtf8Value === "string"
+      ? manifestCidUtf8Value
       : null;
+  const manifestCidBase64Value = readPayloadField(
+    payload,
+    "manifest_cid_base64",
+    "manifestCidBase64",
+  );
   const manifestCidBase64 =
-    typeof payload.manifest_cid_base64 === "string"
-      ? payload.manifest_cid_base64
-      : "";
+    typeof manifestCidBase64Value === "string" ? manifestCidBase64Value : "";
+  const manifestDigestValue = readPayloadField(
+    payload,
+    "manifest_digest_hex",
+    "manifestDigestHex",
+  );
   const manifestDigestHex =
-    typeof payload.manifest_digest_hex === "string"
-      ? payload.manifest_digest_hex
-      : "";
+    typeof manifestDigestValue === "string" ? manifestDigestValue : "";
+  const chunkingProfileValue = readPayloadField(
+    payload,
+    "chunking_profile",
+    "chunkingProfile",
+  );
   const chunkingProfile =
-    typeof payload.chunking_profile === "string"
-      ? payload.chunking_profile
-      : "";
-  const targetReplicas = payload.target_replicas ?? 0;
-  const issuedAtUnix = payload.issued_at_unix ?? 0;
-  const deadlineAtUnix = payload.deadline_at_unix ?? 0;
-  const sla = formatSla(payload.sla);
+    typeof chunkingProfileValue === "string" ? chunkingProfileValue : "";
+  const targetReplicas = readPayloadField(
+    payload,
+    "target_replicas",
+    "targetReplicas",
+  ) ?? 0;
+  const issuedAtUnix = readPayloadField(
+    payload,
+    "issued_at_unix",
+    "issuedAtUnix",
+  ) ?? 0;
+  const deadlineAtUnix = readPayloadField(
+    payload,
+    "deadline_at_unix",
+    "deadlineAtUnix",
+  ) ?? 0;
+  const sla = formatSla(readPayloadField(payload, "sla"));
   return {
     schemaVersion,
     orderIdHex,
@@ -196,305 +239,6 @@ export function decodeReplicationOrder(bytes) {
     sla,
     metadata,
   };
-}
-
-function decodeReplicationOrderFallback(buffer) {
-  try {
-    if (buffer.length < NORITO_HEADER_LENGTH) {
-      throw new Error("replication order payload is too small");
-    }
-    const magic = buffer.toString("ascii", 0, 4);
-    if (magic !== "NRT0") {
-      throw new Error("replication order payload is missing the Norito header");
-    }
-    const compression = buffer[22];
-    if (compression !== 0) {
-      throw new Error("compressed replication orders require the native decoder");
-    }
-    const declaredLength = buffer.readBigUInt64LE(23);
-    if (declaredLength > MAX_SAFE_NORITO_LENGTH) {
-      throw new Error("replication order payload is too large to decode in pure JS");
-    }
-    const payloadLength = Number(declaredLength);
-    const paddingLen = buffer.length - NORITO_HEADER_LENGTH - payloadLength;
-    if (paddingLen < 0) {
-      throw new Error("replication order payload is truncated");
-    }
-    if (paddingLen > MAX_HEADER_PADDING) {
-      throw new Error("replication order payload contains trailing bytes");
-    }
-    if (paddingLen > 0) {
-      for (let i = 0; i < paddingLen; i += 1) {
-        if (buffer[NORITO_HEADER_LENGTH + i] !== 0) {
-          throw new Error("replication order payload contains non-zero padding");
-        }
-      }
-    }
-    const payloadStart = NORITO_HEADER_LENGTH + paddingLen;
-    const payload = buffer.slice(payloadStart, payloadStart + payloadLength);
-    const reader = new NoritoChunkReader(payload, "replication order");
-    const schemaVersion = readU8Chunk(reader.readChunk("schema_version"), "schema_version");
-    const orderIdHex = toHex(reader.readChunk("order_id"), 32, "order_id_hex");
-    const manifestCidBytes = readByteVector(reader.readChunk("manifest_cid"), "manifest_cid");
-    const manifestDigestHex = toHex(
-      reader.readChunk("manifest_digest"),
-      32,
-      "manifest_digest_hex",
-    );
-    const chunkingProfile = readNoritoString(reader.readChunk("chunking_profile"));
-    const targetReplicas = readU16(reader.readChunk("target_replicas"), "target_replicas");
-    const assignments = readSequence(
-      reader.readChunk("assignments"),
-      (entry, index) => parseAssignment(entry, index),
-      "assignments",
-    );
-    const issuedAtUnix = readU64(reader.readChunk("issued_at"), "issued_at_unix");
-    const deadlineAtUnix = readU64(reader.readChunk("deadline_at"), "deadline_at_unix");
-    const sla = parseReplicationSla(reader.readChunk("sla"));
-    const metadata = readSequence(
-      reader.readChunk("metadata"),
-      (entry, index) => parseMetadata(entry, index),
-      "metadata",
-    );
-    reader.ensureFullyConsumed();
-    return {
-      schema_version: schemaVersion,
-      order_id_hex: orderIdHex,
-      manifest_cid_utf8: decodeUtf8Maybe(manifestCidBytes),
-      manifest_cid_base64: manifestCidBytes.toString("base64"),
-      manifest_digest_hex: manifestDigestHex,
-      chunking_profile: chunkingProfile,
-      target_replicas: targetReplicas,
-      assignments,
-      issued_at_unix: issuedAtUnix,
-      deadline_at_unix: deadlineAtUnix,
-      sla,
-      metadata,
-    };
-  } catch (error) {
-    const message =
-      error && typeof error.message === "string"
-        ? `failed to decode SoraFS replication order: ${error.message}`
-        : "failed to decode SoraFS replication order";
-    const wrapped = new Error(message);
-    if (error instanceof Error) {
-      wrapped.cause = error;
-    }
-    throw wrapped;
-  }
-}
-
-class NoritoChunkReader {
-  constructor(buffer, label = "chunk") {
-    this.buffer = buffer;
-    this.offset = 0;
-    this.label = label;
-  }
-
-  readChunk(context = this.label) {
-    if (this.offset + 8 > this.buffer.length) {
-      throw new Error(`${context} is truncated`);
-    }
-    const length = Number(this.buffer.readBigUInt64LE(this.offset));
-    this.offset += 8;
-    if (length < 0 || this.offset + length > this.buffer.length) {
-      throw new Error(`${context} is truncated`);
-    }
-    const slice = this.buffer.slice(this.offset, this.offset + length);
-    this.offset += length;
-    return slice;
-  }
-
-  ensureFullyConsumed(context = this.label) {
-    if (this.offset !== this.buffer.length) {
-      throw new Error(`${context} contains trailing bytes`);
-    }
-  }
-}
-
-function readSequence(chunk, parser, label) {
-  if (chunk.length < 8) {
-    throw new Error(`${label} is truncated`);
-  }
-  const length = chunk.readBigUInt64LE(0);
-  if (length > MAX_SAFE_NORITO_LENGTH) {
-    throw new Error(`${label} contains too many entries`);
-  }
-  const count = Number(length);
-  const reader = new NoritoChunkReader(chunk.slice(8), label);
-  const result = [];
-  for (let index = 0; index < count; index += 1) {
-    result.push(parser(reader.readChunk(`${label}[${index}]`), index));
-  }
-  reader.ensureFullyConsumed(label);
-  return result;
-}
-
-function readByteVector(chunk, label) {
-  const bytes = readSequence(
-    chunk,
-    (entry, index) => {
-      if (entry.length !== 1) {
-        throw new Error(`${label}[${index}] must be a byte`);
-      }
-      return entry[0];
-    },
-    label,
-  );
-  return Buffer.from(bytes);
-}
-
-function readNoritoString(chunk) {
-  if (chunk.length < 8) {
-    throw new Error("string chunk is truncated");
-  }
-  const declared = chunk.readBigUInt64LE(0);
-  if (declared > MAX_SAFE_NORITO_LENGTH) {
-    throw new Error("string value exceeds safe length");
-  }
-  const length = Number(declared);
-  const start = 8;
-  const end = start + length;
-  if (end > chunk.length) {
-    throw new Error("string chunk is truncated");
-  }
-  if (end !== chunk.length) {
-    throw new Error("string chunk contains trailing bytes");
-  }
-  return chunk.slice(start, end).toString("utf8");
-}
-
-function readU8Chunk(chunk, label) {
-  if (chunk.length !== 1) {
-    throw new Error(`${label} must be one byte`);
-  }
-  return chunk[0];
-}
-
-function readU16(chunk, label) {
-  if (chunk.length !== 2) {
-    throw new Error(`${label} must be two bytes`);
-  }
-  return chunk.readUInt16LE(0);
-}
-
-function readU32(chunk, label) {
-  if (chunk.length !== 4) {
-    throw new Error(`${label} must be four bytes`);
-  }
-  return chunk.readUInt32LE(0);
-}
-
-function readU64(chunk, label) {
-  if (chunk.length !== 8) {
-    throw new Error(`${label} must be eight bytes`);
-  }
-  const value = chunk.readBigUInt64LE(0);
-  if (value > MAX_SAFE_NORITO_LENGTH) {
-    throw new Error(`${label} exceeds the safe integer range`);
-  }
-  return Number(value);
-}
-
-function parseAssignment(chunk, index) {
-  const reader = new NoritoChunkReader(chunk, `assignments[${index}]`);
-  const providerHex = toHex(reader.readChunk(`assignments[${index}].provider_id_hex`), 32);
-  const sliceGiB = readU64(reader.readChunk(`assignments[${index}].slice_gib`), "slice_gib");
-  const laneChunk = reader.readChunk(`assignments[${index}].lane`);
-  const lane = parseOptionalString(laneChunk, `assignments[${index}].lane`);
-  reader.ensureFullyConsumed(`assignments[${index}]`);
-  return {
-    provider_id_hex: providerHex,
-    slice_gib: sliceGiB,
-    lane,
-  };
-}
-
-function parseOptionalString(chunk, label) {
-  if (chunk.length === 0) {
-    return null;
-  }
-  const discriminant = chunk[0];
-  if (discriminant === 0) {
-    return null;
-  }
-  if (discriminant !== 1) {
-    throw new Error(`${label} has invalid discriminant`);
-  }
-  if (chunk.length < 17) {
-    throw new Error(`${label} is truncated`);
-  }
-  const payloadLength = chunk.readBigUInt64LE(1);
-  let offset = 9;
-  if (payloadLength > MAX_SAFE_NORITO_LENGTH) {
-    throw new Error(`${label} payload length exceeds safe range`);
-  }
-  const declared = Number(payloadLength);
-  const stringLength = chunk.readBigUInt64LE(offset);
-  offset += 8;
-  if (stringLength > MAX_SAFE_NORITO_LENGTH) {
-    throw new Error(`${label} string is too long`);
-  }
-  const lengthNumber = Number(stringLength);
-  const end = offset + lengthNumber;
-  if (end > chunk.length) {
-    throw new Error(`${label} string is truncated`);
-  }
-  const text = chunk.slice(offset, end).toString("utf8");
-  const expected = lengthNumber + 8;
-  if (declared !== expected) {
-    throw new Error(`${label} length mismatch`);
-  }
-  return text;
-}
-
-function parseReplicationSla(chunk) {
-  const reader = new NoritoChunkReader(chunk, "sla");
-  const ingestDeadlineSecs = readU32(reader.readChunk("sla.ingestDeadlineSecs"), "sla.ingestDeadlineSecs");
-  const minAvailabilityPercentMilli = readU32(
-    reader.readChunk("sla.minAvailabilityPercentMilli"),
-    "sla.minAvailabilityPercentMilli",
-  );
-  const minPorSuccessPercentMilli = readU32(
-    reader.readChunk("sla.minPorSuccessPercentMilli"),
-    "sla.minPorSuccessPercentMilli",
-  );
-  reader.ensureFullyConsumed("sla");
-  return {
-    ingest_deadline_secs: ingestDeadlineSecs,
-    min_availability_percent_milli: minAvailabilityPercentMilli,
-    min_por_success_percent_milli: minPorSuccessPercentMilli,
-  };
-}
-
-function parseMetadata(chunk, index) {
-  const reader = new NoritoChunkReader(chunk, `metadata[${index}]`);
-  const key = readNoritoString(reader.readChunk(`metadata[${index}].key`));
-  const value = readNoritoString(reader.readChunk(`metadata[${index}].value`));
-  reader.ensureFullyConsumed(`metadata[${index}]`);
-  return { key, value };
-}
-
-function toHex(bytes, expectedLength, label) {
-  if (bytes.length !== expectedLength) {
-    throw new Error(`${label} must contain ${expectedLength} bytes`);
-  }
-  return bytes.toString("hex");
-}
-
-function decodeUtf8Maybe(bytes) {
-  if (bytes.length === 0) {
-    return "";
-  }
-  if (utf8Decoder) {
-    try {
-      return utf8Decoder.decode(bytes);
-    } catch {
-      return null;
-    }
-  }
-  const text = bytes.toString("utf8");
-  return Buffer.from(text, "utf8").equals(bytes) ? text : null;
 }
 
 function assertNonEmptyString(value, label) {
@@ -846,9 +590,6 @@ function normaliseGatewayOptions(options = {}) {
   if (typeof options.scoreboardAllowImplicitMetadata === "boolean") {
     native.scoreboard_allow_implicit_metadata = options.scoreboardAllowImplicitMetadata;
   }
-  if (typeof options.allowSingleSourceFallback === "boolean") {
-    native.allow_single_source_fallback = options.allowSingleSourceFallback;
-  }
   return native;
 }
 
@@ -1148,7 +889,6 @@ function transformGatewayMetadata(raw) {
       gatewayManifestCid: null,
       writeMode: "read-only",
       writeModeEnforcesPq: false,
-      allowSingleSourceFallback: false,
       allowImplicitMetadata: false,
     };
   }
@@ -1185,7 +925,6 @@ function transformGatewayMetadata(raw) {
       typeof raw.gateway_manifest_id === "string" ? raw.gateway_manifest_id : null,
     gatewayManifestCid:
       typeof raw.gateway_manifest_cid === "string" ? raw.gateway_manifest_cid : null,
-    allowSingleSourceFallback: Boolean(raw.allow_single_source_fallback),
     allowImplicitMetadata: Boolean(raw.allow_implicit_metadata),
   };
 }
@@ -1205,15 +944,6 @@ export function sorafsGatewayFetch(
   const normalizedChunkerHandle = assertNonEmptyString(chunkerHandle, "chunkerHandle");
   const normalizedPlanJson = assertNonEmptyString(planJson, "planJson");
   const { __nativeBinding: injectedBinding, ...restOptions } = baseOptions;
-  if (
-    restOptions.allowSingleSourceFallback !== undefined &&
-    restOptions.allowSingleSourceFallback !== null &&
-    typeof restOptions.allowSingleSourceFallback !== "boolean"
-  ) {
-    throw new TypeError(
-      "sorafsGatewayFetch options.allowSingleSourceFallback must be a boolean",
-    );
-  }
   const binding = injectedBinding ?? requireSorafsNativeBinding();
   if (!binding || typeof binding.sorafsGatewayFetch !== "function") {
     throw new Error(
@@ -1223,14 +953,13 @@ export function sorafsGatewayFetch(
   if (!Array.isArray(providers) || providers.length === 0) {
     throw new TypeError("providers must be a non-empty array");
   }
-  const allowSingleSourceFallback = restOptions.allowSingleSourceFallback === true;
   const nativeProviders = providers.map(normaliseGatewayProvider);
   const uniqueProviderCount = new Set(
     nativeProviders.map((spec) => spec.provider_id_hex),
   ).size;
-  if (!allowSingleSourceFallback && uniqueProviderCount < 2) {
+  if (uniqueProviderCount < 2) {
     throw new Error(
-      "sorafsGatewayFetch requires at least two gateway providers; set allowSingleSourceFallback: true to bypass this guard during incident downgrades.",
+      "sorafsGatewayFetch requires at least two gateway providers.",
     );
   }
   const nativeOptions = normaliseGatewayOptions(restOptions);

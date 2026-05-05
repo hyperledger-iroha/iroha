@@ -86,7 +86,7 @@ El corredor imprime el registro `info("Hello from Kotodama")` y efectúa la llam
 
 ## 4. Soumettre el código de bytes a través de ToriiComo nuevo y constantemente en el curso de ejecución, envíe el código de bytes a compilar un Torii con la CLI. La identidad de desarrollo por defecto está derivada de la clave pública en `defaults/client.toml`, donde la identificación de cuenta está
 ```
-i105...
+<i105-account-id>
 ```
 
 Utilice el archivo de configuración para guardar la URL Torii, el ID de la cadena y la clave de firma:
@@ -106,7 +106,7 @@ Utilice el perfil de meme CLI para recuperar el detalle de la cuenta que el cont
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

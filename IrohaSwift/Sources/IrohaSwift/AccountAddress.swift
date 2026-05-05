@@ -22,11 +22,11 @@ public enum AccountAddressError: Error, Equatable {
     case unknownCurve(UInt8)
     case unexpectedTrailingBytes
     case invalidI105PrefixEncoding(UInt8)
-    case missingCompressedSentinel
-    case compressedTooShort
-    case invalidCompressedChar(Character)
-    case invalidCompressedBase
-    case invalidCompressedDigit(Int)
+    case missingI105Sentinel
+    case invalidI105Base
+    case invalidI105Digit(Int)
+    case i105TooShort
+    case invalidI105Char(Character)
     case unsupportedAddressFormat
     case multisigMemberOverflow(Int)
     case invalidMultisigPolicy(String)
@@ -76,16 +76,16 @@ public enum AccountAddressError: Error, Equatable {
             return "ERR_UNEXPECTED_TRAILING_BYTES"
         case .invalidI105PrefixEncoding:
             return "ERR_INVALID_I105_PREFIX_ENCODING"
-        case .missingCompressedSentinel:
-            return "ERR_MISSING_COMPRESSED_SENTINEL"
-        case .compressedTooShort:
-            return "ERR_COMPRESSED_TOO_SHORT"
-        case .invalidCompressedChar:
-            return "ERR_INVALID_COMPRESSED_CHAR"
-        case .invalidCompressedBase:
-            return "ERR_INVALID_COMPRESSED_BASE"
-        case .invalidCompressedDigit:
-            return "ERR_INVALID_COMPRESSED_DIGIT"
+        case .missingI105Sentinel:
+            return "ERR_MISSING_I105_SENTINEL"
+        case .invalidI105Base:
+            return "ERR_INVALID_I105_BASE"
+        case .invalidI105Digit:
+            return "ERR_INVALID_I105_DIGIT"
+        case .i105TooShort:
+            return "ERR_I105_TOO_SHORT"
+        case .invalidI105Char:
+            return "ERR_INVALID_I105_CHAR"
         case .unsupportedAddressFormat:
             return "ERR_UNSUPPORTED_ADDRESS_FORMAT"
         case .multisigMemberOverflow:
@@ -99,7 +99,6 @@ public enum AccountAddressError: Error, Equatable {
 /// Structured representation of i105 outputs used by wallet/explorer UX.
 public struct AccountAddressDisplayFormats: Equatable {
     public let i105: String
-    public let i105Default: String
     public let networkPrefix: UInt16
     public let i105Warning: String
 }
@@ -108,6 +107,7 @@ public struct AccountAddress {
     private let header: AddressHeader
     private let domain: DomainSelector
     private let controller: ControllerPayload
+    private let rawCanonicalBytes: Data?
 
     struct ControllerInfo {
         let algorithm: SigningAlgorithm
@@ -129,12 +129,15 @@ public struct AccountAddress {
         public let digestBlake2b256Hex: String
     }
 
-    public static let defaultDomainName = "default"
-
     public static func fromAccount(publicKey: Data, algorithm: String = "ed25519") throws -> AccountAddress {
         let header = try AddressHeader.new(version: 0, classId: .singleKey, normVersion: 1)
         let controller = try ControllerPayload.singleKey(publicKey: publicKey, algorithm: algorithm)
-        return AccountAddress(header: header, domain: .default, controller: controller)
+        return AccountAddress(
+            header: header,
+            domain: .default,
+            controller: controller,
+            rawCanonicalBytes: nil
+        )
     }
 
     public static func fromCanonicalBytes(_ bytes: Data) throws -> AccountAddress {
@@ -142,24 +145,30 @@ public struct AccountAddress {
         let header = try AddressHeader.decode(bytes[0])
         let (controller, cursor) = try ControllerPayload.decode(bytes: bytes, cursor: 1)
         guard cursor == bytes.count else { throw AccountAddressError.unexpectedTrailingBytes }
-        return AccountAddress(header: header, domain: .default, controller: controller)
+        return AccountAddress(
+            header: header,
+            domain: .default,
+            controller: controller,
+            rawCanonicalBytes: bytes
+        )
+    }
+
+    static func parseEncodedSwiftOnly(_ input: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
+        if trimmed.lowercased().hasPrefix("0x") {
+            throw AccountAddressError.unsupportedAddressFormat
+        }
+        let (_, canonical) = try decodeI105String(trimmed, expectedDiscriminant: expectedPrefix)
+        let address = try AccountAddress.fromCanonicalBytes(canonical)
+        try ensureCanonicalI105Literal(trimmed, address: address)
+        return address
     }
 
     public static func fromI105(_ encoded: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
         let trimmed = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw AccountAddressError.invalidLength }
-        if let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
-            literal: trimmed,
-            expectedPrefix: expectedPrefix
-        ) {
-            return try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
-        }
-        let (_, canonical) = try decodeI105String(trimmed, expectedDiscriminant: expectedPrefix)
-        return try AccountAddress.fromCanonicalBytes(canonical)
-    }
-
-    public static func fromI105Default(_ encoded: String) throws -> AccountAddress {
-        try fromI105(encoded, expectedPrefix: AccountId.defaultNetworkPrefix)
+        return try parseEncodedSwiftOnly(trimmed, expectedPrefix: expectedPrefix)
     }
 
     public static func parseEncoded(_ input: String, expectedPrefix: UInt16? = nil) throws -> AccountAddress {
@@ -168,13 +177,13 @@ public struct AccountAddress {
         if trimmed.lowercased().hasPrefix("0x") {
             throw AccountAddressError.unsupportedAddressFormat
         }
-        if let bridged = try? NoritoNativeBridge.shared.parseAccountAddress(
-            literal: trimmed,
-            expectedPrefix: expectedPrefix
-        ) {
-            return try AccountAddress.fromCanonicalBytes(bridged.canonicalBytes)
+        do {
+            return try AccountAddress.fromI105(trimmed, expectedPrefix: expectedPrefix)
+        } catch AccountAddressError.missingI105Sentinel {
+            throw AccountAddressError.unsupportedAddressFormat
+        } catch {
+            throw error
         }
-        return try AccountAddress.fromI105(trimmed, expectedPrefix: expectedPrefix)
     }
 
     static func canonicalizeDomainLabel(_ raw: String) throws -> String {
@@ -196,6 +205,9 @@ public struct AccountAddress {
     }
 
     public func canonicalBytes() throws -> Data {
+        if let rawCanonicalBytes {
+            return rawCanonicalBytes
+        }
         var bytes = Data()
         bytes.append(header.encode())
         try controller.encode(into: &bytes)
@@ -209,12 +221,6 @@ public struct AccountAddress {
 
     public func toI105(networkPrefix: UInt16) throws -> String {
         let canonical = try canonicalBytes()
-        if let render = try? NoritoNativeBridge.shared.renderAccountAddress(
-            canonicalBytes: canonical,
-            networkPrefix: networkPrefix
-        ) {
-            return render.i105
-        }
         return try encodeI105String(discriminant: networkPrefix, canonical: canonical)
     }
 
@@ -222,40 +228,12 @@ public struct AccountAddress {
         try toI105(networkPrefix: chainDiscriminant)
     }
 
-    public func toI105Default() throws -> String {
-        try toI105(chainDiscriminant: AccountId.defaultNetworkPrefix)
-    }
-
-    public func toI105DefaultFullWidth() throws -> String {
-        let canonical = try canonicalBytes()
-        return try encodeI105String(
-            discriminant: AccountId.defaultNetworkPrefix,
-            canonical: canonical,
-            fullWidth: true
-        )
-    }
-
-    /// Returns canonical i105 output plus the UX warning required by
+    /// Returns canonical I105 output plus the UX warning required by
     /// `docs/source/sns/address_display_guidelines.md`.
     public func displayFormats(networkPrefix: UInt16 = 753) throws -> AccountAddressDisplayFormats {
         let canonical = try canonicalBytes()
-        if let render = try? NoritoNativeBridge.shared.renderAccountAddress(
-            canonicalBytes: canonical,
-            networkPrefix: networkPrefix
-        ) {
-            return AccountAddressDisplayFormats(
-                i105: render.i105,
-                i105Default: render.i105Default,
-                networkPrefix: networkPrefix,
-                i105Warning: AccountAddress.i105WarningMessage
-            )
-        }
         return AccountAddressDisplayFormats(
             i105: try encodeI105String(discriminant: networkPrefix, canonical: canonical),
-            i105Default: try encodeI105String(
-                discriminant: AccountId.defaultNetworkPrefix,
-                canonical: canonical
-            ),
             networkPrefix: networkPrefix,
             i105Warning: AccountAddress.i105WarningMessage
         )
@@ -299,8 +277,8 @@ public struct AccountAddress {
 
     static let multisigPersonalisation = Data("iroha-ms-policy".utf8)
     private static let i105WarningMessage =
-        "I105 addresses are the canonical account literal encoding. " +
-        "Use the chain-discriminant sentinel (for example, `sora` on discriminant 753)."
+        "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 half-width katakana from the Iroha poem. " +
+        "Render and validate them with the intended chain discriminant."
 }
 
 // MARK: - Internal components
@@ -353,17 +331,23 @@ private extension CurveId {
         case .mldsa:
             return "mldsa"
         #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case .blsNormal:
+            return "bls_normal"
+        case .blsSmall:
+            return "bls_small"
+        #endif
         #if IROHASWIFT_ENABLE_GOST
         case .gost256A:
-            return "gost3410_2012_256_paramset_a"
+            return "gost3410-2012-256-paramset-a"
         case .gost256B:
-            return "gost3410_2012_256_paramset_b"
+            return "gost3410-2012-256-paramset-b"
         case .gost256C:
-            return "gost3410_2012_256_paramset_c"
+            return "gost3410-2012-256-paramset-c"
         case .gost512A:
-            return "gost3410_2012_512_paramset_a"
+            return "gost3410-2012-512-paramset-a"
         case .gost512B:
-            return "gost3410_2012_512_paramset_b"
+            return "gost3410-2012-512-paramset-b"
         #endif
         #if IROHASWIFT_ENABLE_SM
         case .sm2:
@@ -384,9 +368,23 @@ private extension CurveId {
         case .mldsa:
             return .mlDsa
         #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case .blsNormal:
+            return .blsNormal
+        case .blsSmall:
+            return .blsSmall
+        #endif
         #if IROHASWIFT_ENABLE_GOST
-        case .gost256A, .gost256B, .gost256C, .gost512A, .gost512B:
-            return nil
+        case .gost256A:
+            return .gost2012_256A
+        case .gost256B:
+            return .gost2012_256B
+        case .gost256C:
+            return .gost2012_256C
+        case .gost512A:
+            return .gost2012_512A
+        case .gost512B:
+            return .gost2012_512B
         #endif
         #if IROHASWIFT_ENABLE_SM
         case .sm2:
@@ -559,44 +557,100 @@ private enum ControllerPayload {
             guard cursor + 1 < bytes.count else { throw AccountAddressError.invalidLength }
             let threshold = (UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1])
             cursor += 2
-            guard cursor < bytes.count else { throw AccountAddressError.invalidLength }
-            let memberCount = Int(bytes[cursor])
-            cursor += 1
-            guard memberCount <= multisigMemberMax else {
-                throw AccountAddressError.multisigMemberOverflow(memberCount)
-            }
-            var members: [MultisigMember] = []
-            members.reserveCapacity(memberCount)
-            for _ in 0..<memberCount {
-                guard cursor < bytes.count else { throw AccountAddressError.invalidLength }
-                let curveRaw = bytes[cursor]
-                cursor += 1
-                let curve = try CurveId.decode(rawValue: curveRaw)
-                guard cursor + 1 < bytes.count else { throw AccountAddressError.invalidLength }
-                let weight = (UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1])
-                cursor += 2
-                guard cursor + 1 < bytes.count else { throw AccountAddressError.invalidLength }
-                let keyLength = Int((UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1]))
-                cursor += 2
-                let end = cursor + keyLength
-                guard end <= bytes.count else { throw AccountAddressError.invalidLength }
-                let key = Data(bytes[cursor..<end])
-                cursor = end
-                members.append(MultisigMember(curve: curve, weight: weight, publicKey: key))
-            }
             guard threshold > 0 else {
                 throw AccountAddressError.invalidMultisigPolicy("ZeroThreshold")
             }
-            guard !members.isEmpty else {
-                throw AccountAddressError.invalidMultisigPolicy("EmptyMembers")
+            if let decoded = try decodeMultisigMembers(
+                bytes: bytes,
+                cursor: cursor,
+                version: version,
+                threshold: threshold,
+                countWidth: .u16
+            ) {
+                return decoded
             }
-            return (.multiSig(version: version, threshold: threshold, members: members), cursor)
+            if let decoded = try decodeMultisigMembers(
+                bytes: bytes,
+                cursor: cursor,
+                version: version,
+                threshold: threshold,
+                countWidth: .u8
+            ) {
+                return decoded
+            }
+            throw AccountAddressError.invalidLength
         }
     }
 
     private enum ControllerPayloadTag: UInt8 {
         case singleKey = 0x00
         case multiSig = 0x01
+    }
+
+    private enum MultisigCountWidth {
+        case u8
+        case u16
+    }
+
+    private static func decodeMultisigMembers(
+        bytes: Data,
+        cursor: Int,
+        version: UInt8,
+        threshold: UInt16,
+        countWidth: MultisigCountWidth
+    ) throws -> (ControllerPayload, Int)? {
+        var cursor = cursor
+        let memberCount: Int
+        switch countWidth {
+        case .u8:
+            guard cursor < bytes.count else {
+                return nil
+            }
+            memberCount = Int(bytes[cursor])
+            cursor += 1
+        case .u16:
+            guard cursor + 1 < bytes.count else {
+                return nil
+            }
+            memberCount = Int((UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1]))
+            cursor += 2
+        }
+        guard memberCount <= multisigMemberMax else {
+            return nil
+        }
+
+        var members: [MultisigMember] = []
+        members.reserveCapacity(memberCount)
+        for _ in 0..<memberCount {
+            guard cursor < bytes.count else {
+                return nil
+            }
+            let curveRaw = bytes[cursor]
+            cursor += 1
+            let curve = try CurveId.decode(rawValue: curveRaw)
+            guard cursor + 1 < bytes.count else {
+                return nil
+            }
+            let weight = (UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1])
+            cursor += 2
+            guard cursor + 1 < bytes.count else {
+                return nil
+            }
+            let keyLength = Int((UInt16(bytes[cursor]) << 8) | UInt16(bytes[cursor + 1]))
+            cursor += 2
+            let end = cursor + keyLength
+            guard end <= bytes.count else {
+                return nil
+            }
+            let key = Data(bytes[cursor..<end])
+            cursor = end
+            members.append(MultisigMember(curve: curve, weight: weight, publicKey: key))
+        }
+
+        // Preserve already-issued on-chain identifiers even when the embedded
+        // multisig policy is degenerate. Callers that need to validate or build
+        // policies should enforce stronger invariants separately.
+        return (.multiSig(version: version, threshold: threshold, members: members), cursor)
     }
 }
 
@@ -695,6 +749,10 @@ private enum CurveId: UInt8 {
     #if IROHASWIFT_ENABLE_MLDSA
     case mldsa = 2
     #endif
+    #if IROHASWIFT_ENABLE_BLS
+    case blsNormal = 3
+    case blsSmall = 5
+    #endif
     #if IROHASWIFT_ENABLE_GOST
     case gost256A = 10
     case gost256B = 11
@@ -717,6 +775,12 @@ private enum CurveId: UInt8 {
         #if IROHASWIFT_ENABLE_MLDSA
         case CurveId.mldsa.rawValue:
             return .mldsa
+        #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case CurveId.blsNormal.rawValue:
+            return .blsNormal
+        case CurveId.blsSmall.rawValue:
+            return .blsSmall
         #endif
         #if IROHASWIFT_ENABLE_GOST
         case CurveId.gost256A.rawValue:
@@ -752,17 +816,27 @@ private enum CurveId: UInt8 {
         case "ml-dsa", "mldsa", "ml_dsa":
             return .mldsa
         #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case "bls_normal", "bls-normal", "blsnormal", "bls12-381-g1":
+            return .blsNormal
+        case "bls_small", "bls-small", "blssmall", "bls12-381-g2":
+            return .blsSmall
+        #endif
         #if IROHASWIFT_ENABLE_GOST
-        case "gost256a", "gost-256-a":
+        case "gost256a", "gost-256-a", "gost3410-2012-256-paramset-a":
             return .gost256A
-        case "gost256b", "gost-256-b":
+        case "gost256b", "gost-256-b", "gost3410-2012-256-paramset-b":
             return .gost256B
-        case "gost256c", "gost-256-c":
+        case "gost256c", "gost-256-c", "gost3410-2012-256-paramset-c":
             return .gost256C
-        case "gost512a", "gost-512-a":
+        case "gost512a", "gost-512-a", "gost3410-2012-512-paramset-a":
             return .gost512A
-        case "gost512b", "gost-512-b":
+        case "gost512b", "gost-512-b", "gost3410-2012-512-paramset-b":
             return .gost512B
+        #endif
+        #if IROHASWIFT_ENABLE_SM
+        case "sm2", "sm-2":
+            return .sm2
         #endif
         default:
             throw AccountAddressError.unsupportedAlgorithm(algorithm)
@@ -777,6 +851,22 @@ private enum CurveId: UInt8 {
         case .secp256k1:
             return 33
         #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case .blsNormal:
+            return 48
+        case .blsSmall:
+            return 96
+        #endif
+        #if IROHASWIFT_ENABLE_GOST
+        case .gost256A, .gost256B, .gost256C:
+            return 64
+        case .gost512A, .gost512B:
+            return 128
+        #endif
+        #if IROHASWIFT_ENABLE_SM
+        case .sm2:
+            return 65
+        #endif
         default:
             return nil
         }
@@ -785,42 +875,18 @@ private enum CurveId: UInt8 {
 
 // MARK: - Encoding helpers
 
-private let i105AsciiAlphabet: [String] = [
-    "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "H", "J", "K",
-    "L", "M", "N", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c", "d", "e",
-    "f", "g", "h", "i", "j", "k", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y",
-    "z",
+private let base58Alphabet = Array("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz").map(String.init)
+private let irohaPoemKanaHalfwidth: [String] = [
+    "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
+    "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
+    "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
 ]
-
-private let soraKana: [String] = [
-    "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ", "ﾚ", "ｿ", "ﾂ",
-    "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ",
-    "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
-]
-
-private let soraKanaFullwidth: [String] = [
-    "イ", "ロ", "ハ", "ニ", "ホ", "ヘ", "ト", "チ", "リ", "ヌ", "ル", "ヲ", "ワ", "カ", "ヨ", "タ",
-    "レ", "ソ", "ツ", "ネ", "ナ", "ラ", "ム", "ウ", "ヰ", "ノ", "オ", "ク", "ヤ", "マ", "ケ", "フ",
-    "コ", "エ", "テ", "ア", "サ", "キ", "ユ", "メ", "ミ", "シ", "ヱ", "ヒ", "モ", "セ", "ス",
-]
-
-private let compressedAlphabet: [String] = i105AsciiAlphabet + soraKana
-private let compressedAlphabetFullwidth: [String] = i105AsciiAlphabet + soraKanaFullwidth
-private let compressedIndex: [String: Int] = {
-    var mapping = Dictionary(uniqueKeysWithValues: compressedAlphabet.enumerated().map { ($1, $0) })
-    for (index, symbol) in compressedAlphabetFullwidth.enumerated() {
-        mapping[symbol] = index
-    }
-    return mapping
-}()
-
-private let compressedSentinel = "sora"
-private let compressedChecksumLength = 6
-private let compressedBase = compressedAlphabet.count
 private let localDomainKey = Data("SORA-LOCAL-K:v1".utf8)
 private let multisigMemberMax = 0xFF
 private let blake2bBlockLength = 128
-
+private let compressedAlphabet: [String] = base58Alphabet + irohaPoemKanaHalfwidth
+private let compressedChecksumLength = 6
+private let compressedBase = compressedAlphabet.count
 private let i105DiscriminantSora: UInt16 = 0x02F1
 private let i105DiscriminantTest: UInt16 = 0x0171
 private let i105DiscriminantDev: UInt16 = 0x0000
@@ -829,69 +895,31 @@ private let i105SentinelTest = "test"
 private let i105SentinelDev = "dev"
 private let i105SentinelNumericPrefix = "n"
 
-private func i105Sentinel(for discriminant: UInt16) -> String {
-    switch discriminant {
-    case i105DiscriminantSora:
-        return i105SentinelSora
-    case i105DiscriminantTest:
-        return i105SentinelTest
-    case i105DiscriminantDev:
-        return i105SentinelDev
-    default:
-        return "\(i105SentinelNumericPrefix)\(discriminant)"
+private func lookupI105Digit(_ symbol: String) -> Int? {
+    if let canonical = compressedAlphabet.firstIndex(of: symbol) {
+        return canonical
     }
+    return nil
 }
 
-private func parseI105SentinelAndPayload(_ encoded: String) -> (UInt16, Substring)? {
-    if encoded.hasPrefix(i105SentinelSora) {
-        return (i105DiscriminantSora, encoded.dropFirst(i105SentinelSora.count))
+private func ensureCanonicalI105Literal(_ literal: String, address: AccountAddress) throws {
+    guard let (discriminant, _) = parseI105SentinelAndPayload(literal) else {
+        throw AccountAddressError.unsupportedAddressFormat
     }
-    if encoded.hasPrefix(i105SentinelTest) {
-        return (i105DiscriminantTest, encoded.dropFirst(i105SentinelTest.count))
-    }
-    if encoded.hasPrefix(i105SentinelDev) {
-        return (i105DiscriminantDev, encoded.dropFirst(i105SentinelDev.count))
-    }
-    guard encoded.hasPrefix(i105SentinelNumericPrefix) else { return nil }
-    let tail = encoded.dropFirst(i105SentinelNumericPrefix.count)
-    var digits = ""
-    var index = tail.startIndex
-    while index < tail.endIndex, tail[index].isNumber {
-        digits.append(tail[index])
-        index = tail.index(after: index)
-    }
-    guard !digits.isEmpty, let parsed = UInt16(digits) else { return nil }
-    return (parsed, tail[index...])
+    let canonical = try address.toI105(networkPrefix: discriminant)
+    guard canonical == literal else { throw AccountAddressError.unsupportedAddressFormat }
 }
 
 private func decodeI105String(_ encoded: String,
                               expectedDiscriminant: UInt16? = nil) throws -> (UInt16, Data) {
     guard let (discriminant, payload) = parseI105SentinelAndPayload(encoded) else {
-        throw AccountAddressError.missingCompressedSentinel
+        throw AccountAddressError.missingI105Sentinel
     }
     if let expectedDiscriminant, discriminant != expectedDiscriminant {
         throw AccountAddressError.unexpectedNetworkPrefix(expected: expectedDiscriminant,
                                                           found: discriminant)
     }
-    guard payload.count > compressedChecksumLength else {
-        throw AccountAddressError.compressedTooShort
-    }
-    var digits: [Int] = []
-    for symbol in payload {
-        let key = String(symbol)
-        guard let value = compressedIndex[key] else {
-            throw AccountAddressError.invalidCompressedChar(symbol)
-        }
-        digits.append(value)
-    }
-    let dataDigits = Array(digits.dropLast(compressedChecksumLength))
-    let checksumDigits = Array(digits.suffix(compressedChecksumLength))
-    let canonicalBytes = try decodeBaseN(digits: dataDigits, base: compressedBase)
-    let expected = compressedChecksumDigits(canonical: Data(canonicalBytes))
-    guard checksumDigits.elementsEqual(expected) else {
-        throw AccountAddressError.checksumMismatch
-    }
-    return (discriminant, Data(canonicalBytes))
+    return (discriminant, try decodeI105Payload(String(payload)))
 }
 
 private func encodeI105String(discriminant: UInt16,
@@ -899,38 +927,23 @@ private func encodeI105String(discriminant: UInt16,
                               fullWidth: Bool = false) throws -> String {
     let digits = try encodeBaseN(bytes: Array(canonical), base: compressedBase)
     let checksum = compressedChecksumDigits(canonical: canonical)
-    let alphabet = fullWidth ? compressedAlphabetFullwidth : compressedAlphabet
+    let alphabet = compressedAlphabet
     var parts = [i105Sentinel(for: discriminant)]
     parts.append(contentsOf: digits.map { alphabet[$0] })
     parts.append(contentsOf: checksum.map { alphabet[$0] })
     return parts.joined()
 }
 
-private func encodeCompressedString(canonical: Data, fullWidth: Bool = false) throws -> String {
-    let digits = try encodeBaseN(bytes: Array(canonical), base: compressedBase)
-    let checksum = compressedChecksumDigits(canonical: canonical)
-    let alphabet = fullWidth ? compressedAlphabetFullwidth : compressedAlphabet
-    var parts = [compressedSentinel]
-    parts.append(contentsOf: digits.map { alphabet[$0] })
-    parts.append(contentsOf: checksum.map { alphabet[$0] })
-    return parts.joined()
-}
-
-private func decodeCompressedString(_ encoded: String) throws -> Data {
-    guard encoded.hasPrefix(compressedSentinel) else {
-        throw AccountAddressError.missingCompressedSentinel
-    }
-    let payload = encoded.dropFirst(compressedSentinel.count)
-    guard payload.count > compressedChecksumLength else {
-        throw AccountAddressError.compressedTooShort
-    }
-    var digits: [Int] = []
-    for symbol in payload {
-        let key = String(symbol)
-        guard let value = compressedIndex[key] else {
-            throw AccountAddressError.invalidCompressedChar(symbol)
+private func decodeI105Payload(_ payload: String) throws -> Data {
+    let digits = try payload.map { symbol -> Int in
+        let string = String(symbol)
+        guard let value = lookupI105Digit(string) else {
+            throw AccountAddressError.invalidI105Char(symbol)
         }
-        digits.append(value)
+        return value
+    }
+    guard digits.count > compressedChecksumLength else {
+        throw AccountAddressError.i105TooShort
     }
     let dataDigits = Array(digits.dropLast(compressedChecksumLength))
     let checksumDigits = Array(digits.suffix(compressedChecksumLength))
@@ -943,7 +956,7 @@ private func decodeCompressedString(_ encoded: String) throws -> Data {
 }
 
 private func encodeBaseN(bytes: [UInt8], base: Int) throws -> [Int] {
-    guard base >= 2 else { throw AccountAddressError.invalidCompressedBase }
+    guard base >= 2 else { throw AccountAddressError.invalidI105Base }
     if bytes.isEmpty { return [0] }
     var value = bytes
     var leadingZeros = 0
@@ -970,10 +983,10 @@ private func encodeBaseN(bytes: [UInt8], base: Int) throws -> [Int] {
 }
 
 private func decodeBaseN(digits: [Int], base: Int) throws -> [UInt8] {
-    guard base >= 2 else { throw AccountAddressError.invalidCompressedBase }
+    guard base >= 2 else { throw AccountAddressError.invalidI105Base }
     guard !digits.isEmpty else { throw AccountAddressError.invalidLength }
     for digit in digits where digit < 0 || digit >= base {
-        throw AccountAddressError.invalidCompressedDigit(digit)
+        throw AccountAddressError.invalidI105Digit(digit)
     }
     var value = digits
     var leadingZeros = 0
@@ -997,6 +1010,65 @@ private func decodeBaseN(digits: [Int], base: Int) throws -> [UInt8] {
     bytes.append(contentsOf: Array(repeating: 0, count: leadingZeros))
     if bytes.isEmpty { bytes.append(0) }
     return bytes.reversed()
+}
+
+private func i105Sentinel(for discriminant: UInt16) -> String {
+    switch discriminant {
+    case i105DiscriminantSora:
+        return i105SentinelSora
+    case i105DiscriminantTest:
+        return i105SentinelTest
+    case i105DiscriminantDev:
+        return i105SentinelDev
+    default:
+        return "\(i105SentinelNumericPrefix)\(discriminant)"
+    }
+}
+
+private func parseI105SentinelAndPayload(_ encoded: String) -> (UInt16, Substring)? {
+    if encoded.hasPrefix(i105SentinelSora) {
+        return (i105DiscriminantSora, encoded.dropFirst(i105SentinelSora.count))
+    }
+    if encoded.hasPrefix(i105SentinelTest) {
+        return (i105DiscriminantTest, encoded.dropFirst(i105SentinelTest.count))
+    }
+    if encoded.hasPrefix(i105SentinelDev) {
+        return (i105DiscriminantDev, encoded.dropFirst(i105SentinelDev.count))
+    }
+
+    let tail: Substring
+    if encoded.hasPrefix(i105SentinelNumericPrefix) {
+        tail = encoded.dropFirst(i105SentinelNumericPrefix.count)
+    } else {
+        return nil
+    }
+
+    var digits = ""
+    var index = tail.startIndex
+    while index < tail.endIndex, let value = asciiDigit(from: tail[index]) {
+        digits.append(value)
+        index = tail.index(after: index)
+    }
+    guard !digits.isEmpty, let parsed = UInt16(digits) else { return nil }
+    return (parsed, tail[index...])
+}
+
+private func asciiDigit(from character: Character) -> Character? {
+    guard let scalar = character.unicodeScalars.first,
+          character.unicodeScalars.count == 1 else {
+        return nil
+    }
+    switch scalar.value {
+    case 0x30...0x39:
+        return character
+    default:
+        return nil
+    }
+}
+
+private func computeLocalDigest(label: String) -> Data {
+    let digest = Blake2s.hash(data: Data(label.utf8), key: localDomainKey, outputLength: 32)
+    return Data(digest.prefix(12))
 }
 
 private func convertToBase32(data: Data) -> [Int] {
@@ -1059,11 +1131,6 @@ private func bech32mChecksum(data: Data) -> [Int] {
 
 private func compressedChecksumDigits(canonical: Data) -> [Int] {
     bech32mChecksum(data: canonical)
-}
-
-private func computeLocalDigest(label: String) -> Data {
-    let digest = Blake2s.hash(data: Data(label.utf8), key: localDomainKey, outputLength: 32)
-    return Data(digest.prefix(12))
 }
 
 extension AccountAddressError {
@@ -1155,19 +1222,19 @@ extension AccountAddressError {
             if let value = uInt8Field("value", fields: fields) {
                 return AccountAddressError.invalidI105PrefixEncoding(value)
             }
-        case "ERR_MISSING_COMPRESSED_SENTINEL":
-            return AccountAddressError.missingCompressedSentinel
-        case "ERR_COMPRESSED_TOO_SHORT":
-            return AccountAddressError.compressedTooShort
-        case "ERR_INVALID_COMPRESSED_CHAR":
-            if let value = fields["char"] as? String, let character = value.first {
-                return AccountAddressError.invalidCompressedChar(character)
-            }
-        case "ERR_INVALID_COMPRESSED_BASE":
-            return AccountAddressError.invalidCompressedBase
-        case "ERR_INVALID_COMPRESSED_DIGIT":
+        case "ERR_MISSING_I105_SENTINEL":
+            return AccountAddressError.missingI105Sentinel
+        case "ERR_INVALID_I105_BASE":
+            return AccountAddressError.invalidI105Base
+        case "ERR_INVALID_I105_DIGIT":
             if let digit = intField("digit", fields: fields) {
-                return AccountAddressError.invalidCompressedDigit(digit)
+                return AccountAddressError.invalidI105Digit(digit)
+            }
+        case "ERR_I105_TOO_SHORT":
+            return AccountAddressError.i105TooShort
+        case "ERR_INVALID_I105_CHAR":
+            if let value = fields["char"] as? String, let character = value.first {
+                return AccountAddressError.invalidI105Char(character)
             }
         case "ERR_LOCAL8_DEPRECATED":
             return AccountAddressError.unsupportedAddressFormat
@@ -1224,10 +1291,33 @@ extension AccountAddress {
         return writer.data
     }
 
+    func compactNoritoAccountControllerPayload() throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        switch controller {
+        case .singleKey(let curve, let publicKey):
+            let keyPayload = try compactNoritoPublicKeyPayload(curve: curve, publicKey: publicKey)
+            writer.writeUInt32LE(0)
+            writer.writeField(keyPayload)
+        case .multiSig(let version, let threshold, let members):
+            let policyPayload = try compactNoritoMultisigPolicyPayload(version: version,
+                                                                       threshold: threshold,
+                                                                       members: members)
+            writer.writeUInt32LE(1)
+            writer.writeField(policyPayload)
+        }
+        return writer.data
+    }
+
     private func noritoPublicKeyPayload(curve: CurveId, publicKey: Data) throws -> Data {
         let algorithm = try noritoSigningAlgorithm(for: curve)
         let multihash = OfflineNorito.publicKeyMultihash(algorithm: algorithm, payload: publicKey)
         return OfflineNorito.encodeString(multihash)
+    }
+
+    private func compactNoritoPublicKeyPayload(curve: CurveId, publicKey: Data) throws -> Data {
+        let algorithm = try noritoSigningAlgorithm(for: curve)
+        let multihash = OfflineNorito.publicKeyMultihash(algorithm: algorithm, payload: publicKey)
+        return OfflineCompactNorito.encodeString(multihash)
     }
 
     private func noritoMultisigPolicyPayload(
@@ -1249,6 +1339,25 @@ extension AccountAddress {
         return writer.data
     }
 
+    private func compactNoritoMultisigPolicyPayload(
+        version: UInt8,
+        threshold: UInt16,
+        members: [ControllerPayload.MultisigMember]
+    ) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(OfflineCompactNorito.encodeUInt8(version))
+        writer.writeField(OfflineCompactNorito.encodeUInt16(threshold))
+        let membersPayload = try OfflineCompactNorito.encodeVec(members) { member in
+            var memberWriter = OfflineCompactNoritoWriter()
+            let keyPayload = try compactNoritoPublicKeyPayload(curve: member.curve, publicKey: member.publicKey)
+            memberWriter.writeField(keyPayload)
+            memberWriter.writeField(OfflineCompactNorito.encodeUInt16(member.weight))
+            return memberWriter.data
+        }
+        writer.writeField(membersPayload)
+        return writer.data
+    }
+
     private func noritoSigningAlgorithm(for curve: CurveId) throws -> SigningAlgorithm {
         switch curve {
         case .ed25519:
@@ -1261,9 +1370,23 @@ extension AccountAddress {
         case .mldsa:
             return .mlDsa
         #endif
+        #if IROHASWIFT_ENABLE_BLS
+        case .blsNormal:
+            return .blsNormal
+        case .blsSmall:
+            return .blsSmall
+        #endif
         #if IROHASWIFT_ENABLE_GOST
-        case .gost256A, .gost256B, .gost256C, .gost512A, .gost512B:
-            throw OfflineNoritoError.invalidAccountId("unsupported GOST account controller")
+        case .gost256A:
+            return .gost2012_256A
+        case .gost256B:
+            return .gost2012_256B
+        case .gost256C:
+            return .gost2012_256C
+        case .gost512A:
+            return .gost2012_512A
+        case .gost512B:
+            return .gost2012_512B
         #endif
         #if IROHASWIFT_ENABLE_SM
         case .sm2:
@@ -1387,6 +1510,48 @@ public final class MultisigPolicyBuilder {
         case .mlDsa:
             #if IROHASWIFT_ENABLE_MLDSA
             return .mldsa
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .blsNormal:
+            #if IROHASWIFT_ENABLE_BLS
+            return .blsNormal
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .blsSmall:
+            #if IROHASWIFT_ENABLE_BLS
+            return .blsSmall
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .gost2012_256A:
+            #if IROHASWIFT_ENABLE_GOST
+            return .gost256A
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .gost2012_256B:
+            #if IROHASWIFT_ENABLE_GOST
+            return .gost256B
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .gost2012_256C:
+            #if IROHASWIFT_ENABLE_GOST
+            return .gost256C
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .gost2012_512A:
+            #if IROHASWIFT_ENABLE_GOST
+            return .gost512A
+            #else
+            throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
+            #endif
+        case .gost2012_512B:
+            #if IROHASWIFT_ENABLE_GOST
+            return .gost512B
             #else
             throw MultisigBuilderError.unsupportedAlgorithm(algorithm)
             #endif

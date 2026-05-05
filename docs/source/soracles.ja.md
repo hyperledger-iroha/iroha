@@ -132,8 +132,8 @@ binding 上限、日次予算、deny-list を設定する。プロモーショ�
   形状と数量を受け取って Norito-ready の命令オブジェクトを返す。
 
 これらのフィクスチャは正準ハッシュ表記（`hash:...#...`）、大文字署名、
-決定論的 ed25519 キーから導出した I105 プロバイダ ID（例:
-`34mSYnLrmfrui7Ba2h9RbAPY1hHa7ZCvLRLUSYBujVoUYk1eeBFAZPChUmyGTH47EtrQxAFVA`）を
+決定論的 ed25519 キーから導出した i105 プロバイダ ID（例:
+`sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D`）を
 使用する。
 
 社会/PII を含むフィードでは、`ObservationValue::from_hash`, `from_keyed_hash`,

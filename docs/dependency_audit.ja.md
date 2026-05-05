@@ -34,7 +34,7 @@ translator: manual
 - AEAD／共通鍵暗号: `aes-gcm`、`chacha20poly1305`、`aead` トレイト（RustCrypto）— 標準的。
 - 署名／ECC: `ed25519-dalek`、`x25519-dalek`（dalek プロジェクト）、`k256`（RustCrypto）、`secp256k1`（libsecp バインディング）— いずれも正当。実装の重複を避けるため、可能なら `k256` か `secp256k1` のどちらかに揃える。
 - BLS12-381／ZK: `blstrs`、`halo2_*` — ZK エコシステムで広く実績あり。
-- PQ: `pqcrypto-dilithium`、`pqcrypto-traits` — リファレンスクレートとして信頼できる。
+- PQ: `pqcrypto-mldsa`、`pqcrypto-traits` — リファレンスクレートとして信頼できる。
 - TLS: `rustls`、`tokio-rustls`、`hyper-rustls` — 現代的な Rust TLS スタックの標準。
 - Noise: `snow` — 標準的な実装。
 - シリアライゼーション: `parity-scale-codec` は SCALE の標準。Serde は本番依存から削除済みで、Norito の derive／writer がすべてのランタイム経路をカバー。残存する Serde 参照は履歴ドキュメント、ガードレールスクリプト、テスト専用の許可リストのみ。

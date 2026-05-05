@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +18,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
@@ -30,9 +33,7 @@ import org.hyperledger.iroha.android.nexus.UaidManifestQuery;
 import org.hyperledger.iroha.android.nexus.UaidManifestsResponse;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
-import org.hyperledger.iroha.android.offline.OfflineAuditLogger;
 import org.hyperledger.iroha.android.offline.OfflineJournalKey;
-import org.hyperledger.iroha.android.offline.OfflineWallet;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
@@ -43,6 +44,9 @@ import org.hyperledger.iroha.android.telemetry.NetworkContextProvider;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
 import org.hyperledger.iroha.android.telemetry.TelemetrySink;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamClient;
+import org.hyperledger.iroha.android.client.stream.ToriiEventStream;
+import org.hyperledger.iroha.android.client.stream.ToriiEventStreamListener;
+import org.hyperledger.iroha.android.client.stream.ToriiEventStreamOptions;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
@@ -100,6 +104,52 @@ public final class HttpClientTransport implements IrohaClient {
             : System.currentTimeMillis() + Math.max(0L, resolved.timeoutMillis());
     final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
     pollPipelineStatus(hashHex, resolved, deadline, 0, null, future);
+    return future;
+  }
+
+  @Override
+  public CompletableFuture<Map<String, Object>> waitForTransactionStatusStream(
+      final String hashHex, final PipelineStatusOptions options) {
+    Objects.requireNonNull(hashHex, "hashHex");
+    final PipelineStatusOptions resolved = PipelineStatusOptions.resolve(options);
+    final long deadline =
+        resolved.timeoutMillis() == null
+            ? Long.MAX_VALUE
+            : System.currentTimeMillis() + Math.max(0L, resolved.timeoutMillis());
+    final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
+    fetchPipelineStatusSnapshot(hashHex)
+        .whenComplete(
+            (payload, throwable) -> {
+              if (future.isDone()) {
+                return;
+              }
+              if (throwable != null) {
+                final Throwable cause = unwrapCompletion(throwable);
+                future.completeExceptionally(cause);
+                return;
+              }
+
+              final AtomicInteger attempts = new AtomicInteger(payload == null ? 0 : 1);
+              final AtomicReference<Map<String, Object>> lastPayload = new AtomicReference<>(payload);
+              if (payload != null
+                  && processPipelineTerminalPayload(
+                      hashHex, resolved, payload, attempts.get(), future)) {
+                return;
+              }
+
+              if (deadline != Long.MAX_VALUE && System.currentTimeMillis() >= deadline) {
+                future.completeExceptionally(
+                    new TransactionTimeoutException(
+                        "Transaction " + hashHex + " did not reach a terminal status "
+                            + "within the configured timeout",
+                        hashHex,
+                        attempts.get(),
+                        lastPayload.get()));
+                return;
+              }
+
+              openPipelineStatusStream(hashHex, resolved, deadline, attempts, lastPayload, future);
+            });
     return future;
   }
 
@@ -212,6 +262,199 @@ public final class HttpClientTransport implements IrohaClient {
     return fetchJson(request, UaidJsonParser::parseManifests, "UAID manifests");
   }
 
+  /** Fetches globally registered identifier policies from `/v1/identifier-policies`. */
+  public CompletableFuture<IdentifierPolicyListResponse> listIdentifierPolicies() {
+    final TransportRequest request = buildJsonGetRequest("/v1/identifier-policies", Map.of());
+    return fetchJson(request, IdentifierJsonParser::parsePolicyList, "identifier policy list");
+  }
+
+  /** Fetches globally registered RAM-LFE program policies from `/v1/ram-lfe/program-policies`. */
+  public CompletableFuture<RamLfeProgramPolicyListResponse> listRamLfeProgramPolicies() {
+    final TransportRequest request =
+        buildJsonGetRequest("/v1/ram-lfe/program-policies", Map.of());
+    return fetchJson(request, RamLfeJsonParser::parsePolicyList, "ram-lfe program policy list");
+  }
+
+  /** Fetches a persisted identifier claim by its deterministic receipt hash. */
+  public CompletableFuture<Optional<IdentifierClaimRecord>> getIdentifierClaimByReceiptHash(
+      final String receiptHash) {
+    final String normalizedReceiptHash = normalizeHex32(receiptHash, "receiptHash");
+    final TransportRequest request =
+        buildJsonGetRequest(
+            "/v1/identifiers/receipts/" + encodePathSegment(normalizedReceiptHash), Map.of());
+    return fetchJsonAllowingNotFound(
+        request, IdentifierJsonParser::parseClaimRecord, "identifier claim lookup");
+  }
+
+  /** Resolves an identifier using a typed request wrapper. */
+  public CompletableFuture<Optional<IdentifierResolutionReceipt>> resolveIdentifier(
+      final IdentifierResolveRequest requestBody) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final byte[] body =
+        encodeJsonBody(
+            buildIdentifierResolvePayload(
+                requestBody.policyId(), requestBody.input(), requestBody.encryptedInputHex()));
+    final TransportRequest request = buildJsonPostRequest("/v1/identifiers/resolve", body);
+    return fetchJsonAllowingNotFound(
+        request, IdentifierJsonParser::parseResolutionReceipt, "identifier resolve");
+  }
+
+  /**
+   * Resolves a hidden identifier by posting either a plaintext input or BFV ciphertext hex to
+   * `/v1/identifiers/resolve`.
+   */
+  public CompletableFuture<Optional<IdentifierResolutionReceipt>> resolveIdentifier(
+      final String policyId, final String input, final String encryptedInputHex) {
+    return resolveIdentifier(buildIdentifierResolveRequest(policyId, input, encryptedInputHex));
+  }
+
+  /** Issues a claim receipt using a typed request wrapper. */
+  public CompletableFuture<Optional<IdentifierResolutionReceipt>> issueIdentifierClaimReceipt(
+      final String accountId, final IdentifierResolveRequest requestBody) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final String normalizedAccountId = normalizeNonBlank(accountId, "accountId");
+    final byte[] body =
+        encodeJsonBody(
+            buildIdentifierResolvePayload(
+                requestBody.policyId(), requestBody.input(), requestBody.encryptedInputHex()));
+    final TransportRequest request =
+        buildJsonPostRequest(
+            "/v1/accounts/"
+                + encodePathSegment(normalizedAccountId)
+                + "/identifiers/claim-receipt",
+            body);
+    return fetchJsonAllowingNotFound(
+        request, IdentifierJsonParser::parseResolutionReceipt, "identifier claim receipt");
+  }
+
+  /**
+   * Issues a claim receipt for {@code accountId} by posting either a plaintext input or BFV
+   * ciphertext hex to `/v1/accounts/{account_id}/identifiers/claim-receipt`.
+   */
+  public CompletableFuture<Optional<IdentifierResolutionReceipt>> issueIdentifierClaimReceipt(
+      final String accountId,
+      final String policyId,
+      final String input,
+      final String encryptedInputHex) {
+    return issueIdentifierClaimReceipt(
+        accountId, buildIdentifierResolveRequest(policyId, input, encryptedInputHex));
+  }
+
+  /** Executes a RAM-LFE program using a typed request wrapper. */
+  public CompletableFuture<Optional<RamLfeExecuteResponse>> executeRamLfeProgram(
+      final String programId, final RamLfeExecuteRequest requestBody) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final String normalizedProgramId = normalizeNonBlank(programId, "programId");
+    final byte[] body =
+        encodeJsonBody(
+            buildRamLfeExecutePayload(requestBody.inputHex(), requestBody.encryptedInputHex()));
+    final TransportRequest request =
+        buildJsonPostRequest(
+            "/v1/ram-lfe/programs/" + encodePathSegment(normalizedProgramId) + "/execute", body);
+    return fetchJsonAllowingNotFound(
+        request, RamLfeJsonParser::parseExecuteResponse, "ram-lfe execute");
+  }
+
+  /**
+   * Executes a RAM-LFE program by posting either plaintext input bytes or BFV ciphertext hex to
+   * `/v1/ram-lfe/programs/{program_id}/execute`.
+   */
+  public CompletableFuture<Optional<RamLfeExecuteResponse>> executeRamLfeProgram(
+      final String programId, final String inputHex, final String encryptedInputHex) {
+    return executeRamLfeProgram(
+        programId, buildRamLfeExecuteRequest(inputHex, encryptedInputHex));
+  }
+
+  /** Verifies a RAM-LFE execution receipt against the node's registered program policy. */
+  public CompletableFuture<RamLfeReceiptVerifyResponse> verifyRamLfeReceipt(
+      final RamLfeReceiptVerifyRequest requestBody) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    final byte[] body =
+        encodeJsonBody(
+            buildRamLfeReceiptVerifyPayload(requestBody.receipt(), requestBody.outputHex()));
+    final TransportRequest request = buildJsonPostRequest("/v1/ram-lfe/receipts/verify", body);
+    return fetchJson(
+        request, RamLfeJsonParser::parseReceiptVerifyResponse, "ram-lfe receipt verify");
+  }
+
+  /** Verifies a RAM-LFE execution receipt against the node's registered program policy. */
+  public CompletableFuture<RamLfeReceiptVerifyResponse> verifyRamLfeReceipt(
+      final Map<String, Object> receipt, final String outputHex) {
+    return verifyRamLfeReceipt(new RamLfeReceiptVerifyRequest(receipt, outputHex));
+  }
+
+  /** Deploys contract bytecode via `POST /v1/contracts/deploy`. */
+  public CompletableFuture<Optional<ContractDeployResponse>> deployContract(
+      final String authority,
+      final String privateKey,
+      final String codeB64,
+      final String contractAlias,
+      final Long leaseExpiryMs) {
+    final byte[] body =
+        encodeJsonBody(
+            buildDeployContractPayload(authority, privateKey, codeB64, contractAlias, leaseExpiryMs));
+    final TransportRequest request = buildJsonPostRequest("/v1/contracts/deploy", body);
+    return fetchOptionalJson(request, ContractJsonParser::parseDeployResponse, "contract deploy");
+  }
+
+  /** Deploys contract bytecode via `POST /v1/contracts/deploy`. */
+  public CompletableFuture<Optional<ContractDeployResponse>> deployContract(
+      final String authority,
+      final String privateKey,
+      final String codeB64,
+      final String contractAlias) {
+    return deployContract(authority, privateKey, codeB64, contractAlias, null);
+  }
+
+  /** Calls a deployed contract via `POST /v1/contracts/call`. */
+  public CompletableFuture<ContractCallResponse> callContract(
+      final String authority,
+      final String privateKey,
+      final long gasLimit,
+      final String contractAddress,
+      final String contractAlias,
+      final String entrypoint,
+      final Object payload,
+      final String gasAssetId) {
+    final byte[] body =
+        encodeJsonBody(
+            buildContractCallPayload(
+                authority,
+                privateKey,
+                gasLimit,
+                contractAddress,
+                contractAlias,
+                entrypoint,
+                payload,
+                gasAssetId));
+    final TransportRequest request = buildJsonPostRequest("/v1/contracts/call", body);
+    return fetchJson(request, ContractJsonParser::parseCallResponse, "contract call");
+  }
+
+  /** Fetches one governance binding via `GET /v1/gov/contracts/{contract_address}`. */
+  public CompletableFuture<GovernanceContractResponse> getGovernanceContract(
+      final String contractAddress) {
+    final String normalizedAddress = normalizeNonBlank(contractAddress, "contractAddress");
+    final TransportRequest request =
+        buildJsonGetRequest(
+            "/v1/gov/contracts/" + encodePathSegment(normalizedAddress), Map.of());
+    return fetchJson(
+        request,
+        ContractJsonParser::parseGovernanceContractResponse,
+        "governance contract");
+  }
+
+  /** Resolves an account alias via `POST /v1/aliases/resolve`. */
+  @Override
+  public CompletableFuture<Optional<AccountAliasResolution>> resolveAccountAlias(
+      final String alias) {
+    final String normalizedAlias = normalizeNonBlank(alias, "alias");
+    final byte[] body = encodeJsonBody(Map.of("alias", normalizedAlias));
+    final TransportRequest request = buildJsonPostRequest("/v1/aliases/resolve", body);
+    return fetchJsonAllowingNotFound(
+        request, AccountAliasJsonParser::parseResolution, "account alias resolve");
+  }
+
   /** Creates a transport backed by the platform HTTP executor (OkHttp on Android). */
   public static HttpClientTransport createDefault(final ClientConfig config) {
     return new HttpClientTransport(PlatformHttpTransportExecutor.createDefault(), config);
@@ -279,20 +522,6 @@ public final class HttpClientTransport implements IrohaClient {
    */
   public SubscriptionToriiClient subscriptionToriiClient() {
     return config.toSubscriptionToriiClient(executor);
-  }
-
-  /**
-   * Creates an {@link OfflineWallet} that shares this transport's HTTP executor and attaches a
-   * file-backed audit logger.
-   *
-   * @param auditLogPath filesystem location for the audit JSON file
-   * @param auditLoggingEnabled initial state for the audit toggle
-   */
-  public OfflineWallet offlineWallet(final Path auditLogPath, final boolean auditLoggingEnabled)
-      throws IOException {
-    final OfflineToriiClient offlineClient = offlineToriiClient();
-    final OfflineAuditLogger logger = new OfflineAuditLogger(auditLogPath, auditLoggingEnabled);
-    return new OfflineWallet(offlineClient, logger);
   }
 
   private CompletableFuture<Void> flushPendingQueue() {
@@ -363,7 +592,7 @@ public final class HttpClientTransport implements IrohaClient {
                   response.statusCode(),
                   response.body(),
                   response.message(),
-                  hashHex,
+                  extractTransactionHash(response).orElse(hashHex),
                   extractRejectCode(response));
           if (clientResponse.statusCode() < 200 || clientResponse.statusCode() >= 300) {
             if (config.retryPolicy().shouldRetryResponse(attempt, clientResponse)) {
@@ -647,6 +876,47 @@ public final class HttpClientTransport implements IrohaClient {
         response.headers(), "x-iroha-reject-code");
   }
 
+  private static Optional<String> extractTransactionHash(final TransportResponse response) {
+    if (response == null) {
+      return Optional.empty();
+    }
+    for (final String headerName : List.of("x-iroha-transaction-hash", "x-iroha-tx-hash")) {
+      final List<String> values = response.headers().get(headerName);
+      if (values == null) {
+        continue;
+      }
+      for (final String value : values) {
+        final String normalized = normalizeTransactionHashHeader(value);
+        if (normalized != null) {
+          return Optional.of(normalized);
+        }
+      }
+    }
+    return Optional.empty();
+  }
+
+  private static String normalizeTransactionHashHeader(final String value) {
+    if (value == null) {
+      return null;
+    }
+    String normalized = value.trim();
+    if (normalized.startsWith("0x") || normalized.startsWith("0X")) {
+      normalized = normalized.substring(2);
+    }
+    if (normalized.length() != 64) {
+      return null;
+    }
+    for (int index = 0; index < normalized.length(); index++) {
+      final char ch = normalized.charAt(index);
+      final boolean hex =
+          (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F');
+      if (!hex) {
+        return null;
+      }
+    }
+    return normalized.toLowerCase(java.util.Locale.ROOT);
+  }
+
   private static String resolveAuthority(final TransportRequest request) {
     if (request == null) {
       return "";
@@ -800,6 +1070,179 @@ public final class HttpClientTransport implements IrohaClient {
             });
   }
 
+  private CompletableFuture<Map<String, Object>> fetchPipelineStatusSnapshot(final String hashHex) {
+    final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
+    final TransportRequest request =
+        ToriiRequestBuilder.buildStatusRequest(
+            config.baseUri(), hashHex, config.requestTimeout(), config.defaultHeaders());
+    notifyRequest(request);
+    executor
+        .execute(request)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause = unwrapCompletion(throwable);
+                notifyFailure(request, cause);
+                future.completeExceptionally(cause);
+                return;
+              }
+
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      response.body(),
+                      response.message(),
+                      null,
+                      extractRejectCode(response));
+              notifyResponse(request, clientResponse);
+
+              final int statusCode = clientResponse.statusCode();
+              if (statusCode != 200
+                  && statusCode != 202
+                  && statusCode != 204
+                  && statusCode != 404) {
+                future.completeExceptionally(
+                    buildPipelineStatusHttpException(hashHex, clientResponse));
+                return;
+              }
+
+              try {
+                future.complete(parsePipelineStatusPayload(clientResponse.body()));
+              } catch (final Exception error) {
+                future.completeExceptionally(error);
+              }
+            });
+    return future;
+  }
+
+  private void openPipelineStatusStream(
+      final String hashHex,
+      final PipelineStatusOptions options,
+      final long deadline,
+      final AtomicInteger attempts,
+      final AtomicReference<Map<String, Object>> lastPayload,
+      final CompletableFuture<Map<String, Object>> future) {
+    final ToriiEventStreamOptions.Builder streamOptions = ToriiEventStreamOptions.builder();
+    streamOptions.putQueryParameter("filter", transactionHashFilter(hashHex));
+    if (options.timeoutMillis() != null) {
+      streamOptions.setTimeout(Duration.ofMillis(Math.max(0L, options.timeoutMillis())));
+    }
+
+    final AtomicReference<ToriiEventStream> streamRef = new AtomicReference<>();
+    future.whenComplete(
+        (ignored, throwable) -> {
+          final ToriiEventStream active = streamRef.getAndSet(null);
+          if (active != null) {
+            active.close();
+          }
+        });
+
+    if (deadline != Long.MAX_VALUE) {
+      final long remainingMs = Math.max(0L, deadline - System.currentTimeMillis());
+      CompletableFuture
+          .runAsync(
+              () -> {},
+              CompletableFuture.delayedExecutor(remainingMs, TimeUnit.MILLISECONDS))
+          .whenComplete(
+              (ignored, throwable) -> {
+                if (future.isDone()) {
+                  return;
+                }
+                if (throwable != null) {
+                  future.completeExceptionally(unwrapCompletion(throwable));
+                  return;
+                }
+                future.completeExceptionally(
+                    new TransactionTimeoutException(
+                        "Transaction " + hashHex + " did not reach a terminal status "
+                            + "within the configured timeout",
+                        hashHex,
+                        attempts.get(),
+                        lastPayload.get()));
+              });
+    }
+
+    final ToriiEventStream stream =
+        newEventStreamClient()
+            .openSseStream(
+                "/v1/events/sse",
+                streamOptions.build(),
+                new ToriiEventStreamListener() {
+                  @Override
+                  public void onEvent(
+                      final org.hyperledger.iroha.android.client.stream.ServerSentEvent event) {
+                    if (future.isDone()) {
+                      return;
+                    }
+                    try {
+                      final Map<String, Object> payload = parsePipelineEventPayload(event.data());
+                      if (!isTransactionPipelineEvent(payload)) {
+                        return;
+                      }
+                      lastPayload.set(payload);
+                      final int attempt = attempts.incrementAndGet();
+                      processPipelineTerminalPayload(hashHex, options, payload, attempt, future);
+                    } catch (final Throwable error) {
+                      if (!future.isDone()) {
+                        future.completeExceptionally(error);
+                      }
+                    }
+                  }
+
+                  @Override
+                  public void onClosed() {
+                    if (future.isDone()) {
+                      return;
+                    }
+                    future.completeExceptionally(
+                        new IOException(
+                            "Torii SSE stream closed before transaction "
+                                + hashHex
+                                + " reached a terminal status"));
+                  }
+
+                  @Override
+                  public void onError(final Throwable error) {
+                    if (future.isDone()) {
+                      return;
+                    }
+                    future.completeExceptionally(error);
+                  }
+                });
+    streamRef.set(stream);
+  }
+
+  private boolean processPipelineTerminalPayload(
+      final String hashHex,
+      final PipelineStatusOptions options,
+      final Map<String, Object> payload,
+      final int attempt,
+      final CompletableFuture<Map<String, Object>> future) {
+    final Optional<String> statusKind = PipelineStatusExtractor.extractStatusKind(payload);
+    final String statusLiteral = statusKind.orElse(null);
+    final boolean isSuccess =
+        statusLiteral != null && options.successStatuses().contains(statusLiteral);
+    final boolean isFailure =
+        statusLiteral != null && options.failureStatuses().contains(statusLiteral);
+
+    if (options.observer() != null) {
+      options.observer().onStatus(statusLiteral, payload, attempt);
+    }
+
+    if (isSuccess) {
+      future.complete(payload != null ? payload : Map.of());
+      return true;
+    }
+    if (isFailure) {
+      final String rejectionReason =
+          PipelineStatusExtractor.extractRejectionReason(payload).orElse(null);
+      future.completeExceptionally(
+          new TransactionStatusException(hashHex, statusLiteral, rejectionReason, payload));
+      return true;
+    }
+    return false;
+  }
+
   private void scheduleNextPoll(
       final String hashHex,
       final PipelineStatusOptions options,
@@ -856,6 +1299,36 @@ public final class HttpClientTransport implements IrohaClient {
     throw new IllegalStateException("Pipeline status response must be a JSON object");
   }
 
+  @SuppressWarnings("unchecked")
+  private Map<String, Object> parsePipelineEventPayload(final String json) {
+    if (json == null || json.isBlank()) {
+      throw new IllegalStateException("Pipeline event payload must be a JSON object");
+    }
+    final Object parsed = JsonParser.parse(json.trim());
+    if (parsed instanceof Map) {
+      return (Map<String, Object>) parsed;
+    }
+    throw new IllegalStateException("Pipeline event payload must be a JSON object");
+  }
+
+  private boolean isTransactionPipelineEvent(final Map<String, Object> payload) {
+    if (payload == null) {
+      return false;
+    }
+    final Object event = payload.get("event");
+    if (event == null) {
+      return true;
+    }
+    return "Transaction".equalsIgnoreCase(String.valueOf(event).trim());
+  }
+
+  private static String transactionHashFilter(final String hashHex) {
+    return JsonEncoder.encode(
+        Map.of(
+            "op", "eq",
+            "args", List.of("tx_hash", hashHex)));
+  }
+
   private static TransactionStatusHttpException buildPipelineStatusHttpException(
       final String hashHex, final ClientResponse response) {
     final String bodyPreview = HttpErrorMessageExtractor.extractMessage(response.body());
@@ -893,6 +1366,21 @@ public final class HttpClientTransport implements IrohaClient {
         TransportRequest.builder()
             .setUri(target)
             .setMethod("GET")
+            .addHeader("Accept", "application/json")
+            .setTimeout(config.requestTimeout());
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    return builder.build();
+  }
+
+  private TransportRequest buildJsonPostRequest(final String path, final byte[] body) {
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(resolvePath(path))
+            .setMethod("POST")
+            .setBody(Objects.requireNonNull(body, "body"))
+            .addHeader("Content-Type", "application/json")
             .addHeader("Accept", "application/json")
             .setTimeout(config.requestTimeout());
     for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
@@ -954,6 +1442,14 @@ public final class HttpClientTransport implements IrohaClient {
     }
   }
 
+  private static Throwable unwrapCompletion(final Throwable throwable) {
+    Throwable current = throwable;
+    while (current instanceof CompletionException && current.getCause() != null) {
+      current = current.getCause();
+    }
+    return current;
+  }
+
   private <T> CompletableFuture<T> fetchJson(
       final TransportRequest request,
       final Function<byte[], T> parser,
@@ -998,5 +1494,321 @@ public final class HttpClientTransport implements IrohaClient {
               }
             });
     return future;
+  }
+
+  private <T> CompletableFuture<Optional<T>> fetchJsonAllowingNotFound(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext) {
+    notifyRequest(request);
+    final CompletableFuture<Optional<T>> future = new CompletableFuture<>();
+    executor
+        .execute(request)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause =
+                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
+                final RuntimeException error =
+                    new RuntimeException(errorContext + " request failed", cause);
+                notifyFailure(request, cause);
+                future.completeExceptionally(error);
+                return;
+              }
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      response.body(),
+                      response.message(),
+                      null,
+                      extractRejectCode(response));
+              if (response.statusCode() == 404) {
+                notifyResponse(request, clientResponse);
+                future.complete(Optional.empty());
+                return;
+              }
+              if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                final RuntimeException error =
+                    new RuntimeException(
+                        errorContext + " request failed with status " + response.statusCode());
+                notifyFailure(request, error);
+                future.completeExceptionally(error);
+                return;
+              }
+              try {
+                final T parsed = parser.apply(response.body());
+                notifyResponse(request, clientResponse);
+                future.complete(Optional.of(parsed));
+              } catch (final RuntimeException ex) {
+                notifyFailure(request, ex);
+                future.completeExceptionally(ex);
+              }
+            });
+    return future;
+  }
+
+  private <T> CompletableFuture<Optional<T>> fetchOptionalJson(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext) {
+    notifyRequest(request);
+    final CompletableFuture<Optional<T>> future = new CompletableFuture<>();
+    executor
+        .execute(request)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause =
+                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
+                final RuntimeException error =
+                    new RuntimeException(errorContext + " request failed", cause);
+                notifyFailure(request, cause);
+                future.completeExceptionally(error);
+                return;
+              }
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      response.body(),
+                      response.message(),
+                      null,
+                      extractRejectCode(response));
+              if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                final RuntimeException error =
+                    new RuntimeException(
+                        errorContext + " request failed with status " + response.statusCode());
+                notifyFailure(request, error);
+                future.completeExceptionally(error);
+                return;
+              }
+              if (response.body().length == 0) {
+                notifyResponse(request, clientResponse);
+                future.complete(Optional.empty());
+                return;
+              }
+              try {
+                final T parsed = parser.apply(response.body());
+                notifyResponse(request, clientResponse);
+                future.complete(Optional.of(parsed));
+              } catch (final RuntimeException ex) {
+                notifyFailure(request, ex);
+                future.completeExceptionally(ex);
+              }
+            });
+    return future;
+  }
+
+  private static byte[] encodeJsonBody(final Map<String, Object> payload) {
+    return JsonEncoder.encode(Objects.requireNonNull(payload, "payload"))
+        .getBytes(StandardCharsets.UTF_8);
+  }
+
+  static IdentifierResolveRequest buildIdentifierResolveRequest(
+      final String policyId, final String input, final String encryptedInputHex) {
+    final String normalizedInput = normalizeOptionalNonBlank(input, "input");
+    final String normalizedEncryptedInput =
+        encryptedInputHex == null
+            ? null
+            : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
+    if ((normalizedInput == null) == (normalizedEncryptedInput == null)) {
+      throw new IllegalArgumentException(
+          "Exactly one of input or encryptedInputHex must be provided");
+    }
+    return normalizedInput != null
+        ? IdentifierResolveRequest.plaintext(policyId, normalizedInput)
+        : IdentifierResolveRequest.encrypted(policyId, normalizedEncryptedInput);
+  }
+
+  static RamLfeExecuteRequest buildRamLfeExecuteRequest(
+      final String inputHex, final String encryptedInputHex) {
+    final String normalizedInputHex =
+        inputHex == null ? null : normalizeEvenLengthHex(inputHex, "inputHex");
+    final String normalizedEncryptedInput =
+        encryptedInputHex == null
+            ? null
+            : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
+    if ((normalizedInputHex == null) == (normalizedEncryptedInput == null)) {
+      throw new IllegalArgumentException(
+          "Exactly one of inputHex or encryptedInputHex must be provided");
+    }
+    return normalizedInputHex != null
+        ? RamLfeExecuteRequest.plaintext(normalizedInputHex)
+        : RamLfeExecuteRequest.encrypted(normalizedEncryptedInput);
+  }
+
+  static Map<String, Object> buildIdentifierResolvePayload(
+      final String policyId, final String input, final String encryptedInputHex) {
+    final String normalizedPolicyId = normalizeNonBlank(policyId, "policyId");
+    final String normalizedInput = normalizeOptionalNonBlank(input, "input");
+    final String normalizedEncryptedInput =
+        encryptedInputHex == null ? null : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
+    if ((normalizedInput == null) == (normalizedEncryptedInput == null)) {
+      throw new IllegalArgumentException(
+          "Exactly one of input or encryptedInputHex must be provided");
+    }
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("policy_id", normalizedPolicyId);
+    if (normalizedInput != null) {
+      payload.put("input", normalizedInput);
+    } else {
+      payload.put("encrypted_input", normalizedEncryptedInput);
+    }
+    return payload;
+  }
+
+  static Map<String, Object> buildRamLfeExecutePayload(
+      final String inputHex, final String encryptedInputHex) {
+    final String normalizedInputHex =
+        inputHex == null ? null : normalizeEvenLengthHex(inputHex, "inputHex");
+    final String normalizedEncryptedInput =
+        encryptedInputHex == null
+            ? null
+            : normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex");
+    if ((normalizedInputHex == null) == (normalizedEncryptedInput == null)) {
+      throw new IllegalArgumentException(
+          "Exactly one of inputHex or encryptedInputHex must be provided");
+    }
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    if (normalizedInputHex != null) {
+      payload.put("input_hex", normalizedInputHex);
+    } else {
+      payload.put("encrypted_input", normalizedEncryptedInput);
+    }
+    return payload;
+  }
+
+  static Map<String, Object> buildRamLfeReceiptVerifyPayload(
+      final Map<String, Object> receipt, final String outputHex) {
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("receipt", new LinkedHashMap<>(Objects.requireNonNull(receipt, "receipt")));
+    if (outputHex != null) {
+      payload.put("output_hex", normalizeEvenLengthHex(outputHex, "outputHex"));
+    }
+    return payload;
+  }
+
+  static Map<String, Object> buildDeployContractPayload(
+      final String authority,
+      final String privateKey,
+      final String codeB64,
+      final String contractAlias,
+      final Long leaseExpiryMs) {
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("authority", normalizeNonBlank(authority, "authority"));
+    payload.put("private_key", normalizeNonBlank(privateKey, "privateKey"));
+    payload.put("code_b64", normalizeRequiredBase64Payload(codeB64, "codeB64"));
+    payload.put("contract_alias", normalizeNonBlank(contractAlias, "contractAlias"));
+    if (leaseExpiryMs != null) {
+      if (leaseExpiryMs.longValue() < 0L) {
+        throw new IllegalArgumentException("leaseExpiryMs must be non-negative");
+      }
+      payload.put("lease_expiry_ms", leaseExpiryMs);
+    }
+    return payload;
+  }
+
+  static Map<String, Object> buildContractCallPayload(
+      final String authority,
+      final String privateKey,
+      final long gasLimit,
+      final String contractAddress,
+      final String contractAlias,
+      final String entrypoint,
+      final Object payloadValue,
+      final String gasAssetId) {
+    if (gasLimit < 0L) {
+      throw new IllegalArgumentException("gasLimit must be non-negative");
+    }
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("authority", normalizeNonBlank(authority, "authority"));
+    payload.put("private_key", normalizeNonBlank(privateKey, "privateKey"));
+    payload.putAll(buildContractTargetSelector(contractAddress, contractAlias));
+    if (entrypoint != null) {
+      payload.put("entrypoint", normalizeNonBlank(entrypoint, "entrypoint"));
+    }
+    if (payloadValue != null) {
+      payload.put("payload", payloadValue);
+    }
+    if (gasAssetId != null) {
+      payload.put("gas_asset_id", normalizeNonBlank(gasAssetId, "gasAssetId"));
+    }
+    payload.put("gas_limit", gasLimit);
+    return payload;
+  }
+
+  static Map<String, String> buildContractTargetSelector(
+      final String contractAddress, final String contractAlias) {
+    final boolean hasContractAddress = contractAddress != null;
+    final boolean hasContractAlias = contractAlias != null;
+    if (hasContractAddress == hasContractAlias) {
+      throw new IllegalArgumentException(
+          "Exactly one of contractAddress or contractAlias must be provided");
+    }
+    final Map<String, String> selector = new LinkedHashMap<>();
+    if (hasContractAddress) {
+      selector.put(
+          "contract_address",
+          normalizeNonBlank(contractAddress, "contractAddress"));
+      return selector;
+    }
+    selector.put(
+        "contract_alias",
+        normalizeNonBlank(contractAlias, "contractAlias"));
+    return selector;
+  }
+
+  static String normalizeRequiredBase64Payload(final String value, final String field) {
+    final String normalized = normalizeNonBlank(value, field);
+    final byte[] decoded;
+    try {
+      decoded = Base64.getDecoder().decode(normalized);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(field + " must be valid base64", ex);
+    }
+    if (decoded.length == 0) {
+      throw new IllegalArgumentException(field + " must not decode to empty bytes");
+    }
+    return normalized;
+  }
+
+  static String normalizeOptionalNonBlank(final String value, final String field) {
+    return value == null ? null : normalizeNonBlank(value, field);
+  }
+
+  static String normalizeNonBlank(final String value, final String field) {
+    final String trimmed = Objects.requireNonNull(value, field + " must not be null").trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(field + " must not be blank");
+    }
+    return trimmed;
+  }
+
+  static String normalizeEvenLengthHex(final String value, final String field) {
+    String trimmed = normalizeNonBlank(value, field);
+    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+      trimmed = trimmed.substring(2);
+    }
+    if ((trimmed.length() & 1) != 0 || trimmed.isEmpty()) {
+      throw new IllegalArgumentException(field + " must be an even-length hex string");
+    }
+    for (int i = 0; i < trimmed.length(); i++) {
+      final char c = trimmed.charAt(i);
+      final boolean isHex =
+          (c >= '0' && c <= '9')
+              || (c >= 'a' && c <= 'f')
+              || (c >= 'A' && c <= 'F');
+      if (!isHex) {
+        throw new IllegalArgumentException(field + " must be an even-length hex string");
+      }
+    }
+    return trimmed.toLowerCase();
+  }
+
+  static String normalizeHex32(final String value, final String field) {
+    final String normalized = normalizeEvenLengthHex(value, field);
+    if (normalized.length() != 64) {
+      throw new IllegalArgumentException(field + " must contain 64 hex characters");
+    }
+    return normalized;
   }
 }

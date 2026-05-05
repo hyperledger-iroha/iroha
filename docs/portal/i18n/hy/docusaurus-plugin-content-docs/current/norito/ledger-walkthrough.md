@@ -32,8 +32,8 @@ SDK-ն արագ մեկնարկում է, որպեսզի կարողանաք հա�
 ստացված ցուցադրական ստեղներից.
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Հաստատեք արժեքները՝ թվարկելով առաջին մի քանի հաշիվները.
@@ -52,7 +52,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts inside wonderland (replace --limit with a higher number if needed)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions that already exist
@@ -69,7 +69,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI-ն տպում է ներկայացված գործարքի հեշը (օրինակ՝
@@ -78,7 +78,7 @@ CLI-ն տպում է ներկայացված գործարքի հեշը (օրին�
 ## 3. Մուտքագրեք միավորներ օպերատորի հաշվին
 
 Ակտիվների քանակները ապրում են `(asset definition, account)` զույգի ներքո: Անանուխ 250
-`coffee#wonderland`-ի միավորները `$ADMIN_ACCOUNT`-ի մեջ.
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ`-ի միավորները `$ADMIN_ACCOUNT`-ի մեջ.
 
 ```sh
 iroha --config defaults/client.toml asset mint \

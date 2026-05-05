@@ -30,8 +30,8 @@ conta que voceplaneja usar. تحتوي الحزمة على حسابين مشتق
 شافيز دي التجريبي:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 قم بتأكيد القيم المدرجة كحسابات أولية:
@@ -48,7 +48,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dentro de wonderland (substitua --limit por um numero maior se necessario)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions que ja existem
@@ -64,7 +64,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 يقوم CLI بطباعة تجزئة التحويل المرسل (على سبيل المثال، `0x5f...`). Guarde-o الفقرة
@@ -73,7 +73,7 @@ iroha --config defaults/client.toml asset definition register \
 ## 3. احفظ الوحدات بحساب المشغل
 
 كما تحيا كميات كبيرة من الأشياء على قدم المساواة `(asset definition, account)`. النعناع 250
-وحدات `coffee#wonderland` في `$ADMIN_ACCOUNT`:
+وحدات `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` في `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

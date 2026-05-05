@@ -113,9 +113,10 @@ Iroha тиҫтерҙәре тәртипле топологияны һаҡлай,
 
 `iroha_data_model` йәшник бөтә леджер объекттарын билдәләй, күрһәтмәләр, эҙләүҙәр, һәм ваҡиғалар. Һығымталар:
 
-- **Домендар, иҫәп-хисап һәм активтар** канонлы I105 иҫәп идентификаторҙары (өҫтөнлөклө) ҡулланыу; `name@domain` маршрутлаштырыу булып ҡала
-  псевдонимы асыҡтан-асыҡ бирелгәндә. Метадата детерминистик (`Metadata` картаһы). Һанлы активтар ярҙам фиксированный-нөктә
-  операциялар; НФТ-лар үҙ теләге менән структуралы метамағлүмәттәрҙе йөрөтә.
+- **Domains, accounts, and assets** use canonical I105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+  operations; NFTs carry arbitrary structured metadata.
+
 - **Ролдәр һәм рөхсәттәр** ҡулланыу Norito-иҫәпләнгән токендар, тип карта туранан-тура башҡарыусы тикшерергә.
 - **Триггерс** (ваҡыт нигеҙендә, блок-нигеҙендә, йәки предикат-двигателдәр) детерминистик транзакциялар аша сығарыу аша сылбырлы .
   башҡарыусы.

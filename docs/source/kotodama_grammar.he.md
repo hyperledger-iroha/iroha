@@ -200,8 +200,8 @@ register_trigger wake {
 - ‎`norito_bytes(bytes|string) -> NoritoBytes*`
 
 ה-prelude כולל גם מקרואים שסוגרים על אותם קונסטרוקטורים עם בדיקות קומפייל־טיים:
-- ‎`account!("i105...")` / ‎`account_id!("i105...")`
-- ‎`asset_definition!("rose#wonderland")` / ‎`asset_id!("rose#wonderland")`
+- ‎`account!("<i105-account-id>")` / ‎`account_id!("<i105-account-id>")`
+- ‎`asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")` / ‎`asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - ‎`domain!("wonderland")` / ‎`domain_id!("wonderland")`
 - ‎`name!("example")`
 - ‎`json!("{\"hello\":\"world\"}")` וכן ‎`json!{ hello: "world" }`

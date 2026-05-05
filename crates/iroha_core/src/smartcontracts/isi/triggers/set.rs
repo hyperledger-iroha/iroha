@@ -17,7 +17,7 @@ use iroha_data_model::{
     isi::error::{InstructionExecutionError, MathError},
     prelude::*,
     query::error::FindError,
-    transaction::IvmBytecode,
+    transaction::{IvmBytecode, executable::ContractInvocation},
     trigger::action::EnsureTriggerAuthority,
 };
 use iroha_logger::prelude::*;
@@ -36,7 +36,7 @@ use thiserror::Error;
 
 use super::trigger_is_enabled;
 use crate::smartcontracts::isi::triggers::specialized::{
-    LoadedAction, LoadedActionTrait, SpecializedAction, SpecializedTrigger,
+    LoadedAction, LoadedActionTrait, SpecializedAction, SpecializedTrigger, TimeTriggerRetryState,
 };
 
 /// Error type for [`Set`] operations.
@@ -288,6 +288,7 @@ impl json::JsonDeserialize for IvmBytecodeEntry {
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 enum ExecutableRefDto {
     Ivm(HashOf<IvmBytecode>),
+    ContractCall(ContractInvocation),
     Instructions(ConstVec<InstructionBox>),
 }
 
@@ -295,6 +296,9 @@ impl From<&ExecutableRef> for ExecutableRefDto {
     fn from(r: &ExecutableRef) -> Self {
         match r {
             ExecutableRef::Ivm(h) => ExecutableRefDto::Ivm(*h),
+            ExecutableRef::ContractCall(invocation) => {
+                ExecutableRefDto::ContractCall(invocation.clone())
+            }
             ExecutableRef::Instructions(v) => ExecutableRefDto::Instructions(v.clone()),
         }
     }
@@ -305,6 +309,7 @@ impl TryFrom<ExecutableRefDto> for ExecutableRef {
     fn try_from(dto: ExecutableRefDto) -> Result<Self, Self::Error> {
         Ok(match dto {
             ExecutableRefDto::Ivm(h) => ExecutableRef::Ivm(h),
+            ExecutableRefDto::ContractCall(invocation) => ExecutableRef::ContractCall(invocation),
             ExecutableRefDto::Instructions(v) => ExecutableRef::Instructions(v),
         })
     }
@@ -342,6 +347,8 @@ struct LoadedActionDto<F> {
     repeats: Repeats,
     authority: AccountId,
     filter: F,
+    retry_policy: Option<TimeTriggerRetryPolicy>,
+    retry_state: Option<TimeTriggerRetryState>,
     metadata: Metadata,
 }
 
@@ -352,6 +359,8 @@ impl<F: Clone> From<&LoadedAction<F>> for LoadedActionDto<F> {
             repeats: a.repeats,
             authority: a.authority.clone(),
             filter: a.filter.clone(),
+            retry_policy: a.retry_policy,
+            retry_state: a.retry_state,
             metadata: a.metadata.clone(),
         }
     }
@@ -365,6 +374,8 @@ impl<F> TryFrom<LoadedActionDto<F>> for LoadedAction<F> {
             repeats: dto.repeats,
             authority: dto.authority,
             filter: dto.filter,
+            retry_policy: dto.retry_policy,
+            retry_state: dto.retry_state,
             metadata: dto.metadata,
         })
     }
@@ -412,6 +423,8 @@ pub trait SetReadOnly {
             repeats,
             authority,
             filter,
+            retry_policy,
+            retry_state: _,
             metadata,
         } = action;
 
@@ -426,11 +439,13 @@ pub trait SetReadOnly {
                 };
                 Executable::Ivm(original_contract)
             }
+            ExecutableRef::ContractCall(invocation) => Executable::ContractCall(invocation),
             ExecutableRef::Instructions(isi) => Executable::Instructions(isi),
         };
 
         let mut specialized =
             SpecializedAction::new(original_executable, repeats, authority, filter);
+        specialized.retry_policy = retry_policy;
         specialized.metadata = metadata;
         Some(specialized)
     }
@@ -497,35 +512,91 @@ pub trait SetReadOnly {
             )
     }
 
+    /// Resolve one trigger by identifier.
+    fn trigger_by_id(&self, id: &TriggerId) -> Option<Trigger> {
+        let event_type = self.ids().get(id).copied()?;
+
+        let trigger = match event_type {
+            TriggeringEventType::Data => self
+                .data_triggers()
+                .get(id)
+                .cloned()
+                .and_then(|action| self.get_original_action(action))
+                .map(|action| Trigger::new(id.clone(), action.into())),
+            TriggeringEventType::Pipeline => self
+                .pipeline_triggers()
+                .get(id)
+                .cloned()
+                .and_then(|action| self.get_original_action(action))
+                .map(|action| Trigger::new(id.clone(), action.into())),
+            TriggeringEventType::Time => self
+                .time_triggers()
+                .get(id)
+                .cloned()
+                .and_then(|action| self.get_original_action(action))
+                .map(|action| Trigger::new(id.clone(), action.into())),
+            TriggeringEventType::ExecuteTrigger => self
+                .by_call_triggers()
+                .get(id)
+                .cloned()
+                .and_then(|action| self.get_original_action(action))
+                .map(|action| Trigger::new(id.clone(), action.into())),
+        };
+        if trigger.is_none() {
+            warn!(
+                trigger_id = %id,
+                ?event_type,
+                "trigger id missing from typed map while resolving trigger"
+            );
+        }
+        trigger
+    }
+
     /// Returns an iterator over `(TriggerId, LoadedAction)` pairs for a given time event.
     fn match_time_event(
         &self,
         event: TimeEvent,
         current_block_height: u64,
-        _current_block_time_ms: u64,
+        current_block_time_ms: u64,
     ) -> impl Iterator<Item = (TriggerId, LoadedAction<TimeEventFilter>)> + '_ {
         let key_height = "__registered_block_height".parse::<Name>().ok();
-        self.time_triggers()
+        let mut due_retries = Vec::new();
+        let mut scheduled = Vec::new();
+
+        for (id, action) in self
+            .time_triggers()
             .iter()
             .filter(|(_, action)| trigger_is_enabled(action.metadata()))
-            .flat_map(move |(id, action)| {
-                let height_key = key_height.clone();
-                let mut count = action.filter.count_matches(&event);
-                if let Repeats::Exactly(repeats) = action.repeats {
-                    count = min(repeats, count);
+        {
+            if action.repeats.is_depleted() {
+                continue;
+            }
+
+            let registered_height = key_height
+                .as_ref()
+                .and_then(|key| action.metadata().get(key))
+                .and_then(|json| json.try_into_any_norito::<u64>().ok());
+            if !registered_height.is_some_and(|height| height != current_block_height) {
+                continue;
+            }
+
+            if let Some(retry_state) = action.retry_state {
+                if current_block_time_ms >= retry_state.next_retry_at_ms {
+                    due_retries.push((id.clone(), action.clone()));
                 }
-                // Skip firing triggers that were registered in the same block that is being applied now.
-                // Require `__registered_block_height` metadata set during registration.
-                (0..count)
-                    .map(move |_| (id.clone(), action.clone()))
-                    .filter(move |(_, act)| {
-                        let registered_height = height_key
-                            .as_ref()
-                            .and_then(|key| act.metadata().get(key))
-                            .and_then(|json| json.try_into_any_norito::<u64>().ok());
-                        registered_height.is_some_and(|height| height != current_block_height)
-                    })
-            })
+                continue;
+            }
+
+            let mut count = action.filter.count_matches(&event);
+            if let Repeats::Exactly(repeats) = action.repeats {
+                count = min(repeats, count);
+            }
+            for _ in 0..count {
+                scheduled.push((id.clone(), action.clone()));
+            }
+        }
+
+        due_retries.into_iter().chain(scheduled)
     }
 
     /// Get [`ExecutableRef`] for given [`TriggerId`].
@@ -910,6 +981,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                     repeats,
                     authority,
                     filter,
+                    retry_policy,
                     metadata,
                 },
         } = trigger;
@@ -958,6 +1030,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                 }
                 ExecutableRef::Ivm(hash)
             }
+            Executable::ContractCall(invocation) => ExecutableRef::ContractCall(invocation),
             Executable::Instructions(instructions) => ExecutableRef::Instructions(instructions),
         };
         map(self).insert(
@@ -967,6 +1040,8 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                 repeats,
                 authority,
                 filter,
+                retry_policy,
+                retry_state: None,
                 metadata,
             },
         );
@@ -1137,6 +1212,20 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
         removed
     }
 
+    /// Update internal retry runtime state for a time trigger.
+    pub fn set_time_trigger_retry_state(
+        &mut self,
+        id: &TriggerId,
+        retry_state: Option<TimeTriggerRetryState>,
+    ) -> bool {
+        self.time_triggers
+            .get_mut(id)
+            .map(|action| {
+                action.retry_state = retry_state;
+            })
+            .is_some()
+    }
+
     /// Remove actions with zero execution count from `triggers`
     fn remove_zeros<F: mv::Value + EventFilter>(
         removed: &mut Vec<TriggerId>,
@@ -1204,6 +1293,8 @@ fn replace_by_call_authority(
 pub enum ExecutableRef {
     /// Loaded IVM
     Ivm(HashOf<IvmBytecode>),
+    /// By-reference deployed contract invocation.
+    ContractCall(ContractInvocation),
     /// Vector of ISI
     Instructions(ConstVec<InstructionBox>),
 }
@@ -1212,6 +1303,9 @@ impl core::fmt::Debug for ExecutableRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Ivm(hash) => f.debug_tuple("Ivm").field(hash).finish(),
+            Self::ContractCall(invocation) => {
+                f.debug_tuple("ContractCall").field(invocation).finish()
+            }
             Self::Instructions(instructions) => {
                 f.debug_tuple("Instructions").field(instructions).finish()
             }
@@ -1228,6 +1322,11 @@ impl FastJsonWrite for ExecutableRef {
                 norito::json::write_json_string("Ivm", out);
                 out.push(':');
                 JsonSerializeTrait::json_serialize(hash, out);
+            }
+            ExecutableRef::ContractCall(invocation) => {
+                norito::json::write_json_string("ContractCall", out);
+                out.push(':');
+                JsonSerializeTrait::json_serialize(invocation, out);
             }
             ExecutableRef::Instructions(instrs) => {
                 norito::json::write_json_string("Instructions", out);
@@ -1263,6 +1362,7 @@ impl json::JsonDeserialize for ExecutableRef {
         let (key, inner) = map.into_iter().next().expect("checked map length");
         match key.as_str() {
             "Ivm" => json::from_value(inner).map(ExecutableRef::Ivm),
+            "ContractCall" => json::from_value(inner).map(ExecutableRef::ContractCall),
             "Instructions" => json::from_value(inner).map(ExecutableRef::Instructions),
             other => Err(json::Error::unknown_field(other)),
         }
@@ -1908,6 +2008,7 @@ mod dto_tests {
     use iroha_crypto::{HashOf, KeyPair};
     use iroha_data_model::{
         events::pipeline,
+        events::time::Schedule,
         prelude as dm,
         prelude::{BlockStatus, ExecutionTime, IvmBytecode, Log, SetKeyValue},
     };
@@ -1965,17 +2066,23 @@ mod dto_tests {
             tx.add_pipeline_trigger(trig2)
                 .expect("add pipeline trigger");
 
-            // Time trigger at PreCommit with empty executable
+            // Scheduled time trigger with retry policy and empty executable
             let time_id: dm::TriggerId = "time1".parse().unwrap();
-            let time_filter = dm::TimeEventFilter(ExecutionTime::PreCommit);
+            let time_filter = dm::TimeEventFilter(ExecutionTime::Schedule(Schedule::starting_at(
+                std::time::Duration::from_secs(1),
+            )));
             let exec3 =
                 dm::Executable::Instructions(ConstVec::from(Vec::<dm::InstructionBox>::new()));
-            let action3 = SpecializedAction::new(
+            let mut action3 = SpecializedAction::new(
                 exec3,
                 dm::Repeats::Exactly(1),
                 authority.clone(),
                 time_filter,
             );
+            action3.retry_policy = Some(dm::TimeTriggerRetryPolicy {
+                max_retries: std::num::NonZeroU32::new(2).expect("nonzero"),
+                retry_after_ms: std::num::NonZeroU64::new(750).expect("nonzero"),
+            });
             let trig3 = SpecializedTrigger::new(time_id, action3);
             tx.add_time_trigger(trig3).expect("add time trigger");
 
@@ -2004,6 +2111,8 @@ mod dto_tests {
         assert_eq!(left.repeats, right.repeats);
         assert_eq!(left.authority.subject_id(), right.authority.subject_id());
         assert_eq!(left.filter, right.filter);
+        assert_eq!(left.retry_policy, right.retry_policy);
+        assert_eq!(left.retry_state, right.retry_state);
         assert_eq!(left.metadata, right.metadata);
     }
 
@@ -2100,6 +2209,8 @@ mod dto_tests {
             repeats: dm::Repeats::Exactly(1),
             authority: authority.clone(),
             filter: dm::DataEventFilter::Any,
+            retry_policy: None,
+            retry_state: None,
             metadata: dm::Metadata::default(),
         };
         let call_action = LoadedActionDto {
@@ -2107,6 +2218,8 @@ mod dto_tests {
             repeats: dm::Repeats::Exactly(1),
             authority,
             filter: dm::ExecuteTriggerEventFilter::new(),
+            retry_policy: None,
+            retry_state: None,
             metadata: dm::Metadata::default(),
         };
 
@@ -2172,6 +2285,63 @@ mod dto_tests {
         assert_trigger_entries_equivalent(&original.by_call, &decoded_dto.by_call);
         assert_eq!(original.ids, decoded_dto.ids);
         assert_contract_entries_equivalent(&original.contracts, &decoded_dto.contracts);
+    }
+
+    #[test]
+    fn time_trigger_retry_state_roundtrip_dto() {
+        let authority: dm::AccountId = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let trigger_id: dm::TriggerId = "retry_time".parse().unwrap();
+        let retry_policy = dm::TimeTriggerRetryPolicy {
+            max_retries: std::num::NonZeroU32::new(3).expect("nonzero"),
+            retry_after_ms: std::num::NonZeroU64::new(500).expect("nonzero"),
+        };
+
+        let set = Set::default();
+        {
+            let mut block = set.block();
+            let mut tx = block.transaction();
+            let mut action = SpecializedAction::new(
+                dm::Executable::Instructions(ConstVec::from(Vec::<dm::InstructionBox>::new())),
+                dm::Repeats::Exactly(1),
+                authority,
+                dm::TimeEventFilter(dm::ExecutionTime::Schedule(Schedule::starting_at(
+                    std::time::Duration::from_millis(5),
+                ))),
+            );
+            action.retry_policy = Some(retry_policy);
+            tx.add_time_trigger(SpecializedTrigger::new(trigger_id.clone(), action))
+                .expect("add time trigger");
+            assert!(tx.set_time_trigger_retry_state(
+                &trigger_id,
+                Some(TimeTriggerRetryState {
+                    retries_used: 1,
+                    next_retry_at_ms: 42,
+                }),
+            ));
+            tx.apply();
+            block.commit();
+        }
+
+        let dto = SetDto::from(&set);
+        let bytes = dto.encode().expect("encode dto");
+        let decoded = SetDto::decode(&bytes).expect("decode dto");
+        let restored = Set::try_from(decoded).expect("restore set");
+        let restored_dto = SetDto::from(&restored);
+
+        assert_trigger_entries_equivalent(&dto.time, &restored_dto.time);
+        let (_, restored_action) = restored_dto
+            .time
+            .iter()
+            .find(|(id, _)| id == &trigger_id)
+            .expect("time trigger should survive roundtrip");
+        assert_eq!(restored_action.retry_policy, Some(retry_policy));
+        assert_eq!(
+            restored_action.retry_state,
+            Some(TimeTriggerRetryState {
+                retries_used: 1,
+                next_retry_at_ms: 42,
+            })
+        );
     }
 
     #[test]

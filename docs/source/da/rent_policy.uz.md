@@ -94,7 +94,7 @@ maxsus orkestrlash kodini talab qilmasdan, har bir isbotlangan bonusli hovuzlar.
 
 ### Ijara kitobi rejalarini yaratish
 
-`iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora` ishga tushiring
+`iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc` ishga tushiring
 doimiy ijara kotirovkasini bajariladigan daftar o'tkazmalariga aylantirish uchun. Buyruq
 o'rnatilgan `ledger_projection` ni tahlil qiladi, Norito `Transfer` ko'rsatmalarini chiqaradi
 asosiy ijara haqini xazinaga yig'ib, zaxirani/provayderni yo'naltiradi

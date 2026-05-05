@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -165,84 +165,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## オフライン許可と判定メタデータ
+## Offline V2 readiness
 
-オフライン手当の応答により、強化された台帳メタデータが事前に公開されます。
-`expires_at_ms`、`policy_expires_at_ms`、`refresh_at_ms`、`verdict_id_hex`、
-`attestation_nonce_hex` および `remaining_amount` が生のファイルと一緒に返されます。
-記録することで、ダッシュボードが埋め込み Norito ペイロードをデコードする必要がなくなります。新しい
-カウントダウン ヘルパー (`deadline_kind`、`deadline_state`、`deadline_ms`、
-`deadline_ms_remaining`) 次に期限切れになる期限を強調表示します (更新 → ポリシー)
-→ 証明書) を使用して、許容量が不足するたびに UI バッジがオペレーターに警告できるようにします。
-残り 24 時間未満。 SDK
-`/v1/offline/allowances` によって公開される REST フィルターをミラーリングします。
-`certificateExpiresBeforeMs/AfterMs`、`policyExpiresBeforeMs/AfterMs`、
-`verdictIdHex`、`attestationNonceHex`、`refreshBeforeMs/AfterMs`、および
-`requireVerdict` / `onlyMissingVerdict` ブール値。無効な組み合わせ (
-例 `onlyMissingVerdict` + `verdictIdHex`) は、Torii より前にローカルで拒否されます。
-と呼ばれます。
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## オフラインでのトップアップ (発行 + 登録)
-
-証明書をすぐに発行したい場合は、トップアップ ヘルパーを使用します。
-それを台帳に登録します。 SDKは発行および登録された証明書を検証します
-ID は返される前に一致し、応答には両方のペイロードが含まれます。あります
-専用のトップアップエンドポイントはありません。ヘルパーは問題と登録呼び出しを連鎖させます。もし
-すでに署名付き証明書をお持ちの場合は、`registerOfflineAllowance` (または
-`renewOfflineAllowance`) を直接使用します。
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii クエリとストリーミング (WebSocket)
 
 クエリ ヘルパーはステータス、Prometheus メトリクス、テレメトリ スナップショット、およびイベントを公開します
@@ -277,7 +224,7 @@ Explorer テレメトリは、`/v1/explorer/metrics` および
 `/v1/explorer/accounts/{account_id}/qr` エンドポイント。ダッシュボードで
 ポータルを強化するのと同じスナップショット。 `getExplorerMetrics()` は、
 ペイロードをロードし、ルートが無効な場合は `null` を返します。と組み合わせてください
-I105 (推奨)/sora (2 番目に優れた) リテラルとインラインが必要な場合は常に `getExplorerAccountQr()`
+i105 (推奨)/sora (2 番目に優れた) リテラルとインラインが必要な場合は常に `getExplorerAccountQr()`
 共有ボタンの SVG。
 
 ```ts
@@ -292,14 +239,14 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
   `qr metadata v${qr.qrVersion} ec=${qr.errorCorrection} prefix=${qr.networkPrefix}`,
 );
-````I105` を渡すと、エクスプローラーのデフォルトの圧縮ファイルが反映されます。
-セレクター;優先 I105 出力のオーバーライドを省略するか、`i105_qr` を要求します
+````i105` を渡すと、エクスプローラーのデフォルトの圧縮ファイルが反映されます。
+セレクター;優先 i105 出力のオーバーライドを省略するか、`i105_qr` を要求します
 QRセーフバリアントが必要な場合。圧縮リテラルは 2 番目に優れたものです
 Sora 専用の UX オプション。ヘルパーは常に正規の識別子を返します。
 選択したリテラル、およびメタデータ (ネットワーク プレフィックス、QR バージョン/モジュール、エラー)
@@ -516,7 +463,7 @@ Space Directory API は、ユニバーサル アカウント ID (UAID) のライ
   正規のアカウント ID ごとに資産保有をグループ化します。 `assetId` を渡してフィルタリングします。
   ポートフォリオを単一の資産インスタンスにまで落とし込みます。
 - `getUaidBindings(uaid)` はすべてのデータスペース ↔ アカウントを列挙します
-  バインディング (`I105` は `i105` リテラルを返します)。
+  バインディング (`i105` は `i105` リテラルを返します)。
 - `getUaidManifests(uaid, { dataspaceId })` は各機能マニフェストを返します。
   ライフサイクル ステータス、および監査用にバインドされたアカウント。
 
@@ -561,7 +508,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -571,7 +518,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

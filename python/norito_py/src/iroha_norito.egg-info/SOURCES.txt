@@ -27,8 +27,6 @@ src/norito/schema.py
 src/norito/streaming.py
 src/norito/telemetry_analysis.py
 src/norito/varint.py
-tests/test_codec.py
-tests/test_crc64.py
-tests/test_relay_ranking.py
-tests/test_relay_registry.py
-tests/test_telemetry_analysis.py
+tests/__init__.py
+tests/conftest.py
+tests/test_header_padding.py

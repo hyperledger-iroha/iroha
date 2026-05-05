@@ -36,7 +36,7 @@ Qonuniylik va "asosiy sandiq" baholash (diqqat markazida):
 - AEAD/Simmetrik: `aes-gcm`, `chacha20poly1305`, `aead` belgilari (RustCrypto) — kanonik.
 - Imzolar/ECC: `ed25519-dalek`, `x25519-dalek` (dalek loyihasi), `k256` (RustCrypto), `secp256k1` (libsecp ulanishlari) — barchasi qonuniy; sirt maydonini kamaytirish uchun bitta secp256k1 stekini (sof Rust uchun `k256` yoki libsecp uchun `secp256k1`) afzal qiling.
 - BLS12-381/ZK: `blstrs`, `halo2_*` — ishlab chiqarishda keng qo'llaniladi ZK ekotizimlari; qonuniy.
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` - qonuniy mos yozuvlar qutilari.
+- PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` - qonuniy mos yozuvlar qutilari.
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — kanonik zamonaviy Rust TLS to'plami.
 - Shovqin: `snow` - kanonik amalga oshirish.
 - Seriyalashtirish: `parity-scale-codec` SCALE uchun kanonik hisoblanadi. Serde ish maydoni bo'ylab ishlab chiqarishga bog'liqlikdan olib tashlandi; Norito hosil qiladi/yozuvchilar har bir ish vaqti yo'lini qamrab oladi. Har qanday qoldiq Serde havolalari tarixiy hujjatlarda, himoya skriptlarida yoki faqat sinov uchun ruxsat etilgan ro'yxatlarda mavjud.

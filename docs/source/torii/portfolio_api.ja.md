@@ -53,12 +53,12 @@ GET /v1/accounts/{uaid}/portfolio
       "dataspace_alias": "universal",
       "accounts": [
         {
-          "account_id": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+          "account_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
           "label": null,
           "assets": [
             {
-              "asset_id": "cash#portfolio::6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-              "asset_definition_id": "cash#portfolio",
+              "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+              "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "quantity": "500"
             }
           ]
@@ -70,17 +70,17 @@ GET /v1/accounts/{uaid}/portfolio
       "dataspace_alias": "cbdc",
       "accounts": [
         {
-          "account_id": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+          "account_id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
           "label": "primary-cbdc",
           "assets": [
             {
-              "asset_id": "wholesale#cbdc::34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-              "asset_definition_id": "wholesale#cbdc",
+              "asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
+              "asset_definition_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
               "quantity": "250"
             },
             {
-              "asset_id": "fx#cbdc::34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-              "asset_definition_id": "fx#cbdc",
+              "asset_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
+              "asset_definition_id": "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
               "quantity": "25"
             }
           ]
@@ -97,7 +97,7 @@ GET /v1/accounts/{uaid}/portfolio
 * `dataspaces` enumerate holdings per dataspace. Each slice corresponds to the
   UAID↔dataspace bindings stored in the Space Directory; if a UAID has not been
   bound yet it will appear under the fallback `default_dataspace`
-  (`DataSpaceId::GLOBAL`).
+  (`DataSpaceId::UNIVERSAL`).
 * Each account entry includes the optional stable label plus the sorted list of
   asset positions with their canonical identifiers and Norito numeric balances.
 
@@ -155,12 +155,12 @@ Sample response:
     {
       "dataspace_id": 0,
       "dataspace_alias": "universal",
-      "accounts": ["6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"]
+      "accounts": ["sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"]
     },
     {
       "dataspace_id": 11,
       "dataspace_alias": "cbdc",
-      "accounts": ["34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"]
+      "accounts": ["sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"]
     }
   ]
 }
@@ -212,7 +212,7 @@ Sample response:
         "expired_epoch": null,
         "revocation": null
       },
-      "accounts": ["34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"],
+      "accounts": ["sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"],
       "manifest": {
         "version": 1,
         "uaid": "uaid:0f4d…ab11",
@@ -271,7 +271,7 @@ Example payload:
 
 ```jsonc
 {
-  "authority": "i105...",
+  "authority": "<i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -323,7 +323,7 @@ Example payload:
 
 ```jsonc
 {
-  "authority": "i105...",
+  "authority": "<i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d…ab11",
   "dataspace": 11,

@@ -6,6 +6,7 @@ use std::{
     borrow::{Cow, ToOwned},
     io::{ErrorKind, Read},
     str::FromStr,
+    sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -41,6 +42,7 @@ use iroha_logger::{error, warn};
 use iroha_torii_shared::da::sampling::{
     build_sampling_plan, compute_sample_window, sampling_plan_to_value,
 };
+#[cfg(feature = "ipa-commitment")]
 use iroha_zkp_halo2::pallas::{
     Params as IpaCurveParams, Polynomial as IpaPolynomial, Scalar as IpaScalar,
 };
@@ -61,7 +63,10 @@ use zstd::stream::decode_all as zstd_decode_all;
 
 use super::persistence::{RECEIPT_SIGNATURE_PLACEHOLDER, ReceiptInsertOutcome};
 use super::rs16::build_chunk_commitments;
-use super::{persistence, storage_class_label, taikai, taikai::taikai_ingest};
+use super::{
+    DaSpoolAction, DaSpoolActionOutput, DaSpoolBatch, DaSpoolBatchReport, persistence,
+    storage_class_label, taikai, taikai::taikai_ingest,
+};
 use crate::{
     NoritoQuery, SharedAppState,
     routing::MaybeTelemetry,
@@ -217,10 +222,16 @@ pub async fn handler_post_da_ingest(
 
     match outcome {
         ReplayInsertOutcome::Fresh { .. } | ReplayInsertOutcome::Duplicate { .. } => {
+            let mut spool_batch = DaSpoolBatch::new();
             if matches!(outcome, ReplayInsertOutcome::Fresh { .. }) {
-                if let Err(err) = app.da_replay_store.record(lane_epoch, request.sequence) {
-                    warn!(?err, "failed to persist DA replay cursor");
-                }
+                let replay_store = Arc::clone(&app.da_replay_store);
+                let sequence = request.sequence;
+                spool_batch.push(DaSpoolAction::new("replay_cursor", move || {
+                    replay_store
+                        .record(lane_epoch, sequence)
+                        .map(|()| DaSpoolActionOutput::None)
+                        .map_err(|err| err.to_string())
+                }));
             }
             let duplicate = matches!(outcome, ReplayInsertOutcome::Duplicate { .. });
             let (rent_gib, rent_months) =
@@ -234,21 +245,26 @@ pub async fn handler_post_da_ingest(
                 &manifest.manifest.rent_quote,
             );
 
-            if let Err(err) = persistence::persist_manifest_for_sorafs(
-                &app.da_ingest.manifest_store_dir,
-                &manifest.encoded,
-                request.lane_id,
-                request.epoch,
-                request.sequence,
-                &manifest.storage_ticket,
-                &fingerprint,
-            ) {
-                error!(
-                    ?err,
-                    spool_dir = ?app.da_ingest.manifest_store_dir,
-                    ticket = %hex::encode(manifest.storage_ticket.as_ref()),
-                    "failed to enqueue DA manifest for SoraFS orchestration"
-                );
+            {
+                let spool_dir = app.da_ingest.manifest_store_dir.clone();
+                let encoded = manifest.encoded.clone();
+                let storage_ticket = manifest.storage_ticket.clone();
+                let lane_id = request.lane_id;
+                let epoch = request.epoch;
+                let sequence = request.sequence;
+                spool_batch.push(DaSpoolAction::new("manifest", move || {
+                    persistence::persist_manifest_for_sorafs(
+                        &spool_dir,
+                        &encoded,
+                        lane_id,
+                        epoch,
+                        sequence,
+                        &storage_ticket,
+                        &fingerprint,
+                    )
+                    .map(|_| DaSpoolActionOutput::None)
+                    .map_err(|err| err.to_string())
+                }));
             }
 
             let pdp_commitment = compute_pdp_commitment(
@@ -270,21 +286,26 @@ pub async fn handler_post_da_ingest(
                 },
             )?;
 
-            if let Err(err) = persistence::persist_pdp_commitment(
-                &app.da_ingest.manifest_store_dir,
-                &pdp_commitment,
-                request.lane_id,
-                request.epoch,
-                request.sequence,
-                &manifest.storage_ticket,
-                &fingerprint,
-            ) {
-                error!(
-                    ?err,
-                    spool_dir = ?app.da_ingest.manifest_store_dir,
-                    ticket = %hex::encode(manifest.storage_ticket.as_ref()),
-                    "failed to enqueue PDP commitment for SoraFS orchestration"
-                );
+            {
+                let spool_dir = app.da_ingest.manifest_store_dir.clone();
+                let pdp_commitment = pdp_commitment.clone();
+                let storage_ticket = manifest.storage_ticket.clone();
+                let lane_id = request.lane_id;
+                let epoch = request.epoch;
+                let sequence = request.sequence;
+                spool_batch.push(DaSpoolAction::new("pdp_commitment", move || {
+                    persistence::persist_pdp_commitment(
+                        &spool_dir,
+                        &pdp_commitment,
+                        lane_id,
+                        epoch,
+                        sequence,
+                        &storage_ticket,
+                        &fingerprint,
+                    )
+                    .map(|_| DaSpoolActionOutput::None)
+                    .map_err(|err| err.to_string())
+                }));
             }
 
             let stripe_layout = stripe_layout_from_manifest(&manifest.manifest);
@@ -308,38 +329,49 @@ pub async fn handler_post_da_ingest(
                 &pdp_commitment_bytes,
                 proof_scheme,
             );
-            if let Err(err) = persistence::persist_da_commitment_record(
-                &app.da_ingest.manifest_store_dir,
-                &commitment_record,
-                request.lane_id,
-                request.epoch,
-                request.sequence,
-                &manifest.storage_ticket,
-                &fingerprint,
-            ) {
-                error!(
-                    ?err,
-                    spool_dir = ?app.da_ingest.manifest_store_dir,
-                    ticket = %hex::encode(manifest.storage_ticket.as_ref()),
-                    "failed to enqueue DA commitment record for bundle ingestion"
-                );
+            {
+                let spool_dir = app.da_ingest.manifest_store_dir.clone();
+                let commitment_record = commitment_record.clone();
+                let storage_ticket = manifest.storage_ticket.clone();
+                let lane_id = request.lane_id;
+                let epoch = request.epoch;
+                let sequence = request.sequence;
+                spool_batch.push(DaSpoolAction::new("commitment_record", move || {
+                    persistence::persist_da_commitment_record(
+                        &spool_dir,
+                        &commitment_record,
+                        lane_id,
+                        epoch,
+                        sequence,
+                        &storage_ticket,
+                        &fingerprint,
+                    )
+                    .map(|_| DaSpoolActionOutput::None)
+                    .map_err(|err| err.to_string())
+                }));
             }
-            if let Err(err) = persistence::persist_da_commitment_schedule_entry(
-                &app.da_ingest.manifest_store_dir,
-                &commitment_record,
-                &pdp_commitment_bytes,
-                request.lane_id,
-                request.epoch,
-                request.sequence,
-                &manifest.storage_ticket,
-                &fingerprint,
-            ) {
-                error!(
-                    ?err,
-                    spool_dir = ?app.da_ingest.manifest_store_dir,
-                    ticket = %hex::encode(manifest.storage_ticket.as_ref()),
-                    "failed to enqueue DA commitment schedule entry"
-                );
+            {
+                let spool_dir = app.da_ingest.manifest_store_dir.clone();
+                let commitment_record = commitment_record.clone();
+                let pdp_commitment_bytes = pdp_commitment_bytes.clone();
+                let storage_ticket = manifest.storage_ticket.clone();
+                let lane_id = request.lane_id;
+                let epoch = request.epoch;
+                let sequence = request.sequence;
+                spool_batch.push(DaSpoolAction::new("commitment_schedule", move || {
+                    persistence::persist_da_commitment_schedule_entry(
+                        &spool_dir,
+                        &commitment_record,
+                        &pdp_commitment_bytes,
+                        lane_id,
+                        epoch,
+                        sequence,
+                        &storage_ticket,
+                        &fingerprint,
+                    )
+                    .map(|_| DaSpoolActionOutput::None)
+                    .map_err(|err| err.to_string())
+                }));
             }
             let pin_alias =
                 registry_alias_from_metadata(&request.metadata).map_err(|(status, message)| {
@@ -358,58 +390,51 @@ pub async fn handler_post_da_ingest(
             );
             pin_intent.alias = pin_alias;
             pin_intent.owner = pin_owner;
-            if let Err(err) = persistence::persist_da_pin_intent(
-                &app.da_ingest.manifest_store_dir,
-                &pin_intent,
-                request.lane_id,
-                request.epoch,
-                request.sequence,
-                &manifest.storage_ticket,
-                &fingerprint,
-            ) {
-                error!(
-                    ?err,
-                    spool_dir = ?app.da_ingest.manifest_store_dir,
-                    ticket = %hex::encode(manifest.storage_ticket.as_ref()),
-                    "failed to enqueue DA pin intent for registry ingestion"
-                );
+            {
+                let spool_dir = app.da_ingest.manifest_store_dir.clone();
+                let pin_intent = pin_intent.clone();
+                let storage_ticket = manifest.storage_ticket.clone();
+                let lane_id = request.lane_id;
+                let epoch = request.epoch;
+                let sequence = request.sequence;
+                spool_batch.push(DaSpoolAction::new("pin_intent", move || {
+                    persistence::persist_da_pin_intent(
+                        &spool_dir,
+                        &pin_intent,
+                        lane_id,
+                        epoch,
+                        sequence,
+                        &storage_ticket,
+                        &fingerprint,
+                    )
+                    .map(|_| DaSpoolActionOutput::None)
+                    .map_err(|err| err.to_string())
+                }));
             }
 
-            if let Err(err) = persistence::persist_da_receipt(
-                &app.da_ingest.manifest_store_dir,
-                &receipt,
-                request.sequence,
-                &fingerprint,
-            ) {
-                error!(
-                    ?err,
-                    spool_dir = ?app.da_ingest.manifest_store_dir,
-                    lane = request.lane_id.as_u32(),
-                    epoch = request.epoch,
-                    sequence = request.sequence,
-                    "failed to enqueue DA receipt for downstream fanout"
-                );
+            {
+                let spool_dir = app.da_ingest.manifest_store_dir.clone();
+                let receipt = receipt.clone();
+                let sequence = request.sequence;
+                spool_batch.push(DaSpoolAction::new("receipt_file", move || {
+                    persistence::persist_da_receipt(&spool_dir, &receipt, sequence, &fingerprint)
+                        .map(|_| DaSpoolActionOutput::None)
+                        .map_err(|err| err.to_string())
+                }));
             }
-            match app.da_receipt_log.append(
-                lane_epoch,
-                request.sequence,
-                receipt.clone(),
-                fingerprint,
-            ) {
-                Ok(outcome) => {
-                    record_da_receipt_metrics(&telemetry, lane_epoch, request.sequence, &outcome);
-                }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        ?lane_epoch,
-                        sequence = request.sequence,
-                        "failed to record DA receipt in durable log"
-                    );
-                    record_da_receipt_error_metrics(&telemetry, lane_epoch, request.sequence);
-                }
+            {
+                let receipt_log = Arc::clone(&app.da_receipt_log);
+                let receipt = receipt.clone();
+                let sequence = request.sequence;
+                spool_batch.push(DaSpoolAction::new("receipt_log", move || {
+                    receipt_log
+                        .append(lane_epoch, sequence, receipt, fingerprint)
+                        .map(DaSpoolActionOutput::ReceiptOutcome)
+                        .map_err(|err| err.to_string())
+                }));
             }
 
+            let mut taikai_alias_rotation_event = None;
             if matches!(request.blob_class, BlobClass::TaikaiSegment) {
                 let taikai = match taikai_ingest::build_envelope(
                     &request,
@@ -434,36 +459,48 @@ pub async fn handler_post_da_ingest(
                     }
                 };
 
-                if let Err(err) = taikai_ingest::persist_envelope(
-                    &app.da_ingest.manifest_store_dir,
-                    request.lane_id,
-                    request.epoch,
-                    request.sequence,
-                    &manifest.storage_ticket,
-                    &fingerprint,
-                    &taikai.envelope_bytes,
-                ) {
-                    error!(
-                        ?err,
-                        spool_dir = ?app.da_ingest.manifest_store_dir,
-                        "failed to enqueue Taikai envelope for anchoring"
-                    );
+                {
+                    let spool_dir = app.da_ingest.manifest_store_dir.clone();
+                    let envelope_bytes = taikai.envelope_bytes.clone();
+                    let storage_ticket = manifest.storage_ticket.clone();
+                    let lane_id = request.lane_id;
+                    let epoch = request.epoch;
+                    let sequence = request.sequence;
+                    spool_batch.push(DaSpoolAction::new("taikai_envelope", move || {
+                        taikai_ingest::persist_envelope(
+                            &spool_dir,
+                            lane_id,
+                            epoch,
+                            sequence,
+                            &storage_ticket,
+                            &fingerprint,
+                            &envelope_bytes,
+                        )
+                        .map(|_| DaSpoolActionOutput::None)
+                        .map_err(|err| err.to_string())
+                    }));
                 }
 
-                if let Err(err) = taikai_ingest::persist_indexes(
-                    &app.da_ingest.manifest_store_dir,
-                    request.lane_id,
-                    request.epoch,
-                    request.sequence,
-                    &manifest.storage_ticket,
-                    &fingerprint,
-                    &taikai.indexes_json,
-                ) {
-                    error!(
-                        ?err,
-                        spool_dir = ?app.da_ingest.manifest_store_dir,
-                        "failed to enqueue Taikai index bundle for anchoring"
-                    );
+                {
+                    let spool_dir = app.da_ingest.manifest_store_dir.clone();
+                    let indexes_json = taikai.indexes_json.clone();
+                    let storage_ticket = manifest.storage_ticket.clone();
+                    let lane_id = request.lane_id;
+                    let epoch = request.epoch;
+                    let sequence = request.sequence;
+                    spool_batch.push(DaSpoolAction::new("taikai_indexes", move || {
+                        taikai_ingest::persist_indexes(
+                            &spool_dir,
+                            lane_id,
+                            epoch,
+                            sequence,
+                            &storage_ticket,
+                            &fingerprint,
+                            &indexes_json,
+                        )
+                        .map(|_| DaSpoolActionOutput::None)
+                        .map_err(|err| err.to_string())
+                    }));
                 }
 
                 let ssm_bytes = taikai_ssm_payload.take().ok_or_else(|| {
@@ -487,20 +524,26 @@ pub async fn handler_post_da_ingest(
                     ResponseError::from(build_error_response(status, &message, format))
                 })?;
 
-                if let Err(err) = taikai_ingest::persist_ssm(
-                    &app.da_ingest.manifest_store_dir,
-                    request.lane_id,
-                    request.epoch,
-                    request.sequence,
-                    &manifest.storage_ticket,
-                    &fingerprint,
-                    &ssm_bytes,
-                ) {
-                    error!(
-                        ?err,
-                        spool_dir = ?app.da_ingest.manifest_store_dir,
-                        "failed to enqueue Taikai signing manifest for anchoring"
-                    );
+                {
+                    let spool_dir = app.da_ingest.manifest_store_dir.clone();
+                    let ssm_bytes_for_spool = ssm_bytes.clone();
+                    let storage_ticket = manifest.storage_ticket.clone();
+                    let lane_id = request.lane_id;
+                    let epoch = request.epoch;
+                    let sequence = request.sequence;
+                    spool_batch.push(DaSpoolAction::new("taikai_ssm", move || {
+                        taikai_ingest::persist_ssm(
+                            &spool_dir,
+                            lane_id,
+                            epoch,
+                            sequence,
+                            &storage_ticket,
+                            &fingerprint,
+                            &ssm_bytes_for_spool,
+                        )
+                        .map(|_| DaSpoolActionOutput::None)
+                        .map_err(|err| err.to_string())
+                    }));
                 }
 
                 iroha_logger::info!(
@@ -531,61 +574,71 @@ pub async fn handler_post_da_ingest(
                             })?;
                     }
 
-                    match taikai_ingest::persist_trm(
-                        &app.da_ingest.manifest_store_dir,
-                        request.lane_id,
-                        request.epoch,
-                        request.sequence,
-                        &manifest.storage_ticket,
-                        &fingerprint,
-                        &trm_bytes,
-                    ) {
-                        Ok(persisted) => {
-                            if persisted.is_some() {
-                                if let Some(guard) = lineage_guard.as_mut() {
-                                    guard
-                                        .persist_lineage_hint(
-                                            request.lane_id,
-                                            request.epoch,
-                                            request.sequence,
-                                            &manifest.storage_ticket,
-                                            &fingerprint,
-                                        )
-                                        .map_err(|(status, message): (StatusCode, String)| {
-                                            ResponseError::from(build_error_response(
-                                                status, &message, format,
-                                            ))
-                                        })?;
-                                    guard
-                                        .commit(
-                                            routing_manifest.segment_window,
-                                            &manifest_digest_hex,
-                                        )
-                                        .map_err(|(status, message): (StatusCode, String)| {
-                                            ResponseError::from(build_error_response(
-                                                status, &message, format,
-                                            ))
-                                        })?;
-                                }
-                            }
-                            taikai::record_taikai_alias_rotation_event(
-                                &telemetry,
-                                cluster_label,
-                                &routing_manifest,
-                                &manifest_digest_hex,
-                            );
+                    let spool_dir = app.da_ingest.manifest_store_dir.clone();
+                    let storage_ticket = manifest.storage_ticket.clone();
+                    let lane_id = request.lane_id;
+                    let epoch = request.epoch;
+                    let sequence = request.sequence;
+                    let segment_window = routing_manifest.segment_window.clone();
+                    let manifest_digest_for_spool = manifest_digest_hex.clone();
+                    let trm_bytes_for_spool = trm_bytes.clone();
+                    spool_batch.push(DaSpoolAction::new("taikai_trm", move || {
+                        let persisted = taikai_ingest::persist_trm(
+                            &spool_dir,
+                            lane_id,
+                            epoch,
+                            sequence,
+                            &storage_ticket,
+                            &fingerprint,
+                            &trm_bytes_for_spool,
+                        )
+                        .map_err(|err| err.to_string())?;
+                        if persisted.is_some()
+                            && let Some(guard) = lineage_guard.as_mut()
+                        {
+                            guard
+                                .persist_lineage_hint(
+                                    lane_id,
+                                    epoch,
+                                    sequence,
+                                    &storage_ticket,
+                                    &fingerprint,
+                                )
+                                .map_err(|(_, message)| message)?;
+                            guard
+                                .commit(segment_window, &manifest_digest_for_spool)
+                                .map_err(|(_, message)| message)?;
                         }
-                        Err(err) => {
-                            error!(
-                                ?err,
-                                spool_dir = ?app.da_ingest.manifest_store_dir,
-                                "failed to enqueue Taikai routing manifest for anchoring"
-                            );
-                        }
-                    }
+                        Ok(DaSpoolActionOutput::None)
+                    }));
+                    taikai_alias_rotation_event =
+                        Some((routing_manifest.clone(), manifest_digest_hex));
                 }
 
                 taikai::record_taikai_ingest_metrics(&telemetry, cluster_label, &taikai.telemetry);
+            }
+
+            let spool_report = flush_da_spool_batch(app.as_ref(), spool_batch).await;
+            log_da_spool_failures(&spool_report);
+            let mut receipt_log_recorded = false;
+            for action in spool_report.actions() {
+                if let Some(DaSpoolActionOutput::ReceiptOutcome(outcome)) = action.output() {
+                    receipt_log_recorded = true;
+                    record_da_receipt_metrics(&telemetry, lane_epoch, request.sequence, outcome);
+                }
+            }
+            if !receipt_log_recorded {
+                record_da_receipt_error_metrics(&telemetry, lane_epoch, request.sequence);
+            }
+            if let Some((routing_manifest, manifest_digest_hex)) = taikai_alias_rotation_event
+                && spool_report_action_ok(&spool_report, "taikai_trm")
+            {
+                taikai::record_taikai_alias_rotation_event(
+                    &telemetry,
+                    cluster_label,
+                    &routing_manifest,
+                    &manifest_digest_hex,
+                );
             }
 
             let response = DaIngestResponse {
@@ -1187,6 +1240,7 @@ fn effective_chunk_role(commitment: &ChunkCommitment) -> ChunkRole {
     }
 }
 
+#[cfg(feature = "ipa-commitment")]
 fn ipa_scalar_from_chunk(commitment: &ChunkCommitment) -> IpaScalar {
     let mut hasher = Blake3Hasher::new();
     hasher.update(&commitment.index.to_le_bytes());
@@ -1200,6 +1254,7 @@ fn ipa_scalar_from_chunk(commitment: &ChunkCommitment) -> IpaScalar {
     IpaScalar::from_uniform(&wide)
 }
 
+#[cfg(feature = "ipa-commitment")]
 pub fn ipa_commitment_from_chunks(
     commitments: &[ChunkCommitment],
 ) -> Result<BlobDigest, (StatusCode, String)> {
@@ -1225,6 +1280,16 @@ pub fn ipa_commitment_from_chunks(
         )
     })?;
     Ok(BlobDigest::new(commitment.to_bytes()))
+}
+
+#[cfg(not(feature = "ipa-commitment"))]
+pub fn ipa_commitment_from_chunks(
+    _commitments: &[ChunkCommitment],
+) -> Result<BlobDigest, (StatusCode, String)> {
+    Err((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "IPA commitments require the `ipa-commitment` feature".to_owned(),
+    ))
 }
 
 fn compute_tree_height(count: usize) -> u16 {
@@ -1574,6 +1639,34 @@ fn record_da_receipt_error_metrics(
             false,
         );
     });
+}
+
+async fn flush_da_spool_batch(app: &crate::AppState, batch: DaSpoolBatch) -> DaSpoolBatchReport {
+    if let Some(spooler) = app.da_spooler.as_ref() {
+        spooler.submit(batch).await
+    } else {
+        batch.execute_sync()
+    }
+}
+
+fn log_da_spool_failures(report: &DaSpoolBatchReport) {
+    for action in report.actions() {
+        if let Some(error) = action.error() {
+            error!(
+                kind = action.kind(),
+                outcome = action.outcome_label(),
+                error,
+                "DA spool action failed"
+            );
+        }
+    }
+}
+
+fn spool_report_action_ok(report: &DaSpoolBatchReport, kind: &'static str) -> bool {
+    report
+        .actions()
+        .iter()
+        .any(|action| action.kind() == kind && action.error().is_none())
 }
 
 fn da_metadata_error(key: &str, message: impl Into<String>) -> (StatusCode, String) {

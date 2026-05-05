@@ -11,7 +11,7 @@ use std::{
 
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
-    block::{BlockHeader, BlockSignature},
+    block::{BlockHeader, BlockSignature, consensus::RbcEncoding},
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
@@ -37,6 +37,68 @@ pub(super) fn load_session_from_dir(
 ) -> io::Result<Option<PersistedSession>> {
     let _suppressor = panic_hook::ScopedSuppressor::new();
     ChunkStore::load_session_from_dir(dir, key, expected_chain_hash, expected_manifest)
+}
+
+/// Metadata extracted from a persisted RBC session snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PersistedSessionMetadata {
+    /// Block hash associated with the RBC session.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Block height associated with the RBC session.
+    pub height: u64,
+    /// Consensus view associated with the RBC session.
+    pub view: u64,
+    /// Total chunk count advertised by the persisted session.
+    pub total_chunks: u32,
+    /// Number of chunk payloads still retained in the persisted file.
+    pub persisted_chunk_count: u32,
+    /// Whether the persisted session had already observed DELIVER.
+    pub delivered: bool,
+    /// Whether the persisted session was marked invalid.
+    pub invalid: bool,
+}
+
+/// Load validated metadata for a single persisted session directly from `dir`.
+///
+/// Returns `Ok(None)` when the session file is absent or fails the same chain/manifest guards
+/// used by restart recovery.
+pub fn load_session_metadata_from_dir(
+    dir: &Path,
+    key: &SessionKey,
+    expected_chain_hash: &Hash,
+    expected_manifest: &SoftwareManifest,
+) -> io::Result<Option<PersistedSessionMetadata>> {
+    let _suppressor = panic_hook::ScopedSuppressor::new();
+    Ok(
+        load_session_from_dir(dir, key, expected_chain_hash, expected_manifest)?
+            .map(|persisted| persisted_session_metadata(&persisted)),
+    )
+}
+
+/// Inspect persisted session metadata without validating the software manifest or deleting files.
+///
+/// Use this for tests and observability probes that run outside the peer process. Restart recovery
+/// must continue using [`load_session_metadata_from_dir`] or `load_session_from_dir`, which apply
+/// the full manifest guard before accepting a snapshot.
+pub fn inspect_session_metadata_from_dir(
+    dir: &Path,
+    key: &SessionKey,
+    expected_chain_hash: &Hash,
+) -> io::Result<Option<PersistedSessionMetadata>> {
+    let _suppressor = panic_hook::ScopedSuppressor::new();
+    ChunkStore::inspect_session_metadata_from_dir(dir, key, expected_chain_hash)
+}
+
+fn persisted_session_metadata(persisted: &PersistedSession) -> PersistedSessionMetadata {
+    PersistedSessionMetadata {
+        block_hash: persisted.block_hash,
+        height: persisted.height,
+        view: persisted.view,
+        total_chunks: persisted.total_chunks,
+        persisted_chunk_count: u32::try_from(persisted.chunks.len()).unwrap_or(u32::MAX),
+        delivered: persisted.delivered,
+        invalid: persisted.invalid,
+    }
 }
 
 impl SoftwareManifest {
@@ -385,6 +447,44 @@ impl ChunkStore {
         Ok(None)
     }
 
+    fn inspect_session_metadata_from_dir(
+        dir: &Path,
+        key: &SessionKey,
+        expected_chain_hash: &Hash,
+    ) -> io::Result<Option<PersistedSessionMetadata>> {
+        let path = Self::make_session_path(dir, key);
+        let tmp_path = temp_session_path(&path);
+        let main_bytes = read_session_bytes(&path)?;
+        let tmp_bytes = read_session_bytes(&tmp_path)?;
+        if main_bytes.is_none() && tmp_bytes.is_none() {
+            return Ok(None);
+        }
+        for (candidate_path, bytes) in [(&path, main_bytes), (&tmp_path, tmp_bytes)] {
+            let Some(bytes) = bytes.as_deref() else {
+                continue;
+            };
+            let Some(persisted) =
+                Self::decode_persisted_session_guarded_retaining_file(bytes, candidate_path)
+            else {
+                continue;
+            };
+            if persisted.key_mismatch_with_path(candidate_path) {
+                continue;
+            }
+            if &persisted.chain_hash != expected_chain_hash {
+                continue;
+            }
+            if !persist_version_supported(persisted.format_version()) {
+                continue;
+            }
+            if validate_chunks(&persisted).is_err() {
+                continue;
+            }
+            return Ok(Some(persisted_session_metadata(&persisted)));
+        }
+        Ok(None)
+    }
+
     fn scan_entries(
         &self,
         expected_chain_hash: Option<&Hash>,
@@ -567,6 +667,40 @@ impl ChunkStore {
                     debug!(?path, panic = %msg, "RBC decode panic message");
                 }
                 let _ = Self::delete_path(path);
+                None
+            }
+        }
+    }
+
+    fn decode_persisted_session_guarded_retaining_file(
+        data: &[u8],
+        path: &Path,
+    ) -> Option<PersistedSession> {
+        let result = panic_hook::with_hook_suppressed(|| {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                decode_from_bytes::<PersistedSession>(data)
+            }))
+        });
+        match result {
+            Ok(Ok(persisted)) => Some(persisted),
+            Ok(Err(err)) => {
+                debug!(
+                    ?err,
+                    ?path,
+                    "failed to decode persisted RBC session during non-destructive inspection"
+                );
+                None
+            }
+            Err(panic) => {
+                debug!(
+                    ?path,
+                    "panic while decoding persisted RBC session during non-destructive inspection"
+                );
+                if let Some(msg) = panic.downcast_ref::<&str>() {
+                    debug!(?path, panic = %msg, "RBC decode panic message");
+                } else if let Some(msg) = panic.downcast_ref::<String>() {
+                    debug!(?path, panic = %msg, "RBC decode panic message");
+                }
                 None
             }
         }
@@ -778,6 +912,21 @@ pub(super) struct PersistedSession {
     #[norito(default)]
     pub(crate) leader_signature: Option<BlockSignature>,
     pub(crate) total_chunks: u32,
+    /// Payload chunk encoding.
+    #[norito(default)]
+    pub(crate) encoding: RbcEncoding,
+    /// Configured shard/chunk size in bytes.
+    #[norito(default)]
+    pub(crate) chunk_size_bytes: u32,
+    /// Canonical payload size before any RS16 padding.
+    #[norito(default)]
+    pub(crate) payload_size_bytes: u64,
+    /// RS16 data shards per stripe (`0` when plain chunking is active).
+    #[norito(default)]
+    pub(crate) data_shards: u16,
+    /// RS16 parity shards per stripe (`0` when plain chunking is active).
+    #[norito(default)]
+    pub(crate) parity_shards: u16,
     /// SHA-256 digests for each chunk, indexed by chunk position.
     #[norito(default)]
     pub(crate) chunk_digests: Vec<[u8; 32]>,
@@ -790,6 +939,8 @@ pub(super) struct PersistedSession {
     pub(crate) delivered: bool,
     pub(crate) deliver_sender: Option<u32>,
     pub(crate) deliver_signature: Option<Vec<u8>>,
+    #[norito(default)]
+    pub(crate) reconstructed_stripes: u32,
     pub(crate) chunks: Vec<PersistedChunk>,
     pub(crate) last_updated_ms: u64,
     /// Commit topology snapshot captured when this RBC session started.
@@ -844,6 +995,64 @@ pub(super) struct PersistedReady {
 
 fn ms_to_system_time(ms: u64) -> SystemTime {
     UNIX_EPOCH + Duration::from_millis(ms)
+}
+
+fn persisted_payload_bytes(
+    session: &PersistedSession,
+    chunks: &[&PersistedChunk],
+) -> Result<Vec<u8>, &'static str> {
+    if session.chunk_size_bytes == 0 {
+        let total_len: usize = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
+        let mut bytes = Vec::with_capacity(total_len);
+        for chunk in chunks {
+            bytes.extend_from_slice(&chunk.bytes);
+        }
+        return Ok(bytes);
+    }
+
+    let chunk_size =
+        usize::try_from(session.chunk_size_bytes).map_err(|_| "chunk size exceeds platform")?;
+    let payload_size =
+        usize::try_from(session.payload_size_bytes).map_err(|_| "payload size exceeds platform")?;
+    let payload_chunk_count = if payload_size == 0 {
+        1
+    } else {
+        payload_size.div_ceil(chunk_size)
+    };
+    match session.encoding {
+        RbcEncoding::Plain => {
+            let total_len: usize = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
+            let mut bytes = Vec::with_capacity(total_len);
+            for chunk in chunks {
+                bytes.extend_from_slice(&chunk.bytes);
+            }
+            bytes.truncate(payload_size);
+            Ok(bytes)
+        }
+        RbcEncoding::Rs16 => {
+            let data_shards = usize::from(session.data_shards);
+            let parity_shards = usize::from(session.parity_shards);
+            if chunk_size % 2 != 0 || data_shards == 0 || parity_shards == 0 {
+                return Err("invalid RBC erasure profile");
+            }
+            let stripe_width = data_shards.saturating_add(parity_shards);
+            let mut bytes = Vec::with_capacity(payload_size);
+            for payload_idx in 0..payload_chunk_count {
+                let stripe = payload_idx / data_shards;
+                let within = payload_idx % data_shards;
+                let encoded_idx = stripe
+                    .checked_mul(stripe_width)
+                    .and_then(|base| base.checked_add(within))
+                    .ok_or("encoded chunk index overflow")?;
+                let chunk = chunks
+                    .get(encoded_idx)
+                    .ok_or("encoded chunk index missing")?;
+                bytes.extend_from_slice(&chunk.bytes);
+            }
+            bytes.truncate(payload_size);
+            Ok(bytes)
+        }
+    }
 }
 
 fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
@@ -913,11 +1122,7 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
 
     if let Some(expected_hash) = &session.payload_hash {
         if session.chunks.len() == expected {
-            let total_len: usize = chunks.iter().map(|chunk| chunk.bytes.len()).sum();
-            let mut bytes = Vec::with_capacity(total_len);
-            for chunk in &chunks {
-                bytes.extend_from_slice(&chunk.bytes);
-            }
+            let bytes = persisted_payload_bytes(session, &chunks)?;
             let calculated = Hash::new(&bytes);
             if &calculated != expected_hash {
                 return Err("payload hash mismatch");
@@ -1003,6 +1208,11 @@ mod tests {
             block_header: None,
             leader_signature: None,
             total_chunks: 0,
+            encoding: RbcEncoding::Plain,
+            chunk_size_bytes: 0,
+            payload_size_bytes: 0,
+            data_shards: 0,
+            parity_shards: 0,
             chunk_digests: Vec::new(),
             payload_hash: None,
             expected_chunk_root: None,
@@ -1013,6 +1223,7 @@ mod tests {
             delivered: false,
             deliver_sender: None,
             deliver_signature: None,
+            reconstructed_stripes: 0,
             chunks: Vec::new(),
             last_updated_ms: 0,
             session_roster: Vec::new(),
@@ -1098,6 +1309,11 @@ mod tests {
             block_header: None,
             leader_signature: None,
             total_chunks: 0,
+            encoding: RbcEncoding::Plain,
+            chunk_size_bytes: 0,
+            payload_size_bytes: 0,
+            data_shards: 0,
+            parity_shards: 0,
             chunk_digests: Vec::new(),
             payload_hash: None,
             expected_chunk_root: None,
@@ -1108,6 +1324,7 @@ mod tests {
             delivered: false,
             deliver_sender: None,
             deliver_signature: None,
+            reconstructed_stripes: 0,
             chunks: Vec::new(),
             last_updated_ms: 0,
             session_roster: Vec::new(),
@@ -1607,6 +1824,136 @@ mod tests {
         let rebuilt = RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
         assert_eq!(rebuilt.total_chunks(), 2);
         assert_eq!(rebuilt.received_chunks(), 0);
+    }
+
+    #[test]
+    fn load_session_metadata_from_dir_reports_chunk_counts() {
+        let dir = tempdir().unwrap();
+        let key = session_key(13);
+        let store = ChunkStore::new(
+            dir.path().to_path_buf(),
+            Duration::from_secs(120),
+            2,
+            48,
+            4,
+            1 << 20,
+        )
+        .expect("chunk store init");
+
+        let mut session = RbcSession::test_new(2, None, None, 0);
+        session.test_note_chunk(0, vec![1u8; 8], 0);
+        session.test_note_chunk(1, vec![2u8; 8], 0);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+
+        store
+            .persist_session(key, &session, &chain_hash, &manifest, &[])
+            .expect("persist session");
+
+        let metadata = load_session_metadata_from_dir(dir.path(), &key, &chain_hash, &manifest)
+            .expect("inspect persisted session")
+            .expect("metadata should exist");
+        assert_eq!(metadata.block_hash, key.0);
+        assert_eq!(metadata.height, key.1);
+        assert_eq!(metadata.view, key.2);
+        assert_eq!(metadata.total_chunks, 2);
+        assert_eq!(metadata.persisted_chunk_count, 2);
+        assert!(!metadata.delivered);
+        assert!(!metadata.invalid);
+    }
+
+    #[test]
+    fn inspect_session_metadata_from_dir_ignores_manifest_mismatch_without_deleting() {
+        let dir = tempdir().unwrap();
+        let key = session_key(15);
+        let store = ChunkStore::new(
+            dir.path().to_path_buf(),
+            Duration::from_secs(120),
+            2,
+            48,
+            4,
+            1 << 20,
+        )
+        .expect("chunk store init");
+
+        let mut session = RbcSession::test_new(2, None, None, 0);
+        session.test_note_chunk(0, vec![1u8; 8], 0);
+        let chain_hash = test_chain_hash();
+        let persisted_manifest = SoftwareManifest {
+            version: "1.0.0".into(),
+            profile: "debug".into(),
+            git_commit: Some("producer".into()),
+        };
+        let mismatched_manifest = SoftwareManifest {
+            version: "1.0.0".into(),
+            profile: "debug".into(),
+            git_commit: Some("observer".into()),
+        };
+
+        store
+            .persist_session(key, &session, &chain_hash, &persisted_manifest, &[])
+            .expect("persist session");
+        let path = ChunkStore::make_session_path(dir.path(), &key);
+
+        assert!(
+            load_session_metadata_from_dir(dir.path(), &key, &chain_hash, &mismatched_manifest)
+                .expect("load metadata with mismatched manifest")
+                .is_none(),
+            "strict restart metadata loading should reject manifest mismatches"
+        );
+        assert!(
+            !path.exists(),
+            "strict loading should keep removing mismatched snapshots before restart recovery"
+        );
+
+        store
+            .persist_session(key, &session, &chain_hash, &persisted_manifest, &[])
+            .expect("persist session again");
+        let metadata = inspect_session_metadata_from_dir(dir.path(), &key, &chain_hash)
+            .expect("inspect metadata")
+            .expect("metadata should exist despite manifest mismatch");
+        assert_eq!(metadata.persisted_chunk_count, 1);
+        assert!(
+            path.exists(),
+            "non-destructive inspection must not remove snapshots owned by the peer process"
+        );
+    }
+
+    #[test]
+    fn load_session_metadata_from_dir_keeps_delivered_metadata_without_chunk_bytes() {
+        let dir = tempdir().unwrap();
+        let key = session_key(14);
+        let store = ChunkStore::new(
+            dir.path().to_path_buf(),
+            Duration::from_secs(120),
+            2,
+            48,
+            4,
+            1 << 20,
+        )
+        .expect("chunk store init");
+
+        let mut session = RbcSession::test_new(2, None, None, 0);
+        session.test_note_chunk(0, vec![5u8; 8], 0);
+        session.test_note_chunk(1, vec![6u8; 8], 0);
+        session.test_set_sent_ready(true);
+        session.record_deliver(0, vec![0xAA; 64]);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+        persisted.chunks.clear();
+
+        store
+            .write_session(&persisted)
+            .expect("write persisted session");
+
+        let metadata = load_session_metadata_from_dir(dir.path(), &key, &chain_hash, &manifest)
+            .expect("inspect persisted session")
+            .expect("metadata should exist");
+        assert_eq!(metadata.total_chunks, 2);
+        assert_eq!(metadata.persisted_chunk_count, 0);
+        assert!(metadata.delivered);
+        assert!(!metadata.invalid);
     }
 
     #[test]

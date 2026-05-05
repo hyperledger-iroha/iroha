@@ -36,7 +36,10 @@ pub const DEFAULT_TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(100);
 /// Default timeout for waiting on transaction status updates.
 pub const DEFAULT_TRANSACTION_STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 /// Default timeout for Torii HTTP requests issued by the client.
-pub const DEFAULT_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+///
+/// This must remain above the Nexus routed/fanout HTTP budget so clients do
+/// not abandon a request while Torii is still within its allowed route window.
+pub const DEFAULT_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(70);
 /// Whether to add a random transaction nonce by default.
 pub const DEFAULT_TRANSACTION_NONCE: bool = false;
 /// Default Torii API version header sent by the client.
@@ -162,6 +165,8 @@ pub struct Config {
     pub chain: ChainId,
     /// Account ID used for signing and submitting transactions.
     pub account: AccountId,
+    /// I105 chain discriminant used when parsing and rendering account literals.
+    pub account_chain_discriminant: u16,
     /// Key pair corresponding to the account.
     pub key_pair: KeyPair,
     /// Optional Basic Auth credentials for HTTP.
@@ -182,6 +187,8 @@ pub struct Config {
     pub transaction_add_nonce: bool,
     /// Root directory containing Connect queue state for diagnostics and offline replay helpers.
     pub connect_queue_root: PathBuf,
+    /// Optional JSON witness file used for multisig-signed Soracloud HTTP requests.
+    pub soracloud_http_witness_file: Option<PathBuf>,
     /// Alias cache policy applied when validating `SoraFS` proofs.
     pub sorafs_alias_cache: sorafs_manifest::alias_cache::AliasCachePolicy,
     /// Default `SoraNet` anonymity policy stage for gateway fetches.
@@ -297,7 +304,7 @@ mod tests {
             password = "ilovetea"
 
             [account]
-            domain = "wonderland"
+            domain = "wonderland.universal"
             public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 
@@ -385,7 +392,11 @@ mod tests {
             .set("CHAIN", "wonder")
             .set("TORII_URL", "http://localhost:8080")
             .set("TORII_API_VERSION", DEFAULT_TORII_API_VERSION)
-            .set("ACCOUNT_DOMAIN", "land")
+            .set(
+                "ACCOUNT_CHAIN_DISCRIMINANT",
+                iroha_config::parameters::defaults::common::chain_discriminant().to_string(),
+            )
+            .set("ACCOUNT_DOMAIN", "land.universal")
             .set(
                 "ACCOUNT_PRIVATE_KEY",
                 ExposedPrivateKey(key.private_key().clone()).to_string(),

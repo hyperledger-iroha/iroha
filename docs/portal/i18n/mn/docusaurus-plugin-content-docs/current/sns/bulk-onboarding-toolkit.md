@@ -47,7 +47,7 @@ Torii эсвэл CLI. Туслагч урд талын мөр бүрийг ба�
 | `suffix_id` | Тийм | Тоон дагавар танигч (аравтын буюу `0x` hex). |
 | `owner` | Тийм | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Тийм | Бүхэл тоо `1..=255`. |
-| `payment_asset_id` | Тийм | Төлбөр тооцооны хөрөнгө (жишээ нь `xor#sora`). |
+| `payment_asset_id` | Тийм | Төлбөр тооцооны хөрөнгө (жишээ нь `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Тийм | Хөрөнгийн эх нэгжийг төлөөлөх тэмдэггүй бүхэл тоо. |
 | `settlement_tx` | Тийм | Төлбөрийн гүйлгээ эсвэл хэшийг тодорхойлсон JSON утга эсвэл шууд утга. |
 | `payment_payer` | Тийм | Төлбөрийг зөвшөөрсөн дансны дугаар. |
@@ -86,18 +86,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -143,10 +143,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Туслагч хүсэлт болгонд нэг `POST /v1/sns/registrations` гаргаад цуцлах болно
+- Туслагч хүсэлт болгонд нэг `POST /v1/sns/names` гаргаад цуцлах болно
   Эхний HTTP алдаа. Хариултуудыг бүртгэлийн замд NDJSON гэж хавсаргасан
   бичлэгүүд.
-- `--poll-status` тус бүрийн дараа `/v1/sns/registrations/{selector}`-г дахин асуудаг.
+- `--poll-status` тус бүрийн дараа `/v1/sns/names/{namespace}/{literal}`-г дахин асуудаг.
   Бичлэг байгаа эсэхийг баталгаажуулахын тулд илгээх (`--poll-attempts` хүртэл, анхдагч 5)
   харагдахуйц. `--suffix-map` (`suffix_id`-аас `"suffix"` хүртэлх JSON утгууд) -ийг өгнө.
   хэрэгсэл нь санал асуулгад зориулж `{label}.{suffix}` литералуудыг гаргаж авах боломжтой.
@@ -233,7 +233,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -256,7 +256,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   лавлагаа нь CSV байршилтай харьцуулахад шийдэгддэг. Объект бус мета өгөгдөл
   баталгаажуулалтын алдаа гаргадаг.
 - **Хянагч:** хоосон нүднүүд нь `--default-controllers`. Тодорхой өгөх
-  эзэмшигч бус этгээдэд шилжүүлэх үед хянагчийн жагсаалт (жишээ нь `i105...;i105...`)
+  эзэмшигч бус этгээдэд шилжүүлэх үед хянагчийн жагсаалт (жишээ нь `<i105-account-id>;<i105-account-id>`)
   жүжигчид.
 
 Алдаа дутагдлыг контекст мөрийн дугаараар мэдээлдэг (жишээ нь

@@ -3,7 +3,7 @@
 These commands help you decode **Iroha 2** data types from binaries using the Norito codec.
 
 > **Note:** The codec subcommands are gated behind the optional `codec` feature.
-> Run them via `cargo run -p iroha_kagami --features codec -- codec <SUBCOMMAND>` or build the binary with that feature enabled.
+> Run them via `cargo run -p iroha_kagami --features codec -- advanced codec <SUBCOMMAND>` or build the binary with that feature enabled.
 
 ### Subcommands
 
@@ -20,7 +20,7 @@ These commands help you decode **Iroha 2** data types from binaries using the No
 To list all supported data types, run from the project main directory:
 
 ```bash
-kagami codec list-types
+kagami advanced codec list-types
 ```
 
 <details> <summary> Expand to see expected output</summary>
@@ -53,7 +53,7 @@ These commands require `--type` argument. If data type is not known, [`norito-to
 * Decode the specified data type from a binary:
 
   ```bash
-  kagami codec norito-to-json --input <path_to_binary> --type <type>
+  kagami advanced codec norito-to-json --input <path_to_binary> --type <type>
   ```
 
 ### `norito-to-json` and `json-to-norito` usage examples
@@ -61,13 +61,13 @@ These commands require `--type` argument. If data type is not known, [`norito-to
 * Decode the `NewAccount` data type from the `samples/account.bin` binary:
 
   ```bash
-  kagami codec norito-to-json --input crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
+  kagami advanced codec norito-to-json --input crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
   ```
 
 * Encode the `NewAccount` data type from the `samples/account.json`:
 
   ```bash
-  kagami codec json-to-norito --input crates/iroha_kagami/src/codec/samples/account.json --output result.bin --type NewAccount
+  kagami advanced codec json-to-norito --input crates/iroha_kagami/src/codec/samples/account.json --output result.bin --type NewAccount
   ```
 
 ## `norito-to-rust`
@@ -82,13 +82,13 @@ Decode the data type from a given binary.
 * Decode the specified data type from a binary:
 
   ```bash
-  kagami codec norito-to-rust <path_to_binary> --type <type>
+  kagami advanced codec norito-to-rust <path_to_binary> --type <type>
   ```
 
 * If you are not sure which data type is encoded in the binary, run the tool without the `--type` option:
 
   ```bash
-    kagami codec norito-to-rust <path_to_binary>
+    kagami advanced codec norito-to-rust <path_to_binary>
   ```
 
 ### `norito-to-rust` usage examples
@@ -96,11 +96,11 @@ Decode the data type from a given binary.
 * Decode the `NewAccount` data type from the `samples/account.bin` binary:
 
   ```bash
-  kagami codec norito-to-rust crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
+  kagami advanced codec norito-to-rust crates/iroha_kagami/src/codec/samples/account.bin --type NewAccount
   ```
 
 * Decode the `NewDomain` data type from the `samples/domain.bin` binary:
 
   ```bash
-  kagami codec norito-to-rust crates/iroha_kagami/src/codec/samples/domain.bin --type NewDomain
+  kagami advanced codec norito-to-rust crates/iroha_kagami/src/codec/samples/domain.bin --type NewDomain
   ```

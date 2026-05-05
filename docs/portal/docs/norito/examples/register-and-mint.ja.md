@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c30c710be94cd99f3c7a0484040155bf63ff4dc0d464d76237bddc8bf589ef26
-source_last_modified: "2025-11-07T11:59:47.168250+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 470eb5de8cd9a7f94275062d1e8c3a448a2d734bf86f650ce94a3971baa3527d
+source_last_modified: "2026-04-08T09:19:38.793794+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -20,9 +20,9 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 ## 台帳ウォークスルー
 
-- 宛先アカウント（例: `i105...`）が存在することを確認し、各 SDK クイックスタートのセットアップ段階を反映します。
+- 宛先アカウント（例: `<i105-account-id>`）が存在することを確認し、各 SDK クイックスタートのセットアップ段階を反映します。
 - `register_and_mint` エントリポイントを呼び出して ROSE 資産定義を作成し、1 トランザクションで Alice に 250 単位をミントします。
-- `client.request(FindAccountAssets)` または `iroha_cli ledger assets list --account i105...` で残高を確認し、ミントが成功したことを確かめます。
+- `client.request(FindAccountAssets)` または `iroha ledger asset list all --verbose` で残高を確認し、ミントが成功したことを確かめます。
 
 ## 関連 SDK ガイド
 
@@ -44,8 +44,8 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("i105...");
-    let asset = asset_definition!("rose#wonderland");
+    let to = account!("<i105-account-id>");
+    let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }
 }

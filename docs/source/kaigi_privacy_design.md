@@ -222,11 +222,12 @@ Extend `DomainEvent` variants:
 
 Events serialize with Norito, exposing only commitment hashes and counts.
 
-CLI tooling (`iroha kaigi …`) wraps each ISI so operators can register sessions,
-submit roster updates, report relay health, and record usage without hand-crafting transactions.
-Relay manifests and privacy proofs are loaded from JSON/hex files passed through
-the CLI’s normal submission path, making it straightforward to script contract
-admission in staging environments.
+CLI tooling (`iroha kaigi …`) wraps each ISI so operators can register relay
+descriptors, create sessions, submit roster updates, replace relay manifests,
+report relay health, and record usage without hand-crafting transactions.
+Relay manifests and privacy proofs are loaded from JSON/hex files passed
+through the CLI’s normal submission path, making it straightforward to script
+contract admission in staging environments.
 
 # Gas Accounting
 

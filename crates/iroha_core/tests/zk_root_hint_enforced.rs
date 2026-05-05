@@ -108,9 +108,9 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let alice = AccountId::new(KeyPair::random().public_key().clone());
@@ -118,7 +118,7 @@ fn unshield_rejects_stale_root_hint_and_accepts_recent() {
     // Bootstrap domain/account/asset and mint, then enable ZK (Hybrid)
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(alice.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(alice.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),

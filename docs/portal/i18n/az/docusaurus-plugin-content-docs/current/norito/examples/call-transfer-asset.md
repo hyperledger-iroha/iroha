@@ -21,9 +21,9 @@ Kotodama giriş nöqtəsinin daxili metadata yoxlaması ilə `transfer_asset` t�
 
 ## Ledger prospekti
 
-- Müqavilə orqanını (məsələn, `i105...`) köçürəcəyi aktivlə maliyyələşdirin və orqana `CanTransfer` rolu və ya ekvivalent icazə verəcək.
-- `call_transfer_asset` giriş nöqtəsinə zəng edərək müqavilə hesabından 5 konturu `i105...`-ə köçürmək üçün zəncirdə olan avtomatlaşdırmanın ev sahibi zənglərini əhatə edə bilməsini əks etdirin.
-- `FindAccountAssets` və ya `iroha_cli ledger asset list --account i105...` vasitəsilə balansları yoxlayın və ötürmə kontekstinə daxil edilmiş metadata qoruyucusunu təsdiqləmək üçün hadisələri yoxlayın.
+- Müqavilə orqanını (məsələn, `<i105-account-id>`) köçürəcəyi aktivlə maliyyələşdirin və orqana `CanTransfer` rolu və ya ekvivalent icazə verəcək.
+- `call_transfer_asset` giriş nöqtəsinə zəng edərək müqavilə hesabından 5 konturu `<i105-account-id>`-ə köçürmək üçün zəncirdə olan avtomatlaşdırmanın ev sahibi zənglərini əhatə edə bilməsini əks etdirin.
+- `FindAccountAssets` və ya `iroha_cli ledger asset list --account <i105-account-id>` vasitəsilə balansları yoxlayın və ötürmə kontekstinə daxil edilmiş metadata qoruyucusunu təsdiqləmək üçün hadisələri yoxlayın.
 
 ## Əlaqədar SDK təlimatları
 
@@ -38,9 +38,9 @@ Kotodama giriş nöqtəsinin daxili metadata yoxlaması ilə `transfer_asset` t�
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
-      asset_definition!("rose#wonderland"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
   }

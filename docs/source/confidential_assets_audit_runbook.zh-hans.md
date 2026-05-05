@@ -32,7 +32,7 @@ when validating confidential-asset flows. It complements the rotation playbook
   可以选择将范围限定为单个资产定义。 CLI 示例：
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - 政策元数据和待定转换可通过

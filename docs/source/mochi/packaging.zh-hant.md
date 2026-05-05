@@ -65,7 +65,7 @@ cargo xtask mochi-bundle
   暫存目錄，以便多平台構建可以將工件存放在一個目錄中
   無需額外腳本的位置。
 
-該命令複製 `mochi-ui-egui`、`kagami`、`LICENSE`、示例
+該命令複製 `mochi-ui`、`kagami`、`LICENSE`、示例
 配置，並將 `mochi/BUNDLE_README.md` 放入捆綁包中。確定性的
 `manifest.json` 與二進製文件一起生成，以便 CI 作業可以跟踪文件
 哈希值和大小。

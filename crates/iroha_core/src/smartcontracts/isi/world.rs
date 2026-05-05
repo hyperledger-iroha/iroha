@@ -45,6 +45,7 @@ pub mod isi {
         confidential::ConfidentialStatus,
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
         da::pin_intent::DaPinIntentWithLocation,
+        escrow::AssetEscrowStatus,
         events::data::{
             confidential::{
                 ConfidentialEvent, ConfidentialShielded, ConfidentialTransferred,
@@ -68,10 +69,11 @@ pub mod isi {
             error::{InstructionExecutionError, InvalidParameterError, MathError, RepetitionError},
             governance as gov, nexus, smart_contract_code as scode, verifying_keys,
         },
-        name::{self, Name},
+        name::Name,
         nexus::{
-            DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementRecord,
-            LaneRelayEmergencyValidatorSet,
+            AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
+            DomainEndorsementRecord, LaneRelayEmergencyValidatorSet, LaneRelayEnvelopeRef,
+            VerifiedLaneRelayRecord, proof_matches_manifest,
         },
         parameter::{Parameter, SumeragiParameter},
         prelude::*,
@@ -80,6 +82,7 @@ pub mod isi {
         zk::{BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope, StarkFriOpenProofV1},
     };
     use iroha_primitives::{
+        json::Json,
         numeric::{Numeric, NumericSpec},
         unique_vec::PushResult,
     };
@@ -119,8 +122,7 @@ pub mod isi {
     fn register_manifest_triggers(
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
-        namespace: &str,
-        contract_id: &str,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
         code_bytes: &[u8],
         manifest: &ContractManifest,
     ) -> Result<(), Error> {
@@ -143,9 +145,7 @@ pub mod isi {
             for descriptor in &entrypoint.triggers {
                 let code_hash_string = code_hash.to_string();
                 let trigger_id_string = descriptor.id.to_string();
-                if let Some(ref target_ns) = descriptor.callback.namespace
-                    && target_ns != namespace
-                {
+                if descriptor.callback.namespace.is_some() {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
                             "cross-contract trigger callbacks are not supported yet".into(),
@@ -153,20 +153,14 @@ pub mod isi {
                     ));
                 }
                 let mut metadata = descriptor.metadata.clone();
-                let ns_key = Name::from_str("contract_namespace").expect("static metadata key");
-                let cid_key = Name::from_str("contract_id").expect("static metadata key");
+                let address_key = Name::from_str("contract_address").expect("static metadata key");
                 let ep_key = Name::from_str("contract_entrypoint").expect("static metadata key");
                 let code_key = Name::from_str("contract_code_hash").expect("static metadata key");
                 let trigger_key = Name::from_str("contract_trigger_id").expect("static metadata");
                 ensure_metadata_value(
                     &mut metadata,
-                    &ns_key,
-                    iroha_primitives::json::Json::from(namespace),
-                )?;
-                ensure_metadata_value(
-                    &mut metadata,
-                    &cid_key,
-                    iroha_primitives::json::Json::from(contract_id),
+                    &address_key,
+                    iroha_primitives::json::Json::from(contract_address.as_str()),
                 )?;
                 ensure_metadata_value(
                     &mut metadata,
@@ -207,6 +201,91 @@ pub mod isi {
             .account_permissions
             .get(who)
             .is_some_and(|perms| perms.iter().any(|p| p.name() == name))
+    }
+
+    fn verified_lane_relay_state_key(relay_ref: &LaneRelayEnvelopeRef) -> Result<Name, Error> {
+        let key = relay_ref.relay_state_key();
+        Name::from_str(&key).map_err(|_| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                "invalid verified lane relay state key".into(),
+            ))
+            .into()
+        })
+    }
+
+    fn encode_verified_lane_relay_record_state(
+        record: &VerifiedLaneRelayRecord,
+    ) -> Result<Vec<u8>, String> {
+        let json = Json::try_new(record.clone())
+            .map_err(|err| format!("verified lane relay JSON encode failed: {err}"))?;
+        norito::to_bytes(&json)
+            .map_err(|err| format!("verified lane relay state encode failed: {err}"))
+    }
+
+    fn decode_verified_lane_relay_record_state(
+        payload: &[u8],
+    ) -> Result<VerifiedLaneRelayRecord, String> {
+        let json: Json = norito::decode_from_bytes(payload)
+            .map_err(|err| format!("verified lane relay JSON decode failed: {err}"))?;
+        norito::json::from_slice(json.get().as_bytes())
+            .map_err(|err| format!("verified lane relay JSON materialization failed: {err}"))
+    }
+
+    fn load_verified_lane_relay_record(
+        state_ro: &impl StateReadOnly,
+        relay_ref: &LaneRelayEnvelopeRef,
+    ) -> std::result::Result<
+        VerifiedLaneRelayRecord,
+        iroha_data_model::query::error::QueryExecutionFail,
+    > {
+        let key = verified_lane_relay_state_key(relay_ref).map_err(|err| {
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string())
+        })?;
+        let payload = state_ro
+            .world()
+            .smart_contract_state()
+            .get(&key)
+            .ok_or(iroha_data_model::query::error::QueryExecutionFail::NotFound)?;
+        decode_verified_lane_relay_record_state(payload).map_err(|err| {
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "verified lane relay decode failed: {err}"
+            ))
+        })
+    }
+    fn protected_contract_namespaces(
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> BTreeSet<String> {
+        let Ok(name) = core::str::FromStr::from_str("gov_protected_namespaces") else {
+            return BTreeSet::new();
+        };
+        let id = iroha_data_model::parameter::CustomParameterId(name);
+        let params = state_transaction.world.parameters.get();
+        params
+            .custom()
+            .get(&id)
+            .and_then(|custom| custom.payload().try_into_any_norito::<Vec<String>>().ok())
+            .map(|namespaces| {
+                namespaces
+                    .into_iter()
+                    .map(|namespace| namespace.trim().to_owned())
+                    .filter(|namespace| !namespace.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn ensure_contract_binding_governance(
+        authority: &AccountId,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        if !protected_contract_namespaces(state_transaction).is_empty()
+            && !has_permission(&state_transaction.world, authority, "CanEnactGovernance")
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "not permitted: CanEnactGovernance".into(),
+            ));
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_lines)]
@@ -532,6 +611,391 @@ pub mod isi {
             ));
         }
         Ok(())
+    }
+
+    fn zk_binding_record(
+        state_transaction: &StateTransaction<'_, '_>,
+        binding: Option<&crate::state::ZkAssetVerifierBinding>,
+    ) -> Option<VerifyingKeyRecord> {
+        binding.and_then(|binding| {
+            state_transaction
+                .world
+                .verifying_keys
+                .get(&binding.id)
+                .cloned()
+        })
+    }
+
+    fn asset_uses_confidential_transfer_v2(
+        state_transaction: &StateTransaction<'_, '_>,
+        st: &crate::state::ZkAssetState,
+    ) -> bool {
+        zk_binding_record(state_transaction, st.vk_transfer.as_ref()).is_some_and(|record| {
+            crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(&record.circuit_id)
+        })
+    }
+
+    fn trim_confidential_root_history(st: &mut crate::state::ZkAssetState, cap: usize) {
+        let max_keep = cap.max(1);
+        let len = st.root_history.len();
+        if len > max_keep {
+            st.root_history.drain(0..(len - max_keep));
+        }
+    }
+
+    fn push_confidential_commitment_for_asset(
+        st: &mut crate::state::ZkAssetState,
+        commitment: [u8; 32],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<[u8; 32], Error> {
+        if asset_uses_confidential_transfer_v2(state_transaction, st) {
+            st.commitments.push(commitment);
+            let root = crate::zk::confidential_v2::compute_confidential_root_v2(&st.commitments)
+                .map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("failed to update confidential v2 root: {err}").into(),
+                    )
+                })?;
+            st.root_history.push(root);
+            trim_confidential_root_history(st, state_transaction.zk.root_history_cap);
+            Ok(root)
+        } else {
+            Ok(st.push_commitment(commitment, state_transaction.zk.root_history_cap))
+        }
+    }
+
+    fn validate_confidential_transfer_v2_public_inputs(
+        transfer: &zk::ZkTransfer,
+        attachment: &iroha_data_model::proof::ProofAttachment,
+        state_transaction: &StateTransaction<'_, '_>,
+        vk_record: Option<&VerifyingKeyRecord>,
+    ) -> Result<(), Error> {
+        let Some(vk_record) = vk_record else {
+            return Ok(());
+        };
+        if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(
+            &vk_record.circuit_id,
+        ) {
+            return Ok(());
+        }
+        if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential transfer v2 requires halo2/ipa backend".into(),
+            ));
+        }
+        if transfer.inputs().is_empty()
+            || transfer.inputs().len() > 2
+            || transfer.outputs().is_empty()
+            || transfer.outputs().len() > 2
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential transfer v2 requires 1-2 inputs and 1-2 outputs".into(),
+            ));
+        }
+        let (_input_commitments, proof_nullifiers, proof_outputs, proof_root, asset_tag, chain_tag) =
+            crate::zk::confidential_v2::parse_transfer_public_inputs(&attachment.proof.bytes)
+                .map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("invalid confidential transfer v2 public inputs: {err}").into(),
+                    )
+                })?;
+        let root_hint = (*transfer.root_hint()).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "confidential transfer v2 requires root_hint".into(),
+            )
+        })?;
+        if proof_root != root_hint {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential transfer v2 root_hint mismatch".into(),
+            ));
+        }
+        let zero = [0u8; 32];
+        for index in 0..2 {
+            let expected_nullifier = transfer.inputs().get(index).copied().unwrap_or(zero);
+            if proof_nullifiers[index] != expected_nullifier {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "confidential transfer v2 nullifier mismatch".into(),
+                ));
+            }
+            let expected_output = transfer.outputs().get(index).copied().unwrap_or(zero);
+            if proof_outputs[index] != expected_output {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "confidential transfer v2 output commitment mismatch".into(),
+                ));
+            }
+        }
+        let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
+            &transfer.asset().to_string(),
+        );
+        if asset_tag != expected_asset_tag {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential transfer v2 asset tag mismatch".into(),
+            ));
+        }
+        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
+            state_transaction.chain_id.as_str(),
+        );
+        if chain_tag != expected_chain_tag {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential transfer v2 chain tag mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn protect_anonymous_escrow_commitments_from_generic_transfer(
+        transfer: &zk::ZkTransfer,
+        attachment: &iroha_data_model::proof::ProofAttachment,
+        state_transaction: &StateTransaction<'_, '_>,
+        vk_record: Option<&VerifyingKeyRecord>,
+    ) -> Result<(), Error> {
+        if state_transaction.native_anonymous_escrow_transfer_depth > 0 {
+            return Ok(());
+        }
+
+        let active_commitments = state_transaction
+            .world
+            .anonymous_asset_escrows
+            .iter()
+            .filter_map(|(_, record)| {
+                (record.asset_definition == *transfer.asset()
+                    && matches!(
+                        record.status,
+                        AssetEscrowStatus::Open
+                            | AssetEscrowStatus::Accepted
+                            | AssetEscrowStatus::PaymentSent
+                            | AssetEscrowStatus::Disputed
+                    ))
+                .then_some(record.escrow_commitment)
+            })
+            .collect::<BTreeSet<_>>();
+        if active_commitments.is_empty() {
+            return Ok(());
+        }
+
+        let Some(vk_record) = vk_record else {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "anonymous escrow custody requires bound confidential transfer v2 verifier".into(),
+            ));
+        };
+        if !crate::zk::confidential_v2::is_confidential_transfer_v2_circuit_id(
+            &vk_record.circuit_id,
+        ) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "anonymous escrow custody requires confidential transfer v2 public inputs".into(),
+            ));
+        }
+
+        let (input_commitments, _nullifiers, _outputs, _root, _asset_tag, _chain_tag) =
+            crate::zk::confidential_v2::parse_transfer_public_inputs(&attachment.proof.bytes)
+                .map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("invalid confidential transfer v2 public inputs: {err}").into(),
+                    )
+                })?;
+        let zero = [0u8; 32];
+        if input_commitments
+            .iter()
+            .copied()
+            .filter(|commitment| commitment != &zero)
+            .any(|commitment| active_commitments.contains(&commitment))
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "anonymous escrow custody can only be spent by native escrow ISIs".into(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn validate_confidential_unshield_v2_public_inputs(
+        unshield: &zk::Unshield,
+        attachment: &iroha_data_model::proof::ProofAttachment,
+        state_transaction: &StateTransaction<'_, '_>,
+        vk_record: Option<&VerifyingKeyRecord>,
+    ) -> Result<(), Error> {
+        let Some(vk_record) = vk_record else {
+            return Ok(());
+        };
+        if !crate::zk::confidential_v2::is_confidential_unshield_v2_circuit_id(
+            &vk_record.circuit_id,
+        ) {
+            return Ok(());
+        }
+        if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v2 requires halo2/ipa backend".into(),
+            ));
+        }
+        if unshield.inputs().is_empty() || unshield.inputs().len() > 2 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v2 requires 1-2 inputs".into(),
+            ));
+        }
+        let (_input_commitments, proof_nullifiers, proof_root, public_amount, asset_tag, chain_tag) =
+            crate::zk::confidential_v2::parse_unshield_public_inputs(&attachment.proof.bytes)
+                .map_err(|err| {
+                    InstructionExecutionError::InvariantViolation(
+                        format!("invalid confidential unshield v2 public inputs: {err}").into(),
+                    )
+                })?;
+        let root_hint = (*unshield.root_hint()).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "confidential unshield v2 requires root_hint".into(),
+            )
+        })?;
+        if proof_root != root_hint {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v2 root_hint mismatch".into(),
+            ));
+        }
+        let expected_public_amount =
+            crate::zk::confidential_v2::encode_confidential_amount_v2(*unshield.public_amount());
+        if public_amount != expected_public_amount {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v2 public amount mismatch".into(),
+            ));
+        }
+        let zero = [0u8; 32];
+        for index in 0..2 {
+            let expected_nullifier = unshield.inputs().get(index).copied().unwrap_or(zero);
+            if proof_nullifiers[index] != expected_nullifier {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "confidential unshield v2 nullifier mismatch".into(),
+                ));
+            }
+        }
+        let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
+            &unshield.asset().to_string(),
+        );
+        if asset_tag != expected_asset_tag {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v2 asset tag mismatch".into(),
+            ));
+        }
+        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
+            state_transaction.chain_id.as_str(),
+        );
+        if chain_tag != expected_chain_tag {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v2 chain tag mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_confidential_unshield_v3_public_inputs(
+        unshield: &zk::Unshield,
+        attachment: &iroha_data_model::proof::ProofAttachment,
+        state_transaction: &StateTransaction<'_, '_>,
+        vk_record: Option<&VerifyingKeyRecord>,
+    ) -> Result<(), Error> {
+        let Some(vk_record) = vk_record else {
+            return Ok(());
+        };
+        if !crate::zk::confidential_v2::is_confidential_unshield_v3_circuit_id(
+            &vk_record.circuit_id,
+        ) {
+            return Ok(());
+        }
+        if attachment.backend.as_str() != crate::zk::ZK_BACKEND_HALO2_IPA {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 requires halo2/ipa backend".into(),
+            ));
+        }
+        if unshield.inputs().is_empty() || unshield.inputs().len() > 2 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 requires 1-2 inputs".into(),
+            ));
+        }
+        if unshield.outputs().len() > 1 {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 supports at most one private change output".into(),
+            ));
+        }
+        let (
+            _input_commitments,
+            proof_nullifiers,
+            proof_outputs,
+            proof_root,
+            public_amount,
+            asset_tag,
+            chain_tag,
+        ) = crate::zk::confidential_v2::parse_unshield_public_inputs_v3(&attachment.proof.bytes)
+            .map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("invalid confidential unshield v3 public inputs: {err}").into(),
+                )
+            })?;
+        let root_hint = (*unshield.root_hint()).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 requires root_hint".into(),
+            )
+        })?;
+        if proof_root != root_hint {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 root_hint mismatch".into(),
+            ));
+        }
+        let expected_public_amount =
+            crate::zk::confidential_v2::encode_confidential_amount_v2(*unshield.public_amount());
+        if public_amount != expected_public_amount {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 public amount mismatch".into(),
+            ));
+        }
+        let zero = [0u8; 32];
+        for index in 0..2 {
+            let expected_nullifier = unshield.inputs().get(index).copied().unwrap_or(zero);
+            if proof_nullifiers[index] != expected_nullifier {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "confidential unshield v3 nullifier mismatch".into(),
+                ));
+            }
+        }
+        let expected_output = unshield.outputs().first().copied().unwrap_or(zero);
+        if proof_outputs != expected_output {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 output commitment mismatch".into(),
+            ));
+        }
+        let expected_asset_tag = crate::zk::confidential_v2::derive_confidential_asset_tag_v2(
+            &unshield.asset().to_string(),
+        );
+        if asset_tag != expected_asset_tag {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 asset tag mismatch".into(),
+            ));
+        }
+        let expected_chain_tag = crate::zk::confidential_v2::derive_confidential_chain_tag_v2(
+            state_transaction.chain_id.as_str(),
+        );
+        if chain_tag != expected_chain_tag {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "confidential unshield v3 chain tag mismatch".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_confidential_unshield_public_inputs(
+        unshield: &zk::Unshield,
+        attachment: &iroha_data_model::proof::ProofAttachment,
+        state_transaction: &StateTransaction<'_, '_>,
+        vk_record: Option<&VerifyingKeyRecord>,
+    ) -> Result<(), Error> {
+        validate_confidential_unshield_v2_public_inputs(
+            unshield,
+            attachment,
+            state_transaction,
+            vk_record,
+        )?;
+        validate_confidential_unshield_v3_public_inputs(
+            unshield,
+            attachment,
+            state_transaction,
+            vk_record,
+        )
     }
 
     fn extract_vote_public_inputs(
@@ -1344,7 +1808,7 @@ pub mod isi {
             let id_backend = id.backend.as_str();
             match record.backend {
                 BackendTag::Halo2IpaPasta => {
-                    if !record.curve.eq_ignore_ascii_case("pallas") {
+                    if record.curve != "pallas" {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
                                 "verifying key curve must be \"pallas\"".into(),
@@ -1360,7 +1824,7 @@ pub mod isi {
                     }
                 }
                 BackendTag::Stark => {
-                    if !record.curve.eq_ignore_ascii_case("goldilocks") {
+                    if record.curve != "goldilocks" {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
                                 "verifying key curve must be \"goldilocks\"".into(),
@@ -1613,20 +2077,8 @@ pub mod isi {
                     "not permitted: CanProposeContractDeployment".into(),
                 ));
             }
-            let namespace_trimmed = self.namespace.trim();
-            if namespace_trimmed.is_empty() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("namespace must not be empty".into()),
-                ));
-            }
-            let contract_trimmed = self.contract_id.trim();
-            if contract_trimmed.is_empty() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("contract_id must not be empty".into()),
-                ));
-            }
-            let namespace = namespace_trimmed.to_string();
-            let contract_id = contract_trimmed.to_string();
+            let contract_address = self.contract_address.clone();
+            let contract_address_literal = contract_address.as_str();
 
             let (code_hash_hex_str, code_hash_bytes) =
                 canonical_hex32(&self.code_hash_hex, "code_hash")?;
@@ -1655,30 +2107,25 @@ pub mod isi {
             }
             let abi_version = AbiVersion::new(1);
 
-            let namespace_len: u32 = namespace.len().try_into().map_err(|_| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    "namespace length exceeds 2^32 bytes".into(),
-                ))
-            })?;
-            let contract_len: u32 = contract_id.len().try_into().map_err(|_| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    "contract_id length exceeds 2^32 bytes".into(),
-                ))
-            })?;
+            let contract_address_len: u32 =
+                contract_address_literal.len().try_into().map_err(|_| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "contract_address length exceeds 2^32 bytes".into(),
+                        ),
+                    )
+                })?;
 
             let mut id_input = Vec::with_capacity(
                 b"iroha:gov:proposal:v1|".len()
-                    + core::mem::size_of::<u32>() * 2
-                    + namespace.len()
-                    + contract_id.len()
+                    + core::mem::size_of::<u32>()
+                    + contract_address_literal.len()
                     + code_hash_bytes.len()
                     + abi_hash_bytes.len(),
             );
             id_input.extend_from_slice(b"iroha:gov:proposal:v1|");
-            id_input.extend_from_slice(&namespace_len.to_le_bytes());
-            id_input.extend_from_slice(namespace.as_bytes());
-            id_input.extend_from_slice(&contract_len.to_le_bytes());
-            id_input.extend_from_slice(contract_id.as_bytes());
+            id_input.extend_from_slice(&contract_address_len.to_le_bytes());
+            id_input.extend_from_slice(contract_address_literal.as_bytes());
             id_input.extend_from_slice(&code_hash_bytes);
             id_input.extend_from_slice(&abi_hash_bytes);
             let id_bytes = Blake2b512::digest(&id_input);
@@ -1726,8 +2173,7 @@ pub mod isi {
             }
 
             let payload = DeployContractProposal {
-                namespace: namespace.clone(),
-                contract_id: contract_id.clone(),
+                contract_address: contract_address.clone(),
                 code_hash_hex,
                 abi_hash_hex,
                 abi_version,
@@ -1741,8 +2187,7 @@ pub mod isi {
                         "governance proposal id collision".into(),
                     ));
                 };
-                if existing_payload.namespace != payload.namespace
-                    || existing_payload.contract_id != payload.contract_id
+                if existing_payload.contract_address != payload.contract_address
                     || existing_payload.code_hash_hex != payload.code_hash_hex
                     || existing_payload.abi_hash_hex != payload.abi_hash_hex
                     || existing_payload.abi_version != payload.abi_version
@@ -1817,8 +2262,7 @@ pub mod isi {
                     iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
                         id,
                         proposer: authority.clone(),
-                        namespace: payload.namespace,
-                        contract_id: payload.contract_id,
+                        contract_address: Some(payload.contract_address),
                     },
                 ),
             ));
@@ -1994,14 +2438,12 @@ pub mod isi {
                 },
             );
 
-            let runtime_target = self.manifest.id();
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
                     iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
                         id,
                         proposer: authority.clone(),
-                        namespace: "runtime-upgrade".to_string(),
-                        contract_id: hex::encode(runtime_target.0),
+                        contract_address: None,
                     },
                 ),
             ));
@@ -2279,12 +2721,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must be a canonical account id".into(),
+                                        reason: "owner must be a canonical I105 account id".into(),
                                 },
                             ),
                         ));
                         InstructionExecutionError::InvariantViolation(
-                            "owner must be a canonical account id".into(),
+                            "owner must be a canonical I105 account id".into(),
                         )
                     })?;
                         let owner_str = owner_str_raw.trim();
@@ -2293,12 +2735,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must use canonical account id form".into(),
+                                        reason: "owner must use canonical I105 account id form".into(),
                                     },
                                 ),
                             ));
                             return Err(InstructionExecutionError::InvariantViolation(
-                                "owner must use canonical account id form".into(),
+                                "owner must use canonical I105 account id form".into(),
                             ));
                         }
 
@@ -2311,12 +2753,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must be a canonical account id".into(),
+                                        reason: "owner must be a canonical I105 account id".into(),
                                     },
                                 ),
                             ));
                             InstructionExecutionError::InvariantViolation(
-                                "owner must be a canonical account id".into(),
+                                "owner must be a canonical I105 account id".into(),
                             )
                         })?;
                         if owner_parsed.to_string() != owner_str {
@@ -2324,12 +2766,12 @@ pub mod isi {
                                 iroha_data_model::events::data::governance::GovernanceEvent::BallotRejected(
                                     iroha_data_model::events::data::governance::GovernanceBallotRejected {
                                         referendum_id: self.election_id.clone(),
-                                        reason: "owner must use canonical account id form".into(),
+                                        reason: "owner must use canonical I105 account id form".into(),
                                     },
                                 ),
                             ));
                             return Err(InstructionExecutionError::InvariantViolation(
-                                "owner must use canonical account id form".into(),
+                                "owner must use canonical I105 account id form".into(),
                             ));
                         }
                         if lock_owner.is_none() {
@@ -3516,8 +3958,12 @@ pub mod isi {
         payload: &DeployContractProposal,
         key: iroha_crypto::Hash,
     ) -> Result<bool, Error> {
-        let ns_key = (payload.namespace.clone(), payload.contract_id.clone());
-        if let Some(existing) = state_transaction.world.contract_instances.get(&ns_key) {
+        let contract_address = payload.contract_address.clone();
+        if let Some(existing) = state_transaction
+            .world
+            .contract_instances
+            .get(&contract_address)
+        {
             if *existing != key {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "contract instance already bound to a different code hash".into(),
@@ -3528,7 +3974,7 @@ pub mod isi {
         state_transaction
             .world
             .contract_instances
-            .insert(ns_key, key);
+            .insert(contract_address, key);
         Ok(true)
     }
 
@@ -3550,8 +3996,7 @@ pub mod isi {
             let activated_at_ms_u128 = state_transaction._curr_block.creation_time().as_millis();
             let activated_at_ms = u64::try_from(activated_at_ms_u128).unwrap_or(u64::MAX);
             let activation = GovernanceManifestActivation {
-                namespace: payload.namespace.clone(),
-                contract_id: payload.contract_id.clone(),
+                contract_address: payload.contract_address.to_string(),
                 code_hash_hex: hex::encode(code_hash),
                 abi_hash_hex: Some(hex::encode(abi_hash)),
                 height: state_transaction._curr_block.height().get(),
@@ -3793,48 +4238,14 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            // Require governance authority to activate instances
-            if !has_permission(&state_transaction.world, authority, "CanEnactGovernance") {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanEnactGovernance".into(),
-                ));
-            }
+            ensure_contract_binding_governance(authority, state_transaction)?;
             let key = *self.code_hash();
-            let ns = self.namespace().clone();
-            let cid = self.contract_id().clone();
-            let ns_key = (ns, cid);
-            // Enforce namespace uniqueness when governance protects namespaces to prevent cross-namespace rebinding.
-            let mut protected = Vec::new();
-            if let Ok(name) = core::str::FromStr::from_str("gov_protected_namespaces") {
-                let id = iroha_data_model::parameter::CustomParameterId(name);
-                let params = state_transaction.world.parameters.get();
-                if let Some(custom) = params.custom().get(&id)
-                    && let Ok(v) = custom.payload().try_into_any_norito::<Vec<String>>()
-                {
-                    protected = v;
-                }
-            }
-            if !protected.is_empty() {
-                if let Some(conflict) = state_transaction
-                    .world
-                    .contract_instances
-                    .iter()
-                    .find(|((ns, contract_id), _)| {
-                        contract_id == self.contract_id() && ns != self.namespace()
-                    })
-                    .map(|(k, _)| k.clone())
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "contract_id `{}` already bound under protected namespace `{}`",
-                            self.contract_id(),
-                            conflict.0
-                        )
-                        .into(),
-                    ));
-                }
-            }
-            if let Some(existing) = state_transaction.world.contract_instances.get(&ns_key) {
+            let contract_address = self.contract_address().clone();
+            if let Some(existing) = state_transaction
+                .world
+                .contract_instances
+                .get(&contract_address)
+            {
                 if *existing != key {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "contract instance already bound to a different code hash".into(),
@@ -3876,8 +4287,7 @@ pub mod isi {
                 register_manifest_triggers(
                     authority,
                     state_transaction,
-                    self.namespace(),
-                    self.contract_id(),
+                    self.contract_address(),
                     &code_bytes,
                     &manifest,
                 )?;
@@ -3885,13 +4295,12 @@ pub mod isi {
             state_transaction
                 .world
                 .contract_instances
-                .insert(ns_key, key);
+                .insert(contract_address.clone(), key);
             state_transaction
                 .world
                 .emit_events(Some(SmartContractEvent::InstanceActivated(
                     ContractInstanceActivated {
-                        namespace: self.namespace().clone(),
-                        contract_id: self.contract_id().clone(),
+                        contract_address,
                         code_hash: *self.code_hash(),
                         activated_by: authority.clone(),
                     },
@@ -3906,24 +4315,8 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(&state_transaction.world, authority, "CanEnactGovernance") {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanEnactGovernance".into(),
-                ));
-            }
-            let namespace = self.namespace().trim();
-            if namespace.is_empty() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("namespace must not be empty".into()),
-                ));
-            }
-            let contract_id = self.contract_id().trim();
-            if contract_id.is_empty() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("contract_id must not be empty".into()),
-                ));
-            }
-            let key = (namespace.to_owned(), contract_id.to_owned());
+            ensure_contract_binding_governance(authority, state_transaction)?;
+            let key = self.contract_address().clone();
             let Some(prev_hash) = state_transaction
                 .world
                 .contract_instances
@@ -3973,8 +4366,7 @@ pub mod isi {
                 .world
                 .emit_events(Some(SmartContractEvent::InstanceDeactivated(
                     ContractInstanceDeactivated {
-                        namespace: key.0,
-                        contract_id: key.1,
+                        contract_address: key,
                         previous_code_hash: prev_hash,
                         deactivated_by: authority.clone(),
                         reason,
@@ -3990,16 +4382,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            // Permission gate: same as manifest registration
-            if !has_permission(
-                &state_transaction.world,
-                authority,
-                "CanRegisterSmartContractCode",
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanRegisterSmartContractCode".into(),
-                ));
-            }
             let code = self.code().clone();
             // Parse IVM header and verify code_hash over program body
             let parsed = ivm::ProgramMetadata::parse(&code).map_err(|e| {
@@ -5188,7 +5570,7 @@ pub mod isi {
         let id_backend = id.backend.as_str();
         match new.backend {
             BackendTag::Halo2IpaPasta => {
-                if !new.curve.eq_ignore_ascii_case("pallas") {
+                if new.curve != "pallas" {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
                             "verifying key curve must be \"pallas\"".into(),
@@ -5204,7 +5586,7 @@ pub mod isi {
                 }
             }
             BackendTag::Stark => {
-                if !new.curve.eq_ignore_ascii_case("goldilocks") {
+                if new.curve != "goldilocks" {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
                             "verifying key curve must be \"goldilocks\"".into(),
@@ -6231,6 +6613,20 @@ pub mod isi {
                         ),
                     ));
                 }
+                if tp.proof.backend.starts_with("sccp/stark-fri-v1/")
+                    && iroha_sccp::recover_nexus_sccp_message_transparent_proof(
+                        tp.proof.backend.as_str(),
+                        &tp.proof.bytes,
+                    )
+                    .is_none()
+                {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "SCCP transparent bridge proofs must decode as valid typed message artifacts"
+                                .into(),
+                        ),
+                    ));
+                }
             }
         }
 
@@ -6452,6 +6848,17 @@ pub mod isi {
             let proof_size = encoded.len();
             let backend_label = self.proof.backend_label();
             let commitment = hash_bridge_proof(&backend_label, &encoded);
+            let pid = iroha_data_model::proof::ProofId {
+                backend: backend_label.clone(),
+                proof_hash: commitment,
+            };
+
+            // Allow re-submitting the exact same proof artifact so higher-level
+            // bridge flows can register proof evidence independently from a
+            // later message-settlement transaction.
+            if state_transaction.world.proofs.get(&pid).is_some() {
+                return Ok(());
+            }
 
             if let Some(conflict) =
                 find_overlapping_bridge_range(state_transaction, &backend_label, &self.proof.range)
@@ -6463,10 +6870,6 @@ pub mod isi {
                 ));
             }
 
-            let pid = iroha_data_model::proof::ProofId {
-                backend: backend_label.clone(),
-                proof_hash: commitment,
-            };
             ensure_unique_proof(state_transaction, &pid)?;
 
             let height = current_height;
@@ -6528,6 +6931,32 @@ pub mod isi {
             state_transaction
                 .world
                 .emit_events(Some(BridgeEvent::Emitted(self.receipt)));
+            Ok(())
+        }
+    }
+
+    impl Execute for bridge::RecordSccpMessage {
+        fn execute(
+            self,
+            _authority: &AccountId,
+            _state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let Some(payload) =
+                iroha_sccp::decode_canonical_sccp_payload_bytes(&self.payload_bytes)
+            else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP payload bytes could not be decoded".into(),
+                    ),
+                ));
+            };
+            if !iroha_sccp::verify_sccp_payload_structure(&payload) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP payload bytes failed structural verification".into(),
+                    ),
+                ));
+            }
             Ok(())
         }
     }
@@ -7874,10 +8303,11 @@ pub mod isi {
             let root_before_hex = root_before.map_or_else(|| hex::encode([0u8; 32]), hex::encode);
             #[cfg(feature = "telemetry")]
             let root_history_before = st.root_history.len();
-            let new_root = st.push_commitment(
+            let new_root = push_confidential_commitment_for_asset(
+                &mut st,
                 *self.note_commitment(),
-                state_transaction.zk.root_history_cap,
-            );
+                state_transaction,
+            )?;
             let frontier_update = st.record_frontier_checkpoint(
                 state_transaction.block_height(),
                 state_transaction.zk.tree_frontier_checkpoint_interval,
@@ -8000,9 +8430,10 @@ pub mod isi {
                     ));
                 }
             }
-            // Reject duplicated nullifiers
+            // Reject both previously spent nullifiers and repeated inputs within this transfer.
+            let mut seen_nullifiers = std::collections::BTreeSet::new();
             for &nullifier in self.inputs() {
-                if st.nullifiers.contains(&nullifier) {
+                if !seen_nullifiers.insert(nullifier) || st.nullifiers.contains(&nullifier) {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "duplicate nullifier".into(),
                     ));
@@ -8010,6 +8441,18 @@ pub mod isi {
             }
             let (vk_box, vk_record) =
                 resolve_asset_vk(state_transaction, st.vk_transfer.as_ref(), attachment)?;
+            validate_confidential_transfer_v2_public_inputs(
+                &self,
+                attachment,
+                state_transaction,
+                vk_record.as_ref(),
+            )?;
+            protect_anonymous_escrow_commitments_from_generic_transfer(
+                &self,
+                attachment,
+                state_transaction,
+                vk_record.as_ref(),
+            )?;
             if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
                 // For `stark/fri` we require the canonical OpenVerifyEnvelope wrapper so the
                 // proof bytes are bound to `(backend, circuit_id, vk_hash, public_inputs)` and we
@@ -8090,7 +8533,8 @@ pub mod isi {
             #[cfg(feature = "telemetry")]
             let appended_outputs = outputs_sorted.len();
             for &commitment in &outputs_sorted {
-                let _ = st.push_commitment(commitment, state_transaction.zk.root_history_cap);
+                let _ =
+                    push_confidential_commitment_for_asset(&mut st, commitment, state_transaction)?;
             }
             let frontier_update = st.record_frontier_checkpoint(
                 state_transaction.block_height(),
@@ -8255,6 +8699,7 @@ pub mod isi {
                 .cloned()
                 .unwrap_or_default();
             state_transaction.register_nullifiers(self.inputs().len())?;
+            state_transaction.register_commitments(self.outputs().len())?;
             let attachment = self.proof();
             if attachment.backend != attachment.proof.backend {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -8281,6 +8726,12 @@ pub mod isi {
             }
             let (vk_box, vk_record) =
                 resolve_asset_vk(state_transaction, st.vk_unshield.as_ref(), attachment)?;
+            validate_confidential_unshield_public_inputs(
+                &self,
+                attachment,
+                state_transaction,
+                vk_record.as_ref(),
+            )?;
             if crate::zk::is_stark_fri_v1_backend(attachment.backend.as_str()) {
                 // For `stark/fri` we require the canonical OpenVerifyEnvelope wrapper so the
                 // proof bytes are bound to `(backend, circuit_id, vk_hash, public_inputs)` and we
@@ -8354,6 +8805,18 @@ pub mod isi {
                     ));
                 }
             }
+            let root_before = st.root_history.last().copied();
+            let mut outputs_sorted = self.outputs().clone();
+            outputs_sorted.sort_unstable();
+            for &commitment in &outputs_sorted {
+                let _ =
+                    push_confidential_commitment_for_asset(&mut st, commitment, state_transaction)?;
+            }
+            let _frontier_update = st.record_frontier_checkpoint(
+                state_transaction.block_height(),
+                state_transaction.zk.tree_frontier_checkpoint_interval,
+                state_transaction.zk.reorg_depth_bound,
+            );
             let mint = Mint::asset_numeric(
                 iroha_primitives::numeric::Numeric::new(*self.public_amount(), 0),
                 asset_id,
@@ -8434,7 +8897,7 @@ pub mod isi {
                     }),
                 ),
             ));
-            // No new root is produced by unshield (public credit)
+            let _ = root_before;
             Ok(())
         }
     }
@@ -9049,16 +9512,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            // Enforce permission to register smart contract code/manifests
-            if !has_permission(
-                &state_transaction.world,
-                authority,
-                "CanRegisterSmartContractCode",
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanRegisterSmartContractCode".into(),
-                ));
-            }
             let manifest = self.manifest().clone();
             let Some(key @ Hash { .. }) = manifest.code_hash else {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -9445,18 +9898,12 @@ pub mod isi {
             let Register { object: new_domain } = self;
             let raw_domain_id = new_domain.id.clone();
 
-            let canonical_label = name::canonicalize_domain_label(raw_domain_id.name().as_ref())
+            let canonical_id = DomainId::try_new(raw_domain_id.name(), raw_domain_id.dataspace())
                 .map_err(|err| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(err.reason().into()),
-                    )
-                })?;
-            let canonical_name = Name::from_str(&canonical_label).map_err(|err| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                     err.reason().into(),
                 ))
             })?;
-            let canonical_id = DomainId::new(canonical_name);
 
             if canonical_id == *iroha_genesis::GENESIS_DOMAIN_ID {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -9471,6 +9918,40 @@ pub mod isi {
                 }
                 .into());
             }
+            let now_ms = state_transaction.block_unix_timestamp_ms();
+            let bootstrap_domain_name_lease = state_transaction.block_hashes.is_empty();
+            let should_seed_domain_name_lease = match crate::sns::active_domain_owner(
+                state_transaction.world(),
+                &canonical_id,
+                now_ms,
+            ) {
+                Some(owner) if owner == *authority => false,
+                Some(owner) => {
+                    if state_transaction.replay_compatibility {
+                        false
+                    } else {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "active SNS domain-name lease for `{canonical_id}` is owned by `{owner}`, not `{authority}`"
+                        )
+                        .into(),
+                    ));
+                    }
+                }
+                None if bootstrap_domain_name_lease => true,
+                None => {
+                    if state_transaction.replay_compatibility {
+                        false
+                    } else {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "active SNS domain-name lease is required before registering `{canonical_id}`"
+                        )
+                        .into(),
+                    ));
+                    }
+                }
+            };
             let selector =
                 iroha_data_model::account::AccountDomainSelector::from_domain(&canonical_id)
                     .map_err(|err| {
@@ -9519,6 +10000,38 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "Domain selector already registered".to_owned().into(),
                 ));
+            }
+            if should_seed_domain_name_lease {
+                let lease_selector =
+                    crate::sns::selector_for_domain(&canonical_id).map_err(|err| {
+                        InstructionExecutionError::InvalidParameter(
+                            InvalidParameterError::SmartContract(err.to_string()),
+                        )
+                    })?;
+                let address = iroha_data_model::account::AccountAddress::from_account_id(authority)
+                    .map_err(|err| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "failed to derive genesis account address for SNS bootstrap: {err}"
+                            )
+                            .into(),
+                        )
+                    })?;
+                let record = iroha_data_model::sns::NameRecordV1::new(
+                    lease_selector.clone(),
+                    authority.clone(),
+                    vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                    0,
+                    0,
+                    u64::MAX,
+                    u64::MAX,
+                    u64::MAX,
+                    Metadata::default(),
+                );
+                world.smart_contract_state.insert(
+                    crate::sns::record_storage_key(&lease_selector),
+                    norito::codec::Encode::encode(&record),
+                );
             }
 
             world.emit_events(Some(DomainEvent::Created(event_domain)));
@@ -10004,9 +10517,13 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(&state_transaction.world, authority, "CanManagePeers") {
+            if !has_permission(
+                &state_transaction.world,
+                authority,
+                "CanManageLaneRelayEmergency",
+            ) {
                 return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanManagePeers".into(),
+                    "not permitted: CanManageLaneRelayEmergency".into(),
                 ));
             }
             if !state_transaction.nexus.enabled {
@@ -10048,45 +10565,120 @@ pub mod isi {
                 ));
             }
 
-            let dataspace_id = *self.dataspace_id();
-            if !state_transaction
-                .nexus
-                .dataspace_catalog
-                .entries()
-                .iter()
-                .any(|entry| entry.id == dataspace_id)
-            {
+            let lane_id = *self.lane_id();
+            if state_transaction.nexus.lane_config.entry(lane_id).is_none() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
-                        "unknown dataspace id {}",
-                        dataspace_id.as_u64()
+                        "unknown lane id {}",
+                        lane_id.as_u32()
                     )),
                 ));
             }
 
-            let mut validators = self.validators().clone();
-            validators.sort();
-            validators.dedup();
-            for validator in &validators {
-                state_transaction.world.account(validator)?;
-            }
-
-            if validators.is_empty() {
+            let mut peers = self.peers().clone();
+            peers.sort();
+            peers.dedup();
+            if peers.is_empty() {
+                iroha_logger::info!(
+                    %authority,
+                    lane_id = lane_id.as_u32(),
+                    "clearing lane relay emergency override"
+                );
                 state_transaction
                     .world
                     .lane_relay_emergency_validators
-                    .remove(dataspace_id);
+                    .remove(lane_id);
                 return Ok(());
             }
 
+            let current_height = state_transaction.block_height();
+            let expires_at_height = self.expires_at_height().ok_or_else(|| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "lane relay emergency override requires expires_at_height for non-empty peer rosters"
+                        .into(),
+                ))
+            })?;
+            if expires_at_height < current_height {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "lane relay emergency override expiry {} is already in the past at current height {}",
+                        expires_at_height, current_height
+                    )),
+                ));
+            }
+            let max_ttl_blocks = u64::from(
+                state_transaction
+                    .nexus
+                    .lane_relay_emergency
+                    .max_ttl_blocks
+                    .get(),
+            );
+            if expires_at_height.saturating_sub(current_height) > max_ttl_blocks {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "lane relay emergency override expiry {} exceeds max_ttl_blocks {} at current height {}",
+                        expires_at_height, max_ttl_blocks, current_height
+                    )),
+                ));
+            }
+
+            let present_peers: BTreeSet<_> =
+                state_transaction.world.peers().iter().cloned().collect();
+            let topology_peers: BTreeSet<_> = state_transaction
+                .commit_topology()
+                .get()
+                .iter()
+                .cloned()
+                .collect();
+            let enforce_topology_membership = !topology_peers.is_empty();
+            for peer in &peers {
+                if !present_peers.contains(peer) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "lane relay emergency peer {} is not registered",
+                            peer.public_key()
+                        )),
+                    ));
+                }
+                if enforce_topology_membership && !topology_peers.contains(peer) {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "lane relay emergency peer {} is not in the current commit topology",
+                            peer.public_key()
+                        )),
+                    ));
+                }
+                if crate::state::live_consensus_key_pop_for_peer(
+                    &state_transaction.world,
+                    peer,
+                    current_height,
+                )
+                .is_none()
+                {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "lane relay emergency peer {} does not have a live consensus key",
+                            peer.public_key()
+                        )),
+                    ));
+                }
+            }
+
+            iroha_logger::warn!(
+                %authority,
+                lane_id = lane_id.as_u32(),
+                peer_count = peers.len(),
+                expires_at_height,
+                "setting lane relay emergency override"
+            );
             state_transaction
                 .world
                 .lane_relay_emergency_validators
                 .insert(
-                    dataspace_id,
+                    lane_id,
                     LaneRelayEmergencyValidatorSet {
-                        validators,
-                        expires_at_height: *self.expires_at_height(),
+                        peers,
+                        expires_at_height,
                         metadata: self.metadata().clone(),
                     },
                 );
@@ -10094,13 +10686,216 @@ pub mod isi {
         }
     }
 
-    fn parse_config_asset_definition_id(raw: &str) -> Option<AssetDefinitionId> {
-        raw.parse().ok()
+    impl Execute for nexus::RegisterVerifiedLaneRelay {
+        #[metrics(+"register_verified_lane_relay")]
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if !state_transaction.nexus.enabled {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "verified lane relay registration requires nexus.enabled=true".into(),
+                ));
+            }
+
+            let envelope = self.envelope().clone();
+            envelope.verify().map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    format!("lane relay envelope failed verification: {err}"),
+                ))
+            })?;
+            envelope.verify_fastpq_proof_material().map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    format!("lane relay envelope FASTPQ binding failed verification: {err}"),
+                ))
+            })?;
+
+            let Some(lane) = state_transaction
+                .nexus
+                .lane_catalog
+                .lanes()
+                .iter()
+                .find(|entry| entry.id == envelope.lane_id)
+            else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "unknown lane id {}",
+                        envelope.lane_id.as_u32()
+                    )),
+                )
+                .into());
+            };
+            if lane.dataspace_id != envelope.dataspace_id {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "lane {} belongs to dataspace {}, not {}",
+                        envelope.lane_id.as_u32(),
+                        lane.dataspace_id.as_u64(),
+                        envelope.dataspace_id.as_u64()
+                    )),
+                )
+                .into());
+            }
+            if !state_transaction
+                .nexus
+                .dataspace_catalog
+                .entries()
+                .iter()
+                .any(|entry| entry.id == envelope.dataspace_id)
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "unknown dataspace id {}",
+                        envelope.dataspace_id.as_u64()
+                    )),
+                )
+                .into());
+            }
+
+            let manifest_root = envelope.manifest_root.ok_or_else(|| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "lane relay envelope is missing manifest_root".into(),
+                ))
+            })?;
+            if manifest_root.iter().all(|byte| *byte == 0) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "lane relay manifest_root cannot be zeroed".into(),
+                    ),
+                )
+                .into());
+            }
+
+            let proof_blob = self.proof_blob().clone();
+            if proof_blob.payload.is_empty() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof payload is empty".into(),
+                    ),
+                )
+                .into());
+            }
+
+            let verified_at_height = state_transaction.block_height();
+            if let Some(expiry_slot) = proof_blob.expiry_slot
+                && verified_at_height > expiry_slot
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "verified lane relay proof expired at slot {expiry_slot}"
+                    )),
+                )
+                .into());
+            }
+            if !proof_matches_manifest(&proof_blob, envelope.dataspace_id, manifest_root) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof does not match the declared manifest_root"
+                            .into(),
+                    ),
+                )
+                .into());
+            }
+
+            let proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof_blob.payload)
+                .map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "verified lane relay proof envelope decode failed: {err}"
+                        )),
+                    )
+                })?;
+            if proof_envelope.manifest_root != manifest_root {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof manifest_root mismatch".into(),
+                    ),
+                )
+                .into());
+            }
+            let Some(binding) = proof_envelope.fastpq_binding.clone() else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof is missing fastpq_binding".into(),
+                    ),
+                )
+                .into());
+            };
+            if binding.source_dsid != envelope.dataspace_id.as_u64() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay proof source_dsid mismatch".into(),
+                    ),
+                )
+                .into());
+            }
+            let batch = fastpq_prover::build_batch_from_binding(&binding).map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    format!("verified lane relay binding is invalid: {err}"),
+                ))
+            })?;
+            let proof = norito::decode_from_bytes::<fastpq_prover::Proof>(&proof_envelope.proof)
+                .map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!(
+                            "verified lane relay FASTPQ proof decode failed: {err}"
+                        )),
+                    )
+                })?;
+            fastpq_prover::verify(&batch, &proof).map_err(|err| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("verified lane relay FASTPQ verification failed: {err}").into(),
+                )
+            })?;
+
+            let record = VerifiedLaneRelayRecord::new(
+                envelope,
+                CryptoHash::new(&proof_blob.payload),
+                verified_at_height,
+                manifest_root,
+                binding,
+            );
+            let key = verified_lane_relay_state_key(&record.relay_ref)?;
+            let encoded = encode_verified_lane_relay_record_state(&record).map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    err,
+                ))
+            })?;
+            if let Some(existing) = state_transaction.world.smart_contract_state.get(&key) {
+                let decoded = decode_verified_lane_relay_record_state(existing).map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(format!("stored {err}")),
+                    )
+                })?;
+                if decoded != record {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "conflicting verified lane relay already exists".into(),
+                    )
+                    .into());
+                }
+                return Ok(());
+            }
+
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(key, encoded);
+            Ok(())
+        }
+    }
+
+    fn parse_config_asset_definition_id(
+        world: &impl crate::state::WorldReadOnly,
+        raw: &str,
+        now_ms: u64,
+    ) -> Option<AssetDefinitionId> {
+        crate::block::parse_asset_definition_literal_with_world(world, raw, now_ms)
     }
 
     fn is_permission_domain_associated(permission: &Permission, domain_id: &DomainId) -> bool {
         let asset_definition_matches_domain = |asset_definition: &AssetDefinitionId| -> bool {
-            !asset_definition.is_opaque_canonical() && asset_definition.domain() == domain_id
+            asset_definition.try_domain() == Some(domain_id)
         };
         if let Ok(permission) = CanUnregisterDomain::try_from(permission) {
             return &permission.domain == domain_id;
@@ -10248,20 +11043,10 @@ pub mod isi {
         ) -> Result<(), Error> {
             let domain_id = self.object().clone();
 
-            let unlink_subjects: BTreeSet<AccountId> = state_transaction
-                .world
-                .account_subjects_in_domain(&domain_id)
-                .into_iter()
-                .collect();
-            let relabeled_accounts: Vec<(AccountId, AccountLabel)> = state_transaction
+            let relabeled_accounts: Vec<AccountId> = state_transaction
                 .world
                 .accounts_in_domain_iter(&domain_id)
-                .filter_map(|account| {
-                    account
-                        .label()
-                        .cloned()
-                        .map(|label| (account.id().clone(), label))
-                })
+                .map(|account| account.id().clone())
                 .collect();
             let remove_asset_definitions: Vec<AssetDefinitionId> = state_transaction
                 .world
@@ -10298,6 +11083,21 @@ pub mod isi {
                 .nfts_in_domain_iter(&domain_id)
                 .map(|nft| nft.id().clone())
                 .collect();
+
+            if let Some(rwa_id) = state_transaction
+                .world
+                .rwas_in_domain_iter(&domain_id)
+                .map(|rwa| rwa.id().clone())
+                .next()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister domain {domain_id}: RWA {rwa_id} still exists in the domain; transfer or redeem all RWAs first"
+                    )
+                    .into(),
+                )
+                .into());
+            }
 
             for nft_id in remove_nfts {
                 crate::smartcontracts::isi::nft::isi::remove_nft_associated_permissions(
@@ -10379,8 +11179,12 @@ pub mod isi {
                     )
                     .into());
                 }
-                if parse_config_asset_definition_id(&state_transaction.nexus.fees.fee_asset_id)
-                    .is_some_and(|configured| &configured == asset_definition_id)
+                if parse_config_asset_definition_id(
+                    &state_transaction.world,
+                    &state_transaction.nexus.fees.fee_asset_id,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .is_some_and(|configured| &configured == asset_definition_id)
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
@@ -10390,8 +11194,12 @@ pub mod isi {
                     )
                     .into());
                 }
-                if parse_config_asset_definition_id(&state_transaction.nexus.staking.stake_asset_id)
-                    .is_some_and(|configured| &configured == asset_definition_id)
+                if parse_config_asset_definition_id(
+                    &state_transaction.world,
+                    &state_transaction.nexus.staking.stake_asset_id,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .is_some_and(|configured| &configured == asset_definition_id)
                 {
                     return Err(InstructionExecutionError::InvariantViolation(
                         format!(
@@ -10503,52 +11311,13 @@ pub mod isi {
                     )
                     .into());
                 }
-                if let Some((certificate_id, _)) = state_transaction
-                    .world
-                    .offline_allowances
-                    .iter()
-                    .find(|(_, record)| {
-                        record.certificate.allowance.asset.definition() == asset_definition_id
-                    })
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has active offline allowance state (certificate {certificate_id}); revoke or rotate allowance first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
-                if let Some((bundle_id, _)) = state_transaction
-                    .world
-                    .offline_to_online_transfers
-                    .iter()
-                    .find(|(_, record)| {
-                        record
-                            .transfer
-                            .receipts
-                            .iter()
-                            .any(|receipt| receipt.asset.definition() == asset_definition_id)
-                    })
-                {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        format!(
-                            "cannot unregister domain {domain_id}: asset definition {asset_definition_id} has active offline transfer state (bundle {bundle_id}); settle or prune transfer history first"
-                        )
-                        .into(),
-                    )
-                    .into());
-                }
             }
 
             let remove_assets: Vec<AssetId> = state_transaction
                 .world
                 .assets
                 .iter()
-                .filter(|(asset_id, _)| {
-                    let definition = asset_id.definition();
-                    !definition.is_opaque_canonical() && definition.domain() == &domain_id
-                })
+                .filter(|(asset_id, _)| asset_id.definition().try_domain() == Some(&domain_id))
                 .map(|(asset_id, _)| asset_id.clone())
                 .collect();
             for asset_id in remove_assets {
@@ -10573,22 +11342,54 @@ pub mod isi {
                     .remove(asset_definition_id.clone());
             }
 
-            for (account_id, label) in relabeled_accounts {
-                if let Some(account) = state_transaction.world.accounts.get_mut(&account_id) {
+            for account_id in relabeled_accounts {
+                let alias_matches_domain =
+                    |label: &AccountAlias| -> Result<bool, InstructionExecutionError> {
+                        label
+                            .domain_id(&state_transaction.nexus.dataspace_catalog)
+                            .map(|resolved| resolved.as_ref() == Some(&domain_id))
+                            .map_err(|err| {
+                                InstructionExecutionError::InvariantViolation(
+                                    format!(
+                                        "account alias `{:?}` could not resolve its qualified domain: {err}",
+                                        label
+                                    )
+                                    .into(),
+                                )
+                            })
+                    };
+                let labels = state_transaction
+                    .world
+                    .account_aliases_by_account
+                    .get(&account_id)
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|label| match alias_matches_domain(&label) {
+                        Ok(true) => Some(Ok(label)),
+                        Ok(false) => None,
+                        Err(err) => Some(Err(err)),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let clear_primary_label = state_transaction
+                    .world
+                    .accounts
+                    .get(&account_id)
+                    .and_then(|account| account.label().cloned())
+                    .map_or(Ok(false), |label| alias_matches_domain(&label))?;
+                if clear_primary_label
+                    && let Some(account) = state_transaction.world.accounts.get_mut(&account_id)
+                {
                     account.set_label(None);
                 }
-                state_transaction
-                    .world
-                    .account_rekey_records
-                    .remove(label.clone());
-                state_transaction.world.account_aliases.remove(label);
+                for label in labels {
+                    state_transaction
+                        .world
+                        .account_rekey_records
+                        .remove(label.clone());
+                    state_transaction.world.remove_account_alias_binding(&label);
+                }
             }
-            for subject in unlink_subjects {
-                state_transaction
-                    .world
-                    .unlink_account_subject_domain(&subject.to_account_id(domain_id.clone()));
-            }
-
             let selector = iroha_data_model::account::AccountDomainSelector::from_domain(
                 &domain_id,
             )
@@ -11140,7 +11941,7 @@ pub mod isi {
         #[allow(unused_imports)]
         use iroha_data_model::{
             IntoKeyValue,
-            account::{AccountId, MultisigMember, MultisigPolicy},
+            account::{AccountAddress, AccountId, MultisigMember, MultisigPolicy},
             bridge::BridgeReceipt,
             confidential::ConfidentialStatus,
             consensus::{
@@ -11153,6 +11954,7 @@ pub mod isi {
                 verifying_keys,
             },
             metadata::Metadata,
+            name,
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, DomainEndorsement,
                 DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
@@ -11164,17 +11966,14 @@ pub mod isi {
             },
             query::error::FindError,
             role::{Role, RoleId},
+            sns::{NameControllerV1, NameRecordV1},
             zk::BackendTag,
         };
         use iroha_data_model::{
-            account::{NewAccount, rekey::AccountLabel},
+            account::{NewAccount, rekey::AccountAlias},
             asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
             nexus::{AssetPermissionManifest, ManifestVersion, UniversalAccountId},
             nft::{Nft, NftId},
-            offline::{
-                OfflineAllowanceCommitment, OfflineBalanceProof, OfflineToOnlineTransfer,
-                OfflineTransferRecord, OfflineTransferStatus,
-            },
         };
         use iroha_data_model::{
             isi::{SetParameter, bridge::RecordBridgeReceipt},
@@ -11211,7 +12010,10 @@ pub mod isi {
             let raw = format!("sha256:{}", "aa".repeat(32));
             assert!(super::parse_hex32_hint(&raw).is_none());
         }
-        use iroha_executor_data_model::permission::domain::CanModifyDomainMetadata;
+        use iroha_executor_data_model::permission::{
+            account::{AccountAliasPermissionScope, CanManageAccountAlias},
+            domain::CanModifyDomainMetadata,
+        };
         use iroha_primitives::{json::Json, numeric::Numeric};
         #[allow(unused_imports)]
         use iroha_schema::Ident;
@@ -11252,8 +12054,202 @@ pub mod isi {
             new_dummy_block_at_height(NonZeroU64::new(2).unwrap())
         }
 
-        fn new_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> NewAccount {
-            NewAccount::new_in_domain(account_id.clone(), domain_id.clone())
+        fn sample_verified_lane_relay_record() -> VerifiedLaneRelayRecord {
+            let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+            let block_header = valid_block.as_ref().header().clone();
+            let manifest_root = [0x42; 32];
+            let settlement_commitment = iroha_data_model::block::consensus::LaneBlockCommitment {
+                block_height: block_header.height().get(),
+                lane_id: LaneId::new(4),
+                dataspace_id: DataSpaceId::new(12),
+                tx_count: 1,
+                total_local_micro: 1,
+                total_xor_due_micro: 76,
+                total_xor_after_haircut_micro: 76,
+                total_xor_variance_micro: 0,
+                swap_metadata: None,
+                receipts: Vec::new(),
+            };
+            let base_envelope = iroha_data_model::nexus::LaneRelayEnvelope::new(
+                block_header,
+                None,
+                None,
+                settlement_commitment,
+                0,
+            )
+            .expect("valid envelope")
+            .with_manifest_root(Some(manifest_root));
+            let verified_at_height = Some(base_envelope.block_height);
+            let proof_digest = base_envelope.expected_fastpq_proof_digest(verified_at_height);
+            let envelope = base_envelope.with_fastpq_proof_material(Some(
+                iroha_data_model::nexus::LaneFastpqProofMaterial {
+                    proof_digest,
+                    verified_at_height,
+                },
+            ));
+            let fastpq_binding = iroha_data_model::nexus::AxtFastpqBinding {
+                parameter: "fastpq-lane-balanced".to_string(),
+                source_dsid: 12,
+                source_dataspace: "cbuae".to_string(),
+                source_receipt_id:
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                source_tx_commitment:
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+                claim_type: "value_conservation".to_string(),
+                claim_digest: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                    .to_string(),
+                witness_commitment:
+                    "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string(),
+                policy_commitment:
+                    "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
+                verified_effect_type: "aed_to_pkr_settlement".to_string(),
+                corridor: "paynet-aed-to-pkr-interceptor".to_string(),
+                verifier_id: "fastpq".to_string(),
+                verifier_version: "v1".to_string(),
+                target_dsids: vec![10],
+                effect_binding: None,
+            };
+            VerifiedLaneRelayRecord::new(
+                envelope,
+                Hash::new(b"proof"),
+                42,
+                manifest_root,
+                fastpq_binding,
+            )
+        }
+
+        #[test]
+        fn verified_lane_relay_state_key_is_single_contract_name() {
+            let record = sample_verified_lane_relay_record();
+            let key = super::verified_lane_relay_state_key(&record.relay_ref).expect("state key");
+            let key = key.to_string();
+            let expected_prefix = format!(
+                "{}_{}_{}_{}_",
+                iroha_data_model::nexus::VERIFIED_LANE_RELAY_STATE_KEY_PREFIX,
+                record.relay_ref.dataspace_id.as_u64(),
+                record.relay_ref.lane_id.as_u32(),
+                record.relay_ref.block_height,
+            );
+            assert!(key.starts_with(&expected_prefix));
+            assert!(!key.contains('/'));
+            let suffix = key.rsplit('_').next().expect("hash suffix");
+            assert_eq!(suffix.len(), 64);
+            assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
+        }
+
+        #[test]
+        fn verified_lane_relay_state_encoding_is_contract_visible_json() {
+            let record = sample_verified_lane_relay_record();
+            let encoded = super::encode_verified_lane_relay_record_state(&record).expect("encode");
+            let stored_json: Json = norito::decode_from_bytes(&encoded).expect("stored JSON");
+            assert!(stored_json.get().contains("\"relay_ref\""));
+            assert!(stored_json.get().contains("\"fastpq_binding\""));
+            let decoded =
+                super::decode_verified_lane_relay_record_state(&encoded).expect("decode record");
+            assert_eq!(decoded, record);
+
+            let old_shape = norito::to_bytes(&record).expect("old record bytes");
+            assert!(super::decode_verified_lane_relay_record_state(&old_shape).is_err());
+        }
+
+        fn new_account_in_domain(account_id: &AccountId) -> NewAccount {
+            NewAccount::new(account_id.clone())
+        }
+
+        fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {
+            let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
+            let address =
+                iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
+            let record = iroha_data_model::sns::NameRecordV1::new(
+                selector.clone(),
+                owner.clone(),
+                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                Metadata::default(),
+            );
+            world.smart_contract_state_mut_for_testing().insert(
+                crate::sns::record_storage_key(&selector),
+                norito::codec::Encode::encode(&record),
+            );
+        }
+
+        fn seed_domain_name_lease_tx(
+            world: &mut WorldTransaction<'_, '_>,
+            owner: &AccountId,
+            domain_id: &DomainId,
+        ) {
+            let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
+            let address =
+                iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
+            let record = iroha_data_model::sns::NameRecordV1::new(
+                selector.clone(),
+                owner.clone(),
+                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                Metadata::default(),
+            );
+            world.smart_contract_state_mut_for_testing().insert(
+                crate::sns::record_storage_key(&selector),
+                norito::codec::Encode::encode(&record),
+            );
+        }
+
+        fn seed_account_alias_lease_tx(
+            tx: &mut StateTransaction<'_, '_>,
+            owner: &AccountId,
+            alias: &AccountAlias,
+        ) {
+            let selector =
+                crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
+                    .expect("selector");
+            let address = AccountAddress::from_account_id(owner).expect("account address");
+            let record = NameRecordV1::new(
+                selector.clone(),
+                owner.clone(),
+                vec![NameControllerV1::account(&address)],
+                0,
+                0,
+                1_000,
+                2_000,
+                3_000,
+                Metadata::default(),
+            );
+            tx.world.smart_contract_state.insert(
+                crate::sns::record_storage_key(&selector),
+                norito::codec::Encode::encode(&record),
+            );
+        }
+
+        fn seed_account_alias_manage_permissions(
+            tx: &mut StateTransaction<'_, '_>,
+            authority: &AccountId,
+            alias: &AccountAlias,
+        ) {
+            tx.world.add_account_permission(
+                authority,
+                Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
+                }),
+            );
+            if let Some(domain) = alias
+                .domain_id(&tx.nexus.dataspace_catalog)
+                .expect("alias domain should resolve")
+            {
+                tx.world.add_account_permission(
+                    authority,
+                    Permission::from(CanManageAccountAlias {
+                        scope: AccountAliasPermissionScope::Domain(domain),
+                    }),
+                );
+            }
         }
 
         #[test]
@@ -11334,6 +12330,132 @@ pub mod isi {
                 "stark/fri/sha256-goldilocks:vote-tally",
                 "vote-ballot"
             ));
+        }
+
+        #[test]
+        fn register_domain_requires_active_sns_lease_for_non_genesis_owner() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            {
+                let mut block_hashes = state.block_hashes.block();
+                block_hashes.push_for_tests(
+                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                        Hash::prehashed([0x51; Hash::LENGTH]),
+                    ),
+                );
+                block_hashes.commit_for_tests();
+            }
+            let block = new_dummy_block_non_genesis();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let (authority, _) = gen_account_in("tenants");
+            let domain_id: DomainId = DomainId::try_new("leased", "world").expect("domain");
+
+            let err = Register::domain(Domain::new(domain_id))
+                .execute(&authority, &mut stx)
+                .expect_err("missing lease must fail");
+
+            assert!(
+                err.to_string().contains("active SNS domain-name lease"),
+                "unexpected error: {err}"
+            );
+        }
+
+        #[test]
+        fn replay_allows_legacy_domain_registration_without_active_sns_lease() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            {
+                let mut block_hashes = state.block_hashes.block();
+                block_hashes.push_for_tests(
+                    iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                        Hash::prehashed([0x51; Hash::LENGTH]),
+                    ),
+                );
+                block_hashes.commit_for_tests();
+            }
+            let block = new_dummy_block_non_genesis();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            stx.replay_compatibility = true;
+            let (authority, _) = gen_account_in("tenants");
+            let domain_id: DomainId = DomainId::try_new("leased", "world").expect("domain");
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&authority, &mut stx)
+                .expect("replay must preserve legacy committed domain registration");
+
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "domain should be stored during replay"
+            );
+        }
+
+        #[test]
+        fn register_domain_in_empty_state_does_not_require_sns_lease() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block_non_genesis();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let (authority, _) = gen_account_in("tenants");
+            let domain_id: DomainId = DomainId::try_new("leased-empty", "world").expect("domain");
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&authority, &mut stx)
+                .expect("empty-state bootstrap should bypass SNS lease gating");
+
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "domain should be stored during empty-state bootstrap"
+            );
+        }
+
+        #[test]
+        fn register_domain_in_genesis_does_not_require_sns_lease() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let (authority, _) = gen_account_in("tenants");
+            let domain_id: DomainId = DomainId::try_new("leased-genesis", "world").expect("domain");
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&authority, &mut stx)
+                .expect("genesis registration should bypass SNS lease gating");
+
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "genesis registration should materialize the domain"
+            );
+        }
+
+        #[test]
+        fn register_domain_accepts_matching_active_sns_lease() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let (authority, _) = gen_account_in("tenants");
+            let domain_id: DomainId = DomainId::try_new("leased-ok", "world").expect("domain");
+            let mut world = World::default();
+            seed_domain_name_lease(&mut world, &authority, &domain_id);
+            let state = State::new(world, kura, query_handle);
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&authority, &mut stx)
+                .expect("lease-backed registration should succeed");
+
+            assert!(
+                stx.world.domains.get(&domain_id).is_some(),
+                "domain should be stored after registration"
+            );
         }
 
         #[test]
@@ -11783,26 +12905,27 @@ pub mod isi {
         }
 
         fn bootstrap_alice_account(stx: &mut StateTransaction<'_, '_>) {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
+            seed_domain_name_lease_tx(&mut stx.world, &ALICE_ID, &domain_id);
             Register::domain(Domain::new(domain_id))
                 .execute(&ALICE_ID, stx)
                 .expect("register wonderland domain");
-            Register::account(new_account_in_domain(
-                &ALICE_ID,
-                &"wonderland".parse().expect("domain id parses"),
-            ))
-            .execute(&ALICE_ID, stx)
-            .expect("register ALICE account");
+            Register::account(new_account_in_domain(&ALICE_ID))
+                .execute(&ALICE_ID, stx)
+                .expect("register ALICE account");
         }
 
-        fn configure_global_dataspace(stx: &mut StateTransaction<'_, '_>) {
-            stx.nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+        fn configure_universal_dataspace(stx: &mut StateTransaction<'_, '_>) {
+            let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
             .expect("dataspace catalog");
+            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+            stx.world.dataspace_catalog = dataspace_catalog;
         }
 
         fn seed_manifest_record(
@@ -11826,11 +12949,38 @@ pub mod isi {
             stx.world.space_directory_manifests.insert(uaid, set);
         }
 
-        fn grant_manage_peers_permission(stx: &mut StateTransaction<'_, '_>, account: &AccountId) {
-            let permission = Permission::new("CanManagePeers".into(), Json::new(()));
+        fn grant_manage_lane_relay_emergency_permission(
+            stx: &mut StateTransaction<'_, '_>,
+            account: &AccountId,
+        ) {
+            let permission = Permission::new("CanManageLaneRelayEmergency".into(), Json::new(()));
             stx.world
                 .account_permissions
                 .insert(account.clone(), BTreeSet::from([permission]));
+        }
+
+        fn seed_live_peer(stx: &mut StateTransaction<'_, '_>, keypair: &KeyPair) -> PeerId {
+            let peer = PeerId::new(keypair.public_key().clone());
+            if stx.world.peers.iter().all(|existing| existing != &peer) {
+                let _ = stx.world.peers.push(peer.clone());
+            }
+
+            let record = ConsensusKeyRecord {
+                id: crate::state::derive_validator_key_id(keypair.public_key()),
+                public_key: keypair.public_key().clone(),
+                pop: Some(
+                    iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                        .expect("generate pop for test peer"),
+                ),
+                activation_height: 0,
+                expiry_height: None,
+                hsm: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            let record_id = record.id.clone();
+            upsert_consensus_key(&mut stx.world, &record_id, record);
+            peer
         }
 
         fn register_multisig_authority(
@@ -11845,9 +12995,8 @@ pub mod isi {
                 members.push(member);
             }
             let policy = MultisigPolicy::new(threshold, members).expect("multisig policy");
-            let domain_id: DomainId = "wonderland".parse().expect("domain id parses");
             let multisig_id = AccountId::new_multisig(policy);
-            Register::account(Account::new(multisig_id.to_account_id(domain_id)))
+            Register::account(Account::new(multisig_id.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register multisig authority");
             multisig_id
@@ -11859,15 +13008,23 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let other_domain_id: DomainId = "other.world".parse().expect("domain id parses");
-            let account_label = AccountLabel::new(domain_id.clone(), "primary".parse().unwrap());
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "universal").expect("domain id parses");
+            let other_domain_id: DomainId =
+                DomainId::try_new("other", "world").expect("domain id parses");
+            let account_label = AccountAlias::new(
+                "primary".parse().unwrap(),
+                Some(AccountAliasDomain::new(domain_id.name().clone())),
+                DataSpaceId::UNIVERSAL,
+            );
             let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::domain_unregister"));
             let dataspace = DataSpaceId::new(17);
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
+
+            bootstrap_alice_account(&mut stx);
 
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -11877,11 +13034,13 @@ pub mod isi {
                 .expect("register other domain");
 
             seed_manifest_record(&mut stx, uaid, dataspace);
+            seed_account_alias_manage_permissions(&mut stx, &ALICE_ID, &account_label);
+            seed_account_alias_lease_tx(&mut stx, &ALICE_ID, &account_label);
 
             let keypair = KeyPair::random();
             let account_id = AccountId::new(keypair.public_key().clone());
             Register::account(
-                new_account_in_domain(&account_id, &domain_id)
+                new_account_in_domain(&account_id)
                     .with_label(Some(account_label.clone()))
                     .with_uaid(Some(uaid)),
             )
@@ -11966,13 +13125,131 @@ pub mod isi {
         }
 
         #[test]
+        fn unregister_domain_keeps_aliases_in_same_named_foreign_dataspace() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let global_domain_id: DomainId =
+                DomainId::try_new("billing", "universal").expect("domain id parses");
+            let retail_domain_id: DomainId =
+                DomainId::try_new("billing", "retail").expect("domain id parses");
+            let retail_dataspace = DataSpaceId::new(17);
+            let primary_label = AccountAlias::new(
+                "globaldesk".parse().unwrap(),
+                Some(AccountAliasDomain::new(global_domain_id.name().clone())),
+                DataSpaceId::UNIVERSAL,
+            );
+            let retail_label = AccountAlias::new(
+                "retaildesk".parse().unwrap(),
+                Some(AccountAliasDomain::new(retail_domain_id.name().clone())),
+                retail_dataspace,
+            );
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: DataSpaceId::UNIVERSAL,
+                    alias: "universal".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: retail_dataspace,
+                    alias: "retail".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+            stx.world.dataspace_catalog = dataspace_catalog;
+
+            let authority_id = AccountId::new(KeyPair::random().public_key().clone());
+            Register::account(NewAccount::new(authority_id.clone()))
+                .execute(&authority_id, &mut stx)
+                .expect("register authority");
+            seed_domain_name_lease_tx(&mut stx.world, &authority_id, &global_domain_id);
+            seed_domain_name_lease_tx(&mut stx.world, &authority_id, &retail_domain_id);
+            Register::domain(Domain::new(global_domain_id.clone()))
+                .execute(&authority_id, &mut stx)
+                .expect("register global domain");
+            Register::domain(Domain::new(retail_domain_id.clone()))
+                .execute(&authority_id, &mut stx)
+                .expect("register retail domain");
+
+            let account_id = AccountId::new(KeyPair::random().public_key().clone());
+            Register::account(NewAccount::new(account_id.clone()))
+                .execute(&authority_id, &mut stx)
+                .expect("register account");
+            stx.world
+                .account_mut(&account_id)
+                .expect("account exists")
+                .set_label(Some(primary_label.clone()));
+            stx.world
+                .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+            stx.world.account_rekey_records.insert(
+                primary_label.clone(),
+                iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                    primary_label.clone(),
+                    account_id.clone(),
+                ),
+            );
+            stx.world
+                .insert_account_alias_binding(retail_label.clone(), account_id.clone());
+            stx.world.account_rekey_records.insert(
+                retail_label.clone(),
+                iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                    retail_label.clone(),
+                    account_id.clone(),
+                ),
+            );
+
+            Unregister::domain(retail_domain_id.clone())
+                .execute(&authority_id, &mut stx)
+                .expect("unregister retail domain");
+
+            assert_eq!(
+                stx.world
+                    .accounts
+                    .get(&account_id)
+                    .and_then(|account| account.label().cloned()),
+                Some(primary_label.clone()),
+                "primary alias in universal dataspace must survive"
+            );
+            assert_eq!(
+                stx.world.account_aliases.get(&primary_label),
+                Some(&account_id),
+                "universal alias binding must remain"
+            );
+            assert!(
+                stx.world.account_aliases.get(&retail_label).is_none(),
+                "retail alias binding should be removed"
+            );
+            assert!(
+                stx.world
+                    .account_rekey_records
+                    .get(&primary_label)
+                    .is_some(),
+                "primary rekey record must remain"
+            );
+            assert!(
+                stx.world.account_rekey_records.get(&retail_label).is_none(),
+                "retail rekey record should be removed"
+            );
+        }
+
+        #[test]
         fn unregister_domain_removes_assets_with_definitions_in_other_domains() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "defs.world".parse().expect("domain id parses");
-            let holder_domain: DomainId = "holder.world".parse().expect("domain id parses");
+            let domain_id: DomainId = DomainId::try_new("defs", "world").expect("domain id parses");
+            let holder_domain: DomainId =
+                DomainId::try_new("holder", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -11986,7 +13263,7 @@ pub mod isi {
                 .expect("register holder domain");
 
             let (holder_id, _) = gen_account_in(&holder_domain);
-            Register::account(new_account_in_domain(&holder_id, &holder_domain))
+            Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
@@ -12037,8 +13314,10 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let foreign_domain: DomainId = "foreign.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let foreign_domain: DomainId =
+                DomainId::try_new("foreign", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12052,7 +13331,7 @@ pub mod isi {
                 .expect("register foreign domain");
 
             let (account_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&account_id, &domain_id))
+            Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
             stx.world
@@ -12111,7 +13390,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12122,7 +13402,7 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let (account_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&account_id, &domain_id))
+            Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
             stx.gov.bond_escrow_account = account_id.clone();
@@ -12156,14 +13436,17 @@ pub mod isi {
         }
 
         #[test]
-        fn unregister_domain_removes_only_selected_link_for_configured_subject() {
+        fn unregister_domain_preserves_configured_canonical_account() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let remove_domain: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let retained_domain: DomainId = "retained.world".parse().expect("domain id parses");
-            let holder_domain: DomainId = "holder.world".parse().expect("domain id parses");
+            let remove_domain: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let retained_domain: DomainId =
+                DomainId::try_new("retained", "world").expect("domain id parses");
+            let holder_domain: DomainId =
+                DomainId::try_new("holder", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12181,18 +13464,11 @@ pub mod isi {
                 .expect("register holder domain");
 
             let account_id = AccountId::new(KeyPair::random().public_key().clone());
-            Register::account(new_account_in_domain(&account_id, &remove_domain))
+            Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register cleanup-domain account");
-            LinkAccountDomain {
-                account: account_id.clone(),
-                domain: retained_domain.clone(),
-            }
-            .execute(&ALICE_ID, &mut stx)
-            .expect("link account into retained domain");
-
             let (holder_id, _) = gen_account_in(&holder_domain);
-            Register::account(new_account_in_domain(&holder_id, &holder_domain))
+            Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
@@ -12208,7 +13484,7 @@ pub mod isi {
 
             Unregister::domain(remove_domain.clone())
                 .execute(&ALICE_ID, &mut stx)
-                .expect("removing one linked domain should preserve surviving account state");
+                .expect("removing an unrelated domain should preserve canonical account state");
 
             assert!(
                 stx.world.domains.get(&remove_domain).is_none(),
@@ -12218,19 +13494,11 @@ pub mod isi {
                 stx.world.accounts.get(&account_id).is_some(),
                 "configured account should remain"
             );
-            let linked_domains = stx
+            let account = stx
                 .world
-                .account_subject_domains
-                .get(&account_id.subject_id())
-                .expect("subject links should remain present");
-            assert!(
-                !linked_domains.contains(&remove_domain),
-                "removed domain link should be pruned"
-            );
-            assert!(
-                linked_domains.contains(&retained_domain),
-                "retained domain link should remain"
-            );
+                .account(&account_id)
+                .expect("configured account should exist");
+            assert!(account.label().is_none());
             assert!(
                 stx.world
                     .account_permissions
@@ -12247,8 +13515,10 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let foreign_domain: DomainId = "external.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let foreign_domain: DomainId =
+                DomainId::try_new("external", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12263,10 +13533,10 @@ pub mod isi {
 
             let (initiator, _) = gen_account_in(&foreign_domain);
             let (counterparty, _) = gen_account_in(&foreign_domain);
-            Register::account(new_account_in_domain(&initiator, &foreign_domain))
+            Register::account(new_account_in_domain(&initiator))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register foreign initiator");
-            Register::account(new_account_in_domain(&counterparty, &foreign_domain))
+            Register::account(new_account_in_domain(&counterparty))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register foreign counterparty");
 
@@ -12330,7 +13600,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12377,7 +13648,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12423,7 +13695,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12467,7 +13740,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12511,7 +13785,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12556,7 +13831,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12604,8 +13880,10 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let foreign_domain: DomainId = "foreign.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let foreign_domain: DomainId =
+                DomainId::try_new("foreign", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12663,7 +13941,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12729,8 +14008,10 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let external_domain: DomainId = "external.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let external_domain: DomainId =
+                DomainId::try_new("external", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12744,7 +14025,7 @@ pub mod isi {
                 .expect("register external domain");
 
             let (account_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&account_id, &domain_id))
+            Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
@@ -12753,8 +14034,6 @@ pub mod isi {
                 AssetDefinitionId::new(external_domain.clone(), "bond".parse().unwrap());
             let reward_def =
                 AssetDefinitionId::new(external_domain.clone(), "fee".parse().unwrap());
-            let offline_def =
-                AssetDefinitionId::new(external_domain.clone(), "coin".parse().unwrap());
             Register::asset_definition({
                 let __asset_definition_id = cash_def.clone();
                 AssetDefinition::numeric(__asset_definition_id.clone())
@@ -12776,14 +14055,6 @@ pub mod isi {
             })
             .execute(&ALICE_ID, &mut stx)
             .expect("register external reward definition");
-            Register::asset_definition({
-                let __asset_definition_id = offline_def.clone();
-                AssetDefinition::numeric(__asset_definition_id.clone())
-                    .with_name(__asset_definition_id.name().to_string())
-            })
-            .execute(&ALICE_ID, &mut stx)
-            .expect("register external offline definition");
-
             let repo_id: iroha_data_model::repo::RepoAgreementId =
                 "repoguard".parse().expect("repo agreement id");
             let agreement = iroha_data_model::repo::RepoAgreement::new(
@@ -12869,57 +14140,12 @@ pub mod isi {
                 }],
             );
 
-            let allowance = OfflineAllowanceCommitment::new(
-                AssetId::new(offline_def, account_id.clone()),
-                Numeric::new(10, 0),
-                vec![0xCD],
-            );
-            let bundle_id = Hash::new(b"offline-transfer-domain-guard");
-            let transfer = OfflineToOnlineTransfer::new(
-                bundle_id,
-                account_id.clone(),
-                account_id.clone(),
-                Vec::new(),
-                OfflineBalanceProof::new(allowance, vec![0xCD], Numeric::new(1, 0), None),
-                None,
-                None,
-                None,
-            );
-            stx.world.offline_to_online_transfers.insert(
-                bundle_id,
-                OfflineTransferRecord {
-                    transfer,
-                    controller: account_id.clone(),
-                    status: OfflineTransferStatus::Settled,
-                    rejection_reason: None,
-                    recorded_at_ms: 1,
-                    recorded_at_height: 1,
-                    archived_at_height: None,
-                    history: Vec::new(),
-                    pos_verdict_snapshots: Vec::new(),
-                    verdict_snapshot: None,
-                    platform_snapshot: None,
-                },
-            );
-            let verdict_id = Hash::new(b"offline-verdict-domain-guard");
-            stx.world.offline_verdict_revocations.insert(
-                verdict_id,
-                iroha_data_model::offline::OfflineVerdictRevocation {
-                    verdict_id,
-                    issuer: account_id.clone(),
-                    revoked_at_ms: 1,
-                    reason:
-                        iroha_data_model::offline::OfflineVerdictRevocationReason::IssuerRequest,
-                    note: None,
-                    metadata: Metadata::default(),
-                },
-            );
-
             stx.world.public_lane_validators.insert(
                 (LaneId::SINGLE, account_id.clone()),
                 iroha_data_model::nexus::PublicLaneValidatorRecord {
                     lane_id: LaneId::SINGLE,
                     validator: account_id.clone(),
+                    peer_id: PeerId::from(account_id.signatory().clone()),
                     stake_account: account_id.clone(),
                     total_stake: Numeric::new(1, 0),
                     self_stake: Numeric::new(1, 0),
@@ -12970,13 +14196,6 @@ pub mod isi {
                 stx.world.repo_agreements.get(&repo_id).is_some(),
                 "repo agreement state should remain"
             );
-            assert!(
-                stx.world
-                    .offline_to_online_transfers
-                    .get(&bundle_id)
-                    .is_some(),
-                "offline transfer state should remain"
-            );
         }
 
         #[test]
@@ -12985,7 +14204,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12996,14 +14216,15 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let (account_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&account_id, &domain_id))
+            Register::account(new_account_in_domain(&account_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
             let proposal_id = [0xB7; 32];
             let kind = ProposalKind::DeployContract(DeployContractProposal {
-                namespace: "gov".to_string(),
-                contract_id: "proposal-guard".to_string(),
+                contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                    .parse()
+                    .expect("contract address"),
                 code_hash_hex: ContractCodeHash::new([0x31; 32]),
                 abi_hash_hex: ContractAbiHash::new([0x41; 32]),
                 abi_version: AbiVersion::new(1),
@@ -13045,7 +14266,7 @@ pub mod isi {
             let manifest = iroha_data_model::content::ContentBundleManifest {
                 bundle_id,
                 index_hash: [0x55; 32],
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 lane: LaneId::SINGLE,
                 blob_class: iroha_data_model::da::types::BlobClass::GovernanceArtifact,
                 retention: iroha_data_model::da::types::RetentionPolicy::default(),
@@ -13157,10 +14378,10 @@ pub mod isi {
                 },
             );
             stx.world.lane_relay_emergency_validators.insert(
-                DataSpaceId::GLOBAL,
+                LaneId::new(0),
                 iroha_data_model::nexus::LaneRelayEmergencyValidatorSet {
-                    validators: vec![account_id.clone()],
-                    expires_at_height: None,
+                    peers: vec![PeerId::from(account_id.signatory().clone())],
+                    expires_at_height: 10,
                     metadata: Metadata::default(),
                 },
             );
@@ -13193,7 +14414,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "kingdom".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("kingdom", "universal").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13205,9 +14427,10 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register kingdom domain");
 
-            let owner_domain: DomainId = "wonderland".parse().expect("domain id parses");
+            let owner_domain: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
             let (bob_id, _) = gen_account_in(&owner_domain);
-            Register::account(new_account_in_domain(&bob_id, &owner_domain))
+            Register::account(new_account_in_domain(&bob_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register bob account");
 
@@ -13272,7 +14495,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13285,13 +14509,14 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let (target_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&target_id, &domain_id))
+            Register::account(new_account_in_domain(&target_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
-            let owner_domain: DomainId = "wonderland".parse().expect("domain id parses");
+            let owner_domain: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
             let (holder_id, _) = gen_account_in(&owner_domain);
-            Register::account(new_account_in_domain(&holder_id, &owner_domain))
+            Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
@@ -13357,7 +14582,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13370,13 +14596,14 @@ pub mod isi {
                 .expect("register cleanup domain");
 
             let (target_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&target_id, &domain_id))
+            Register::account(new_account_in_domain(&target_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
-            let owner_domain: DomainId = "wonderland".parse().expect("domain id parses");
+            let owner_domain: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
             let (holder_id, _) = gen_account_in(&owner_domain);
-            Register::account(new_account_in_domain(&holder_id, &owner_domain))
+            Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
@@ -13441,9 +14668,12 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let retained_domain_id: DomainId = "retained.world".parse().expect("domain id parses");
-            let holder_domain_id: DomainId = "holder.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let retained_domain_id: DomainId =
+                DomainId::try_new("retained", "world").expect("domain id parses");
+            let holder_domain_id: DomainId =
+                DomainId::try_new("holder", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13463,19 +14693,12 @@ pub mod isi {
 
             let keypair = KeyPair::random();
             let target_id = AccountId::new(keypair.public_key().clone());
-            Register::account(new_account_in_domain(&target_id, &domain_id))
+            Register::account(new_account_in_domain(&target_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
-            LinkAccountDomain {
-                account: target_id.clone(),
-                domain: retained_domain_id.clone(),
-            }
-            .execute(&ALICE_ID, &mut stx)
-            .expect("link retained domain to target subject");
-
             let (holder_id, _) = gen_account_in(&holder_domain_id);
-            Register::account(new_account_in_domain(&holder_id, &holder_domain_id))
+            Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
@@ -13509,20 +14732,11 @@ pub mod isi {
             );
             assert!(
                 stx.world.accounts.get(&target_id).is_some(),
-                "linked subject should remain materialized under retained domain"
-            );
-            let linked_domains = stx
-                .world
-                .account_subject_domains
-                .get(&target_id.subject_id())
-                .expect("subject domain links should remain materialized");
-            assert!(
-                !linked_domains.contains(&"cleanup.world".parse().expect("domain id parses")),
-                "removed domain must be unlinked from surviving subject"
+                "canonical account should remain materialized"
             );
             assert!(
-                linked_domains.contains(&retained_domain_id),
-                "retained domain link must stay for surviving subject"
+                stx.world.account(&target_id).is_ok(),
+                "canonical account should remain addressable"
             );
             assert!(
                 stx.world
@@ -13548,9 +14762,12 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let foreign_domain_id: DomainId = "foreign.world".parse().expect("domain id parses");
-            let holder_domain_id: DomainId = "holder.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let foreign_domain_id: DomainId =
+                DomainId::try_new("foreign", "world").expect("domain id parses");
+            let holder_domain_id: DomainId =
+                DomainId::try_new("holder", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13569,12 +14786,12 @@ pub mod isi {
                 .expect("register holder domain");
 
             let (target_id, _) = gen_account_in(&domain_id);
-            Register::account(new_account_in_domain(&target_id, &domain_id))
+            Register::account(new_account_in_domain(&target_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
             let (holder_id, _) = gen_account_in(&holder_domain_id);
-            Register::account(new_account_in_domain(&holder_id, &holder_domain_id))
+            Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register holder account");
 
@@ -13652,7 +14869,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "endorsed.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("endorsed", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13834,19 +15052,15 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator");
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
 
             let err = SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![validator],
-                expires_at_height: None,
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
+                expires_at_height: Some(12),
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
@@ -13854,12 +15068,12 @@ pub mod isi {
             assert!(matches!(
                 err,
                 InstructionExecutionError::InvariantViolation(msg)
-                    if msg.as_ref() == "not permitted: CanManagePeers"
+                    if msg.as_ref() == "not permitted: CanManageLaneRelayEmergency"
             ));
             assert!(
                 stx.world
                     .lane_relay_emergency_validators
-                    .get(&DataSpaceId::GLOBAL)
+                    .get(&LaneId::new(0))
                     .is_none(),
                 "override must not be stored without permission"
             );
@@ -13875,22 +15089,18 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             bootstrap_alice_account(&mut stx);
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             stx.nexus.lane_relay_emergency.enabled = true;
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_peers_permission(&mut stx, &authority);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
             stx.nexus.enabled = false;
-
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator");
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
 
             let err = SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![validator],
-                expires_at_height: None,
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
+                expires_at_height: Some(12),
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
@@ -13913,20 +15123,16 @@ pub mod isi {
             let mut stx = state_block.transaction();
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_peers_permission(&mut stx, &authority);
-
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator");
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
 
             let err = SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![validator],
-                expires_at_height: None,
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
+                expires_at_height: Some(12),
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
@@ -13951,19 +15157,15 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
-            grant_manage_peers_permission(&mut stx, &ALICE_ID);
-
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator");
+            configure_universal_dataspace(&mut stx);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &ALICE_ID);
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
 
             let err = SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![validator],
-                expires_at_height: None,
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
+                expires_at_height: Some(12),
                 metadata: Metadata::default(),
             }
             .execute(&ALICE_ID, &mut stx)
@@ -13978,7 +15180,7 @@ pub mod isi {
         }
 
         #[test]
-        fn set_lane_relay_emergency_validators_rejects_unknown_dataspace() {
+        fn set_lane_relay_emergency_validators_rejects_unknown_lane() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -13989,34 +15191,29 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_peers_permission(&mut stx, &authority);
-
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator");
-
-            let unknown = DataSpaceId::new(42);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
+            let unknown = LaneId::new(42);
             let err = SetLaneRelayEmergencyValidators {
-                dataspace_id: unknown,
-                validators: vec![validator],
-                expires_at_height: None,
+                lane_id: unknown,
+                peers: vec![peer],
+                expires_at_height: Some(12),
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
-            .expect_err("unknown dataspace should be rejected");
+            .expect_err("unknown lane should be rejected");
             let msg = smart_contract_instruction_error_message(err);
             assert!(
-                msg.contains("unknown dataspace id"),
+                msg.contains("unknown lane id"),
                 "unexpected error message: {msg}"
             );
         }
 
         #[test]
-        fn set_lane_relay_emergency_validators_rejects_unknown_validator() {
+        fn set_lane_relay_emergency_validators_rejects_unregistered_peer() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -14027,23 +15224,130 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_peers_permission(&mut stx, &authority);
-
-            let (missing, _) = gen_account_in("wonderland");
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+            let missing = PeerId::new(
+                KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                    .public_key()
+                    .clone(),
+            );
             let err = SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![missing.clone()],
+                lane_id: LaneId::new(0),
+                peers: vec![missing],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("unregistered peer should be rejected");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("is not registered"),
+                "unexpected error message: {msg}"
+            );
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_rejects_peer_without_live_consensus_key() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_universal_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+
+            let peer = PeerId::new(
+                KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                    .public_key()
+                    .clone(),
+            );
+            let _ = stx.world.peers.push(peer.clone());
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
+                expires_at_height: Some(12),
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("peer without live consensus key should be rejected");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("does not have a live consensus key"),
+                "unexpected error message: {msg}"
+            );
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_requires_expiry_for_non_empty_roster() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_universal_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
                 expires_at_height: None,
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
-            .expect_err("unknown validator should be rejected");
-            assert!(matches!(
-                err,
-                InstructionExecutionError::Find(FindError::Account(id)) if id == missing
-            ));
+            .expect_err("missing expiry should be rejected");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("requires expires_at_height"),
+                "unexpected error message: {msg}"
+            );
+        }
+
+        #[test]
+        fn set_lane_relay_emergency_validators_rejects_expiry_beyond_max_ttl() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            stx.nexus.enabled = true;
+            stx.nexus.lane_relay_emergency.enabled = true;
+            configure_universal_dataspace(&mut stx);
+            let authority = register_multisig_authority(&mut stx, 3, 5);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+
+            let peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let peer = seed_live_peer(&mut stx, &peer_keypair);
+            let err = SetLaneRelayEmergencyValidators {
+                lane_id: LaneId::new(0),
+                peers: vec![peer],
+                expires_at_height: Some(40),
+                metadata: Metadata::default(),
+            }
+            .execute(&authority, &mut stx)
+            .expect_err("oversized ttl should be rejected");
+            let msg = smart_contract_instruction_error_message(err);
+            assert!(
+                msg.contains("exceeds max_ttl_blocks"),
+                "unexpected error message: {msg}"
+            );
         }
 
         #[test]
@@ -14058,23 +15362,22 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_peers_permission(&mut stx, &authority);
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
 
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator_a, _) = gen_account_in("wonderland");
-            let (validator_b, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator_a, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator_a");
-            Register::account(new_account_in_domain(&validator_b, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator_b");
+            let validator_a = seed_live_peer(
+                &mut stx,
+                &KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            );
+            let validator_b = seed_live_peer(
+                &mut stx,
+                &KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            );
 
             SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![
+                lane_id: LaneId::new(0),
+                peers: vec![
                     validator_b.clone(),
                     validator_a.clone(),
                     validator_b.clone(),
@@ -14088,13 +15391,13 @@ pub mod isi {
             let record = stx
                 .world
                 .lane_relay_emergency_validators
-                .get(&DataSpaceId::GLOBAL)
+                .get(&LaneId::new(0))
                 .expect("override stored");
             let mut expected = vec![validator_a, validator_b];
             expected.sort();
             expected.dedup();
-            assert_eq!(record.validators, expected);
-            assert_eq!(record.expires_at_height, Some(12));
+            assert_eq!(record.peers, expected);
+            assert_eq!(record.expires_at_height, 12);
             assert!(record.metadata.is_empty());
         }
 
@@ -14110,20 +15413,18 @@ pub mod isi {
             bootstrap_alice_account(&mut stx);
             stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
-            configure_global_dataspace(&mut stx);
+            configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_peers_permission(&mut stx, &authority);
-
-            let wonderland: DomainId = "wonderland".parse().expect("domain id parses");
-            let (validator, _) = gen_account_in("wonderland");
-            Register::account(new_account_in_domain(&validator, &wonderland))
-                .execute(&ALICE_ID, &mut stx)
-                .expect("register validator");
+            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
+            let validator = seed_live_peer(
+                &mut stx,
+                &KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            );
 
             SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: vec![validator.clone()],
-                expires_at_height: None,
+                lane_id: LaneId::new(0),
+                peers: vec![validator.clone()],
+                expires_at_height: Some(12),
                 metadata: Metadata::default(),
             }
             .execute(&authority, &mut stx)
@@ -14131,14 +15432,14 @@ pub mod isi {
             assert!(
                 stx.world
                     .lane_relay_emergency_validators
-                    .get(&DataSpaceId::GLOBAL)
+                    .get(&LaneId::new(0))
                     .is_some(),
                 "override should be stored before clearing"
             );
 
             SetLaneRelayEmergencyValidators {
-                dataspace_id: DataSpaceId::GLOBAL,
-                validators: Vec::new(),
+                lane_id: LaneId::new(0),
+                peers: Vec::new(),
                 expires_at_height: None,
                 metadata: Metadata::default(),
             }
@@ -14147,9 +15448,9 @@ pub mod isi {
             assert!(
                 stx.world
                     .lane_relay_emergency_validators
-                    .get(&DataSpaceId::GLOBAL)
+                    .get(&LaneId::new(0))
                     .is_none(),
-                "override should be removed when validators list is empty"
+                "override should be removed when peer list is empty"
             );
         }
 
@@ -14174,19 +15475,9 @@ pub mod isi {
 
         #[test]
         fn register_domain_rejects_labels_failing_norm_current() {
-            let kura = Kura::blank_kura_for_testing();
-            let query_handle = LiveQueryStore::start_test();
-            let state = State::new(World::default(), kura, query_handle);
-
-            let block = new_dummy_block();
-            let mut state_block = state.block(block.as_ref().header());
-            let mut stx = state_block.transaction();
-
-            let domain_id: DomainId = "wÍḷd-card".parse().expect("domain id parses");
-            let err = Register::domain(Domain::new(domain_id))
-                .execute(&ALICE_ID, &mut stx)
+            let err = DomainId::try_new("wÍḷd-card", "universal")
                 .expect_err("label violating STD3 must be rejected");
-            let msg = smart_contract_instruction_error_message(err);
+            let msg = err.reason();
             assert!(
                 msg.contains("normalization"),
                 "unexpected error message: {msg}"
@@ -14203,14 +15494,15 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "例え.テスト".parse().expect("IDN label parses");
+            let domain_id: DomainId =
+                DomainId::try_new("例え", "テスト").expect("IDN label parses");
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("IDN domain must be accepted");
             let canonical_label =
                 name::canonicalize_domain_label("例え.テスト").expect("canonical label");
-            let canonical_id: DomainId =
-                canonical_label.parse().expect("canonical domain id parses");
+            let canonical_id: DomainId = DomainId::parse_fully_qualified(&canonical_label)
+                .expect("canonical domain id parses");
             assert!(stx.world.domain(&canonical_id).is_ok());
         }
 
@@ -14250,12 +15542,14 @@ pub mod isi {
                 .consensus_keys_by_pk
                 .insert(kp.public_key().to_string(), vec![endorsement_key_id]);
 
-            let domain_id: DomainId = "endorsed".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("endorsed", "universal").expect("domain id parses");
             let mut new_domain = Domain::new(domain_id.clone());
 
             let canonical_label =
                 name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
-            let canonical_id: DomainId = canonical_label.parse().expect("canonical domain");
+            let canonical_id = DomainId::try_new(&canonical_label, domain_id.dataspace().as_ref())
+                .expect("canonical domain");
             let statement_hash = Hash::new(canonical_id.to_string().as_bytes());
             let mut endorsement = DomainEndorsement {
                 version: iroha_data_model::nexus::DOMAIN_ENDORSEMENT_VERSION_V1,
@@ -14325,7 +15619,8 @@ pub mod isi {
                 .consensus_keys_by_pk
                 .insert(kp.public_key().to_string(), vec![endorsement_key_id]);
 
-            let domain_id: DomainId = "endorse-missing".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("endorse-missing", "universal").expect("domain id parses");
             let res = Register::domain(Domain::new(domain_id)).execute(&ALICE_ID, &mut stx);
             assert!(res.is_err(), "missing endorsement must be rejected");
         }
@@ -14365,10 +15660,12 @@ pub mod isi {
                 .consensus_keys_by_pk
                 .insert(kp.public_key().to_string(), vec![endorsement_key_id]);
 
-            let domain_id: DomainId = "endorsed".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("endorsed", "universal").expect("domain id parses");
             let canonical_label =
                 name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
-            let canonical_id: DomainId = canonical_label.parse().expect("canonical domain");
+            let canonical_id = DomainId::try_new(&canonical_label, domain_id.dataspace().as_ref())
+                .expect("canonical domain");
             let statement_hash = Hash::new(canonical_id.to_string().as_bytes());
 
             let mut endorsement = DomainEndorsement {
@@ -14477,11 +15774,13 @@ pub mod isi {
                 .consensus_keys_by_pk
                 .insert(kp.public_key().to_string(), vec![endorsement_key_id]);
 
-            let domain_id: DomainId = "endorse-expired".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("endorse-expired", "universal").expect("domain id parses");
             let mut new_domain = Domain::new(domain_id.clone());
             let canonical_label =
                 name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
-            let canonical_id: DomainId = canonical_label.parse().expect("canonical domain");
+            let canonical_id = DomainId::try_new(&canonical_label, domain_id.dataspace().as_ref())
+                .expect("canonical domain");
             let statement_hash = Hash::new(canonical_id.to_string().as_bytes());
             let mut endorsement = DomainEndorsement {
                 version: iroha_data_model::nexus::DOMAIN_ENDORSEMENT_VERSION_V1,
@@ -14997,6 +16296,56 @@ pub mod isi {
             let msg = smart_contract_error_message(err);
             assert!(
                 msg.contains("backend must be Halo2IpaPasta"),
+                "unexpected msg: {msg}"
+            );
+        }
+
+        #[test]
+        fn register_vk_rejects_mixed_case_stark_curve() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            let backend = "stark/fri/sha256-goldilocks";
+            let id = VerifyingKeyId::new(backend, "vk_stark_mixed_case_curve");
+            let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                "stark/fri/sha256-goldilocks:curve-test",
+                None,
+                "test",
+                BackendTag::Stark,
+                "GoLdIlOcKs",
+                [0x42; 32],
+                hash_vk(&vk_box),
+            );
+            rec.vk_len = 3;
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box);
+            rec.gas_schedule_id = Some("stark_default".into());
+            let instr: InstructionBox =
+                verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
+            let err = exec
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
+                .expect_err("mixed-case STARK curve must be rejected");
+            let msg = smart_contract_error_message(err);
+            assert!(
+                msg.contains("verifying key curve must be \"goldilocks\""),
                 "unexpected msg: {msg}"
             );
         }
@@ -16101,6 +17450,38 @@ pub mod isi {
         }
 
         #[test]
+        fn set_parameter_allows_sequential_sumeragi_timing_updates() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            SetParameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("min_finality should accept 100");
+            SetParameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("block_time should accept 100 after min_finality update");
+            SetParameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("commit_time should accept 100 after block_time update");
+            SetParameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("commit_time should accept 667 before block_time increase");
+            SetParameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("block_time should accept 333 after commit_time increase");
+
+            let params = stx.world.parameters.get().sumeragi().clone();
+            assert_eq!(params.min_finality_ms(), 100);
+            assert_eq!(params.block_time_ms(), 333);
+            assert_eq!(params.commit_time_ms(), 667);
+        }
+
+        #[test]
         fn set_parameter_rejects_zero_npos_reconfig_fields() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -16382,6 +17763,100 @@ pub mod isi {
             let msg = smart_contract_error_message(err);
             assert!(
                 msg.contains("backend cannot change"),
+                "unexpected msg: {msg}"
+            );
+        }
+
+        #[cfg(feature = "zk-stark")]
+        #[test]
+        fn update_vk_rejects_mixed_case_stark_curve() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            bootstrap_alice_account(&mut stx);
+            let perm = Permission::new(
+                "CanManageVerifyingKeys".parse().unwrap(),
+                iroha_primitives::json::Json::new(()),
+            );
+            Grant::account_permission(perm, ALICE_ID.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect("grant manage vk");
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let exec = Executor::default();
+            let backend = "stark/fri/sha256-goldilocks";
+            let id = VerifyingKeyId::new(backend, "vk_stark_update_curve");
+            let circuit_id = "stark/fri/sha256-goldilocks:update-curve";
+            let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
+                version: 1,
+                circuit_id: circuit_id.into(),
+                n_log2: 4,
+                blowup_log2: 2,
+                fold_arity: 2,
+                queries: 2,
+                merkle_arity: 2,
+                hash_fn: crate::zk_stark::STARK_HASH_SHA256_V1,
+            };
+            let vk_box = VerifyingKeyBox::new(
+                backend.into(),
+                norito::to_bytes(&vk_payload).expect("encode STARK verifying key"),
+            );
+            let mut rec = VerifyingKeyRecord::new_with_owner(
+                1,
+                circuit_id,
+                None,
+                "test",
+                BackendTag::Stark,
+                "goldilocks",
+                [0x51; 32],
+                hash_vk(&vk_box),
+            );
+            rec.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits into u32");
+            rec.status = ConfidentialStatus::Active;
+            rec.key = Some(vk_box.clone());
+            rec.gas_schedule_id = Some("stark_default".into());
+            let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                id: id.clone(),
+                record: rec,
+            }
+            .into();
+            exec.execute_instruction(&mut stx, &ALICE_ID.clone(), register_vk_instruction)
+                .expect("register vk");
+            stx.apply();
+
+            let mut stx = state_block.transaction();
+            let mut new_rec = VerifyingKeyRecord::new_with_owner(
+                2,
+                circuit_id,
+                None,
+                "test",
+                BackendTag::Stark,
+                "GoLdIlOcKs",
+                [0x52; 32],
+                hash_vk(&vk_box),
+            );
+            new_rec.vk_len =
+                u32::try_from(vk_box.bytes.len()).expect("verifying key length fits into u32");
+            new_rec.status = ConfidentialStatus::Active;
+            new_rec.key = Some(vk_box);
+            new_rec.gas_schedule_id = Some("stark_default".into());
+            let upd: InstructionBox = verifying_keys::UpdateVerifyingKey {
+                id: id.clone(),
+                record: new_rec,
+            }
+            .into();
+            let err = exec
+                .execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
+                .expect_err("mixed-case STARK curve update must fail");
+            let msg = smart_contract_error_message(err);
+            assert!(
+                msg.contains("verifying key curve must be \"goldilocks\""),
                 "unexpected msg: {msg}"
             );
         }
@@ -16703,6 +18178,126 @@ pub mod isi {
         }
 
         #[test]
+        fn activate_contract_instance_is_public_for_unprotected_namespace() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("seed authority");
+
+            let code_hash = Hash::new(b"public-contract");
+            let manifest = ContractManifest {
+                code_hash: Some(code_hash),
+                abi_hash: None,
+                compiler_fingerprint: None,
+                features_bitmap: None,
+                access_set_hints: None,
+                entrypoints: None,
+                kotoba: None,
+                provenance: None,
+            };
+            stx.world.contract_manifests.insert(code_hash, manifest);
+
+            let contract_address = ContractAddress::derive(
+                iroha_data_model::account::address::chain_discriminant(),
+                &ALICE_ID,
+                0,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("contract address");
+
+            scode::ActivateContractInstance {
+                contract_address: contract_address.clone(),
+                code_hash,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect("unprotected namespace should not require governance");
+
+            assert_eq!(
+                stx.world.contract_instances.get(&contract_address),
+                Some(&code_hash)
+            );
+        }
+
+        #[test]
+        fn activate_contract_instance_requires_governance_for_protected_namespace() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("seed authority");
+
+            let protected = iroha_data_model::parameter::custom::CustomParameter::new(
+                iroha_data_model::parameter::custom::CustomParameterId(
+                    "gov_protected_namespaces".parse().expect("parameter id"),
+                ),
+                Json::new(vec!["protected".to_owned()]),
+            );
+            stx.world
+                .parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(protected));
+
+            let code_hash = Hash::new(b"protected-contract");
+            let manifest = ContractManifest {
+                code_hash: Some(code_hash),
+                abi_hash: None,
+                compiler_fingerprint: None,
+                features_bitmap: None,
+                access_set_hints: None,
+                entrypoints: None,
+                kotoba: None,
+                provenance: None,
+            };
+            stx.world.contract_manifests.insert(code_hash, manifest);
+
+            let contract_address = ContractAddress::derive(
+                iroha_data_model::account::address::chain_discriminant(),
+                &ALICE_ID,
+                1,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("contract address");
+
+            let err = scode::ActivateContractInstance {
+                contract_address,
+                code_hash,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("protected namespace must remain governance-gated");
+
+            let msg = smart_contract_error_message(
+                iroha_data_model::ValidationFail::InstructionFailed(err),
+            );
+            assert!(
+                msg.contains("CanEnactGovernance"),
+                "unexpected protected-namespace error: {msg}"
+            );
+        }
+
+        #[test]
         fn register_domain_rejects_missing_endorsement_when_required() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
@@ -16721,7 +18316,9 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            let domain_id: DomainId = "wonderland".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
+            seed_domain_name_lease_tx(&mut stx.world, &ALICE_ID, &domain_id);
             let err = Register::domain(Domain::new(domain_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("endorsement must be required");
@@ -16758,7 +18355,8 @@ pub mod isi {
             let mut stx = block.transaction();
             install_endorsement_keys(&mut stx, &[kp_a.clone(), kp_b.clone()]);
 
-            let domain_id: DomainId = "endorse-me".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("endorse-me", "universal").expect("domain id parses");
             let scope = DomainEndorsementScope {
                 dataspace: None,
                 block_start: Some(stx.block_height()),
@@ -16820,7 +18418,8 @@ pub mod isi {
             let mut stx = block.transaction();
             install_endorsement_keys(&mut stx, std::slice::from_ref(&kp));
 
-            let domain_id: DomainId = "scope-check".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("scope-check", "universal").expect("domain id parses");
             let late_scope = DomainEndorsementScope {
                 dataspace: None,
                 block_start: Some(stx.block_height().saturating_add(2)),
@@ -17108,6 +18707,15 @@ pub mod isi {
                     .get(&ticket)
                     .cloned()
                     .ok_or_else(|| Error::Conversion("DA pin intent not found".to_string()))
+            }
+        }
+
+        impl ValidSingularQuery for iroha_data_model::query::nexus::prelude::FindLaneRelayEnvelopeByRef {
+            fn execute(
+                &self,
+                state_ro: &impl StateReadOnly,
+            ) -> Result<VerifiedLaneRelayRecord, Error> {
+                load_verified_lane_relay_record(state_ro, &self.relay_ref)
             }
         }
 

@@ -10,7 +10,7 @@ use std::{
 use eyre::{Report, eyre};
 use http::StatusCode;
 use iroha_config::client_api::ConfigGetDTO;
-use iroha_crypto::PublicKey;
+use iroha_crypto::{KeyPair, PublicKey};
 use iroha_logger::prelude::*;
 use iroha_telemetry::metrics::Status;
 use norito::json::{self, Value};
@@ -24,8 +24,8 @@ use tracing::{Instrument, info_span};
 use url::Url;
 
 use super::{GeoLocation, GeoLookupConfig, PeerConfigSnapshot, ToriiUrl};
+use crate::operator_signatures;
 
-const DEFAULT_GEO_ENDPOINT: &str = "http://ip-api.com/json";
 const GEO_QUERY_FIELDS: &str = "status,message,lat,lon,country,city";
 #[cfg(test)]
 const GET_STATUS_INTERVAL: Duration = Duration::from_millis(200);
@@ -68,6 +68,7 @@ pub enum Update {
 pub fn run(
     torii_url: ToriiUrl,
     geo_config: GeoLookupConfig,
+    operator_signer: Option<KeyPair>,
 ) -> (mpsc::Receiver<Update>, impl Future<Output = ()> + Sized) {
     let (tx, rx) = mpsc::channel(128);
     let url = Arc::new(torii_url);
@@ -104,6 +105,26 @@ pub fn run(
                                 );
                                 return;
                             }
+                            Err(GeoLookupError::MissingEndpoint) => {
+                                iroha_logger::warn!(
+                                    "peer geo lookup enabled without torii.peer_geo.endpoint; skipping geo lookup"
+                                );
+                                return;
+                            }
+                            Err(GeoLookupError::InsecureEndpoint { endpoint }) => {
+                                iroha_logger::warn!(
+                                    %endpoint,
+                                    "peer geo lookup endpoint must use HTTPS; skipping geo lookup"
+                                );
+                                return;
+                            }
+                            Err(GeoLookupError::InvalidEndpoint { endpoint }) => {
+                                iroha_logger::warn!(
+                                    %endpoint,
+                                    "peer geo lookup endpoint is not a base URL; skipping geo lookup"
+                                );
+                                return;
+                            }
                             Err(err) => {
                                 iroha_logger::error!(?err, "failed to collect geo data");
                                 return;
@@ -123,7 +144,7 @@ pub fn run(
                     let url = Arc::clone(&monitor_span_url);
                     async move {
                         loop {
-                            let cfg = get_config_with_retry(&url).await;
+                            let cfg = get_config_with_retry(&url, operator_signer.as_ref()).await;
                             iroha_logger::debug!(?cfg, "peer connected");
                             let _ = tx.send(Update::Connected(Box::new(cfg))).await;
 
@@ -170,11 +191,11 @@ enum IpApiComResponse {
 
 #[derive(thiserror::Error, Debug)]
 enum RequestError {
-    #[error("request to ip-api.com failed: {0:?}")]
+    #[error("request to geo endpoint failed: {0:?}")]
     Http(#[from] reqwest::Error),
-    #[error("request to ip-api.com failed with message: {message}")]
+    #[error("geo endpoint returned failure message: {message}")]
     FailResponse { message: String },
-    #[error("request to ip-api.com returned invalid payload: {0}")]
+    #[error("geo endpoint returned invalid payload: {0}")]
     InvalidResponse(String),
 }
 
@@ -184,8 +205,12 @@ enum GeoLookupError {
     Disabled,
     #[error("Torii URL does not have host")]
     MissingHost,
+    #[error("peer geo lookup enabled without an endpoint")]
+    MissingEndpoint,
     #[error("Torii host is not public: {host}")]
     NonPublicHost { host: String },
+    #[error("geo endpoint must use HTTPS: {endpoint}")]
+    InsecureEndpoint { endpoint: String },
     #[error("geo endpoint is not a base URL: {endpoint}")]
     InvalidEndpoint { endpoint: String },
     #[error(transparent)]
@@ -375,10 +400,14 @@ fn construct_geo_query(
             host: host.to_owned(),
         });
     }
-    let mut url = endpoint.map_or_else(
-        || Url::parse(DEFAULT_GEO_ENDPOINT).expect("default geo endpoint is valid"),
-        std::clone::Clone::clone,
-    );
+    let Some(mut url) = endpoint.cloned() else {
+        return Err(GeoLookupError::MissingEndpoint);
+    };
+    if url.scheme() != "https" {
+        return Err(GeoLookupError::InsecureEndpoint {
+            endpoint: url.to_string(),
+        });
+    }
     let endpoint_label = url.to_string();
     {
         let mut segments =
@@ -391,11 +420,6 @@ fn construct_geo_query(
     url.query_pairs_mut()
         .append_pair("fields", GEO_QUERY_FIELDS);
     Ok(url)
-}
-
-fn is_missing_public_key_error(err: &norito::json::Error) -> bool {
-    let message = err.to_string();
-    message.contains("missing public_key") || message.contains("missing field `public_key`")
 }
 
 fn value_to_u32(value: &Value) -> Option<u32> {
@@ -447,28 +471,71 @@ fn decode_legacy_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSna
 fn decode_peer_config_payload(bytes: &[u8]) -> eyre::Result<PeerConfigSnapshot> {
     match json::from_slice::<ConfigGetDTO>(bytes) {
         Ok(config) => Ok(PeerConfigSnapshot::from(&config)),
-        Err(err) if is_missing_public_key_error(&err) => {
+        Err(err) => {
             let legacy = decode_legacy_peer_config_payload(bytes).map_err(|fallback_err| {
                 eyre!(
                     "failed to decode /configuration payload: {err}; legacy fallback failed: {fallback_err}"
                 )
             })?;
-            iroha_logger::debug!(
-                "decoded /configuration payload without public_key using legacy fallback"
-            );
+            iroha_logger::debug!("decoded /configuration payload using legacy fallback");
             Ok(legacy)
         }
-        Err(err) => Err(eyre!("failed to decode /configuration payload: {err}")),
     }
 }
 
-async fn get_config_with_retry(torii_url: &ToriiUrl) -> PeerConfigSnapshot {
+fn decode_operator_access_error(bytes: &[u8]) -> Option<String> {
+    let value: Value = json::from_slice(bytes).ok()?;
+    let payload = value.as_object()?;
+    let code = payload.get("code")?.as_str()?;
+    if code.starts_with("operator_") {
+        return Some(code.to_owned());
+    }
+    None
+}
+
+async fn get_config_with_retry(
+    torii_url: &ToriiUrl,
+    operator_signer: Option<&KeyPair>,
+) -> PeerConfigSnapshot {
     let client = Client::new();
-    let url = torii_url.0.join("/configuration").expect("valid url");
+    let url = torii_url
+        .0
+        .join(iroha_torii_shared::uri::CONFIGURATION)
+        .expect("valid url");
+    let config_uri: crate::Uri = iroha_torii_shared::uri::CONFIGURATION
+        .parse()
+        .expect("static configuration URI");
 
     let do_request = || async {
-        let response = client.get(url.clone()).send().await?;
+        let mut request = client.get(url.clone());
+        if let Some(key_pair) = operator_signer {
+            let headers = operator_signatures::signed_request_headers(
+                key_pair,
+                &crate::Method::GET,
+                &config_uri,
+                &[],
+            );
+            request = request.headers(headers);
+        }
+        let response = request.send().await?;
+        let status = response.status();
         let bytes = response.bytes().await?;
+        if status == StatusCode::NOT_FOUND {
+            iroha_logger::debug!(
+                %status,
+                "peer does not expose /configuration; continuing without config snapshot"
+            );
+            return Ok::<_, Report>(PeerConfigSnapshot::default());
+        }
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+            && decode_operator_access_error(&bytes).is_some()
+        {
+            iroha_logger::debug!(
+                %status,
+                "peer /configuration requires operator access; continuing without config snapshot"
+            );
+            return Ok::<_, Report>(PeerConfigSnapshot::default());
+        }
         let config = decode_peer_config_payload(&bytes)?;
         Ok::<_, Report>(config)
     };
@@ -809,13 +876,25 @@ mod tests {
     }
 
     #[test]
-    fn construct_geo_query_uses_default_endpoint() {
+    fn construct_geo_query_requires_explicit_endpoint() {
         let torii_url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
-        let url = construct_geo_query(&torii_url, None).expect("geo query should build");
-        assert_eq!(
-            url.as_str(),
-            "http://ip-api.com/json/example.com?fields=status,message,lat,lon,country,city"
-        );
+        let err =
+            construct_geo_query(&torii_url, None).expect_err("missing endpoint should fail closed");
+        assert!(matches!(err, GeoLookupError::MissingEndpoint));
+    }
+
+    #[test]
+    fn construct_geo_query_rejects_non_https_endpoint() {
+        let torii_url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
+        let endpoint = Url::parse("http://geo.internal/api").expect("valid endpoint");
+        let err = construct_geo_query(&torii_url, Some(&endpoint))
+            .expect_err("non-HTTPS endpoint should fail closed");
+        match err {
+            GeoLookupError::InsecureEndpoint { endpoint } => {
+                assert_eq!(endpoint, "http://geo.internal/api");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
@@ -823,10 +902,13 @@ mod tests {
         let torii_url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
         let endpoint = Url::parse("https://geo.internal/api").expect("valid endpoint");
         let url = construct_geo_query(&torii_url, Some(&endpoint)).expect("geo query should build");
-        assert_eq!(
-            url.as_str(),
-            "https://geo.internal/api/example.com?fields=status,message,lat,lon,country,city"
-        );
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some("geo.internal"));
+        assert_eq!(url.path(), "/api/example.com");
+        let fields = url
+            .query_pairs()
+            .find_map(|(key, value)| (key == "fields").then(|| value.into_owned()));
+        assert_eq!(fields.as_deref(), Some(GEO_QUERY_FIELDS));
     }
 
     #[tokio::test]
@@ -845,7 +927,7 @@ mod tests {
             &url,
             GeoLookupConfig {
                 enabled: true,
-                endpoint: None,
+                endpoint: Some(Url::parse("https://geo.internal/api").expect("valid endpoint")),
             },
         )
         .await
@@ -853,6 +935,41 @@ mod tests {
         match err {
             GeoLookupError::NonPublicHost { host } => {
                 assert_eq!(host, "127.0.0.1");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_geo_requires_explicit_endpoint_when_enabled() {
+        let url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
+        let err = collect_geo(
+            &url,
+            GeoLookupConfig {
+                enabled: true,
+                endpoint: None,
+            },
+        )
+        .await
+        .expect_err("missing endpoint should fail closed");
+        assert!(matches!(err, GeoLookupError::MissingEndpoint));
+    }
+
+    #[tokio::test]
+    async fn collect_geo_rejects_non_https_endpoint() {
+        let url: ToriiUrl = "http://example.com:8080".parse().expect("valid torii url");
+        let err = collect_geo(
+            &url,
+            GeoLookupConfig {
+                enabled: true,
+                endpoint: Some(Url::parse("http://geo.internal/api").expect("valid endpoint")),
+            },
+        )
+        .await
+        .expect_err("non-HTTPS endpoint should fail closed");
+        match err {
+            GeoLookupError::InsecureEndpoint { endpoint } => {
+                assert_eq!(endpoint, "http://geo.internal/api");
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -947,6 +1064,24 @@ mod tests {
             message.contains("missing queue object"),
             "unexpected error: {message}"
         );
+    }
+
+    #[test]
+    fn operator_access_error_payload_is_detected() {
+        let payload = br#"{
+            "code":"operator_signature_missing",
+            "message":"missing required operator signature header"
+        }"#;
+        assert_eq!(
+            decode_operator_access_error(payload).as_deref(),
+            Some("operator_signature_missing")
+        );
+    }
+
+    #[test]
+    fn non_operator_error_payload_is_not_treated_as_configless_fallback() {
+        let payload = br#"{"code":"some_other_error","message":"boom"}"#;
+        assert!(decode_operator_access_error(payload).is_none());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Validate `trusted_peers_pop` coverage and parsing rules.
+//! Validate `trusted_peers_pop` validator-subset and parsing rules.
 
 use std::{path::PathBuf, str::FromStr};
 
@@ -63,7 +63,7 @@ pop_hex = "{other_pop_hex}"
 }
 
 #[test]
-fn trusted_peers_pop_requires_full_roster() {
+fn trusted_peers_pop_can_mark_validator_subset() {
     let base = base_keypair();
     let other = KeyPair::from_seed(b"trusted-peers-pop-missing".to_vec(), Algorithm::BlsNormal);
     let base_pop_hex = hex::encode(bls_normal_pop_prove(base.private_key()).expect("pop"));
@@ -83,11 +83,19 @@ pop_hex = "{base_pop_hex}"
         base_pop_hex = base_pop_hex,
     );
     let user_cfg = build_user_config(&inline);
-    assert!(user_cfg.parse().is_err());
+    let actual = user_cfg
+        .parse()
+        .expect("missing PoP should leave peer network-trusted but non-validator");
+    let trusted = actual.common.trusted_peers.value();
+    assert!(trusted.pops.contains_key(base.public_key()));
+    assert!(
+        !trusted.pops.contains_key(other.public_key()),
+        "peer without PoP should stay out of validator subset"
+    );
 }
 
 #[test]
-fn trusted_peers_pop_missing_rejects_config() {
+fn trusted_peers_pop_empty_keeps_bls_trusted_peer_roster() {
     let base = base_keypair();
     let inline = format!(
         r#"
@@ -99,7 +107,10 @@ trusted_peers_pop = []
         base_pk = base.public_key(),
     );
     let user_cfg = build_user_config(&inline);
-    assert!(user_cfg.parse().is_err());
+    let actual = user_cfg
+        .parse()
+        .expect("empty PoP map should keep the BLS trusted-peer roster");
+    assert!(actual.common.trusted_peers.value().pops.is_empty());
 }
 
 #[test]

@@ -15,13 +15,13 @@ val sampleUsePublished =
         val globalToggle = providers.gradleProperty("irohaAndroidUsePublished").orNull
         val sampleToggle = providers.gradleProperty("irohaAndroidSampleUsePublished").orNull
         val envToggle = System.getenv("ANDROID_SAMPLE_USE_PUBLISHED")
-        val fallbackToggle =
+        val detectedToggle =
             if (!repoUrlProp.isNullOrBlank() || !repoDirProp.isNullOrBlank() || defaultRepoDir.asFile.exists()) {
                 "true"
             } else {
                 "false"
             }
-        (globalToggle ?: sampleToggle ?: envToggle ?: fallbackToggle).equals("true", ignoreCase = true)
+        (globalToggle ?: sampleToggle ?: envToggle ?: detectedToggle).equals("true", ignoreCase = true)
     }
 val resolvedRepoDir = repoDirProp ?: sampleRepoDir.get()
 

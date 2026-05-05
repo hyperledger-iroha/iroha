@@ -402,7 +402,6 @@ mod tests {
     };
 
     use iroha_data_model::nexus::LaneId;
-    use proptest::{collection::vec, prelude::*};
 
     use super::*;
 
@@ -558,32 +557,34 @@ mod tests {
         assert_eq!(cache.len_for_lane_epoch(lane_epoch), capacity.get());
     }
 
-    proptest! {
-        #[test]
-        fn fresh_then_duplicate_for_replayed_sequences(
-            sequences in vec(0u64..256, 1..32)
-        ) {
-            let cache = ReplayCache::new(
-                ReplayCacheConfig::new().with_max_sequence_lag(u64::MAX)
-            );
+    #[test]
+    fn fresh_then_duplicate_for_replayed_sequences() {
+        let cases: &[&[u64]] = &[
+            &[0],
+            &[1, 1],
+            &[0, 1, 0, 2, 1],
+            &[255, 0, 255, 128, 128, 3],
+            &[7, 8, 9, 10, 7, 8, 10, 9],
+            &[31, 31, 32, 33, 32, 34, 31],
+        ];
+
+        for sequences in cases {
+            let cache = ReplayCache::new(ReplayCacheConfig::new().with_max_sequence_lag(u64::MAX));
             let lane_epoch = LaneEpoch::new(LaneId::SINGLE, 99);
             let mut seen = BTreeSet::new();
             let mut now = Instant::now();
 
-            for sequence in sequences {
+            for &sequence in *sequences {
                 now += Duration::from_micros(1);
-                let key = ReplayKey::new(
-                    lane_epoch,
-                    sequence,
-                    fingerprint((sequence & 0xFF) as u8)
-                );
+                let key =
+                    ReplayKey::new(lane_epoch, sequence, fingerprint((sequence & 0xFF) as u8));
                 let outcome = cache.insert(key, now);
                 if seen.insert(sequence) {
                     let is_fresh = matches!(outcome, ReplayInsertOutcome::Fresh { .. });
-                    prop_assert!(is_fresh);
+                    assert!(is_fresh, "sequence={sequence}");
                 } else {
                     let is_duplicate = matches!(outcome, ReplayInsertOutcome::Duplicate { .. });
-                    prop_assert!(is_duplicate);
+                    assert!(is_duplicate, "sequence={sequence}");
                 }
             }
         }

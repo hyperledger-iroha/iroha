@@ -87,7 +87,7 @@ Este runbook documenta o procedimento end-to-end para preparar, validar e desmon
 
 1. **Delete sessoes em staging.** Sempre delete sessoes de preview para que os alarmes de profundidade de fila continuem significativos:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    Para testes apenas Swift, chame o mesmo endpoint via o helper Rust/CLI.
 2. **Purgue journals.** Remova qualquer journal de fila persistido (`ApplicationSupport/ConnectQueue/<sid>.to`, stores IndexedDB, etc.) para que o proximo run inicie limpo. Registre o hash do arquivo antes de apagar se precisar depurar um problema de replay.

@@ -185,6 +185,41 @@ fn gas_for_proof_attachment(
     gas
 }
 
+fn anonymous_escrow_proof_gas(any: &dyn std::any::Any) -> Option<u64> {
+    if let Some(open) = any.downcast_ref::<dm_isi::escrow::OpenAnonymousAssetEscrow>() {
+        return Some(gas_for_proof_attachment(
+            &open.proof,
+            open.funding_nullifiers.len(),
+            1,
+        ));
+    }
+    if let Some(release) = any.downcast_ref::<dm_isi::escrow::ReleaseAnonymousAssetEscrow>() {
+        return Some(gas_for_proof_attachment(
+            &release.proof,
+            release.escrow_nullifiers.len(),
+            release.buyer_output_commitments.len(),
+        ));
+    }
+    if let Some(cancel) = any.downcast_ref::<dm_isi::escrow::CancelAnonymousAssetEscrow>() {
+        return Some(gas_for_proof_attachment(
+            &cancel.proof,
+            cancel.escrow_nullifiers.len(),
+            cancel.seller_output_commitments.len(),
+        ));
+    }
+    if let Some(resolve) = any.downcast_ref::<dm_isi::escrow::ResolveAnonymousEscrowDispute>() {
+        return Some(gas_for_proof_attachment(
+            &resolve.proof,
+            resolve.escrow_nullifiers.len(),
+            resolve
+                .buyer_output_commitments
+                .len()
+                .saturating_add(resolve.seller_output_commitments.len()),
+        ));
+    }
+    None
+}
+
 /// Compute gas for a single instruction using a simple schedule.
 #[allow(clippy::too_many_lines)]
 pub fn meter_instruction(instr: &InstructionBox) -> u64 {
@@ -256,6 +291,13 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         };
     }
 
+    if any
+        .downcast_ref::<dm_isi::SetAssetDefinitionBalancePolicy>()
+        .is_some()
+    {
+        return BASE_SET_KV + 100;
+    }
+
     // Key-value
     if let Some(kv) = any.downcast_ref::<dm_isi::SetKeyValueBox>() {
         let sz = match kv {
@@ -295,6 +337,10 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
         let sz = json_len(&custom.payload) as u64;
         return BASE_CUSTOM + PER_BYTE_JSON.saturating_mul(sz);
     }
+    if let Some(record) = any.downcast_ref::<dm_isi::bridge::RecordSccpMessage>() {
+        let sz = u64::try_from(record.payload_bytes.len()).unwrap_or(u64::MAX);
+        return BASE_CUSTOM + sz;
+    }
     if any.downcast_ref::<dm_isi::kaigi::CreateKaigi>().is_some() {
         return BASE_KAIGI_CREATE;
     }
@@ -330,6 +376,9 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             return BASE_KAIGI_USAGE_ZK + PER_KAIGI_PROOF_BYTE.saturating_mul(proof_bytes);
         }
         return BASE_KAIGI_USAGE;
+    }
+    if let Some(gas) = anonymous_escrow_proof_gas(any) {
+        return gas;
     }
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
@@ -375,6 +424,9 @@ pub fn meter_instructions(is: &[InstructionBox]) -> u64 {
 #[must_use]
 pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
     let any = instr.as_any();
+    if let Some(gas) = anonymous_escrow_proof_gas(any) {
+        return gas;
+    }
     if let Some(verify) = any.downcast_ref::<dm_isi::zk::VerifyProof>() {
         return gas_for_proof_attachment(&verify.attachment, 0, 0);
     }
@@ -431,7 +483,7 @@ mod tests {
     fn mint_and_transfer_have_nonzero_costs() {
         let a = sample_account();
         let def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let mint =
@@ -450,7 +502,7 @@ mod tests {
     fn batch_meter_sums_items() {
         let a = sample_account();
         let def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let r = dm_isi::register::Register::asset_definition({
@@ -472,7 +524,7 @@ mod tests {
         let from = sample_account();
         let to = sample_account();
         let def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let entry_a = dm_isi::transfer::TransferAssetBatchEntry::new(
@@ -509,19 +561,17 @@ mod tests {
         let (authority, _) = gen_account_in("wonderland");
         let role_id: RoleId = "bench_role".parse().unwrap();
         let trigger_id: TriggerId = "bench_trg".parse().unwrap();
-        let bench_domain: DomainId = "bench".parse().unwrap();
+        let bench_domain: DomainId = DomainId::try_new("bench", "universal").unwrap();
 
         let register_domain: InstructionBox =
             dm_isi::register::Register::domain(Domain::new(bench_domain.clone())).into();
 
-        let register_account: InstructionBox = dm_isi::register::Register::account(Account::new(
-            authority.clone().to_account_id(bench_domain),
-        ))
-        .into();
+        let register_account: InstructionBox =
+            dm_isi::register::Register::account(Account::new(authority.clone())).into();
 
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
         let register_asset_definition: InstructionBox =
@@ -593,7 +643,7 @@ mod tests {
         crate::test_alias::ensure();
         super::configure_confidential_gas(super::ConfidentialGasSchedule::default());
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
+            DomainId::try_new("domain", "universal").unwrap(),
             "shield".parse().unwrap(),
         );
         let account = ALICE_ID.clone();
@@ -655,7 +705,7 @@ mod tests {
         let proof_bytes = attachment.proof.bytes.len() as u64;
         let public_inputs = (fixture.public_inputs.len() / super::FIELD_ELEMENT_BYTES) as u64;
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
+            DomainId::try_new("domain", "universal").unwrap(),
             "shield".parse().unwrap(),
         );
         let transfer = ZkTransfer::new(
@@ -674,6 +724,118 @@ mod tests {
             + schedule.per_commitment;
         assert_eq!(gas, expected);
         assert_eq!(confidential_gas_cost(&transfer_instr), expected);
+    }
+
+    #[test]
+    fn anonymous_escrow_gas_matches_internal_transfers() {
+        let _gas_lock = super::lock_confidential_gas_for_tests();
+        use iroha_crypto::Hash;
+        use iroha_data_model::{
+            escrow::EscrowId,
+            isi::{
+                escrow::{
+                    CancelAnonymousAssetEscrow, OpenAnonymousAssetEscrow,
+                    ReleaseAnonymousAssetEscrow, ResolveAnonymousEscrowDispute,
+                },
+                zk::ZkTransfer,
+            },
+            prelude::AssetDefinitionId,
+            proof::VerifyingKeyId,
+        };
+
+        super::configure_confidential_gas(super::ConfidentialGasSchedule::default());
+        let fixture = halo2_fixture_envelope("halo2/ipa:anonymous-escrow-gas", [0u8; 32]);
+        let proof_box = fixture.proof_box("halo2/ipa");
+        let attachment = ProofAttachment::new_ref(
+            proof_box.backend.clone(),
+            proof_box,
+            VerifyingKeyId::new("halo2/ipa", "vk-anonymous-escrow"),
+        );
+        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("domain", "universal").unwrap(),
+            "shield".parse().unwrap(),
+        );
+        let root_hint = Some([0xFE; 32]);
+
+        let assert_same_as_transfer =
+            |instr: InstructionBox, nullifiers: Vec<[u8; 32]>, outputs: Vec<[u8; 32]>| {
+                let expected_transfer: InstructionBox = ZkTransfer::new(
+                    asset.clone(),
+                    nullifiers,
+                    outputs,
+                    attachment.clone(),
+                    root_hint,
+                )
+                .into();
+                let expected = meter_instruction(&expected_transfer);
+                assert_eq!(meter_instruction(&instr), expected);
+                assert_eq!(confidential_gas_cost(&instr), expected);
+            };
+
+        let funding_nullifiers = vec![[0xA1; 32], [0xA2; 32]];
+        let escrow_commitment = [0xB1; 32];
+        assert_same_as_transfer(
+            OpenAnonymousAssetEscrow::new(
+                EscrowId::new(Hash::new("gas-open-anonymous")),
+                asset.clone(),
+                funding_nullifiers.clone(),
+                escrow_commitment,
+                attachment.clone(),
+                root_hint,
+            )
+            .into(),
+            funding_nullifiers,
+            vec![escrow_commitment],
+        );
+
+        let release_nullifiers = vec![[0xC1; 32]];
+        let buyer_outputs = vec![[0xD1; 32], [0xD2; 32]];
+        assert_same_as_transfer(
+            ReleaseAnonymousAssetEscrow::new(
+                EscrowId::new(Hash::new("gas-release-anonymous")),
+                release_nullifiers.clone(),
+                buyer_outputs.clone(),
+                attachment.clone(),
+                root_hint,
+            )
+            .into(),
+            release_nullifiers,
+            buyer_outputs,
+        );
+
+        let cancel_nullifiers = vec![[0xC2; 32]];
+        let seller_outputs = vec![[0xE1; 32]];
+        assert_same_as_transfer(
+            CancelAnonymousAssetEscrow::new(
+                EscrowId::new(Hash::new("gas-cancel-anonymous")),
+                cancel_nullifiers.clone(),
+                seller_outputs.clone(),
+                attachment.clone(),
+                root_hint,
+            )
+            .into(),
+            cancel_nullifiers,
+            seller_outputs,
+        );
+
+        let resolve_nullifiers = vec![[0xC3; 32]];
+        let resolution_buyer_outputs = vec![[0xF1; 32]];
+        let resolution_seller_outputs = vec![[0xF2; 32]];
+        let mut resolution_outputs = resolution_buyer_outputs.clone();
+        resolution_outputs.extend(resolution_seller_outputs.iter().copied());
+        assert_same_as_transfer(
+            ResolveAnonymousEscrowDispute::new(
+                EscrowId::new(Hash::new("gas-resolve-anonymous")),
+                resolve_nullifiers.clone(),
+                resolution_buyer_outputs,
+                resolution_seller_outputs,
+                attachment.clone(),
+                root_hint,
+            )
+            .into(),
+            resolve_nullifiers,
+            resolution_outputs,
+        );
     }
 
     #[test]
@@ -720,7 +882,7 @@ mod tests {
         assert_eq!(verify_gas, expected_verify);
 
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
+            DomainId::try_new("domain", "universal").unwrap(),
             "shield".parse().unwrap(),
         );
         let nullifiers = vec![[0xAA; 32], [0xBB; 32]];
@@ -752,7 +914,7 @@ mod tests {
     fn confidential_gas_cost_zero_for_non_confidential_instr() {
         let account = sample_account();
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let mint =

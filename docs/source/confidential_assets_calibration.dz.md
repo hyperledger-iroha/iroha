@@ -89,11 +89,11 @@ translator: machine-google-reviewed
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
 ཚད་འཇལ་ལཱ་གི་མངའ་ཁོངས་ཀྱི་ཧེ་མ་དང་ཤུལ་ལས་ འཕྲལ་མགྱོགས་རང་གནས་གོང་ཚུ་ཐོ་བཀོད་འབད། ཅིག
-རྒྱུ་དངོས་རེ་ལུ་བརྡ་བཀོད་རྐྱངམ་ཅིག་འདི་ལངམ་སྦེ་ཡོདཔ་ཨིན། དཔེར་ན་ `xor#wonderland`: གི་དོན་ལུ་:
+རྒྱུ་དངོས་རེ་ལུ་བརྡ་བཀོད་རྐྱངམ་ཅིག་འདི་ལངམ་སྦེ་ཡོདཔ་ཨིན། དཔེར་ན་ `4cuvDVPuLBKJyN6dPbRQhmLh68sU`: གི་དོན་ལུ་:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 ཐོན་འབྲས་སྔོ་མ་ (ཡང་ན་ Prometheus པར་ལེན་) འདི་ ཚད་འཇལ་ཤོག་བྱང་ལུ་ མཉམ་སྦྲགས་འབད།

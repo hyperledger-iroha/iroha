@@ -24,7 +24,7 @@
         "dataspace": 32,
         "program": "cbdc.supervision",
         "method": "issue_stop_order",
-        "asset": "aid:550e8400e29b41d4a7164466554400ee",
+        "asset": "5kb2KcCA3A1vc4BetPzvuZT8PYR3",
         "role": "Initiator"
       },
       "effect": {

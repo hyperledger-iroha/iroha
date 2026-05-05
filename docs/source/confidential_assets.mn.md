@@ -89,7 +89,7 @@ Swift SDK-ууд одоо JSON цавуугүйгээр бамбай заавр�
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ Swift SDK-ууд одоо JSON цавуугүйгээр бамбай заавр�
 - Данс тус бүрийн гарал үүслийн түлхүүрийн шатлал:
   - `sk_spend` → `nk` (тэгдэгч түлхүүр), `ivk` (орж буй харах түлхүүр), `ovk` (гарч байгаа харах түлхүүр), `fvk`.
 - Шифрлэгдсэн тэмдэглэлийн ачаалал нь ECDH-аас гаралтай хуваалцсан түлхүүрүүдтэй AEAD ашигладаг; Сонголттой аудиторын харах түлхүүрүүдийг хөрөнгийн бодлого бүрийн гаралтад хавсаргаж болно.
-- CLI нэмэлтүүд: `confidential create-keys`, `confidential send`, `confidential export-view-key`, санамж бичгийн шифрийг тайлах аудиторын хэрэгсэл, Grafana офлайн дугтуйг үйлдвэрлэх/шалгах `iroha app zk envelope` туслах. Torii нь `POST /v1/confidential/derive-keyset`-ээр дамжуулан ижил үүсмэл урсгалыг гаргаж, hex болон base64 хэлбэрийг хоёуланг нь буцааснаар түрийвчнүүд түлхүүр шатлалыг программчлан авчрах боломжтой.
+- CLI нэмэлтүүд: `confidential create-keys`, `confidential send`, `confidential export-view-key`, санамж бичгийн шифрийг тайлах аудиторын хэрэгсэл, Grafana офлайн дугтуйг үйлдвэрлэх/шалгах `iroha app zk envelope` туслах.
 
 ## Хий, Хязгаарлалт ба DoS хяналт
 - Тодорхойлох хийн хуваарь:
@@ -391,7 +391,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -423,8 +423,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -455,7 +455,7 @@ Shield, transfer, unshield барилгачид ижил загварыг даг
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Үүнийг ижил хуссан дээр `rg 'iroha_confidential_tree_depth'`-тэй холбоно уу, шинэ үүрэг даалгавраар гүн өсдөг бол нүүлгэн шилжүүлэх тоолуур зөвхөн бичилтийг багасгах үед л нэмэгддэг. Эдгээр утгууд нь засаглалын нотлох баримтын багцад хавсаргасан Grafana хяналтын самбарын экспорттой тохирч байх ёстой.

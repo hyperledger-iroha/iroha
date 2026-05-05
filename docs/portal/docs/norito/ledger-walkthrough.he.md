@@ -4,9 +4,9 @@ direction: rtl
 source: docs/portal/docs/norito/ledger-walkthrough.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2ea0c0b2f750131568e801b5fe583ae46ebddda3ce4f9fb52387725c2e227520
-source_last_modified: "2025-11-07T12:25:39.145308+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: a26e8de48d00066a9551f1909840165fc33e0ffc18b38b7ac4c6491b2c825f7b
+source_last_modified: "2026-04-03T17:43:03.931384+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -27,8 +27,8 @@ slug: /norito/ledger-walkthrough
 לאורך המדריך החליפו את `$ADMIN_ACCOUNT` ו-`$RECEIVER_ACCOUNT` במזהי החשבונות שבהם תשתמשו. ה-bundle ברירת המחדל כבר כולל שני חשבונות שנגזרו מהמפתחות של הדמו:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 אמתו את הערכים על ידי הצגת החשבונות הראשונים:
@@ -47,7 +47,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts בתוך wonderland (החליפו את --limit במספר גבוה יותר אם צריך)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions שכבר קיימים
@@ -62,14 +62,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ה-CLI מדפיס את ה-hash של הטרנזקציה שנשלחה (לדוגמה, `0x5f…`). שמרו אותו כדי לבדוק את הסטטוס בהמשך.
 
 ## 3. מינט יחידות לחשבון המפעיל
 
-כמויות נכס חיות תחת הצמד `(asset definition, account)`. מינטו 250 יחידות של `coffee#wonderland` אל `$ADMIN_ACCOUNT`:
+כמויות נכס חיות תחת הצמד `(asset definition, account)`. מינטו 250 יחידות של `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` אל `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

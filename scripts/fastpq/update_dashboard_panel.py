@@ -60,6 +60,29 @@ def summarize_operations(entries: Sequence[dict[str, Any]] | None) -> str:
     return "Mean timings (ms): " + ", ".join(rendered)
 
 
+def format_operation_filter(benchmarks: dict[str, Any] | None) -> str | None:
+    if not benchmarks:
+        return None
+    raw = benchmarks.get("operation_filter")
+    if isinstance(raw, str) and raw.strip():
+        return raw
+    operations = benchmarks.get("operations")
+    if not isinstance(operations, list):
+        return None
+    names = sorted(
+        {
+            entry.get("operation")
+            for entry in operations
+            if isinstance(entry, dict) and isinstance(entry.get("operation"), str)
+        }
+    )
+    if len(names) == 1:
+        return names[0]
+    if names:
+        return "all"
+    return None
+
+
 def summarize_device(labels: dict[str, Any] | None) -> str | None:
     if not labels:
         return None
@@ -159,6 +182,31 @@ def summarize_poseidon_microbench(entry: dict[str, Any] | None) -> str | None:
     return "Poseidon microbench: " + "; ".join(pieces)
 
 
+def summarize_regeneration_hint(backend: Any, operation_filter: str | None) -> str:
+    focused = (
+        f" Reuse `--operation {operation_filter}` for focused reruns."
+        if operation_filter and operation_filter != "all"
+        else ""
+    )
+    if isinstance(backend, str) and backend.startswith("cuda"):
+        return (
+            "- Regenerate with `fastpq_cuda_bench` plus "
+            "`scripts/fastpq/wrap_benchmark.py` after each CUDA lab run."
+            f"{focused}"
+        )
+    if isinstance(backend, str) and backend.startswith("metal"):
+        return (
+            "- Regenerate with `fastpq_metal_bench` plus "
+            "`scripts/fastpq/wrap_benchmark.py` after each macOS nightly run."
+            f"{focused}"
+        )
+    return (
+        "- Regenerate with the matching `fastpq_*_bench` binary plus "
+        "`scripts/fastpq/wrap_benchmark.py` whenever the capture changes."
+        f"{focused}"
+    )
+
+
 def relative_bundle_path(bundle_path: Path) -> str:
     try:
         return bundle_path.resolve().relative_to(Path.cwd().resolve()).as_posix()
@@ -187,6 +235,13 @@ def build_markdown(bundle_path: Path, bundle: dict[str, Any]) -> str:
         else "rows/iterations unavailable"
     )
     lines.append(f"- Rows: {row_desc}")
+    operation_filter = format_operation_filter(benchmarks)
+    if operation_filter:
+        suffix = " (focused capture)" if operation_filter != "all" else ""
+        lines.append(f"- Operation filter: `{operation_filter}`{suffix}")
+    column_count = benchmarks.get("column_count")
+    if isinstance(column_count, int):
+        lines.append(f"- Column count: **{column_count}**")
     operations = summarize_operations(benchmarks.get("operations"))
     lines.append(f"- {operations}")
     queue = summarize_queue(benchmarks.get("metal_dispatch_queue"))
@@ -200,10 +255,7 @@ def build_markdown(bundle_path: Path, bundle: dict[str, Any]) -> str:
     poseidon_micro = summarize_poseidon_microbench(benchmarks.get("poseidon_microbench"))
     if poseidon_micro:
         lines.append(f"- {poseidon_micro}")
-    lines.append(
-        "- Regenerate with `FASTPQ_METAL_LIB=$(fd -g 'fastpq.metallib' target/release/build | head -n1)` and "
-        "`scripts/fastpq/wrap_benchmark.py` after each macOS nightly run."
-    )
+    lines.append(summarize_regeneration_hint(backend, operation_filter))
     return "\\n".join(lines)
 
 

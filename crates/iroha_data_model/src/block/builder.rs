@@ -7,15 +7,21 @@ use std::{
 
 use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
 
-use super::{BlockHeader, BlockPayload, BlockResult, BlockSignature, SignedBlock};
+use super::{
+    BlockExecutionContextBundle, BlockHeader, BlockPayload, BlockResult, BlockSignature,
+    SignedBlock,
+};
 use crate::{
     consensus::PreviousRosterEvidence,
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
     },
-    transaction::signed::{
-        SignedTransaction, TransactionEntrypoint, TransactionResult, TransactionResultInner,
+    transaction::{
+        PrivateKaigiTransaction,
+        signed::{
+            SignedTransaction, TransactionEntrypoint, TransactionResult, TransactionResultInner,
+        },
     },
     trigger::TimeTriggerEntrypoint,
 };
@@ -25,6 +31,7 @@ use crate::{
 pub struct BlockBuilder {
     header: BlockHeader,
     transactions: Vec<SignedTransaction>,
+    external_entrypoints: Vec<TransactionEntrypoint>,
     time_triggers: Vec<TimeTriggerEntrypoint>,
     results: Vec<TransactionResult>,
     entry_merkle: MerkleTree<TransactionEntrypoint>,
@@ -33,6 +40,7 @@ pub struct BlockBuilder {
     da_proof_policies: Option<DaProofPolicyBundle>,
     da_pin_intents: Option<DaPinIntentBundle>,
     previous_roster_evidence: Option<PreviousRosterEvidence>,
+    execution_context: Option<BlockExecutionContextBundle>,
 }
 
 impl BlockBuilder {
@@ -42,10 +50,12 @@ impl BlockBuilder {
         Self {
             header,
             transactions: Vec::new(),
+            external_entrypoints: Vec::new(),
             time_triggers: Vec::new(),
             results: Vec::new(),
             entry_merkle: MerkleTree::default(),
             result_merkle: MerkleTree::default(),
+            execution_context: None,
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
@@ -55,16 +65,28 @@ impl BlockBuilder {
 
     /// Push a signed transaction and update the entrypoint Merkle tree.
     pub fn push_transaction(&mut self, tx: SignedTransaction) -> usize {
-        let idx = self.transactions.len();
+        let idx = self.external_entrypoints.len();
         let h: HashOf<TransactionEntrypoint> = tx.hash_as_entrypoint();
         self.entry_merkle.add(h);
+        self.external_entrypoints
+            .push(TransactionEntrypoint::External(tx.clone()));
         self.transactions.push(tx);
+        idx
+    }
+
+    /// Push an authority-free private Kaigi transaction and update the entrypoint Merkle tree.
+    pub fn push_private_kaigi_transaction(&mut self, tx: PrivateKaigiTransaction) -> usize {
+        let idx = self.external_entrypoints.len();
+        let h: HashOf<TransactionEntrypoint> = tx.hash_as_entrypoint();
+        self.entry_merkle.add(h);
+        self.external_entrypoints
+            .push(TransactionEntrypoint::PrivateKaigi(tx));
         idx
     }
 
     /// Push a time trigger and update the entrypoint Merkle tree.
     pub fn push_time_trigger(&mut self, trig: TimeTriggerEntrypoint) -> usize {
-        let idx = self.transactions.len() + self.time_triggers.len();
+        let idx = self.external_entrypoints.len() + self.time_triggers.len();
         let h: HashOf<TransactionEntrypoint> = trig.hash_as_entrypoint();
         self.entry_merkle.add(h);
         self.time_triggers.push(trig);
@@ -100,6 +122,16 @@ impl BlockBuilder {
         self.previous_roster_evidence = evidence;
     }
 
+    /// Attach durable execution context that will be embedded in the resulting block.
+    pub fn set_execution_context(&mut self, context: Option<BlockExecutionContextBundle>) {
+        self.execution_context = context.filter(|bundle| !bundle.is_empty());
+    }
+
+    /// Commit an SCCP commitment root in the resulting block header.
+    pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {
+        self.header.set_sccp_commitment_root(root);
+    }
+
     /// Build a `SignedBlock` with the provided signatures.
     pub fn build(mut self, signatures: BTreeSet<BlockSignature>) -> SignedBlock {
         // Write roots into header
@@ -109,15 +141,20 @@ impl BlockBuilder {
         let da_proof_policies = self.da_proof_policies.clone();
         let da_pin_intents = self.da_pin_intents.clone();
         let previous_roster_evidence = self.previous_roster_evidence.clone();
+        self.header
+            .set_execution_context_hash(self.execution_context.as_ref().map(HashOf::new));
         let payload = BlockPayload {
             header: self.header,
             transactions: self.transactions,
+            external_entrypoints: self.external_entrypoints.clone(),
+            execution_context: self.execution_context.clone(),
             da_commitments,
             da_proof_policies,
             da_pin_intents,
             previous_roster_evidence,
         };
         let result = BlockResult {
+            external_entrypoints: self.external_entrypoints,
             time_triggers: self.time_triggers,
             merkle: self.entry_merkle,
             result_merkle: self.result_merkle,
@@ -135,6 +172,7 @@ impl BlockBuilder {
         block.set_da_commitments(self.da_commitments);
         block.set_da_pin_intents(self.da_pin_intents);
         block.set_previous_roster_evidence(self.previous_roster_evidence);
+        block.set_execution_context(self.execution_context);
         block
     }
 
@@ -149,6 +187,8 @@ impl BlockBuilder {
         self.header.result_merkle_root = self.result_merkle.root();
         self.header
             .set_da_proof_policies_hash(self.da_proof_policies.as_ref().map(HashOf::new));
+        self.header
+            .set_execution_context_hash(self.execution_context.as_ref().map(HashOf::new));
         self.header.da_commitments_hash = self.da_commitments.as_ref().and_then(|bundle| {
             if bundle.is_empty() {
                 None
@@ -289,7 +329,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let policy = DaProofPolicy {
             lane_id: LaneId::new(1),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "lane-1".to_string(),
             proof_scheme: DaProofScheme::MerkleSha256,
         };

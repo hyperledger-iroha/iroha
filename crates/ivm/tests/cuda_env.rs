@@ -1,28 +1,56 @@
-#[cfg(feature = "cuda")]
-use ivm::{AccelerationConfig, GpuManager, IVM};
+//! CUDA environment and config gate regressions.
 
 #[cfg(feature = "cuda")]
-struct AccelGuard(AccelerationConfig);
+use ivm::{AccelerationConfig, GpuManager, IVM};
+#[cfg(feature = "cuda")]
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+#[cfg(feature = "cuda")]
+struct AccelGuard {
+    _lock: MutexGuard<'static, ()>,
+    original: AccelerationConfig,
+}
+
+#[cfg(feature = "cuda")]
+impl AccelGuard {
+    fn new() -> Self {
+        fn accel_test_lock() -> &'static Mutex<()> {
+            static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+            LOCK.get_or_init(|| Mutex::new(()))
+        }
+
+        let lock = accel_test_lock()
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        Self {
+            _lock: lock,
+            original: ivm::acceleration_config(),
+        }
+    }
+}
 
 #[cfg(feature = "cuda")]
 impl Drop for AccelGuard {
     fn drop(&mut self) {
-        ivm::set_acceleration_config(self.0);
+        ivm::set_acceleration_config(self.original);
     }
 }
 
 #[cfg(feature = "cuda")]
 #[test]
 fn disable_cuda_via_env() {
-    let baseline = ivm::acceleration_config();
-    let _guard = AccelGuard(baseline);
-    std::env::set_var("IVM_DISABLE_CUDA", "1");
+    let _guard = AccelGuard::new();
+    unsafe {
+        std::env::set_var("IVM_DISABLE_CUDA", "1");
+    }
     let vm = IVM::new(1_000);
     assert!(
-        !vm.use_cuda,
+        !vm.uses_cuda(),
         "VM should not enable CUDA when IVM_DISABLE_CUDA is set"
     );
-    std::env::remove_var("IVM_DISABLE_CUDA");
+    unsafe {
+        std::env::remove_var("IVM_DISABLE_CUDA");
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -32,9 +60,8 @@ fn limit_gpu_count_respects_config() {
         eprintln!("No CUDA GPU available; skipping test");
         return;
     }
-    let baseline = ivm::acceleration_config();
-    let _guard = AccelGuard(baseline);
-    let mut cfg = baseline;
+    let _guard = AccelGuard::new();
+    let mut cfg = ivm::acceleration_config();
     cfg.enable_cuda = true;
     cfg.max_gpus = Some(1);
     ivm::set_acceleration_config(cfg);
@@ -56,9 +83,8 @@ fn disable_cuda_via_config() {
         eprintln!("No CUDA GPU available; skipping test");
         return;
     }
-    let baseline = ivm::acceleration_config();
-    let _guard = AccelGuard(baseline);
-    let mut cfg = baseline;
+    let _guard = AccelGuard::new();
+    let mut cfg = ivm::acceleration_config();
     cfg.enable_cuda = false;
     ivm::set_acceleration_config(cfg);
 

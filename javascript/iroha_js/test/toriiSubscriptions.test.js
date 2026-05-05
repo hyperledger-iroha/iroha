@@ -4,9 +4,7 @@ import { ToriiClient } from "../src/toriiClient.js";
 import { AccountAddress } from "../src/address.js";
 
 const BASE_URL = "https://localhost:8080";
-const SAMPLE_ACCOUNT_ID = AccountAddress.fromAccount({
-  domain: "wonderland",
-  publicKey: Buffer.from(
+const SAMPLE_ACCOUNT_ID = AccountAddress.fromAccount({ publicKey: Buffer.from(
     "EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
     "hex",
   ),

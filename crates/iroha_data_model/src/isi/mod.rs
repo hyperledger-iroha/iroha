@@ -35,7 +35,6 @@ use rustc_hash::FxHashMap as HashMap;
 
 use super::prelude::*;
 use crate::{Level, Registered, seal};
-
 /// Consensus key lifecycle instructions.
 pub mod consensus_keys;
 /// Domain endorsement management instructions.
@@ -43,6 +42,8 @@ pub mod endorsement;
 /// Governance instruction module
 #[cfg(feature = "governance")]
 pub mod governance;
+/// Ministry agenda intake instructions.
+pub mod ministry;
 
 /// Owned trait-object wrapper for any [`crate::isi::Instruction`].
 ///
@@ -98,6 +99,63 @@ impl PartialEq for InstructionBox {
 
 impl Eq for InstructionBox {}
 
+/// Client-side wrapper preserving an instruction wire-id plus already encoded
+/// bare payload bytes.
+///
+/// This is intended for compatibility flows where a remote node returns a draft
+/// instruction in framed wire form and the local client needs to resubmit that
+/// exact payload without understanding its full semantic schema.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct OpaqueInstruction {
+    wire_id: &'static str,
+    bare_payload: Vec<u8>,
+}
+
+impl OpaqueInstruction {
+    /// Build an opaque instruction from a framed wire payload returned by Torii.
+    ///
+    /// # Errors
+    /// Returns [`norito::core::Error`] when the framed payload is malformed.
+    pub fn from_framed(
+        wire_id: impl Into<String>,
+        framed_payload: &[u8],
+    ) -> Result<Self, norito::core::Error> {
+        let view = norito::core::from_bytes_view(framed_payload)?;
+        Ok(Self {
+            wire_id: Box::leak(wire_id.into().into_boxed_str()),
+            bare_payload: view.as_bytes().to_vec(),
+        })
+    }
+
+    /// Return the stable wire identifier carried by this opaque instruction.
+    #[must_use]
+    pub const fn wire_id(&self) -> &'static str {
+        self.wire_id
+    }
+}
+
+impl crate::seal::Instruction for OpaqueInstruction {}
+
+impl Instruction for OpaqueInstruction {
+    fn dyn_encode(&self) -> Vec<u8> {
+        self.bare_payload.clone()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn id(&self) -> &'static str {
+        self.wire_id
+    }
+}
+
+impl From<OpaqueInstruction> for InstructionBox {
+    fn from(i: OpaqueInstruction) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl PartialOrd for InstructionBox {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
@@ -137,6 +195,36 @@ impl From<crate::isi::bridge::SubmitBridgeProof> for InstructionBox {
 }
 impl From<crate::isi::bridge::RecordBridgeReceipt> for InstructionBox {
     fn from(i: crate::isi::bridge::RecordBridgeReceipt) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::bridge::RecordSccpMessage> for InstructionBox {
+    fn from(i: crate::isi::bridge::RecordSccpMessage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::asset_alias::SetAssetDefinitionAlias> for InstructionBox {
+    fn from(i: crate::isi::asset_alias::SetAssetDefinitionAlias) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::asset_alias::SetAssetDefinitionBalancePolicy> for InstructionBox {
+    fn from(i: crate::isi::asset_alias::SetAssetDefinitionBalancePolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::asset_transfer_control::SetAssetTransferFreeze> for InstructionBox {
+    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferFreeze) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::asset_transfer_control::SetAssetTransferBlacklist> for InstructionBox {
+    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferBlacklist) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::asset_transfer_control::SetAssetTransferControl> for InstructionBox {
+    fn from(i: crate::isi::asset_transfer_control::SetAssetTransferControl) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -200,8 +288,410 @@ impl From<crate::isi::staking::ExitPublicLaneValidator> for InstructionBox {
     }
 }
 
+impl From<crate::isi::staking::RebindPublicLaneValidatorPeer> for InstructionBox {
+    fn from(i: crate::isi::staking::RebindPublicLaneValidatorPeer) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::CreateKaigi> for InstructionBox {
+    fn from(i: crate::isi::kaigi::CreateKaigi) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::JoinKaigi> for InstructionBox {
+    fn from(i: crate::isi::kaigi::JoinKaigi) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::LeaveKaigi> for InstructionBox {
+    fn from(i: crate::isi::kaigi::LeaveKaigi) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::EndKaigi> for InstructionBox {
+    fn from(i: crate::isi::kaigi::EndKaigi) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::RecordKaigiUsage> for InstructionBox {
+    fn from(i: crate::isi::kaigi::RecordKaigiUsage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::SetKaigiRelayManifest> for InstructionBox {
+    fn from(i: crate::isi::kaigi::SetKaigiRelayManifest) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::RegisterKaigiRelay> for InstructionBox {
+    fn from(i: crate::isi::kaigi::RegisterKaigiRelay) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::kaigi::ReportKaigiRelayHealth> for InstructionBox {
+    fn from(i: crate::isi::kaigi::ReportKaigiRelayHealth) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::nexus::SetLaneRelayEmergencyValidators> for InstructionBox {
     fn from(i: crate::isi::nexus::SetLaneRelayEmergencyValidators) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::nexus::RegisterVerifiedLaneRelay> for InstructionBox {
+    fn from(i: crate::isi::nexus::RegisterVerifiedLaneRelay) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::identifier::RegisterIdentifierPolicy> for InstructionBox {
+    fn from(i: crate::isi::identifier::RegisterIdentifierPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::identifier::ActivateIdentifierPolicy> for InstructionBox {
+    fn from(i: crate::isi::identifier::ActivateIdentifierPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::identifier::ClaimIdentifier> for InstructionBox {
+    fn from(i: crate::isi::identifier::ClaimIdentifier) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::identifier::RevokeIdentifier> for InstructionBox {
+    fn from(i: crate::isi::identifier::RevokeIdentifier) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::DeploySoracloudService> for InstructionBox {
+    fn from(i: crate::isi::soracloud::DeploySoracloudService) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::UpgradeSoracloudService> for InstructionBox {
+    fn from(i: crate::isi::soracloud::UpgradeSoracloudService) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RollbackSoracloudService> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RollbackSoracloudService) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::SetSoracloudServiceConfig> for InstructionBox {
+    fn from(i: crate::isi::soracloud::SetSoracloudServiceConfig) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::DeleteSoracloudServiceConfig> for InstructionBox {
+    fn from(i: crate::isi::soracloud::DeleteSoracloudServiceConfig) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::SetSoracloudServiceSecret> for InstructionBox {
+    fn from(i: crate::isi::soracloud::SetSoracloudServiceSecret) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::DeleteSoracloudServiceSecret> for InstructionBox {
+    fn from(i: crate::isi::soracloud::DeleteSoracloudServiceSecret) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::MutateSoracloudState> for InstructionBox {
+    fn from(i: crate::isi::soracloud::MutateSoracloudState) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RunSoracloudFheJob> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RunSoracloudFheJob) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RecordSoracloudDecryptionRequest> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RecordSoracloudDecryptionRequest) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::JoinSoracloudHfSharedLease> for InstructionBox {
+    fn from(i: crate::isi::soracloud::JoinSoracloudHfSharedLease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::LeaveSoracloudHfSharedLease> for InstructionBox {
+    fn from(i: crate::isi::soracloud::LeaveSoracloudHfSharedLease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RenewSoracloudHfSharedLease> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RenewSoracloudHfSharedLease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AdvertiseSoracloudModelHost> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AdvertiseSoracloudModelHost) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::HeartbeatSoracloudModelHost> for InstructionBox {
+    fn from(i: crate::isi::soracloud::HeartbeatSoracloudModelHost) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::WithdrawSoracloudModelHost> for InstructionBox {
+    fn from(i: crate::isi::soracloud::WithdrawSoracloudModelHost) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::ReconcileSoracloudModelHosts> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ReconcileSoracloudModelHosts) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AdvertiseSoracloudInrouHost> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AdvertiseSoracloudInrouHost) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::WithdrawSoracloudInrouHost> for InstructionBox {
+    fn from(i: crate::isi::soracloud::WithdrawSoracloudInrouHost) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::ReconcileSoracloudInrouPlacements> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ReconcileSoracloudInrouPlacements) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::ReportSoracloudModelHostViolation> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ReportSoracloudModelHostViolation) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::DeploySoracloudAgentApartment> for InstructionBox {
+    fn from(i: crate::isi::soracloud::DeploySoracloudAgentApartment) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RenewSoracloudAgentLease> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RenewSoracloudAgentLease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RestartSoracloudAgentApartment> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RestartSoracloudAgentApartment) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RevokeSoracloudAgentPolicy> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RevokeSoracloudAgentPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RequestSoracloudAgentWalletSpend> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RequestSoracloudAgentWalletSpend) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::ApproveSoracloudAgentWalletSpend> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ApproveSoracloudAgentWalletSpend) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::EnqueueSoracloudAgentMessage> for InstructionBox {
+    fn from(i: crate::isi::soracloud::EnqueueSoracloudAgentMessage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AcknowledgeSoracloudAgentMessage> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AcknowledgeSoracloudAgentMessage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AllowSoracloudAgentAutonomyArtifact> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AllowSoracloudAgentAutonomyArtifact) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RunSoracloudAgentAutonomy> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RunSoracloudAgentAutonomy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RecordSoracloudAgentAutonomyExecution> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RecordSoracloudAgentAutonomyExecution) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::StartSoracloudTrainingJob> for InstructionBox {
+    fn from(i: crate::isi::soracloud::StartSoracloudTrainingJob) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::CheckpointSoracloudTrainingJob> for InstructionBox {
+    fn from(i: crate::isi::soracloud::CheckpointSoracloudTrainingJob) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RetrySoracloudTrainingJob> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RetrySoracloudTrainingJob) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RegisterSoracloudModelArtifact> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RegisterSoracloudModelArtifact) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RegisterSoracloudModelWeight> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RegisterSoracloudModelWeight) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::PromoteSoracloudModelWeight> for InstructionBox {
+    fn from(i: crate::isi::soracloud::PromoteSoracloudModelWeight) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RollbackSoracloudModelWeight> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RollbackSoracloudModelWeight) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RegisterSoracloudUploadedModelBundle> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RegisterSoracloudUploadedModelBundle) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AppendSoracloudUploadedModelChunk> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AppendSoracloudUploadedModelChunk) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::FinalizeSoracloudUploadedModelBundle> for InstructionBox {
+    fn from(i: crate::isi::soracloud::FinalizeSoracloudUploadedModelBundle) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AdmitSoracloudPrivateCompileProfile> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AdmitSoracloudPrivateCompileProfile) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AllowSoracloudUploadedModel> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AllowSoracloudUploadedModel) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::StartSoracloudPrivateInference> for InstructionBox {
+    fn from(i: crate::isi::soracloud::StartSoracloudPrivateInference) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::AdvanceSoracloudRollout> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AdvanceSoracloudRollout) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::SetSoracloudRuntimeState> for InstructionBox {
+    fn from(i: crate::isi::soracloud::SetSoracloudRuntimeState) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::SetSoracloudInrouReplicaRuntimeState> for InstructionBox {
+    fn from(i: crate::isi::soracloud::SetSoracloudInrouReplicaRuntimeState) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::ReportSoracloudServiceLeaseUsage> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ReportSoracloudServiceLeaseUsage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RecordSoracloudMailboxMessage> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RecordSoracloudMailboxMessage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::RecordSoracloudRuntimeReceipt> for InstructionBox {
+    fn from(i: crate::isi::soracloud::RecordSoracloudRuntimeReceipt) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -283,6 +773,78 @@ impl From<crate::isi::social::CancelTwitterEscrow> for InstructionBox {
     }
 }
 
+// Allow direct boxing of native asset escrow instructions.
+impl From<crate::isi::escrow::OpenAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::OpenAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::AcceptAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::AcceptAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::MarkEscrowPaymentSent> for InstructionBox {
+    fn from(i: crate::isi::escrow::MarkEscrowPaymentSent) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::ReleaseAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::ReleaseAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::CancelAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::CancelAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::OpenEscrowDispute> for InstructionBox {
+    fn from(i: crate::isi::escrow::OpenEscrowDispute) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::ResolveEscrowDispute> for InstructionBox {
+    fn from(i: crate::isi::escrow::ResolveEscrowDispute) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::OpenAnonymousAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::OpenAnonymousAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::AcceptAnonymousAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::AcceptAnonymousAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::MarkAnonymousEscrowPaymentSent> for InstructionBox {
+    fn from(i: crate::isi::escrow::MarkAnonymousEscrowPaymentSent) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::ReleaseAnonymousAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::ReleaseAnonymousAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::CancelAnonymousAssetEscrow> for InstructionBox {
+    fn from(i: crate::isi::escrow::CancelAnonymousAssetEscrow) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::OpenAnonymousEscrowDispute> for InstructionBox {
+    fn from(i: crate::isi::escrow::OpenAnonymousEscrowDispute) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::ResolveAnonymousEscrowDispute> for InstructionBox {
+    fn from(i: crate::isi::escrow::ResolveAnonymousEscrowDispute) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 // Allow direct boxing of SoraFS capacity marketplace instructions.
 impl From<crate::isi::sorafs::RegisterCapacityDeclaration> for InstructionBox {
     fn from(i: crate::isi::sorafs::RegisterCapacityDeclaration) -> Self {
@@ -360,48 +922,132 @@ impl From<crate::isi::space_directory::ExpireSpaceDirectoryManifest> for Instruc
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::domain_link::LinkAccountDomain> for InstructionBox {
-    fn from(i: crate::isi::domain_link::LinkAccountDomain) -> Self {
+impl From<crate::isi::domain_link::SetAccountAliasBinding> for InstructionBox {
+    fn from(i: crate::isi::domain_link::SetAccountAliasBinding) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::domain_link::BindAccountAlias> for InstructionBox {
-    fn from(i: crate::isi::domain_link::BindAccountAlias) -> Self {
+impl From<crate::isi::domain_link::SetPrimaryAccountAlias> for InstructionBox {
+    fn from(i: crate::isi::domain_link::SetPrimaryAccountAlias) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::domain_link::SetAccountLabel> for InstructionBox {
-    fn from(i: crate::isi::domain_link::SetAccountLabel) -> Self {
+impl From<crate::isi::account_alias_lease::AcquireAccountAliasLease> for InstructionBox {
+    fn from(i: crate::isi::account_alias_lease::AcquireAccountAliasLease) -> Self {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::domain_link::UnlinkAccountDomain> for InstructionBox {
-    fn from(i: crate::isi::domain_link::UnlinkAccountDomain) -> Self {
+impl From<crate::isi::account_alias_lease::RenewAccountAliasLease> for InstructionBox {
+    fn from(i: crate::isi::account_alias_lease::RenewAccountAliasLease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sns::RegisterSnsName> for InstructionBox {
+    fn from(i: crate::isi::sns::RegisterSnsName) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sns::RenewSnsName> for InstructionBox {
+    fn from(i: crate::isi::sns::RenewSnsName) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sns::TransferSnsName> for InstructionBox {
+    fn from(i: crate::isi::sns::TransferSnsName) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sns::UpdateSnsNameControllers> for InstructionBox {
+    fn from(i: crate::isi::sns::UpdateSnsNameControllers) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sns::FreezeSnsName> for InstructionBox {
+    fn from(i: crate::isi::sns::FreezeSnsName) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sns::UnfreezeSnsName> for InstructionBox {
+    fn from(i: crate::isi::sns::UnfreezeSnsName) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::ReplaceAccountController> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::ReplaceAccountController) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::SetAccountRecoveryPolicy> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::SetAccountRecoveryPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::ClearAccountRecoveryPolicy> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::ClearAccountRecoveryPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::ProposeAccountRecovery> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::ProposeAccountRecovery) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::ApproveAccountRecovery> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::ApproveAccountRecovery) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::CancelAccountRecovery> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::CancelAccountRecovery) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::FinalizeAccountRecovery> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::FinalizeAccountRecovery) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::contract_alias::SetContractAlias> for InstructionBox {
+    fn from(i: crate::isi::contract_alias::SetContractAlias) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+// Allow direct boxing of Musubi package registry instructions.
+impl From<crate::isi::musubi::PublishMusubiRelease> for InstructionBox {
+    fn from(i: crate::isi::musubi::PublishMusubiRelease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::musubi::YankMusubiRelease> for InstructionBox {
+    fn from(i: crate::isi::musubi::YankMusubiRelease) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::musubi::SetMusubiShortAlias> for InstructionBox {
+    fn from(i: crate::isi::musubi::SetMusubiShortAlias) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::musubi::AssertMusubiReleaseExists> for InstructionBox {
+    fn from(i: crate::isi::musubi::AssertMusubiReleaseExists) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+// Allow direct boxing of Offline V2 note instructions.
+impl From<crate::isi::offline::IssueOfflineNoteV2> for InstructionBox {
+    fn from(i: crate::isi::offline::IssueOfflineNoteV2) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-// Allow direct boxing of offline allowance instructions.
-impl From<crate::isi::offline::RegisterOfflineAllowance> for InstructionBox {
-    fn from(i: crate::isi::offline::RegisterOfflineAllowance) -> Self {
+impl From<crate::isi::offline::RedeemOfflineNoteV2> for InstructionBox {
+    fn from(i: crate::isi::offline::RedeemOfflineNoteV2) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::offline::SubmitOfflineToOnlineTransfer> for InstructionBox {
-    fn from(i: crate::isi::offline::SubmitOfflineToOnlineTransfer) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::RegisterOfflineVerdictRevocation> for InstructionBox {
-    fn from(i: crate::isi::offline::RegisterOfflineVerdictRevocation) -> Self {
-        InstructionBox(Box::new(i))
-    }
-}
-
-impl From<crate::isi::offline::ReclaimExpiredOfflineAllowance> for InstructionBox {
-    fn from(i: crate::isi::offline::ReclaimExpiredOfflineAllowance) -> Self {
+impl From<crate::isi::offline::AuditOfflineNoteV2> for InstructionBox {
+    fn from(i: crate::isi::offline::AuditOfflineNoteV2) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -610,6 +1256,11 @@ impl From<crate::isi::governance::ApproveGovernanceProposal> for InstructionBox 
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::ministry::SubmitAgendaProposal> for InstructionBox {
+    fn from(i: crate::isi::ministry::SubmitAgendaProposal) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 
 /// Object-safe cloning support for [`Instruction`] trait objects.
 pub trait InstructionDynClone {
@@ -811,18 +1462,190 @@ impl norito::json::FastJsonWrite for InstructionBox {
     }
 }
 
+#[cfg(feature = "json")]
+fn instruction_box_from_base64_literal(
+    encoded: &str,
+) -> Result<InstructionBox, norito::json::Error> {
+    let bytes = STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+    let archived = norito::from_bytes::<InstructionBox>(&bytes)
+        .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+    norito::core::NoritoDeserialize::try_deserialize(archived)
+        .map_err(|err| norito::json::Error::Message(err.to_string()))
+}
+
+#[cfg(feature = "json")]
+fn json_required_string(map: &norito::json::Map, key: &str) -> Result<String, norito::json::Error> {
+    map.get(key)
+        .and_then(norito::json::Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| norito::json::Error::Message(format!("instruction `{key}` is required")))
+}
+
+#[cfg(feature = "json")]
+fn json_optional_string(map: &norito::json::Map, key: &str) -> Option<String> {
+    map.get(key)
+        .and_then(norito::json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+#[cfg(feature = "json")]
+fn json_required_bool(map: &norito::json::Map, key: &str) -> Result<bool, norito::json::Error> {
+    map.get(key)
+        .and_then(norito::json::Value::as_bool)
+        .ok_or_else(|| norito::json::Error::Message(format!("instruction `{key}` must be a bool")))
+}
+
+#[cfg(feature = "json")]
+fn json_numeric_opt(
+    value: Option<&norito::json::Value>,
+) -> Result<Option<iroha_primitives::numeric::Numeric>, norito::json::Error> {
+    use std::str::FromStr as _;
+
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    if let Some(value) = value.as_u64() {
+        return Ok(Some(iroha_primitives::numeric::Numeric::from(value)));
+    }
+    if let Some(value) = value.as_i64() {
+        if value < 0 {
+            return Err(norito::json::Error::Message(
+                "asset transfer cap_amount must be non-negative".to_owned(),
+            ));
+        }
+        return Ok(Some(iroha_primitives::numeric::Numeric::from(
+            value.cast_unsigned(),
+        )));
+    }
+    if let Some(value) = value.as_str() {
+        let parsed = iroha_primitives::numeric::Numeric::from_str(value.trim())
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+        return Ok(Some(parsed));
+    }
+    Err(norito::json::Error::Message(
+        "asset transfer cap_amount must be a string, number, or null".to_owned(),
+    ))
+}
+
+#[cfg(feature = "json")]
+fn instruction_box_from_object(
+    map: &norito::json::Map,
+) -> Result<InstructionBox, norito::json::Error> {
+    use std::str::FromStr as _;
+
+    let name = json_required_string(map, "name")?;
+    let params = map
+        .get("params")
+        .and_then(norito::json::Value::as_object)
+        .ok_or_else(|| {
+            norito::json::Error::Message("instruction `params` must be an object".to_owned())
+        })?;
+    match name.as_str() {
+        "SetAssetTransferFreeze" => {
+            let account_id = crate::account::AccountId::parse_encoded(
+                json_required_string(params, "account_id")?.as_str(),
+            )
+            .map(crate::account::ParsedAccountId::into_account_id)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
+                json_required_string(params, "asset_definition_id")?.as_str(),
+            )
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            Ok(
+                crate::isi::asset_transfer_control::SetAssetTransferFreeze::new(
+                    account_id,
+                    asset_definition_id,
+                    json_required_bool(params, "outgoing_frozen")?,
+                    json_optional_string(params, "reason"),
+                )
+                .into(),
+            )
+        }
+        "SetAssetTransferBlacklist" => {
+            let account_id = crate::account::AccountId::parse_encoded(
+                json_required_string(params, "account_id")?.as_str(),
+            )
+            .map(crate::account::ParsedAccountId::into_account_id)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
+                json_required_string(params, "asset_definition_id")?.as_str(),
+            )
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            Ok(
+                crate::isi::asset_transfer_control::SetAssetTransferBlacklist::new(
+                    account_id,
+                    asset_definition_id,
+                    json_required_bool(params, "blacklisted")?,
+                )
+                .into(),
+            )
+        }
+        "SetAssetTransferControl" => {
+            let account_id = crate::account::AccountId::parse_encoded(
+                json_required_string(params, "account_id")?.as_str(),
+            )
+            .map(crate::account::ParsedAccountId::into_account_id)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let asset_definition_id = crate::asset::AssetDefinitionId::from_str(
+                json_required_string(params, "asset_definition_id")?.as_str(),
+            )
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+            let limits = params
+                .get("limits")
+                .and_then(norito::json::Value::as_array)
+                .ok_or_else(|| {
+                    norito::json::Error::Message("instruction `limits` must be an array".to_owned())
+                })?
+                .iter()
+                .map(|entry| {
+                    let entry = entry.as_object().ok_or_else(|| {
+                        norito::json::Error::Message(
+                            "each asset transfer limit must be an object".to_owned(),
+                        )
+                    })?;
+                    let window = crate::asset::AssetTransferControlWindow::from_str(
+                        json_required_string(entry, "window")?.as_str(),
+                    )
+                    .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+                    Ok(crate::asset::AssetTransferLimit {
+                        window,
+                        cap_amount: json_numeric_opt(entry.get("cap_amount"))?,
+                    })
+                })
+                .collect::<Result<Vec<_>, norito::json::Error>>()?;
+            Ok(
+                crate::isi::asset_transfer_control::SetAssetTransferControl::new(
+                    account_id,
+                    asset_definition_id,
+                    limits,
+                )
+                .into(),
+            )
+        }
+        other => Err(norito::json::Error::Message(format!(
+            "unsupported structured instruction `{other}`"
+        ))),
+    }
+}
+
 impl norito::json::JsonDeserialize for InstructionBox {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
-        let encoded = parser.parse_string()?;
-        let bytes = STANDARD
-            .decode(encoded.as_str())
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-        let archived = norito::from_bytes::<InstructionBox>(&bytes)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
-        norito::core::NoritoDeserialize::try_deserialize(archived)
-            .map_err(|err| norito::json::Error::Message(err.to_string()))
+        match norito::json::Value::json_deserialize(parser)? {
+            norito::json::Value::String(encoded) => instruction_box_from_base64_literal(&encoded),
+            norito::json::Value::Object(map) => instruction_box_from_object(&map),
+            other => Err(norito::json::Error::Message(format!(
+                "instruction JSON must be either a base64 string or an object, found {other:?}"
+            ))),
+        }
     }
 }
 
@@ -1186,15 +2009,15 @@ fn instruction_registry() -> InstructionRegistryReadGuard {
 }
 
 macro_rules! isi {
-    ($($meta:meta)* $item:item) => {
+    ($(#[$meta:meta])* pub struct $name:ident $($rest:tt)*) => {
         iroha_data_model_derive::model_single! {
             #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
             #[derive(getset::Getters)]
             #[derive(Decode, Encode)]
             #[derive(iroha_schema::IntoSchema)]
             #[getset(get = "pub")]
-            $($meta)*
-            $item
+            $(#[$meta])*
+            pub struct $name $($rest)*
         }
     };
 }
@@ -1324,8 +2147,14 @@ macro_rules! enum_type {
     };
 }
 
+/// Canonical paid account-alias lease instructions.
+pub mod account_alias_lease;
+/// Native account controller replacement and social recovery instructions.
+pub mod account_recovery;
 /// Asset-definition alias binding instructions.
 pub mod asset_alias;
+/// Asset-scoped outbound transfer control instructions.
+pub mod asset_transfer_control;
 /// Confidential registry management instructions.
 /// Bridge proof ingestion instructions.
 pub mod bridge;
@@ -1333,20 +2162,28 @@ pub mod bridge;
 pub mod confidential;
 /// Content lane instructions.
 pub mod content;
+/// Contract alias binding instructions.
+pub mod contract_alias;
 /// Account subject and domain link instructions.
 pub mod domain_link;
+/// Ledger-managed asset escrow instructions.
+pub mod escrow;
 /// Hidden-function-backed identifier policy instructions.
 pub mod identifier;
 /// Kaigi collaboration instructions.
 pub mod kaigi;
 /// Mint and burn instruction variants and helpers.
 pub mod mint_burn;
+/// Musubi package registry instructions.
+pub mod musubi;
 /// Nexus lane governance instructions.
 pub mod nexus;
 /// Offline allowance settlement instructions.
 pub mod offline;
 /// Oracle feed registration and aggregation instructions.
 pub mod oracle;
+/// Generic RAM-LFE program-policy instructions.
+pub mod ram_lfe;
 /// Registration-related instructions (accounts, assets, domains, etc.).
 pub mod register;
 /// Instruction registries shared across instruction families.
@@ -1355,12 +2192,18 @@ pub mod registry;
 pub mod repo;
 /// Runtime upgrade instructions and payloads.
 pub mod runtime_upgrade;
+/// Real-world asset lot instructions.
+pub mod rwa;
 /// DvP/PvP settlement instructions.
 pub mod settlement;
 /// Smart contract code management instructions.
 pub mod smart_contract_code;
+/// Consensus-backed SNS mutation instructions.
+pub mod sns;
 /// Viral incentive and social reward instructions.
 pub mod social;
+/// Soracloud lifecycle and runtime-state instructions.
+pub mod soracloud;
 /// `SoraDNS` attestation and directory instructions.
 pub mod soradns;
 /// `SoraFS` pin registry instructions.
@@ -1377,18 +2220,25 @@ pub mod verifying_keys;
 /// Zero-knowledge instruction wrappers.
 pub mod zk;
 
+pub use account_alias_lease::*;
+pub use account_recovery::*;
 pub use asset_alias::*;
+pub use asset_transfer_control::*;
 pub use confidential::*;
+pub use contract_alias::*;
 pub use domain_link::*;
 pub use identifier::*;
 pub use kaigi::*;
+pub use ministry::*;
 pub use mint_burn::*;
 pub use nexus::*;
 pub use offline::*;
 pub use oracle::*;
+pub use ram_lfe::*;
 pub use register::*;
 pub use repo::*;
 pub use settlement::*;
+pub use sns::*;
 pub use soradns::*;
 pub use sorafs::*;
 pub use space_directory::*;
@@ -2151,29 +3001,65 @@ pub mod prelude {
         RollbackOracleChange, SetKeyValue, SetKeyValueBox, SetParameter, SubmitOracleObservation,
         Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister,
         UnregisterBox, Upgrade, VoteOracleChangeStage,
-        bridge::{RecordBridgeReceipt, SubmitBridgeProof},
+        account_alias_lease::{AcquireAccountAliasLease, RenewAccountAliasLease},
+        account_recovery::{
+            ApproveAccountRecovery, CancelAccountRecovery, ClearAccountRecoveryPolicy,
+            FinalizeAccountRecovery, ProposeAccountRecovery, ReplaceAccountController,
+            SetAccountRecoveryPolicy,
+        },
+        asset_transfer_control::{
+            SetAssetTransferBlacklist, SetAssetTransferControl, SetAssetTransferFreeze,
+        },
+        bridge::{RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof},
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
             SetPoseidonParamsLifecycle,
         },
         consensus_keys::{DisableConsensusKey, RegisterConsensusKey, RotateConsensusKey},
         content::{PublishContentBundle, RetireContentBundle},
-        domain_link::{BindAccountAlias, LinkAccountDomain, SetAccountLabel, UnlinkAccountDomain},
+        contract_alias::SetContractAlias,
+        domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
         endorsement::{
             RegisterDomainCommittee, SetDomainEndorsementPolicy, SubmitDomainEndorsement,
+        },
+        escrow::{
+            AcceptAnonymousAssetEscrow, AcceptAssetEscrow, CancelAnonymousAssetEscrow,
+            CancelAssetEscrow, MarkAnonymousEscrowPaymentSent, MarkEscrowPaymentSent,
+            OpenAnonymousAssetEscrow, OpenAnonymousEscrowDispute, OpenAssetEscrow,
+            OpenEscrowDispute, ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow,
+            ResolveAnonymousEscrowDispute, ResolveEscrowDispute,
         },
         identifier::{
             ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,
         },
-        nexus::SetLaneRelayEmergencyValidators,
+        ministry::SubmitAgendaProposal,
+        nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
+        ram_lfe::{
+            ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
+        },
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
+        rwa::{
+            ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
+            RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
+        },
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementFailureRecord,
             SettlementInstructionBox, SettlementKind, SettlementLedger, SettlementLedgerEntry,
             SettlementLeg, SettlementLegRole, SettlementLegSnapshot, SettlementOutcomeRecord,
             SettlementPlan, SettlementSuccessRecord,
         },
+        sns::{
+            FreezeSnsName, RegisterSnsName, RenewSnsName, TransferSnsName, UnfreezeSnsName,
+            UpdateSnsNameControllers,
+        },
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
+        soracloud::{
+            AdvanceSoracloudRollout, DeploySoracloudService, MutateSoracloudState,
+            RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
+            RecordSoracloudMailboxMessage, RecordSoracloudRuntimeReceipt,
+            ReportSoracloudServiceLeaseUsage, RollbackSoracloudService, RunSoracloudFheJob,
+            SetSoracloudRuntimeState, UpgradeSoracloudService,
+        },
         soradns::{
             AddReleaseSigner, PublishDirectory, RemoveReleaseSigner, RevokeResolver,
             SetDirectoryRotationPolicy, SubmitDirectoryDraft, UnrevokeResolver,
@@ -2194,6 +3080,7 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use iroha_primitives::const_vec::ConstVec;
+    use iroha_primitives::numeric::Numeric;
 
     use super::*;
     use crate::prelude::*;
@@ -2263,6 +3150,29 @@ mod tests {
     fn decode_unregistered_instruction() {
         let registry = InstructionRegistry::new();
         assert!(registry.decode("missing", &[]).is_none());
+    }
+
+    #[test]
+    fn record_sccp_message_registry_roundtrip_preserves_payload_bytes() {
+        let registry = InstructionRegistry::new().register::<RecordSccpMessage>();
+        let instruction = RecordSccpMessage::new(vec![0xAA, 0xBB, 0xCC]);
+        let bytes = instruction.encode();
+        let framed = registry
+            .frame_payload_for_type(std::any::type_name::<RecordSccpMessage>(), &bytes)
+            .expect("record sccp message must be registered")
+            .expect("record sccp message must frame");
+        let decoded = InstructionRegistry::decode(
+            &registry,
+            std::any::type_name::<RecordSccpMessage>(),
+            &framed,
+        )
+        .expect("record sccp message must be registered")
+        .expect("record sccp message must decode");
+        let decoded = decoded
+            .as_any()
+            .downcast_ref::<RecordSccpMessage>()
+            .expect("decoded instruction type");
+        assert_eq!(decoded.payload_bytes, vec![0xAA, 0xBB, 0xCC]);
     }
 
     #[test]
@@ -2468,6 +3378,109 @@ mod tests {
     }
 
     #[test]
+    fn offline_note_v2_instructions_are_registered_and_boxable() {
+        use crate::offline::{
+            OfflineNoteAuditBundleV2, OfflineNoteIssueV2, OfflineNoteIssuedClaimV2,
+            OfflineNoteKeyCertificateV2, OfflineNoteRecursiveProofV2, OfflineNoteRedeemV2,
+        };
+        use crate::proof::{ProofBox, VerifyingKeyId};
+        use iroha_crypto::{Hash, Signature};
+
+        let registry = crate::instruction_registry::default();
+        let account_id = AccountId::new(
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                .parse()
+                .expect("public key"),
+        );
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+        let asset_id = AssetId::of(asset_definition_id, account_id.clone());
+        let proof = OfflineNoteRecursiveProofV2 {
+            verifier_key_id: VerifyingKeyId::new("halo2/ipa", "offline-note-v2-recursive-v1"),
+            public_inputs_hash: Hash::new(b"offline-v2-public-inputs"),
+            proof: ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+        };
+        let key_certificate = OfflineNoteKeyCertificateV2 {
+            version: 2,
+            platform: "ios-appattest".to_owned(),
+            key_id: "one-use-key".to_owned(),
+            device_id: "device-1".to_owned(),
+            account_id: account_id.clone(),
+            public_key: vec![0x01, 0x02, 0x03],
+            assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+            assertion_key_algorithm: "app-attest-p256".to_owned(),
+            assertion_public_key: vec![0x04; 65],
+            assertion_usage_count_limit: None,
+            one_use: true,
+            issuer_signature: Signature::from_bytes(&[0xAB; 64]),
+        };
+
+        let issue = crate::isi::offline::IssueOfflineNoteV2::new(OfflineNoteIssueV2 {
+            note_commitment: Hash::new(b"note-commitment"),
+            key_certificate: key_certificate.clone(),
+            asset: asset_id.clone(),
+            amount: Numeric::new(10, 0),
+        });
+        let redemption = crate::isi::offline::RedeemOfflineNoteV2::new(OfflineNoteRedeemV2 {
+            source_note_commitment: Hash::new(b"note-commitment"),
+            input_nullifiers: vec![Hash::new(b"input-nullifier")],
+            sender_key_certificate: key_certificate.clone(),
+            recipient: account_id,
+            asset: asset_id.clone(),
+            amount: Numeric::new(10, 0),
+            recursive_proof: proof.clone(),
+        });
+        let audit = crate::isi::offline::AuditOfflineNoteV2::new(OfflineNoteAuditBundleV2 {
+            token_id: Hash::new(b"token"),
+            sender_key_certificate: key_certificate.clone(),
+            input_nullifiers: vec![Hash::new(b"audit-nullifier")],
+            input_claims: vec![
+                OfflineNoteIssuedClaimV2::from_issue(&issue.issue).expect("audit input claim"),
+            ],
+            output_commitments: vec![Hash::new(b"output-note")],
+            output_claims: vec![crate::offline::OfflineNoteAuditOutputClaimV2 {
+                note_commitment: Hash::new(b"output-note"),
+                key_certificate,
+                asset: asset_id,
+                amount: Numeric::new(10, 0),
+            }],
+            recursive_proof: proof,
+        });
+
+        let cases: Vec<(&'static str, InstructionBox, Vec<u8>)> = vec![
+            (
+                std::any::type_name::<crate::isi::offline::IssueOfflineNoteV2>(),
+                issue.clone().into(),
+                norito::to_bytes(&issue).expect("encode issue instruction"),
+            ),
+            (
+                std::any::type_name::<crate::isi::offline::RedeemOfflineNoteV2>(),
+                redemption.clone().into(),
+                norito::to_bytes(&redemption).expect("encode redemption instruction"),
+            ),
+            (
+                std::any::type_name::<crate::isi::offline::AuditOfflineNoteV2>(),
+                audit.clone().into(),
+                norito::to_bytes(&audit).expect("encode audit instruction"),
+            ),
+        ];
+
+        for (type_name, instruction, payload) in cases {
+            assert!(
+                registry.contains(type_name),
+                "default registry should contain {type_name}"
+            );
+            let decoded = registry
+                .decode(type_name, &payload)
+                .unwrap_or_else(|| panic!("missing decoder for {type_name}"))
+                .expect("decode instruction through registry");
+            assert_eq!(instruction, decoded);
+        }
+    }
+
+    #[test]
     fn default_registry_roundtrip_selected_instructions() {
         if !run_or_skip() {
             eprintln!(
@@ -2480,14 +3493,14 @@ mod tests {
         let local_registry = crate::instruction_registry::default();
 
         // Build a small suite of representative instructions
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = AccountId::new(
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .unwrap(),
         );
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
@@ -2539,7 +3552,7 @@ mod tests {
 
     #[test]
     fn revoke_encode_as_instruction_box_uses_encode() {
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signatory = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
             .parse()
             .unwrap();
@@ -2622,14 +3635,14 @@ mod tests {
         // Ensure the total ordering of InstructionBox is stable after Norito roundtrip.
         let _guard = RegistryGuard::set(crate::instruction_registry::default());
 
-        let domain_id: DomainId = "alice".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("alice", "universal").unwrap();
         let account_id = AccountId::new(
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .expect("public key"),
         );
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "alice".parse().unwrap(),
+            DomainId::try_new("alice", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
@@ -2673,7 +3686,7 @@ mod tests {
         let local_registry = crate::instruction_registry::default();
 
         // Common fixtures
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_a = AccountId::new(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
@@ -2685,7 +3698,7 @@ mod tests {
                 .unwrap(),
         );
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def_id.clone(), account_a.clone());

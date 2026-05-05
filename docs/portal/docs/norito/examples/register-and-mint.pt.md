@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c30c710be94cd99f3c7a0484040155bf63ff4dc0d464d76237bddc8bf589ef26
-source_last_modified: "2025-11-07T11:59:47.168250+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 470eb5de8cd9a7f94275062d1e8c3a448a2d734bf86f650ce94a3971baa3527d
+source_last_modified: "2026-04-08T09:19:38.793794+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -20,9 +20,9 @@ Demonstra a criacao de dominios com permissao, o registro de ativos e a cunhagem
 
 ## Roteiro do livro razao
 
-- Garanta que a conta de destino (por exemplo `i105...`) exista, espelhando a fase de configuracao em cada quickstart do SDK.
+- Garanta que a conta de destino (por exemplo `<i105-account-id>`) exista, espelhando a fase de configuracao em cada quickstart do SDK.
 - Invoque o entrypoint `register_and_mint` para criar a definicao do ativo ROSE e cunhar 250 unidades para Alice em uma unica transacao.
-- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account i105...` para confirmar que a cunhagem foi bem-sucedida.
+- Verifique os saldos via `client.request(FindAccountAssets)` ou `iroha ledger asset list all --verbose` para confirmar que a cunhagem foi bem-sucedida.
 
 ## Guias de SDK relacionados
 
@@ -44,8 +44,8 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("i105...");
-    let asset = asset_definition!("rose#wonderland");
+    let to = account!("<i105-account-id>");
+    let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }
 }

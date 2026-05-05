@@ -53,7 +53,7 @@ the build:
   a staging directory so multi-platform builds can deposit artefacts in one
   location without extra scripting.
 
-The command copies `mochi-ui-egui`, `kagami`, `LICENSE`, the sample
+The command copies `mochi-ui`, `kagami`, `LICENSE`, the sample
 configuration, and `mochi/BUNDLE_README.md` into the bundle. A deterministic
 `manifest.json` is generated alongside the binaries so CI jobs can track file
 hashes and sizes.

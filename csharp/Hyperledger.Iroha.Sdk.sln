@@ -1,0 +1,52 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{332E049A-1BB4-46FA-88D6-A75609546729}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Hyperledger.Iroha.Sdk", "src\Hyperledger.Iroha.Sdk\Hyperledger.Iroha.Sdk.csproj", "{299A1397-702A-4B89-87DA-603500D8BF61}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{7494FCCE-E037-4FF8-B150-F5295129CD8E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Hyperledger.Iroha.Sdk.Tests", "tests\Hyperledger.Iroha.Sdk.Tests\Hyperledger.Iroha.Sdk.Tests.csproj", "{4678A0A4-F95C-48B4-B9C6-B7B8EE477A05}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Hyperledger.Iroha.Sdk.IntegrationTests", "tests\Hyperledger.Iroha.Sdk.IntegrationTests\Hyperledger.Iroha.Sdk.IntegrationTests.csproj", "{5A00DFBA-31A2-4FC4-84C1-6890039579E5}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "samples", "samples", "{EFBB4E42-DA55-4C94-87B8-F8CA8839587F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Hyperledger.Iroha.Sdk.Sample", "samples\Hyperledger.Iroha.Sdk.Sample\Hyperledger.Iroha.Sdk.Sample.csproj", "{DE0F0AED-9419-48A7-9B31-FFA3930787AF}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{299A1397-702A-4B89-87DA-603500D8BF61}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{299A1397-702A-4B89-87DA-603500D8BF61}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{299A1397-702A-4B89-87DA-603500D8BF61}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{299A1397-702A-4B89-87DA-603500D8BF61}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4678A0A4-F95C-48B4-B9C6-B7B8EE477A05}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4678A0A4-F95C-48B4-B9C6-B7B8EE477A05}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4678A0A4-F95C-48B4-B9C6-B7B8EE477A05}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4678A0A4-F95C-48B4-B9C6-B7B8EE477A05}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5A00DFBA-31A2-4FC4-84C1-6890039579E5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5A00DFBA-31A2-4FC4-84C1-6890039579E5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5A00DFBA-31A2-4FC4-84C1-6890039579E5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5A00DFBA-31A2-4FC4-84C1-6890039579E5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DE0F0AED-9419-48A7-9B31-FFA3930787AF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DE0F0AED-9419-48A7-9B31-FFA3930787AF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DE0F0AED-9419-48A7-9B31-FFA3930787AF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DE0F0AED-9419-48A7-9B31-FFA3930787AF}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{299A1397-702A-4B89-87DA-603500D8BF61} = {332E049A-1BB4-46FA-88D6-A75609546729}
+		{4678A0A4-F95C-48B4-B9C6-B7B8EE477A05} = {7494FCCE-E037-4FF8-B150-F5295129CD8E}
+		{5A00DFBA-31A2-4FC4-84C1-6890039579E5} = {7494FCCE-E037-4FF8-B150-F5295129CD8E}
+		{DE0F0AED-9419-48A7-9B31-FFA3930787AF} = {EFBB4E42-DA55-4C94-87B8-F8CA8839587F}
+	EndGlobalSection
+EndGlobal

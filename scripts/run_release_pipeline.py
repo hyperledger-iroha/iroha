@@ -169,6 +169,89 @@ def export_fastpq_dashboard(grafana_url: str, token: str, destination: Path) -> 
     destination.write_text(json.dumps(dashboard, indent=2) + "\n", encoding="utf-8")
 
 
+def summarize_fastpq_rollout_bundle(bundle_dir: Path, *, dry_run: bool) -> List[Dict[str, str]]:
+    """Write reviewer-facing FASTPQ rollout summaries for each archived manifest."""
+
+    manifests = sorted(bundle_dir.rglob("fastpq_bench_manifest.json"))
+    summaries: List[Dict[str, str]] = []
+    helper = REPO_ROOT / "scripts" / "fastpq" / "rollout_manifest_summary.py"
+    for manifest in manifests:
+        json_out = manifest.parent / "fastpq_rollout_summary.json"
+        markdown_out = manifest.parent / "fastpq_rollout_summary.md"
+        if dry_run:
+            print(
+                "[release-pipeline] (dry-run) summarize FASTPQ rollout manifest "
+                f"{manifest} -> {json_out}, {markdown_out}"
+            )
+            continue
+        run(
+            [
+                sys.executable,
+                str(helper),
+                "--manifest",
+                str(manifest),
+                "--bundle-dir",
+                str(manifest.parent),
+                "--repo-root",
+                str(REPO_ROOT),
+                "--json-out",
+                str(json_out),
+                "--markdown-out",
+                str(markdown_out),
+            ]
+        )
+        summary_entry: Dict[str, str] = {}
+        try:
+            summary_entry["manifest"] = str(manifest.relative_to(REPO_ROOT))
+        except ValueError:
+            summary_entry["manifest"] = str(manifest)
+        try:
+            summary_entry["json"] = str(json_out.relative_to(REPO_ROOT))
+        except ValueError:
+            summary_entry["json"] = str(json_out)
+        try:
+            summary_entry["markdown"] = str(markdown_out.relative_to(REPO_ROOT))
+        except ValueError:
+            summary_entry["markdown"] = str(markdown_out)
+        summaries.append(summary_entry)
+    return summaries
+
+
+def update_release_manifest_evidence(
+    manifest_path: Path,
+    *,
+    fastpq_grafana_rel: str | None,
+    archived_fastpq: List[Dict[str, object]],
+    cbdc_validation_rel: str | None,
+) -> None:
+    """Attach archived rollout evidence paths to the release manifest."""
+
+    with manifest_path.open("r", encoding="utf-8") as fh:
+        manifest = json.load(fh)
+
+    evidence = manifest.get("evidence")
+    if not isinstance(evidence, dict):
+        evidence = {}
+
+    if fastpq_grafana_rel or archived_fastpq:
+        fastpq_evidence: Dict[str, object] = {}
+        if fastpq_grafana_rel:
+            fastpq_evidence["grafana_export"] = fastpq_grafana_rel
+        if archived_fastpq:
+            fastpq_evidence["rollout_bundles"] = archived_fastpq
+        evidence["fastpq"] = fastpq_evidence
+
+    if cbdc_validation_rel:
+        evidence["cbdc"] = {"validated_bundle": cbdc_validation_rel}
+
+    if evidence:
+        manifest["evidence"] = evidence
+
+    with manifest_path.open("w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+        fh.write("\n")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True, help="Target release version (e.g., 2.0.0-rc.3 or v2.0.0-rc.3)")
@@ -595,7 +678,7 @@ def main() -> int:
         except ValueError:
             fastpq_grafana_rel = str(rollout_dir)
 
-    archived_fastpq: List[str] = []
+    archived_fastpq: List[Dict[str, object]] = []
     if args.fastpq_bundles:
         script = REPO_ROOT / "ci" / "check_fastpq_rollout.sh"
         release_rollout_root = release_root / "fastpq_rollouts"
@@ -622,10 +705,17 @@ def main() -> int:
                     shutil.rmtree(dest_dir)
                 dest_dir.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(bundle_path, dest_dir)
+            summary_paths = summarize_fastpq_rollout_bundle(dest_dir, dry_run=args.dry_run)
             try:
-                archived_fastpq.append(str(dest_dir.relative_to(REPO_ROOT)))
+                bundle_label = str(dest_dir.relative_to(REPO_ROOT))
             except ValueError:
-                archived_fastpq.append(str(dest_dir))
+                bundle_label = str(dest_dir)
+            archived_fastpq.append(
+                {
+                    "bundle": bundle_label,
+                    "summaries": summary_paths,
+                }
+            )
 
     cbdc_validation_rel: str | None = None
     if not args.skip_cbdc_rollout_check:
@@ -647,6 +737,14 @@ def main() -> int:
                 cbdc_validation_rel = str(cbdc_dir.relative_to(REPO_ROOT))
             except ValueError:
                 cbdc_validation_rel = str(cbdc_dir)
+
+    if not args.dry_run:
+        update_release_manifest_evidence(
+            release_root / "release_manifest.json",
+            fastpq_grafana_rel=fastpq_grafana_rel,
+            archived_fastpq=archived_fastpq,
+            cbdc_validation_rel=cbdc_validation_rel,
+        )
 
     summary = release_root / "SUMMARY.txt"
     lines = [
@@ -678,7 +776,13 @@ def main() -> int:
     if archived_fastpq:
         lines.append("FASTPQ rollout bundles archived:")
         for entry in archived_fastpq:
-            lines.append(f"  - {entry}")
+            bundle = entry.get("bundle", "")
+            lines.append(f"  - {bundle}")
+            for summary_path in entry.get("summaries", []):
+                if isinstance(summary_path, dict):
+                    markdown_path = summary_path.get("markdown")
+                    if markdown_path:
+                        lines.append(f"    Summary: {markdown_path}")
     if cbdc_validation_rel:
         lines.append(f"CBDC rollout bundles validated: {cbdc_validation_rel}")
     summary.write_text("\n".join(lines) + "\n", encoding="utf-8")

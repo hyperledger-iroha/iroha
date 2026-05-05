@@ -41,7 +41,7 @@ base64 = { workspace = true }
 ed25519-dalek = "2.2.0"
 curve25519-dalek = "4.1.3"
 rand_core = "0.9.3"
-pqcrypto-dilithium = { version = "0.5" }
+pqcrypto-mldsa = { version = "0.1.2" }
 pqcrypto-traits = { version = "0.3.5" }
 blstrs = "0.7.1"
 group = "0.13"
@@ -51,7 +51,6 @@ rodio = { version = "0.21.1", optional = true }
 k256 = { version = "0.13.4", features = ["ecdsa"] }
 signature = "2.2.0"
 cust = { version = "0.3.2", optional = true }
-proptest = { version = "1.9.0", optional = true, default-features = false, features = ["std"] }
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 sha2 = { version = "0.10.9", features = ["asm"] }
@@ -74,6 +73,7 @@ hex-literal = "1.1.0"
 # - `metal`: enables Apple Metal GPU kernels on macOS. Ignored on other OSes.
 # - `cuda`: enables CUDA PTX kernels when available. Falls back to CPU otherwise.
 default = ["halo2"]
+bench = []
 ## Hardware transactional memory experiments on x86_64 (requires nightly RTM intrinsics).
 htm = []
 beep = ["dep:rodio"]
@@ -102,8 +102,6 @@ merkle_incremental = []
 ## This is a noop here; present only to silence unexpected-cfg warnings from
 ## proc-macros that reference `feature = "schema-structural"`.
 schema-structural = []
-## Dev-only: enable property-based testing skeleton in tests. No deps added by default.
-ivm_prop = ["dep:proptest"]
 ## Dev-only test gate used by poseidon_simd.rs; declared to silence unexpected-cfg warnings.
 ivm_zk_tests = []
 ## Dev-only test gate used by vrf_verify_chain.rs; declared to silence unexpected-cfg warnings.
@@ -205,13 +203,11 @@ harness = false
 name = "bench_aes_cuda"
 path = "benches/bench_aes_cuda.rs"
 harness = false
-required-features = ["cuda"]
 
 [[bench]]
 name = "bench_bn254_cuda"
 path = "benches/bench_bn254_cuda.rs"
 harness = false
-required-features = ["cuda"]
 
 [[bench]]
 name = "bench_vm_aes"

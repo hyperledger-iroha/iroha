@@ -8,6 +8,7 @@ import java.util.List;
 import org.hyperledger.iroha.android.tools.PendingQueueInspector.EntrySummary;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.tx.SignedTransactionHasher;
 import org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelope;
 import org.hyperledger.iroha.android.tx.offline.OfflineSigningEnvelopeCodec;
@@ -32,7 +33,7 @@ public final class PendingQueueInspectorTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
-            .setAuthority("inspector@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x2D))
             .setCreationTimeMs(issuedAt)
             .setInstructionBytes(new byte[] {0x01, 0x02})
             .setTimeToLiveMs(5_000L)

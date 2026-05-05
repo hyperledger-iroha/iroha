@@ -1,0 +1,22 @@
+[package]
+name = "gpuzstd_cuda"
+version.workspace = true
+edition = "2024"
+build = "build.rs"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["cuda-kernel"]
+cuda-kernel = []
+
+[dependencies]
+gpuzstd_metal = { path = "../gpuzstd_metal", default-features = false }
+zstd.workspace = true
+
+[build-dependencies]
+cc = "1.2.45"
+
+[dev-dependencies]
+zstd.workspace = true

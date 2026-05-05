@@ -1,10 +1,11 @@
-"""Torii client helpers for configuration, subscriptions, attachments, and prover reports.
+"""Torii client helpers for configuration, contracts, subscriptions, attachments, and prover reports.
 
 The API mirrors the app-facing endpoints exposed by Torii:
 
 * `/v1/subscriptions` and `/v1/subscriptions/plans` for subscription
   management and billing triggers.
 * `/v1/configuration` for configuration snapshots and updates.
+* `/v1/contracts/*` for contract deploy/call helpers and governance bindings.
 * `/v1/zk/attachments` for uploading, listing, fetching, and deleting
   proof attachments stored on the node.
 * `/v1/zk/prover/reports` for querying background prover results.
@@ -48,122 +49,50 @@ from urllib.parse import quote
 
 import requests
 
-I105_ASCII_ALPHABET = (
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "A",
-    "B",
-    "C",
-    "D",
-    "E",
-    "F",
-    "G",
-    "H",
-    "J",
-    "K",
-    "L",
-    "M",
-    "N",
-    "P",
-    "Q",
-    "R",
-    "S",
-    "T",
-    "U",
-    "V",
-    "W",
-    "X",
-    "Y",
-    "Z",
-    "a",
-    "b",
-    "c",
-    "d",
-    "e",
-    "f",
-    "g",
-    "h",
-    "i",
-    "j",
-    "k",
-    "m",
-    "n",
-    "o",
-    "p",
-    "q",
-    "r",
-    "s",
-    "t",
-    "u",
-    "v",
-    "w",
-    "x",
-    "y",
-    "z",
+BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+IROHA_POEM_KANA_HALFWIDTH = (
+    "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
+    "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
+    "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ", "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
 )
-I105_KANA_ALPHABET = (
-    "ｲ",
-    "ﾛ",
-    "ﾊ",
-    "ﾆ",
-    "ﾎ",
-    "ﾍ",
-    "ﾄ",
-    "ﾁ",
-    "ﾘ",
-    "ﾇ",
-    "ﾙ",
-    "ｦ",
-    "ﾜ",
-    "ｶ",
-    "ﾖ",
-    "ﾀ",
-    "ﾚ",
-    "ｿ",
-    "ﾂ",
-    "ﾈ",
-    "ﾅ",
-    "ﾗ",
-    "ﾑ",
-    "ｳ",
-    "ヰ",
-    "ﾉ",
-    "ｵ",
-    "ｸ",
-    "ﾔ",
-    "ﾏ",
-    "ｹ",
-    "ﾌ",
-    "ｺ",
-    "ｴ",
-    "ﾃ",
-    "ｱ",
-    "ｻ",
-    "ｷ",
-    "ﾕ",
-    "ﾒ",
-    "ﾐ",
-    "ｼ",
-    "ヱ",
-    "ﾋ",
-    "ﾓ",
-    "ｾ",
-    "ｽ",
-)
-I105_ALPHABET = I105_ASCII_ALPHABET + I105_KANA_ALPHABET
+I105_ALPHABET = BASE58_ALPHABET + IROHA_POEM_KANA_HALFWIDTH
 I105_INDEX = {symbol: idx for idx, symbol in enumerate(I105_ALPHABET)}
 I105_BASE = len(I105_ALPHABET)
 I105_CHECKSUM_LEN = 6
 I105_BECH32M_CONST = 0x2BC830A3
 I105_SENTINELS = ("sora", "test", "dev")
 I105_NUMERIC_SENTINEL_PREFIX = "n"
+I105_DISCRIMINANT_MAX = 0xFFFF
+SCCP_FINALITY_MODEL_VALUES = {
+    "EthereumBeaconExecution",
+    "BscValidatorSet",
+    "SolanaFinalizedSlot",
+    "TonMasterchain",
+    "TronDpos",
+    "SubstrateGrandpa",
+}
+SCCP_VERIFIER_TARGET_VALUES = {
+    "EvmContract",
+    "SolanaProgram",
+    "TonContract",
+    "TronContract",
+    "SubstrateRuntime",
+}
+SCCP_HUB_MESSAGE_KIND_VALUES = {
+    "Burn",
+    "TokenAdd",
+    "TokenPause",
+    "TokenResume",
+    "AssetRegister",
+    "RouteActivate",
+    "Transfer",
+}
+SCCP_CHAIN_FAMILY_VALUES = {"Evm", "Solana", "Ton", "Tron", "Substrate"}
+SCCP_MESSAGE_PAYLOAD_KIND_VALUES = {
+    "AssetRegister",
+    "RouteActivate",
+    "Transfer",
+}
 
 
 def _decode_base_n(digits: Sequence[int], base: int) -> bytes:
@@ -242,11 +171,16 @@ def _strip_i105_sentinel(encoded: str) -> str:
             return encoded[len(sentinel) :]
     if encoded.startswith(I105_NUMERIC_SENTINEL_PREFIX):
         index = len(I105_NUMERIC_SENTINEL_PREFIX)
-        while index < len(encoded) and encoded[index].isdigit():
+        while index < len(encoded) and "0" <= encoded[index] <= "9":
             index += 1
         if index > len(I105_NUMERIC_SENTINEL_PREFIX):
+            discriminant = int(encoded[len(I105_NUMERIC_SENTINEL_PREFIX):index])
+            if discriminant > I105_DISCRIMINANT_MAX:
+                raise ValueError(
+                    "i105 chain discriminant must fit in an unsigned 16-bit integer"
+                )
             return encoded[index:]
-    raise ValueError("I105 address is missing the expected chain-discriminant sentinel")
+    raise ValueError("i105 address is missing the expected chain-discriminant sentinel")
 
 
 def _decode_i105_string(encoded: str) -> bytes:
@@ -256,14 +190,14 @@ def _decode_i105_string(encoded: str) -> bytes:
         try:
             digits.append(I105_INDEX[symbol])
         except KeyError as exc:
-            raise ValueError("invalid character in I105 address") from exc
+            raise ValueError("invalid character in i105 address") from exc
     if len(digits) <= I105_CHECKSUM_LEN:
-        raise ValueError("I105 address too short")
+        raise ValueError("i105 address too short")
     data_digits = digits[:-I105_CHECKSUM_LEN]
     checksum_digits = digits[-I105_CHECKSUM_LEN:]
     canonical = _decode_base_n(data_digits, I105_BASE)
     if checksum_digits != _i105_checksum_digits(canonical):
-        raise ValueError("I105 checksum mismatch")
+        raise ValueError("i105 checksum mismatch")
     return canonical
 
 __all__ = [
@@ -280,6 +214,12 @@ __all__ = [
     "TransactionInstruction",
     "GovernanceInstructionDraft",
     "GovernanceProposalDraft",
+    "ContractDeployContractReceipt",
+    "ContractDeployCallReceipt",
+    "ContractDeployAssertionReceipt",
+    "ContractDeployResponse",
+    "ContractCallResponse",
+    "GovernanceContractResponse",
     "BallotSubmitResult",
     "ProtectedNamespacesApplyResult",
     "ProtectedNamespacesStatus",
@@ -306,6 +246,26 @@ __all__ = [
     "NodeCurveCapabilities",
     "NodeCryptoCapabilities",
     "NodeCapabilities",
+    "SccpCodecCapability",
+    "SccpCounterpartyCapability",
+    "SccpCapabilities",
+    "SccpProofManifest",
+    "SccpProofManifestSet",
+    "SccpHubCommitment",
+    "SccpMerkleStep",
+    "SccpMerkleProof",
+    "SccpPayloadEnvelope",
+    "SccpMessageProofBundle",
+    "SccpMessageTransparentPublicInputs",
+    "SccpMessageTransparentProofArtifact",
+    "SccpSubmissionArgument",
+    "SccpSubmissionArgumentValue",
+    "SccpCounterpartySubmissionTemplate",
+    "SccpPlatformSubmissionPayload",
+    "SccpCounterpartySubmissionPackage",
+    "SccpNormalizedCodecValue",
+    "SccpPayloadProjection",
+    "SccpCounterpartyProofJob",
     "RuntimeAbiActive",
     "RuntimeAbiHash",
     "RuntimeUpgradeEventCounters",
@@ -364,14 +324,7 @@ __all__ = [
     "KaigiRelayDetail",
     "KaigiRelayHealthSnapshot",
     "SumeragiQcEntry",
-    "OfflineAllowanceDeadline",
-    "OfflineAllowanceListItem",
-    "OfflineAllowanceListPage",
-    "OfflineTransferHistoryEntry",
-    "OfflineTransferListItem",
-    "OfflineTransferListPage",
-    "OfflineSummaryListItem",
-    "OfflineSummaryListPage",
+    "OfflineV2Readiness",
     "SubscriptionPlanCreateResult",
     "SubscriptionPlanListItem",
     "SubscriptionPlanListPage",
@@ -427,9 +380,9 @@ def _read_header_value(
         direct = getter(name)
         if isinstance(direct, str):
             return direct
-        fallback = getter(lowered)
-        if isinstance(fallback, str):
-            return fallback
+        lower_value = getter(lowered)
+        if isinstance(lower_value, str):
+            return lower_value
     try:
         items = headers.items()
     except AttributeError:
@@ -991,6 +944,250 @@ class NodeCapabilities:
 
 
 @dataclass(frozen=True)
+class SccpCodecCapability:
+    """Codec entry returned by ``GET /v1/sccp/capabilities``."""
+
+    id: int
+    key: str
+    description: str
+
+
+@dataclass(frozen=True)
+class SccpCounterpartyCapability:
+    """Counterparty entry returned by ``GET /v1/sccp/capabilities``."""
+
+    domain: int
+    chain: str
+    message_backend: str
+    registry_backend: str
+    counterparty_account_codec: int
+    counterparty_account_codec_key: str
+
+
+@dataclass(frozen=True)
+class SccpCapabilities:
+    """SCCP discovery advert returned by ``GET /v1/sccp/capabilities``."""
+
+    local_domain: int
+    local_chain: str
+    proof_family: str
+    burn_bundle_path: str
+    governance_bundle_path: str
+    message_bundle_path: str
+    message_proof_path: str
+    message_job_path: str
+    proof_manifest_path: str
+    burn_registry_backend: str
+    governance_registry_backend: str
+    proof_submit_path: Optional[str]
+    message_submit_path: Optional[str]
+    message_payload_kinds: List[str]
+    codecs: List[SccpCodecCapability]
+    counterparties: List[SccpCounterpartyCapability]
+
+
+@dataclass(frozen=True)
+class SccpProofManifest:
+    """Chain-specific SCCP proof manifest returned by ``GET /v1/sccp/manifests``."""
+
+    version: int
+    local_domain: int
+    local_chain: str
+    counterparty_domain: int
+    chain: str
+    proof_family: str
+    message_backend: str
+    registry_backend: str
+    counterparty_account_codec: int
+    counterparty_account_codec_key: str
+    finality_model: str
+    verifier_target: str
+    manifest_seed: str
+    required_public_inputs: List[str]
+    message_payload_kinds: List[str]
+    submission_template: "SccpCounterpartySubmissionTemplate"
+
+
+@dataclass(frozen=True)
+class SccpProofManifestSet:
+    """SCCP proof-manifest collection returned by ``GET /v1/sccp/manifests``."""
+
+    local_domain: int
+    local_chain: str
+    proof_family: str
+    manifests: List[SccpProofManifest]
+
+
+@dataclass(frozen=True)
+class SccpHubCommitment:
+    """Canonical SCCP message commitment."""
+
+    version: int
+    kind: str
+    target_domain: int
+    message_id: str
+    payload_hash: str
+    parliament_certificate_hash: Optional[str]
+
+
+@dataclass(frozen=True)
+class SccpMerkleStep:
+    """Single SCCP Merkle-branch step."""
+
+    sibling_hash: str
+    sibling_is_left: bool
+
+
+@dataclass(frozen=True)
+class SccpMerkleProof:
+    """Merkle inclusion proof for an SCCP message commitment."""
+
+    steps: List[SccpMerkleStep]
+
+
+@dataclass(frozen=True)
+class SccpPayloadEnvelope:
+    """External-tagged SCCP payload envelope."""
+
+    kind: str
+    value: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class SccpMessageProofBundle:
+    """Canonical SCCP message bundle embedded in transparent proof artifacts."""
+
+    version: int
+    commitment_root: str
+    commitment: SccpHubCommitment
+    merkle_proof: SccpMerkleProof
+    payload: SccpPayloadEnvelope
+    finality_proof: str
+
+
+@dataclass(frozen=True)
+class SccpMessageTransparentPublicInputs:
+    """Canonical public inputs for SCCP transparent message proofs."""
+
+    version: int
+    message_id: str
+    payload_hash: str
+    target_domain: int
+    commitment_root: str
+    finality_height: int
+    finality_block_hash: str
+
+
+@dataclass(frozen=True)
+class SccpMessageTransparentProofArtifact:
+    """Typed transparent SCCP proof artifact returned by Torii."""
+
+    version: int
+    local_domain: int
+    counterparty_domain: int
+    proof_family: str
+    message_backend: str
+    registry_backend: str
+    manifest_seed: str
+    finality_model: str
+    verifier_target: str
+    public_inputs: SccpMessageTransparentPublicInputs
+    proof_bytes: str
+    submission_package: "SccpCounterpartySubmissionPackage"
+    bundle: SccpMessageProofBundle
+
+
+@dataclass(frozen=True)
+class SccpSubmissionArgument:
+    """Submission argument required by a chain-specific SCCP verifier entrypoint."""
+
+    key: str
+    description: str
+
+
+@dataclass(frozen=True)
+class SccpCounterpartySubmissionTemplate:
+    """Chain-specific submission envelope for a counterparty SCCP verifier."""
+
+    version: int
+    encoding: str
+    submission_kind: str
+    verifier_entrypoint: str
+    required_arguments: List[SccpSubmissionArgument]
+
+
+@dataclass(frozen=True)
+class SccpSubmissionArgumentValue:
+    """Concrete argument blob emitted for a counterparty SCCP submission."""
+
+    key: str
+    encoding: str
+    bytes: str
+
+
+@dataclass(frozen=True)
+class SccpPlatformSubmissionPayload:
+    """Normalized per-platform SCCP proof payload."""
+
+    kind: str
+    value: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class SccpCounterpartySubmissionPackage:
+    """Concrete submission package emitted for a counterparty SCCP verifier."""
+
+    version: int
+    proof_family: str
+    verifier_backend_key: str
+    envelope_encoding: str
+    submission_kind: str
+    verifier_entrypoint: str
+    platform_payload: SccpPlatformSubmissionPayload
+    arguments: List[SccpSubmissionArgumentValue]
+    envelope_bytes: str
+
+
+@dataclass(frozen=True)
+class SccpNormalizedCodecValue:
+    """Normalized chain-specific codec value collapsed from the SCCP job enum surface."""
+
+    kind: str
+    value: Union[str, Mapping[str, Any]]
+
+
+@dataclass(frozen=True)
+class SccpPayloadProjection:
+    """Normalized SCCP payload projection collapsed from the SCCP job enum surface."""
+
+    kind: str
+    value: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class SccpCounterpartyProofJob:
+    """Normalized SCCP counterparty proof job returned by Torii."""
+
+    version: int
+    chain_family: str
+    chain: str
+    local_domain: int
+    counterparty_domain: int
+    proof_family: str
+    message_backend: str
+    registry_backend: str
+    manifest_seed: str
+    finality_model: str
+    verifier_target: str
+    public_inputs: SccpMessageTransparentPublicInputs
+    payload_kind: str
+    payload_projection: SccpPayloadProjection
+    submission_template: SccpCounterpartySubmissionTemplate
+    submission_package: SccpCounterpartySubmissionPackage
+    bundle: SccpMessageProofBundle
+
+
+@dataclass(frozen=True)
 class RuntimeAbiActive:
     """Active ABI version advertised by the runtime."""
 
@@ -1089,6 +1286,10 @@ class ConnectStatusPolicy:
     session_ttl_ms: Optional[int]
     frame_max_bytes: Optional[int]
     session_buffer_max_bytes: Optional[int]
+    relay_strategy: Optional[str]
+    relay_effective_strategy: Optional[str]
+    relay_p2p_attached: Optional[bool]
+    p2p_ttl_hops: Optional[int]
     heartbeat_interval_ms: Optional[int]
     heartbeat_miss_tolerance: Optional[int]
     heartbeat_min_interval_ms: Optional[int]
@@ -1113,7 +1314,19 @@ class ConnectStatusSnapshot:
     buffer_drops_total: int
     plaintext_control_drops_total: int
     monotonic_drops_total: int
+    sequence_violation_closes_total: int
+    role_direction_mismatch_total: int
     ping_miss_total: int
+    p2p_rebroadcasts_total: int
+    p2p_rebroadcast_skipped_total: int
+    p2p_auth_failures_total: int
+    p2p_ttl_drops_total: int
+    p2p_unknown_session_drops_total: int
+    p2p_session_claims_in_total: int
+    p2p_session_claims_installed_total: int
+    p2p_session_claim_conflicts_total: int
+    p2p_role_consumed_total: int
+    p2p_session_terminated_total: int
     policy: Optional[ConnectStatusPolicy]
 
 
@@ -1126,6 +1339,8 @@ class ConnectSessionInfo:
     app_uri: str
     token_app: str
     token_wallet: str
+    token_management: str
+    token_relay: str
     extra: Dict[str, Any]
 
 
@@ -1511,414 +1726,28 @@ class RbcSample:
 
 
 @dataclass(frozen=True)
-class OfflineAllowanceDeadline:
-    """Deadline summary advertised by `/v1/offline/allowances`."""
+class OfflineV2Readiness:
+    """Offline V2 readiness advertised by Torii."""
 
-    kind: str
-    state: str
-    deadline_ms: int
-    ms_remaining: int
-
-
-@dataclass(frozen=True)
-class OfflineAllowanceListItem:
-    """Offline allowance descriptor returned by list/query endpoints."""
-
-    certificate_id_hex: str
-    controller_id: str
-    controller_display: str
-    asset_id: str
-    registered_at_ms: int
-    expires_at_ms: int
-    policy_expires_at_ms: int
-    refresh_at_ms: Optional[int]
-    verdict_id_hex: Optional[str]
-    attestation_nonce_hex: Optional[str]
-    remaining_amount: str
-    deadline: Optional[OfflineAllowanceDeadline]
-    record: Dict[str, Any]
+    offline_note_v2: bool
+    offline_one_use_keys: bool
+    offline_recursive_note_proof: bool
+    offline_fountain_qr_v1: bool
+    offline_sync_optional: bool
+    offline_telemetry: bool
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineAllowanceListItem":
+    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineV2Readiness":
         if not isinstance(payload, Mapping):
-            raise RuntimeError("offline allowance entry must be an object")
-
-        def require_str(key: str) -> str:
-            value = payload.get(key)
-            if not isinstance(value, str) or not value:
-                raise RuntimeError(f"offline allowance entry missing `{key}`")
-            return value
-
-        def optional_str(key: str) -> Optional[str]:
-            value = payload.get(key)
-            if value is None:
-                return None
-            if not isinstance(value, str) or not value:
-                raise RuntimeError(f"offline allowance `{key}` must be a non-empty string")
-            return value
-
-        def require_int(key: str) -> int:
-            value = payload.get(key)
-            if not isinstance(value, (int, float)):
-                raise RuntimeError(f"offline allowance `{key}` must be numeric")
-            return int(value)
-
-        def optional_int(key: str) -> Optional[int]:
-            value = payload.get(key)
-            if value is None:
-                return None
-            if not isinstance(value, (int, float)):
-                raise RuntimeError(f"offline allowance `{key}` must be numeric when present")
-            return int(value)
-
-        record_value = payload.get("record")
-        if not isinstance(record_value, Mapping):
-            raise RuntimeError("offline allowance entry missing `record` object")
-
-        deadline: Optional[OfflineAllowanceDeadline] = None
-        if "deadline_kind" in payload:
-            kind = require_str("deadline_kind")
-            state = require_str("deadline_state")
-            deadline_ms = require_int("deadline_ms")
-            ms_remaining = require_int("deadline_ms_remaining")
-            deadline = OfflineAllowanceDeadline(
-                kind=kind,
-                state=state,
-                deadline_ms=deadline_ms,
-                ms_remaining=ms_remaining,
-            )
-
+            raise RuntimeError("offline v2 readiness response must be an object")
         return cls(
-            certificate_id_hex=require_str("certificate_id_hex"),
-            controller_id=require_str("controller_id"),
-            controller_display=require_str("controller_display"),
-            asset_id=require_str("asset_id"),
-            registered_at_ms=require_int("registered_at_ms"),
-            expires_at_ms=require_int("expires_at_ms"),
-            policy_expires_at_ms=require_int("policy_expires_at_ms"),
-            refresh_at_ms=optional_int("refresh_at_ms"),
-            verdict_id_hex=optional_str("verdict_id_hex"),
-            attestation_nonce_hex=optional_str("attestation_nonce_hex"),
-            remaining_amount=require_str("remaining_amount"),
-            deadline=deadline,
-            record=dict(record_value),
+            offline_note_v2=ToriiClient._coerce_bool(payload.get("offline_note_v2"), "offline v2 readiness.offline_note_v2"),
+            offline_one_use_keys=ToriiClient._coerce_bool(payload.get("offline_one_use_keys"), "offline v2 readiness.offline_one_use_keys"),
+            offline_recursive_note_proof=ToriiClient._coerce_bool(payload.get("offline_recursive_note_proof"), "offline v2 readiness.offline_recursive_note_proof"),
+            offline_fountain_qr_v1=ToriiClient._coerce_bool(payload.get("offline_fountain_qr_v1"), "offline v2 readiness.offline_fountain_qr_v1"),
+            offline_sync_optional=ToriiClient._coerce_bool(payload.get("offline_sync_optional"), "offline v2 readiness.offline_sync_optional"),
+            offline_telemetry=ToriiClient._coerce_bool(payload.get("offline_telemetry"), "offline v2 readiness.offline_telemetry"),
         )
-
-
-@dataclass(frozen=True)
-class OfflineAllowanceListPage:
-    """Paginated list of offline allowances."""
-
-    items: List[OfflineAllowanceListItem]
-    total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineAllowanceListPage":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("offline allowance page must be an object")
-        items_value = payload.get("items", [])
-        if items_value is None:
-            items_value = []
-        if not isinstance(items_value, list):
-            raise RuntimeError("offline allowance `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_value)))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("offline allowance `total` must be numeric") from exc
-        items = [OfflineAllowanceListItem.from_payload(entry) for entry in items_value]
-        return cls(items=items, total=total)
-
-
-@dataclass(frozen=True)
-class OfflineCertificateIssueResponse:
-    """Issued offline certificate response."""
-
-    certificate_id_hex: str
-    certificate: Dict[str, Any]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineCertificateIssueResponse":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("offline certificate issue response must be an object")
-        certificate_id_hex = payload.get("certificate_id_hex")
-        if not isinstance(certificate_id_hex, str) or not certificate_id_hex:
-            raise RuntimeError("offline certificate issue response missing `certificate_id_hex`")
-        certificate = payload.get("certificate")
-        if not isinstance(certificate, Mapping):
-            raise RuntimeError("offline certificate issue response missing `certificate`")
-        return cls(
-            certificate_id_hex=certificate_id_hex,
-            certificate=dict(certificate),
-        )
-
-
-@dataclass(frozen=True)
-class OfflineAllowanceRegisterResponse:
-    """Response payload for registering or renewing an offline allowance."""
-
-    certificate_id_hex: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineAllowanceRegisterResponse":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("offline allowance register response must be an object")
-        certificate_id_hex = payload.get("certificate_id_hex")
-        if not isinstance(certificate_id_hex, str) or not certificate_id_hex:
-            raise RuntimeError("offline allowance register response missing `certificate_id_hex`")
-        return cls(certificate_id_hex=certificate_id_hex)
-
-
-@dataclass(frozen=True)
-class OfflineTopUpResponse:
-    """Aggregated result for offline allowance top-up (issue + register/renew)."""
-
-    certificate: OfflineCertificateIssueResponse
-    registration: OfflineAllowanceRegisterResponse
-
-
-@dataclass(frozen=True)
-class OfflineTransferHistoryEntry:
-    """Status transition entry for an offline transfer bundle."""
-
-    status: str
-    transitioned_at_ms: int
-    verdict_snapshot: Optional[Dict[str, Any]]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineTransferHistoryEntry":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("offline transfer history entry must be an object")
-        status = payload.get("status")
-        if not isinstance(status, str) or not status:
-            raise RuntimeError("offline transfer history entry missing `status`")
-        transitioned = payload.get("transitioned_at_ms")
-        if not isinstance(transitioned, (int, float)):
-            raise RuntimeError("offline transfer history entry missing `transitioned_at_ms`")
-        verdict = payload.get("verdict_snapshot")
-        if verdict is not None:
-            if not isinstance(verdict, Mapping):
-                raise RuntimeError("offline transfer history `verdict_snapshot` must be an object")
-            verdict_value: Optional[Dict[str, Any]] = dict(verdict)
-        else:
-            verdict_value = None
-        return cls(status=status, transitioned_at_ms=int(transitioned), verdict_snapshot=verdict_value)
-
-
-@dataclass(frozen=True)
-class OfflineTransferListItem:
-    """Offline transfer descriptor returned by list/query endpoints."""
-
-    bundle_id_hex: str
-    controller_id: str
-    controller_display: str
-    receiver_id: str
-    receiver_display: str
-    deposit_account_id: str
-    deposit_account_display: str
-    asset_id: Optional[str]
-    certificate_id_hex: Optional[str]
-    certificate_expires_at_ms: Optional[int]
-    policy_expires_at_ms: Optional[int]
-    refresh_at_ms: Optional[int]
-    verdict_id_hex: Optional[str]
-    attestation_nonce_hex: Optional[str]
-    receipt_count: int
-    total_amount: str
-    status: str
-    recorded_at_ms: int
-    recorded_at_height: int
-    archived_at_height: Optional[int]
-    status_transitions: List[OfflineTransferHistoryEntry]
-    claimed_delta: str
-    platform_policy: Optional[str]
-    platform_token_snapshot: Optional[Dict[str, Any]]
-    verdict_snapshot: Optional[Dict[str, Any]]
-    transfer: Dict[str, Any]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineTransferListItem":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("offline transfer entry must be an object")
-
-        def optional_str(key: str) -> Optional[str]:
-            value = payload.get(key)
-            if value is None:
-                return None
-            if not isinstance(value, str) or not value:
-                raise RuntimeError(f"offline transfer `{key}` must be a non-empty string")
-            return value
-
-        def optional_int(key: str) -> Optional[int]:
-            value = payload.get(key)
-            if value is None:
-                return None
-            if not isinstance(value, (int, float)):
-                raise RuntimeError(f"offline transfer `{key}` must be numeric when present")
-            return int(value)
-
-        def require_str(key: str) -> str:
-            value = payload.get(key)
-            if not isinstance(value, str) or not value:
-                raise RuntimeError(f"offline transfer entry missing `{key}`")
-            return value
-
-        def require_int(key: str) -> int:
-            value = payload.get(key)
-            if not isinstance(value, (int, float)):
-                raise RuntimeError(f"offline transfer `{key}` must be numeric")
-            return int(value)
-
-        transfer_value = payload.get("transfer")
-        if not isinstance(transfer_value, Mapping):
-            raise RuntimeError("offline transfer entry missing `transfer` object")
-        history_value = payload.get("status_transitions", [])
-        if history_value is None:
-            history_value = []
-        if not isinstance(history_value, list):
-            raise RuntimeError("offline transfer `status_transitions` must be a list")
-        platform_snapshot = payload.get("platform_token_snapshot")
-        if platform_snapshot is not None and not isinstance(platform_snapshot, Mapping):
-            raise RuntimeError("offline transfer `platform_token_snapshot` must be an object")
-        verdict_snapshot = payload.get("verdict_snapshot")
-        if verdict_snapshot is not None and not isinstance(verdict_snapshot, Mapping):
-            raise RuntimeError("offline transfer `verdict_snapshot` must be an object")
-
-        history = [
-            OfflineTransferHistoryEntry.from_payload(entry) for entry in history_value
-        ]
-
-        platform_value = dict(platform_snapshot) if isinstance(platform_snapshot, Mapping) else None
-        verdict_value = dict(verdict_snapshot) if isinstance(verdict_snapshot, Mapping) else None
-
-        return cls(
-            bundle_id_hex=require_str("bundle_id_hex"),
-            controller_id=require_str("controller_id"),
-            controller_display=require_str("controller_display"),
-            receiver_id=require_str("receiver_id"),
-            receiver_display=require_str("receiver_display"),
-            deposit_account_id=require_str("deposit_account_id"),
-            deposit_account_display=require_str("deposit_account_display"),
-            asset_id=optional_str("asset_id"),
-            certificate_id_hex=optional_str("certificate_id_hex"),
-            certificate_expires_at_ms=optional_int("certificate_expires_at_ms"),
-            policy_expires_at_ms=optional_int("policy_expires_at_ms"),
-            refresh_at_ms=optional_int("refresh_at_ms"),
-            verdict_id_hex=optional_str("verdict_id_hex"),
-            attestation_nonce_hex=optional_str("attestation_nonce_hex"),
-            receipt_count=require_int("receipt_count"),
-            total_amount=require_str("total_amount"),
-            status=require_str("status"),
-            recorded_at_ms=require_int("recorded_at_ms"),
-            recorded_at_height=require_int("recorded_at_height"),
-            archived_at_height=optional_int("archived_at_height"),
-            status_transitions=history,
-            claimed_delta=require_str("claimed_delta"),
-            platform_policy=optional_str("platform_policy"),
-            platform_token_snapshot=platform_value,
-            verdict_snapshot=verdict_value,
-            transfer=dict(transfer_value),
-        )
-
-
-@dataclass(frozen=True)
-class OfflineTransferListPage:
-    """Paginated list of offline transfers."""
-
-    items: List[OfflineTransferListItem]
-    total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineTransferListPage":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("offline transfer page must be an object")
-        items_value = payload.get("items", [])
-        if items_value is None:
-            items_value = []
-        if not isinstance(items_value, list):
-            raise RuntimeError("offline transfer `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_value)))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("offline transfer `total` must be numeric") from exc
-        items = [OfflineTransferListItem.from_payload(entry) for entry in items_value]
-        return cls(items=items, total=total)
-
-
-@dataclass(frozen=True)
-class OfflineSummaryListItem:
-    """Controller counter summary returned by offline summaries endpoints."""
-
-    certificate_id_hex: str
-    controller_id: str
-    controller_display: str
-    summary_hash_hex: str
-    apple_key_counters: Dict[str, int]
-    android_series_counters: Dict[str, int]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineSummaryListItem":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("offline summary entry must be an object")
-        certificate_id_hex = payload.get("certificate_id_hex")
-        if not isinstance(certificate_id_hex, str) or not certificate_id_hex:
-            raise RuntimeError("offline summary entry missing `certificate_id_hex`")
-        controller_id = payload.get("controller_id")
-        if not isinstance(controller_id, str) or not controller_id:
-            raise RuntimeError("offline summary entry missing `controller_id`")
-        controller_display = payload.get("controller_display")
-        if not isinstance(controller_display, str) or not controller_display:
-            raise RuntimeError("offline summary entry missing `controller_display`")
-        summary_hash = payload.get("summary_hash_hex")
-        if not isinstance(summary_hash, str) or not summary_hash:
-            raise RuntimeError("offline summary entry missing `summary_hash_hex`")
-
-        def parse_counter_map(obj: Any, field: str) -> Dict[str, int]:
-            if obj is None:
-                return {}
-            if not isinstance(obj, Mapping):
-                raise RuntimeError(f"offline summary `{field}` must be an object")
-            result: Dict[str, int] = {}
-            for key, value in obj.items():
-                if not isinstance(key, str) or not isinstance(value, (int, float)):
-                    raise RuntimeError(f"offline summary `{field}` must map strings to numbers")
-                result[key] = int(value)
-            return result
-
-        apple = parse_counter_map(payload.get("apple_key_counters"), "apple_key_counters")
-        android = parse_counter_map(payload.get("android_series_counters"), "android_series_counters")
-
-        return cls(
-            certificate_id_hex=certificate_id_hex,
-            controller_id=controller_id,
-            controller_display=controller_display,
-            summary_hash_hex=summary_hash,
-            apple_key_counters=apple,
-            android_series_counters=android,
-        )
-
-
-@dataclass(frozen=True)
-class OfflineSummaryListPage:
-    """Paginated list of offline counter summaries."""
-
-    items: List[OfflineSummaryListItem]
-    total: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "OfflineSummaryListPage":
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("offline summary page must be an object")
-        items_value = payload.get("items", [])
-        if items_value is None:
-            items_value = []
-        if not isinstance(items_value, list):
-            raise RuntimeError("offline summary `items` must be a list")
-        try:
-            total = int(payload.get("total", len(items_value)))
-        except (TypeError, ValueError) as exc:
-            raise RuntimeError("offline summary `total` must be numeric") from exc
-        items = [OfflineSummaryListItem.from_payload(entry) for entry in items_value]
-        return cls(items=items, total=total)
 
 
 @dataclass(frozen=True)
@@ -2285,6 +2114,91 @@ class GovernanceProposalDraft:
 
 
 @dataclass(frozen=True)
+class ContractDeployContractReceipt:
+    """One contract receipt returned by ``POST /v1/contracts/deploy``."""
+
+    name: str
+    contract_alias: Optional[str]
+    contract_address: Optional[str]
+    previous_contract_address: Optional[str]
+    upgraded: bool
+    dataspace: Optional[str]
+    deploy_nonce: Optional[int]
+    tx_hash_hex: Optional[str]
+    code_hash_hex: str
+    abi_hash_hex: str
+    status: str
+
+
+@dataclass(frozen=True)
+class ContractDeployCallReceipt:
+    """One init-call receipt returned by ``POST /v1/contracts/deploy``."""
+
+    id: str
+    contract_alias: Optional[str]
+    entrypoint: Optional[str]
+    tx_hash_hex: Optional[str]
+    status: str
+
+
+@dataclass(frozen=True)
+class ContractDeployAssertionReceipt:
+    """One assertion receipt returned by ``POST /v1/contracts/deploy``."""
+
+    id: str
+    contract_alias: Optional[str]
+    entrypoint: Optional[str]
+    status: str
+    actual_result: Any
+    expected_result: Any
+    error: Optional[str]
+
+
+@dataclass(frozen=True)
+class ContractDeployResponse:
+    """Canonical bundle receipt returned by ``POST /v1/contracts/deploy``."""
+
+    ok: bool
+    bundle_name: str
+    bundle_digest: str
+    chain_fingerprint: str
+    dry_run: bool
+    completed_stages: List[str]
+    failure_point: Optional[str]
+    contracts: List[ContractDeployContractReceipt]
+    init_calls: List[ContractDeployCallReceipt]
+    assertions: List[ContractDeployAssertionReceipt]
+
+
+@dataclass(frozen=True)
+class ContractCallResponse:
+    """Result returned by ``POST /v1/contracts/call``."""
+
+    ok: bool
+    submitted: bool
+    dataspace: str
+    code_hash_hex: str
+    abi_hash_hex: str
+    creation_time_ms: int
+    contract_address: Optional[str]
+    tx_hash_hex: Optional[str]
+    entrypoint: Optional[str]
+    transaction_scaffold_b64: Optional[str]
+    signed_transaction_b64: Optional[str]
+    signing_message_b64: Optional[str]
+
+
+@dataclass(frozen=True)
+class GovernanceContractResponse:
+    """Governance binding returned by ``GET /v1/gov/contracts/{contract_address}``."""
+
+    found: bool
+    contract_address: str
+    dataspace: Optional[str]
+    code_hash_hex: Optional[str]
+
+
+@dataclass(frozen=True)
 class BallotSubmitResult:
     """Response to ``/v1/gov/ballots/*`` submissions."""
 
@@ -2563,8 +2477,7 @@ class GovernanceManifestQuorumStats:
 class GovernanceManifestActivation:
     """Recent manifest activation record."""
 
-    namespace: str
-    contract_id: str
+    contract_address: str
     code_hash_hex: str
     abi_hash_hex: Optional[str]
     height: int
@@ -2793,7 +2706,7 @@ class ToriiClient:
     ) -> ExplorerAccountQr:
         """Fetch QR metadata for an account (`GET /v1/explorer/accounts/{account_id}/qr`)."""
 
-        canonical = self._require_non_empty_string(account_id, "account_id")
+        canonical = self._normalize_canonical_account_id(account_id, "account_id")
         response = self._request(
             "GET",
             f"/v1/explorer/accounts/{quote(canonical, safe='')}/qr",
@@ -2904,6 +2817,64 @@ class ToriiClient:
             context="node capabilities",
         )
         return self._parse_node_capabilities(payload, context="node capabilities")
+
+    def get_sccp_capabilities(self) -> SccpCapabilities:
+        """Fetch SCCP capability discovery (`GET /v1/sccp/capabilities`)."""
+
+        payload = self._get_json_object(
+            "/v1/sccp/capabilities",
+            context="sccp capabilities",
+        )
+        return self._parse_sccp_capabilities(payload, context="sccp capabilities")
+
+    def get_sccp_proof_manifests(self) -> SccpProofManifestSet:
+        """Fetch SCCP proof manifests (`GET /v1/sccp/manifests`)."""
+
+        payload = self._get_json_object(
+            "/v1/sccp/manifests",
+            context="sccp proof manifests",
+        )
+        return self._parse_sccp_proof_manifests(payload, context="sccp proof manifests")
+
+    def get_sccp_message_proof_artifact(
+        self,
+        message_id: Union[str, bytes, bytearray, memoryview],
+    ) -> SccpMessageTransparentProofArtifact:
+        """Fetch a typed SCCP message proof artifact (`GET /v1/sccp/artifacts/message/{message_id}`)."""
+
+        normalized_message_id = self._normalize_hex_string(
+            message_id,
+            context="sccp message proof artifact message_id",
+            expected_length=64,
+        )
+        payload = self._get_json_object(
+            f"/v1/sccp/artifacts/message/{normalized_message_id}",
+            context="sccp message proof artifact",
+        )
+        return self._parse_sccp_message_proof_artifact(
+            payload,
+            context="sccp message proof artifact",
+        )
+
+    def get_sccp_message_proof_job(
+        self,
+        message_id: Union[str, bytes, bytearray, memoryview],
+    ) -> SccpCounterpartyProofJob:
+        """Fetch a normalized SCCP counterparty proof job (`GET /v1/sccp/jobs/message/{message_id}`)."""
+
+        normalized_message_id = self._normalize_hex_string(
+            message_id,
+            context="sccp message proof job message_id",
+            expected_length=64,
+        )
+        payload = self._get_json_object(
+            f"/v1/sccp/jobs/message/{normalized_message_id}",
+            context="sccp message proof job",
+        )
+        return self._parse_sccp_message_proof_job(
+            payload,
+            context="sccp message proof job",
+        )
 
     def get_runtime_abi_active(self) -> RuntimeAbiActive:
         """Fetch the active ABI version (`GET /v1/runtime/abi/active`)."""
@@ -3045,11 +3016,17 @@ class ToriiClient:
         )
         return self._parse_connect_session(body, context="connect session")
 
-    def delete_connect_session(self, sid: str) -> bool:
+    def delete_connect_session(self, sid: str, token_management: str) -> bool:
         """Delete a Connect session (`DELETE /v1/connect/session/{sid}`)."""
 
-        response = self._request("DELETE", f"/v1/connect/session/{sid}")
-        self._expect_status(response, {200, 202, 204, 404})
+        if not isinstance(token_management, str) or not token_management:
+            raise TypeError("token_management must be a non-empty string")
+        response = self._request(
+            "DELETE",
+            f"/v1/connect/session/{sid}",
+            headers={"Authorization": f"Bearer {token_management}"},
+        )
+        self._expect_status(response, {204, 404})
         return response.status_code != 404
 
     def list_connect_apps(
@@ -3773,236 +3750,16 @@ class ToriiClient:
         return self._ensure_mapping(ack, "space directory manifest revoke response")
 
     # ------------------------------------------------------------------
-    # Offline allowances and transfers
+    # Offline V2 readiness
     # ------------------------------------------------------------------
-    def issue_offline_certificate(
-        self,
-        certificate: Mapping[str, Any],
-    ) -> OfflineCertificateIssueResponse:
-        """Issue a signed offline certificate via ``POST /v1/offline/certificates/issue``."""
+    def get_offline_v2_readiness(self) -> OfflineV2Readiness:
+        """Fetch Offline V2 feature readiness."""
 
-        payload = {
-            "certificate": self._clone_json_payload(
-                certificate,
-                context="offline certificate",
-            )
-        }
-        body = self._post_json(
-            "/v1/offline/certificates/issue",
-            payload,
-            context="offline certificate issue response",
+        payload = self._get_json_object(
+            "/v1/offline/v2/readiness",
+            context="offline v2 readiness response",
         )
-        return OfflineCertificateIssueResponse.from_payload(body)
-
-    def issue_offline_certificate_renewal(
-        self,
-        certificate_id_hex: str,
-        certificate: Mapping[str, Any],
-    ) -> OfflineCertificateIssueResponse:
-        """Issue a renewal certificate via ``POST /v1/offline/certificates/{id}/renew/issue``."""
-
-        normalized_id = self._require_non_empty_string(
-            certificate_id_hex,
-            "offline certificate renewal id",
-        )
-        payload = {
-            "certificate": self._clone_json_payload(
-                certificate,
-                context="offline certificate renewal",
-            )
-        }
-        body = self._post_json(
-            f"/v1/offline/certificates/{normalized_id}/renew/issue",
-            payload,
-            context="offline certificate renewal response",
-        )
-        return OfflineCertificateIssueResponse.from_payload(body)
-
-    def register_offline_allowance(
-        self,
-        *,
-        certificate: Mapping[str, Any],
-        authority: str,
-        private_key: str,
-    ) -> OfflineAllowanceRegisterResponse:
-        """Register an offline allowance via ``POST /v1/offline/allowances``."""
-
-        payload = {
-            "authority": self._require_non_empty_string(
-                authority,
-                "offline allowance authority",
-            ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "offline allowance private_key",
-            ),
-            "certificate": self._clone_json_payload(
-                certificate,
-                context="offline allowance certificate",
-            ),
-        }
-        body = self._post_json(
-            "/v1/offline/allowances",
-            payload,
-            context="offline allowance register response",
-        )
-        return OfflineAllowanceRegisterResponse.from_payload(body)
-
-    def renew_offline_allowance(
-        self,
-        *,
-        certificate_id_hex: str,
-        certificate: Mapping[str, Any],
-        authority: str,
-        private_key: str,
-    ) -> OfflineAllowanceRegisterResponse:
-        """Renew an offline allowance via ``POST /v1/offline/allowances/{id}/renew``."""
-
-        normalized_id = self._require_non_empty_string(
-            certificate_id_hex,
-            "offline allowance renewal id",
-        )
-        payload = {
-            "authority": self._require_non_empty_string(
-                authority,
-                "offline allowance renewal authority",
-            ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "offline allowance renewal private_key",
-            ),
-            "certificate": self._clone_json_payload(
-                certificate,
-                context="offline allowance renewal certificate",
-            ),
-        }
-        body = self._post_json(
-            f"/v1/offline/allowances/{normalized_id}/renew",
-            payload,
-            context="offline allowance renewal response",
-        )
-        return OfflineAllowanceRegisterResponse.from_payload(body)
-
-    def top_up_offline_allowance(
-        self,
-        *,
-        certificate: Mapping[str, Any],
-        authority: str,
-        private_key: str,
-    ) -> OfflineTopUpResponse:
-        """Issue and register an offline allowance in one call."""
-
-        issued = self.issue_offline_certificate(certificate)
-        registration = self.register_offline_allowance(
-            certificate=issued.certificate,
-            authority=authority,
-            private_key=private_key,
-        )
-        if issued.certificate_id_hex.strip().lower() != registration.certificate_id_hex.strip().lower():
-            raise RuntimeError(
-                "offline top-up certificate mismatch "
-                f"(issued {issued.certificate_id_hex}, registered {registration.certificate_id_hex})"
-            )
-        return OfflineTopUpResponse(certificate=issued, registration=registration)
-
-    def top_up_offline_allowance_renewal(
-        self,
-        *,
-        certificate_id_hex: str,
-        certificate: Mapping[str, Any],
-        authority: str,
-        private_key: str,
-    ) -> OfflineTopUpResponse:
-        """Issue and register a renewed offline allowance in one call."""
-
-        issued = self.issue_offline_certificate_renewal(
-            certificate_id_hex,
-            certificate,
-        )
-        registration = self.renew_offline_allowance(
-            certificate_id_hex=certificate_id_hex,
-            certificate=issued.certificate,
-            authority=authority,
-            private_key=private_key,
-        )
-        if issued.certificate_id_hex.strip().lower() != registration.certificate_id_hex.strip().lower():
-            raise RuntimeError(
-                "offline top-up renewal certificate mismatch "
-                f"(issued {issued.certificate_id_hex}, registered {registration.certificate_id_hex})"
-            )
-        return OfflineTopUpResponse(certificate=issued, registration=registration)
-
-    def list_offline_allowances(self, **params: Any) -> OfflineAllowanceListPage:
-        """List offline allowances via ``GET /v1/offline/allowances``."""
-
-        response = self._request(
-            "GET",
-            "/v1/offline/allowances",
-            params=self._clean_params(params),
-        )
-        self._expect_status(response, {200})
-        return OfflineAllowanceListPage.from_payload(response.json())
-
-    def query_offline_allowances(
-        self,
-        envelope: Mapping[str, Any],
-    ) -> OfflineAllowanceListPage:
-        """Query offline allowances via ``POST /v1/offline/allowances/query``."""
-
-        payload = self._post_json(
-            "/v1/offline/allowances/query",
-            dict(envelope),
-            context="offline allowances query",
-        )
-        return OfflineAllowanceListPage.from_payload(payload)
-
-    def list_offline_transfers(self, **params: Any) -> OfflineTransferListPage:
-        """List offline transfers via ``GET /v1/offline/transfers``."""
-
-        response = self._request(
-            "GET",
-            "/v1/offline/transfers",
-            params=self._clean_params(params),
-        )
-        self._expect_status(response, {200})
-        return OfflineTransferListPage.from_payload(response.json())
-
-    def query_offline_transfers(
-        self,
-        envelope: Mapping[str, Any],
-    ) -> OfflineTransferListPage:
-        """Query offline transfers via ``POST /v1/offline/transfers/query``."""
-
-        payload = self._post_json(
-            "/v1/offline/transfers/query",
-            dict(envelope),
-            context="offline transfers query",
-        )
-        return OfflineTransferListPage.from_payload(payload)
-
-    def list_offline_summaries(self, **params: Any) -> OfflineSummaryListPage:
-        """List offline counter summaries via ``GET /v1/offline/summaries``."""
-
-        response = self._request(
-            "GET",
-            "/v1/offline/summaries",
-            params=self._clean_params(params),
-        )
-        self._expect_status(response, {200})
-        return OfflineSummaryListPage.from_payload(response.json())
-
-    def query_offline_summaries(
-        self,
-        envelope: Mapping[str, Any],
-    ) -> OfflineSummaryListPage:
-        """Query offline counter summaries via ``POST /v1/offline/summaries/query``."""
-
-        payload = self._post_json(
-            "/v1/offline/summaries/query",
-            dict(envelope),
-            context="offline summaries query",
-        )
-        return OfflineSummaryListPage.from_payload(payload)
+        return OfflineV2Readiness.from_payload(payload)
 
     # ------------------------------------------------------------------
     # Sumeragi telemetry & RBC helpers
@@ -4103,9 +3860,10 @@ class ToriiClient:
     def get_kaigi_relay(self, relay_id: str) -> Optional[KaigiRelayDetail]:
         """Return detailed metadata for a specific relay via ``GET /v1/kaigi/relays/{relay_id}``."""
 
+        canonical = self._normalize_canonical_account_id(relay_id, "relay_id")
         response = self._request(
             "GET",
-            f"/v1/kaigi/relays/{relay_id}",
+            f"/v1/kaigi/relays/{quote(canonical, safe='')}",
             headers={"Accept": "application/json"},
         )
         self._expect_status(response, {200, 404})
@@ -4251,8 +4009,151 @@ class ToriiClient:
         return self._coerce_unsigned(payload.get("count"), "sumeragi evidence count.count")
 
     # ------------------------------------------------------------------
-    # Governance & council helpers
+    # Contract, governance, and council helpers
     # ------------------------------------------------------------------
+    def deploy_contract(
+        self,
+        *,
+        authority: str,
+        private_key: str,
+        code_b64: str,
+        contract_alias: str,
+        lease_expiry_ms: Optional[int] = None,
+    ) -> Optional[ContractDeployResponse]:
+        """Deploy bytecode via ``POST /v1/contracts/deploy``."""
+
+        payload: Dict[str, Any] = {
+            "authority": self._require_non_empty_string(
+                authority,
+                "deploy_contract.authority",
+            ),
+            "private_key": self._require_non_empty_string(
+                private_key,
+                "deploy_contract.private_key",
+            ),
+            "code_b64": self._normalize_required_base64_payload(
+                code_b64,
+                "deploy_contract.code_b64",
+            ),
+            "contract_alias": self._require_non_empty_string(
+                contract_alias,
+                "deploy_contract.contract_alias",
+            ),
+        }
+        lease_expiry_value = self._normalize_optional_int(
+            lease_expiry_ms,
+            "deploy_contract.lease_expiry_ms",
+            allow_zero=True,
+        )
+        if lease_expiry_value is not None:
+            payload["lease_expiry_ms"] = lease_expiry_value
+        response = self._request(
+            "POST",
+            "/v1/contracts/deploy",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            data=json.dumps(payload).encode("utf-8"),
+        )
+        self._expect_status(response, {200, 202})
+        body = self._maybe_json(response)
+        if body is None:
+            return None
+        record = self._ensure_mapping(body, "contract deploy response")
+        return self._parse_contract_deploy_response(
+            record,
+            context="contract deploy response",
+        )
+
+    def call_contract(
+        self,
+        *,
+        authority: str,
+        private_key: str,
+        contract_address: Optional[str] = None,
+        contract_alias: Optional[str] = None,
+        entrypoint: Optional[str] = None,
+        payload: Any = None,
+        gas_asset_id: Optional[str] = None,
+        gas_limit: Any,
+    ) -> ContractCallResponse:
+        """Invoke a deployed contract via ``POST /v1/contracts/call``."""
+
+        request_payload: Dict[str, Any] = {
+            "authority": self._require_non_empty_string(
+                authority,
+                "call_contract.authority",
+            ),
+            "private_key": self._require_non_empty_string(
+                private_key,
+                "call_contract.private_key",
+            ),
+        }
+        request_payload.update(
+            self._normalize_contract_selector(
+                contract_address=contract_address,
+                contract_alias=contract_alias,
+                context="call_contract",
+            )
+        )
+        if entrypoint is not None:
+            request_payload["entrypoint"] = self._require_non_empty_string(
+                entrypoint,
+                "call_contract.entrypoint",
+            )
+        if payload is not None:
+            request_payload["payload"] = self._clone_json_value(
+                payload,
+                context="call_contract.payload",
+            )
+        if gas_asset_id is not None:
+            request_payload["gas_asset_id"] = self._require_non_empty_string(
+                gas_asset_id,
+                "call_contract.gas_asset_id",
+            )
+        gas_limit_value = self._coerce_int(gas_limit, "call_contract.gas_limit")
+        if gas_limit_value < 0:
+            raise ValueError("call_contract.gas_limit must be non-negative")
+        request_payload["gas_limit"] = gas_limit_value
+        response = self._request(
+            "POST",
+            "/v1/contracts/call",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            data=json.dumps(request_payload).encode("utf-8"),
+        )
+        self._expect_status(response, {200, 202})
+        body = self._maybe_json(response)
+        if body is None:
+            raise RuntimeError("contract call endpoint returned no payload")
+        record = self._ensure_mapping(body, "contract call response")
+        return self._parse_contract_call_response(
+            record,
+            context="contract call response",
+        )
+
+    def get_governance_contract(
+        self,
+        contract_address: str,
+    ) -> GovernanceContractResponse:
+        """Fetch one governed contract binding via ``GET /v1/gov/contracts/{contract_address}``."""
+
+        normalized_address = self._require_non_empty_string(
+            contract_address,
+            "governance contract contract_address",
+        )
+        payload = self._get_json_object(
+            f"/v1/gov/contracts/{quote(normalized_address, safe='')}",
+            context="governance contract response",
+        )
+        return self._parse_governance_contract_response(
+            payload,
+            context="governance contract response",
+        )
+
     def get_governance_proposal(self, proposal_id: str) -> GovernanceProposalStatus:
         """Fetch proposal metadata via ``GET /v1/gov/proposals/{id}``."""
 
@@ -4350,8 +4251,8 @@ class ToriiClient:
     def propose_contract_deploy(
         self,
         *,
-        contract_id: str,
-        namespace: str,
+        contract_address: Optional[str] = None,
+        contract_alias: Optional[str] = None,
         abi_version: str,
         code_hash: str,
         abi_hash: str,
@@ -4361,13 +4262,19 @@ class ToriiClient:
     ) -> GovernanceProposalDraft:
         """Draft a deploy-contract proposal via ``POST /v1/gov/proposals/deploy-contract``."""
 
+        if (contract_address is None) == (contract_alias is None):
+            raise ValueError(
+                "provide exactly one of contract_address or contract_alias",
+            )
         payload: Dict[str, Any] = {
-            "contract_id": contract_id,
-            "namespace": namespace,
             "abi_version": abi_version,
             "code_hash": code_hash,
             "abi_hash": abi_hash,
         }
+        if contract_address is not None:
+            payload["contract_address"] = contract_address
+        if contract_alias is not None:
+            payload["contract_alias"] = contract_alias
         if window is not None:
             payload["window"] = {"lower": int(window[0]), "upper": int(window[1])}
         if mode:
@@ -4830,6 +4737,35 @@ class ToriiClient:
         return number
 
     @staticmethod
+    def _normalize_canonical_account_id(value: Any, context: str) -> str:
+        literal = ToriiClient._require_non_empty_string(value, context)
+        if literal != value or any(ch.isspace() for ch in literal):
+            raise ValueError(
+                f"{context} must be a canonical I105 account id or on-chain account alias"
+            )
+        if "@" in literal:
+            label, separator, scope = literal.partition("@")
+            scope_parts = scope.split(".") if separator else []
+            if (
+                not label
+                or not separator
+                or not scope
+                or len(scope_parts) not in (1, 2)
+                or any(not part for part in scope_parts)
+            ):
+                raise ValueError(
+                    f"{context} must use canonical I105 account id or account alias `name@dataspace` / `name@domain.dataspace`"
+                )
+            return literal
+        try:
+            _decode_i105_string(literal)
+        except ValueError as exc:
+            raise ValueError(
+                f"{context} must be a canonical I105 account id or on-chain account alias"
+            ) from exc
+        return literal
+
+    @staticmethod
     def _normalize_numeric_literal(
         value: Any, context: str, *, allow_negative: bool = False
     ) -> str:
@@ -4868,6 +4804,54 @@ class ToriiClient:
         if not seen_digit:
             raise ValueError(f"{context} must be a numeric literal")
         return raw
+
+    @staticmethod
+    def _normalize_contract_selector(
+        *,
+        contract_address: Optional[str],
+        contract_alias: Optional[str],
+        context: str,
+    ) -> Dict[str, str]:
+        has_contract_address = contract_address is not None
+        has_contract_alias = contract_alias is not None
+        if has_contract_address == has_contract_alias:
+            raise ValueError(
+                f"{context} requires exactly one of contract_address or contract_alias"
+            )
+        if has_contract_address:
+            return {
+                "contract_address": ToriiClient._require_non_empty_string(
+                    contract_address,
+                    f"{context}.contract_address",
+                )
+            }
+        return {
+            "contract_alias": ToriiClient._require_non_empty_string(
+                contract_alias,
+                f"{context}.contract_alias",
+            )
+        }
+
+    @staticmethod
+    def _normalize_required_base64_payload(value: Any, context: str) -> str:
+        literal = ToriiClient._require_non_empty_string(value, context)
+        try:
+            decoded = base64.b64decode(literal, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise RuntimeError(f"{context} must be a valid base64 payload") from exc
+        if not decoded:
+            raise RuntimeError(f"{context} must not decode to empty bytes")
+        return literal
+
+    @staticmethod
+    def _normalize_optional_base64_payload(
+        value: Any,
+        *,
+        context: str,
+    ) -> Optional[str]:
+        if value is None:
+            return None
+        return ToriiClient._normalize_required_base64_payload(value, context)
 
     @staticmethod
     def _normalize_subscription_status(value: Any, context: str) -> str:
@@ -4925,6 +4909,12 @@ class ToriiClient:
         raise RuntimeError(f"{context} response must be a JSON object")
 
     @staticmethod
+    def _ensure_list(payload: Any, context: str) -> List[Any]:
+        if isinstance(payload, list):
+            return payload
+        raise RuntimeError(f"{context} response must be a JSON array")
+
+    @staticmethod
     def _optional_mapping(
         value: Any,
         *,
@@ -4940,6 +4930,13 @@ class ToriiClient:
     def _clone_json_payload(value: Mapping[str, Any], *, context: str) -> Dict[str, Any]:
         if not isinstance(value, Mapping):
             raise RuntimeError(f"{context} must be a JSON object")
+        cloned = ToriiClient._clone_json_value(value, context=context)
+        if not isinstance(cloned, dict):
+            raise RuntimeError(f"{context} must be a JSON object")
+        return cloned
+
+    @staticmethod
+    def _clone_json_value(value: Any, *, context: str) -> Any:
         try:
             encoded = json.dumps(value)
         except (TypeError, ValueError) as exc:
@@ -5225,8 +5222,11 @@ class ToriiClient:
         activations: List[GovernanceManifestActivation] = []
         for index, entry in enumerate(payload):
             record = self._ensure_mapping(entry, f"governance.recent_manifest_activations[{index}]")
-            namespace = "" if record.get("namespace") is None else str(record.get("namespace"))
-            contract_id = "" if record.get("contract_id") is None else str(record.get("contract_id"))
+            contract_address = (
+                ""
+                if record.get("contract_address") is None
+                else str(record.get("contract_address"))
+            )
             code_hash = "" if record.get("code_hash_hex") is None else str(record.get("code_hash_hex"))
             abi_hash = (
                 None
@@ -5235,8 +5235,7 @@ class ToriiClient:
             )
             activations.append(
                 GovernanceManifestActivation(
-                    namespace=namespace,
-                    contract_id=contract_id,
+                    contract_address=contract_address,
                     code_hash_hex=code_hash,
                     abi_hash_hex=abi_hash,
                     height=self._coerce_int(
@@ -5642,7 +5641,55 @@ class ToriiClient:
                 record.get("monotonic_drops_total"),
                 f"{context}.monotonic_drops_total",
             ),
+            sequence_violation_closes_total=ToriiClient._coerce_int(
+                record.get("sequence_violation_closes_total"),
+                f"{context}.sequence_violation_closes_total",
+            ),
+            role_direction_mismatch_total=ToriiClient._coerce_int(
+                record.get("role_direction_mismatch_total"),
+                f"{context}.role_direction_mismatch_total",
+            ),
             ping_miss_total=ToriiClient._coerce_int(record.get("ping_miss_total"), f"{context}.ping_miss_total"),
+            p2p_rebroadcasts_total=ToriiClient._coerce_int(
+                record.get("p2p_rebroadcasts_total"),
+                f"{context}.p2p_rebroadcasts_total",
+            ),
+            p2p_rebroadcast_skipped_total=ToriiClient._coerce_int(
+                record.get("p2p_rebroadcast_skipped_total"),
+                f"{context}.p2p_rebroadcast_skipped_total",
+            ),
+            p2p_auth_failures_total=ToriiClient._coerce_int(
+                record.get("p2p_auth_failures_total"),
+                f"{context}.p2p_auth_failures_total",
+            ),
+            p2p_ttl_drops_total=ToriiClient._coerce_int(
+                record.get("p2p_ttl_drops_total"),
+                f"{context}.p2p_ttl_drops_total",
+            ),
+            p2p_unknown_session_drops_total=ToriiClient._coerce_int(
+                record.get("p2p_unknown_session_drops_total"),
+                f"{context}.p2p_unknown_session_drops_total",
+            ),
+            p2p_session_claims_in_total=ToriiClient._coerce_int(
+                record.get("p2p_session_claims_in_total"),
+                f"{context}.p2p_session_claims_in_total",
+            ),
+            p2p_session_claims_installed_total=ToriiClient._coerce_int(
+                record.get("p2p_session_claims_installed_total"),
+                f"{context}.p2p_session_claims_installed_total",
+            ),
+            p2p_session_claim_conflicts_total=ToriiClient._coerce_int(
+                record.get("p2p_session_claim_conflicts_total"),
+                f"{context}.p2p_session_claim_conflicts_total",
+            ),
+            p2p_role_consumed_total=ToriiClient._coerce_int(
+                record.get("p2p_role_consumed_total"),
+                f"{context}.p2p_role_consumed_total",
+            ),
+            p2p_session_terminated_total=ToriiClient._coerce_int(
+                record.get("p2p_session_terminated_total"),
+                f"{context}.p2p_session_terminated_total",
+            ),
             policy=policy,
         )
 
@@ -5685,6 +5732,19 @@ class ToriiClient:
                 record.get("session_buffer_max_bytes"),
                 context=f"{context}.session_buffer_max_bytes",
             ),
+            relay_strategy=ToriiClient._optional_string(record.get("relay_strategy"), f"{context}.relay_strategy"),
+            relay_effective_strategy=ToriiClient._optional_string(
+                record.get("relay_effective_strategy"),
+                f"{context}.relay_effective_strategy",
+            ),
+            relay_p2p_attached=ToriiClient._optional_bool(
+                record.get("relay_p2p_attached"),
+                f"{context}.relay_p2p_attached",
+            ),
+            p2p_ttl_hops=ToriiClient._coerce_optional_unsigned(
+                record.get("p2p_ttl_hops"),
+                context=f"{context}.p2p_ttl_hops",
+            ),
             heartbeat_interval_ms=ToriiClient._coerce_optional_unsigned(
                 record.get("heartbeat_interval_ms"),
                 context=f"{context}.heartbeat_interval_ms",
@@ -5709,6 +5769,10 @@ class ToriiClient:
                     "session_ttl_ms",
                     "frame_max_bytes",
                     "session_buffer_max_bytes",
+                    "relay_strategy",
+                    "relay_effective_strategy",
+                    "relay_p2p_attached",
+                    "p2p_ttl_hops",
                     "heartbeat_interval_ms",
                     "heartbeat_miss_tolerance",
                     "heartbeat_min_interval_ms",
@@ -5724,12 +5788,19 @@ class ToriiClient:
         app_uri = ToriiClient._require_string(record.get("app_uri"), f"{context}.app_uri")
         token_app = ToriiClient._require_string(record.get("token_app"), f"{context}.token_app")
         token_wallet = ToriiClient._require_string(record.get("token_wallet"), f"{context}.token_wallet")
+        token_management = ToriiClient._require_string(
+            record.get("token_management"),
+            f"{context}.token_management",
+        )
+        token_relay = ToriiClient._require_string(record.get("token_relay"), f"{context}.token_relay")
         known = {
             "sid",
             "wallet_uri",
             "app_uri",
             "token_app",
             "token_wallet",
+            "token_management",
+            "token_relay",
         }
         extra = {key: value for key, value in record.items() if key not in known}
         return ConnectSessionInfo(
@@ -5738,6 +5809,8 @@ class ToriiClient:
             app_uri=app_uri,
             token_app=token_app,
             token_wallet=token_wallet,
+            token_management=token_management,
+            token_relay=token_relay,
             extra=extra,
         )
 
@@ -6851,20 +6924,20 @@ class ToriiClient:
         if owner is None:
             return
         if not isinstance(owner, str):
-            raise RuntimeError(f"{context}.owner must be a canonical account id")
+            raise RuntimeError(f"{context}.owner must be a canonical I105 account id")
         trimmed = owner.strip()
         if not trimmed or trimmed != owner:
-            raise RuntimeError(f"{context}.owner must be a canonical account id")
+            raise RuntimeError(f"{context}.owner must be a canonical I105 account id")
         if any(ch.isspace() for ch in trimmed):
-            raise RuntimeError(f"{context}.owner must be a canonical account id")
+            raise RuntimeError(f"{context}.owner must be a canonical I105 account id")
         if "@" in trimmed:
-            raise RuntimeError(f"{context}.owner must be a canonical account id")
+            raise RuntimeError(f"{context}.owner must be a canonical I105 account id")
         if trimmed.lower().startswith("0x"):
-            raise RuntimeError(f"{context}.owner must be a canonical account id")
+            raise RuntimeError(f"{context}.owner must be a canonical I105 account id")
         try:
             _decode_i105_string(trimmed)
         except ValueError as exc:
-            raise RuntimeError(f"{context}.owner must be a canonical account id") from exc
+            raise RuntimeError(f"{context}.owner must be a canonical I105 account id") from exc
 
     @classmethod
     def _normalize_governance_zk_public_inputs(
@@ -6996,6 +7069,890 @@ class ToriiClient:
         )
 
     @staticmethod
+    def _parse_mapping_list(value: Any, *, context: str) -> List[Mapping[str, Any]]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise RuntimeError(f"{context} must be a list")
+        return [ToriiClient._ensure_mapping(entry, f"{context}[{index}]") for index, entry in enumerate(value)]
+
+    @staticmethod
+    def _require_choice(value: Any, *, allowed: set[str], context: str) -> str:
+        literal = ToriiClient._require_string(value, context)
+        if literal not in allowed:
+            allowed_sorted = ", ".join(sorted(allowed))
+            raise RuntimeError(f"{context} must be one of: {allowed_sorted}")
+        return literal
+
+    @staticmethod
+    def _parse_sccp_capabilities(payload: Mapping[str, Any], *, context: str) -> SccpCapabilities:
+        record = ToriiClient._ensure_mapping(payload, context)
+        codecs = [
+            ToriiClient._parse_sccp_codec_capability(entry, context=f"{context}.codecs[{index}]")
+            for index, entry in enumerate(
+                ToriiClient._parse_mapping_list(record.get("codecs"), context=f"{context}.codecs")
+            )
+        ]
+        counterparties = [
+            ToriiClient._parse_sccp_counterparty_capability(
+                entry,
+                context=f"{context}.counterparties[{index}]",
+            )
+            for index, entry in enumerate(
+                ToriiClient._parse_mapping_list(
+                    record.get("counterparties"),
+                    context=f"{context}.counterparties",
+                )
+            )
+        ]
+        return SccpCapabilities(
+            local_domain=ToriiClient._coerce_unsigned(record.get("local_domain"), f"{context}.local_domain"),
+            local_chain=ToriiClient._require_string(record.get("local_chain"), f"{context}.local_chain"),
+            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
+            burn_bundle_path=ToriiClient._require_string(
+                record.get("burn_bundle_path"),
+                f"{context}.burn_bundle_path",
+            ),
+            governance_bundle_path=ToriiClient._require_string(
+                record.get("governance_bundle_path"),
+                f"{context}.governance_bundle_path",
+            ),
+            message_bundle_path=ToriiClient._require_string(
+                record.get("message_bundle_path"),
+                f"{context}.message_bundle_path",
+            ),
+            message_proof_path=ToriiClient._require_string(
+                record.get("message_proof_path"),
+                f"{context}.message_proof_path",
+            ),
+            message_job_path=ToriiClient._require_string(
+                record.get("message_job_path"),
+                f"{context}.message_job_path",
+            ),
+            proof_manifest_path=ToriiClient._require_string(
+                record.get("proof_manifest_path"),
+                f"{context}.proof_manifest_path",
+            ),
+            burn_registry_backend=ToriiClient._require_string(
+                record.get("burn_registry_backend"),
+                f"{context}.burn_registry_backend",
+            ),
+            governance_registry_backend=ToriiClient._require_string(
+                record.get("governance_registry_backend"),
+                f"{context}.governance_registry_backend",
+            ),
+            proof_submit_path=ToriiClient._coerce_optional_string(
+                record.get("proof_submit_path"),
+                context=f"{context}.proof_submit_path",
+            ),
+            message_submit_path=ToriiClient._coerce_optional_string(
+                record.get("message_submit_path"),
+                context=f"{context}.message_submit_path",
+            ),
+            message_payload_kinds=ToriiClient._parse_string_list(
+                record.get("message_payload_kinds"),
+                context=f"{context}.message_payload_kinds",
+            ),
+            codecs=codecs,
+            counterparties=counterparties,
+        )
+
+    @staticmethod
+    def _parse_sccp_codec_capability(value: Mapping[str, Any], *, context: str) -> SccpCodecCapability:
+        record = ToriiClient._ensure_mapping(value, context)
+        return SccpCodecCapability(
+            id=ToriiClient._coerce_unsigned(record.get("id"), f"{context}.id"),
+            key=ToriiClient._require_string(record.get("key"), f"{context}.key"),
+            description=ToriiClient._require_string(record.get("description"), f"{context}.description"),
+        )
+
+    @staticmethod
+    def _parse_sccp_counterparty_capability(
+        value: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpCounterpartyCapability:
+        record = ToriiClient._ensure_mapping(value, context)
+        return SccpCounterpartyCapability(
+            domain=ToriiClient._coerce_unsigned(record.get("domain"), f"{context}.domain"),
+            chain=ToriiClient._require_string(record.get("chain"), f"{context}.chain"),
+            message_backend=ToriiClient._require_string(
+                record.get("message_backend"),
+                f"{context}.message_backend",
+            ),
+            registry_backend=ToriiClient._require_string(
+                record.get("registry_backend"),
+                f"{context}.registry_backend",
+            ),
+            counterparty_account_codec=ToriiClient._coerce_unsigned(
+                record.get("counterparty_account_codec"),
+                f"{context}.counterparty_account_codec",
+            ),
+            counterparty_account_codec_key=ToriiClient._require_string(
+                record.get("counterparty_account_codec_key"),
+                f"{context}.counterparty_account_codec_key",
+            ),
+        )
+
+    @staticmethod
+    def _parse_sccp_proof_manifests(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpProofManifestSet:
+        record = ToriiClient._ensure_mapping(payload, context)
+        manifests = [
+            ToriiClient._parse_sccp_proof_manifest(entry, context=f"{context}.manifests[{index}]")
+            for index, entry in enumerate(
+                ToriiClient._parse_mapping_list(record.get("manifests"), context=f"{context}.manifests")
+            )
+        ]
+        return SccpProofManifestSet(
+            local_domain=ToriiClient._coerce_unsigned(record.get("local_domain"), f"{context}.local_domain"),
+            local_chain=ToriiClient._require_string(record.get("local_chain"), f"{context}.local_chain"),
+            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
+            manifests=manifests,
+        )
+
+    @staticmethod
+    def _parse_sccp_proof_manifest(value: Mapping[str, Any], *, context: str) -> SccpProofManifest:
+        record = ToriiClient._ensure_mapping(value, context)
+        return SccpProofManifest(
+            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
+            local_domain=ToriiClient._coerce_unsigned(record.get("local_domain"), f"{context}.local_domain"),
+            local_chain=ToriiClient._require_string(record.get("local_chain"), f"{context}.local_chain"),
+            counterparty_domain=ToriiClient._coerce_unsigned(
+                record.get("counterparty_domain"),
+                f"{context}.counterparty_domain",
+            ),
+            chain=ToriiClient._require_string(record.get("chain"), f"{context}.chain"),
+            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
+            message_backend=ToriiClient._require_string(
+                record.get("message_backend"),
+                f"{context}.message_backend",
+            ),
+            registry_backend=ToriiClient._require_string(
+                record.get("registry_backend"),
+                f"{context}.registry_backend",
+            ),
+            counterparty_account_codec=ToriiClient._coerce_unsigned(
+                record.get("counterparty_account_codec"),
+                f"{context}.counterparty_account_codec",
+            ),
+            counterparty_account_codec_key=ToriiClient._require_string(
+                record.get("counterparty_account_codec_key"),
+                f"{context}.counterparty_account_codec_key",
+            ),
+            finality_model=ToriiClient._require_choice(
+                record.get("finality_model"),
+                allowed=SCCP_FINALITY_MODEL_VALUES,
+                context=f"{context}.finality_model",
+            ),
+            verifier_target=ToriiClient._require_choice(
+                record.get("verifier_target"),
+                allowed=SCCP_VERIFIER_TARGET_VALUES,
+                context=f"{context}.verifier_target",
+            ),
+            manifest_seed=ToriiClient._require_string(record.get("manifest_seed"), f"{context}.manifest_seed"),
+            required_public_inputs=ToriiClient._parse_string_list(
+                record.get("required_public_inputs"),
+                context=f"{context}.required_public_inputs",
+            ),
+            message_payload_kinds=ToriiClient._parse_string_list(
+                record.get("message_payload_kinds"),
+                context=f"{context}.message_payload_kinds",
+            ),
+            submission_template=ToriiClient._parse_sccp_counterparty_submission_template(
+                ToriiClient._ensure_mapping(
+                    record.get("submission_template"),
+                    f"{context}.submission_template",
+                ),
+                context=f"{context}.submission_template",
+            ),
+        )
+
+    @staticmethod
+    def _parse_sccp_message_proof_artifact(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpMessageTransparentProofArtifact:
+        record = ToriiClient._ensure_mapping(payload, context)
+        artifact = SccpMessageTransparentProofArtifact(
+            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
+            local_domain=ToriiClient._coerce_unsigned(record.get("local_domain"), f"{context}.local_domain"),
+            counterparty_domain=ToriiClient._coerce_unsigned(
+                record.get("counterparty_domain"),
+                f"{context}.counterparty_domain",
+            ),
+            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
+            message_backend=ToriiClient._require_string(
+                record.get("message_backend"),
+                f"{context}.message_backend",
+            ),
+            registry_backend=ToriiClient._require_string(
+                record.get("registry_backend"),
+                f"{context}.registry_backend",
+            ),
+            manifest_seed=ToriiClient._require_string(record.get("manifest_seed"), f"{context}.manifest_seed"),
+            finality_model=ToriiClient._require_choice(
+                record.get("finality_model"),
+                allowed=SCCP_FINALITY_MODEL_VALUES,
+                context=f"{context}.finality_model",
+            ),
+            verifier_target=ToriiClient._require_choice(
+                record.get("verifier_target"),
+                allowed=SCCP_VERIFIER_TARGET_VALUES,
+                context=f"{context}.verifier_target",
+            ),
+            public_inputs=ToriiClient._parse_sccp_message_transparent_public_inputs(
+                ToriiClient._ensure_mapping(record.get("public_inputs"), f"{context}.public_inputs"),
+                context=f"{context}.public_inputs",
+            ),
+            proof_bytes=ToriiClient._require_hex_string(record.get("proof_bytes"), f"{context}.proof_bytes"),
+            submission_package=ToriiClient._parse_sccp_counterparty_submission_package(
+                ToriiClient._ensure_mapping(record.get("submission_package"), f"{context}.submission_package"),
+                context=f"{context}.submission_package",
+            ),
+            bundle=ToriiClient._parse_sccp_message_proof_bundle(
+                ToriiClient._ensure_mapping(record.get("bundle"), f"{context}.bundle"),
+                context=f"{context}.bundle",
+            ),
+        )
+        if artifact.bundle.commitment.message_id.lower() != artifact.public_inputs.message_id.lower():
+            raise RuntimeError(
+                f"{context}.bundle.commitment.message_id must match {context}.public_inputs.message_id"
+            )
+        if artifact.bundle.commitment.payload_hash.lower() != artifact.public_inputs.payload_hash.lower():
+            raise RuntimeError(
+                f"{context}.bundle.commitment.payload_hash must match {context}.public_inputs.payload_hash"
+            )
+        if artifact.bundle.commitment_root.lower() != artifact.public_inputs.commitment_root.lower():
+            raise RuntimeError(
+                f"{context}.bundle.commitment_root must match {context}.public_inputs.commitment_root"
+            )
+        return artifact
+
+    @staticmethod
+    def _parse_sccp_submission_argument(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpSubmissionArgument:
+        record = ToriiClient._ensure_mapping(payload, context)
+        return SccpSubmissionArgument(
+            key=ToriiClient._require_string(record.get("key"), f"{context}.key"),
+            description=ToriiClient._require_string(
+                record.get("description"),
+                f"{context}.description",
+            ),
+        )
+
+    @staticmethod
+    def _parse_sccp_counterparty_submission_template(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpCounterpartySubmissionTemplate:
+        record = ToriiClient._ensure_mapping(payload, context)
+        return SccpCounterpartySubmissionTemplate(
+            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
+            encoding=ToriiClient._require_string(record.get("encoding"), f"{context}.encoding"),
+            submission_kind=ToriiClient._require_string(
+                record.get("submission_kind"),
+                f"{context}.submission_kind",
+            ),
+            verifier_entrypoint=ToriiClient._require_string(
+                record.get("verifier_entrypoint"),
+                f"{context}.verifier_entrypoint",
+            ),
+            required_arguments=[
+                ToriiClient._parse_sccp_submission_argument(
+                    entry,
+                    context=f"{context}.required_arguments[{index}]",
+                )
+                for index, entry in enumerate(
+                    ToriiClient._parse_mapping_list(
+                        record.get("required_arguments"),
+                        context=f"{context}.required_arguments",
+                    )
+                )
+            ],
+        )
+
+    @staticmethod
+    def _parse_sccp_submission_argument_value(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpSubmissionArgumentValue:
+        record = ToriiClient._ensure_mapping(payload, context)
+        return SccpSubmissionArgumentValue(
+            key=ToriiClient._require_string(record.get("key"), f"{context}.key"),
+            encoding=ToriiClient._require_string(record.get("encoding"), f"{context}.encoding"),
+            bytes=ToriiClient._require_hex_string(record.get("bytes"), f"{context}.bytes"),
+        )
+
+    @staticmethod
+    def _parse_sccp_platform_submission_payload(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpPlatformSubmissionPayload:
+        record = ToriiClient._ensure_mapping(payload, context)
+        kind = ToriiClient._require_string(record.get("platform"), f"{context}.platform")
+        body = ToriiClient._ensure_mapping(record.get("payload"), f"{context}.payload")
+        if kind in {"evm_contract_call", "tron_contract_call"}:
+            public_inputs = ToriiClient._ensure_mapping(
+                body.get("public_inputs"),
+                f"{context}.payload.public_inputs",
+            )
+            value = {
+                "proof_bytes": ToriiClient._require_hex_string(
+                    body.get("proof_bytes"),
+                    f"{context}.payload.proof_bytes",
+                ),
+                "public_inputs": {
+                    "message_id": ToriiClient._normalize_hex_string(
+                        public_inputs.get("message_id"),
+                        context=f"{context}.payload.public_inputs.message_id",
+                        expected_length=64,
+                    ),
+                    "payload_hash": ToriiClient._normalize_hex_string(
+                        public_inputs.get("payload_hash"),
+                        context=f"{context}.payload.public_inputs.payload_hash",
+                        expected_length=64,
+                    ),
+                    "target_domain_word": ToriiClient._normalize_hex_string(
+                        public_inputs.get("target_domain_word"),
+                        context=f"{context}.payload.public_inputs.target_domain_word",
+                        expected_length=64,
+                    ),
+                    "commitment_root": ToriiClient._normalize_hex_string(
+                        public_inputs.get("commitment_root"),
+                        context=f"{context}.payload.public_inputs.commitment_root",
+                        expected_length=64,
+                    ),
+                    "finality_height_word": ToriiClient._normalize_hex_string(
+                        public_inputs.get("finality_height_word"),
+                        context=f"{context}.payload.public_inputs.finality_height_word",
+                        expected_length=64,
+                    ),
+                    "finality_block_hash": ToriiClient._normalize_hex_string(
+                        public_inputs.get("finality_block_hash"),
+                        context=f"{context}.payload.public_inputs.finality_block_hash",
+                        expected_length=64,
+                    ),
+                },
+                "statement_hash": ToriiClient._normalize_hex_string(
+                    body.get("statement_hash"),
+                    context=f"{context}.payload.statement_hash",
+                    expected_length=64,
+                ),
+            }
+            return SccpPlatformSubmissionPayload(kind=kind, value=value)
+        if kind in {"solana_program_instruction", "substrate_runtime_call"}:
+            value = {
+                "proof_bytes": ToriiClient._require_hex_string(
+                    body.get("proof_bytes"),
+                    f"{context}.payload.proof_bytes",
+                ),
+                "public_inputs_bytes": ToriiClient._require_hex_string(
+                    body.get("public_inputs_bytes"),
+                    f"{context}.payload.public_inputs_bytes",
+                ),
+                "bundle_bytes": ToriiClient._require_hex_string(
+                    body.get("bundle_bytes"),
+                    f"{context}.payload.bundle_bytes",
+                ),
+            }
+            return SccpPlatformSubmissionPayload(kind=kind, value=value)
+        if kind == "ton_internal_message":
+            value = {
+                "proof_cell": ToriiClient._require_hex_string(
+                    body.get("proof_cell"),
+                    f"{context}.payload.proof_cell",
+                ),
+                "public_inputs_cell": ToriiClient._require_hex_string(
+                    body.get("public_inputs_cell"),
+                    f"{context}.payload.public_inputs_cell",
+                ),
+                "bundle_cell": ToriiClient._require_hex_string(
+                    body.get("bundle_cell"),
+                    f"{context}.payload.bundle_cell",
+                ),
+            }
+            return SccpPlatformSubmissionPayload(kind=kind, value=value)
+        raise RuntimeError(f"{context}.platform must be a supported SCCP platform payload")
+
+    @staticmethod
+    def _parse_sccp_counterparty_submission_package(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpCounterpartySubmissionPackage:
+        record = ToriiClient._ensure_mapping(payload, context)
+        verifier_backend = ToriiClient._ensure_mapping(
+            record.get("verifier_backend"),
+            f"{context}.verifier_backend",
+        )
+        return SccpCounterpartySubmissionPackage(
+            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
+            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
+            verifier_backend_key=ToriiClient._require_string(
+                verifier_backend.get("key"),
+                f"{context}.verifier_backend.key",
+            ),
+            envelope_encoding=ToriiClient._require_string(
+                record.get("envelope_encoding"),
+                f"{context}.envelope_encoding",
+            ),
+            submission_kind=ToriiClient._require_string(
+                record.get("submission_kind"),
+                f"{context}.submission_kind",
+            ),
+            verifier_entrypoint=ToriiClient._require_string(
+                record.get("verifier_entrypoint"),
+                f"{context}.verifier_entrypoint",
+            ),
+            platform_payload=ToriiClient._parse_sccp_platform_submission_payload(
+                ToriiClient._ensure_mapping(record.get("platform_payload"), f"{context}.platform_payload"),
+                context=f"{context}.platform_payload",
+            ),
+            arguments=[
+                ToriiClient._parse_sccp_submission_argument_value(
+                    entry,
+                    context=f"{context}.arguments[{index}]",
+                )
+                for index, entry in enumerate(
+                    ToriiClient._parse_mapping_list(
+                        record.get("arguments"),
+                        context=f"{context}.arguments",
+                    )
+                )
+            ],
+            envelope_bytes=ToriiClient._require_hex_string(
+                record.get("envelope_bytes"),
+                f"{context}.envelope_bytes",
+            ),
+        )
+
+    @staticmethod
+    def _coerce_sccp_codec_scalar(value: Any, *, context: str) -> str:
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return bytes(value).hex()
+        if isinstance(value, (list, tuple)):
+            try:
+                return bytes(
+                    ToriiClient._coerce_unsigned(entry, f"{context}[{index}]")
+                    for index, entry in enumerate(value)
+                ).hex()
+            except ValueError as exc:
+                raise RuntimeError(f"{context} must contain byte values") from exc
+        if isinstance(value, str):
+            literal = value.strip()
+            if not literal:
+                raise RuntimeError(f"{context} must be a non-empty string")
+            if literal.startswith(("0x", "0X")):
+                literal = literal[2:]
+            if literal and all(ch in "0123456789abcdefABCDEF" for ch in literal):
+                return literal.lower()
+            return literal
+        raise RuntimeError(f"{context} must be bytes, a byte array, or a non-empty string")
+
+    @staticmethod
+    def _parse_sccp_normalized_codec_value(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpNormalizedCodecValue:
+        record = ToriiClient._ensure_mapping(payload, context)
+        if len(record) != 1:
+            raise RuntimeError(f"{context} must contain exactly one SCCP codec variant")
+        kind, body = next(iter(record.items()))
+        body_record = ToriiClient._ensure_mapping(body, f"{context}.{kind}")
+        if kind == "TextUtf8":
+            return SccpNormalizedCodecValue(
+                kind=kind,
+                value=ToriiClient._require_string(body_record.get("value"), f"{context}.{kind}.value"),
+            )
+        if kind in {"EvmHex", "SolanaBase58"}:
+            return SccpNormalizedCodecValue(
+                kind=kind,
+                value=ToriiClient._coerce_sccp_codec_scalar(
+                    body_record.get("bytes"),
+                    context=f"{context}.{kind}.bytes",
+                ),
+            )
+        if kind == "TonRaw":
+            return SccpNormalizedCodecValue(
+                kind=kind,
+                value={
+                    "workchain": ToriiClient._coerce_int(
+                        body_record.get("workchain"),
+                        f"{context}.{kind}.workchain",
+                    ),
+                    "account": ToriiClient._coerce_sccp_codec_scalar(
+                        body_record.get("account"),
+                        context=f"{context}.{kind}.account",
+                    ),
+                },
+            )
+        if kind == "TronBase58Check":
+            return SccpNormalizedCodecValue(
+                kind=kind,
+                value=ToriiClient._coerce_sccp_codec_scalar(
+                    body_record.get("payload"),
+                    context=f"{context}.{kind}.payload",
+                ),
+            )
+        raise RuntimeError(f"{context} has unsupported SCCP codec variant {kind}")
+
+    @staticmethod
+    def _parse_sccp_payload_projection(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpPayloadProjection:
+        record = ToriiClient._ensure_mapping(payload, context)
+        if len(record) != 1:
+            raise RuntimeError(f"{context} must contain exactly one SCCP payload projection variant")
+        kind, body = next(iter(record.items()))
+        body_record = ToriiClient._ensure_mapping(body, f"{context}.{kind}")
+
+        if kind == "AssetRegister":
+            value = {
+                "version": ToriiClient._coerce_unsigned(
+                    body_record.get("version"),
+                    f"{context}.{kind}.version",
+                ),
+                "target_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("target_domain"),
+                    f"{context}.{kind}.target_domain",
+                ),
+                "home_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("home_domain"),
+                    f"{context}.{kind}.home_domain",
+                ),
+                "nonce": ToriiClient._coerce_unsigned(
+                    body_record.get("nonce"),
+                    f"{context}.{kind}.nonce",
+                ),
+                "asset_id": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("asset_id"),
+                        f"{context}.{kind}.asset_id",
+                    ),
+                    context=f"{context}.{kind}.asset_id",
+                ),
+                "decimals": ToriiClient._coerce_unsigned(
+                    body_record.get("decimals"),
+                    f"{context}.{kind}.decimals",
+                ),
+            }
+            return SccpPayloadProjection(kind=kind, value=value)
+
+        if kind == "RouteActivate":
+            value = {
+                "version": ToriiClient._coerce_unsigned(
+                    body_record.get("version"),
+                    f"{context}.{kind}.version",
+                ),
+                "source_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("source_domain"),
+                    f"{context}.{kind}.source_domain",
+                ),
+                "target_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("target_domain"),
+                    f"{context}.{kind}.target_domain",
+                ),
+                "nonce": ToriiClient._coerce_unsigned(
+                    body_record.get("nonce"),
+                    f"{context}.{kind}.nonce",
+                ),
+                "asset_id": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("asset_id"),
+                        f"{context}.{kind}.asset_id",
+                    ),
+                    context=f"{context}.{kind}.asset_id",
+                ),
+                "route_id": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("route_id"),
+                        f"{context}.{kind}.route_id",
+                    ),
+                    context=f"{context}.{kind}.route_id",
+                ),
+            }
+            return SccpPayloadProjection(kind=kind, value=value)
+
+        if kind == "Transfer":
+            value = {
+                "version": ToriiClient._coerce_unsigned(
+                    body_record.get("version"),
+                    f"{context}.{kind}.version",
+                ),
+                "source_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("source_domain"),
+                    f"{context}.{kind}.source_domain",
+                ),
+                "dest_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("dest_domain"),
+                    f"{context}.{kind}.dest_domain",
+                ),
+                "nonce": ToriiClient._coerce_unsigned(
+                    body_record.get("nonce"),
+                    f"{context}.{kind}.nonce",
+                ),
+                "asset_home_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("asset_home_domain"),
+                    f"{context}.{kind}.asset_home_domain",
+                ),
+                "asset_id": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("asset_id"),
+                        f"{context}.{kind}.asset_id",
+                    ),
+                    context=f"{context}.{kind}.asset_id",
+                ),
+                "amount": ToriiClient._coerce_unsigned(
+                    body_record.get("amount"),
+                    f"{context}.{kind}.amount",
+                ),
+                "sender": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("sender"),
+                        f"{context}.{kind}.sender",
+                    ),
+                    context=f"{context}.{kind}.sender",
+                ),
+                "recipient": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("recipient"),
+                        f"{context}.{kind}.recipient",
+                    ),
+                    context=f"{context}.{kind}.recipient",
+                ),
+                "route_id": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("route_id"),
+                        f"{context}.{kind}.route_id",
+                    ),
+                    context=f"{context}.{kind}.route_id",
+                ),
+            }
+            return SccpPayloadProjection(kind=kind, value=value)
+
+        raise RuntimeError(f"{context} has unsupported SCCP payload projection variant {kind}")
+
+    @staticmethod
+    def _parse_sccp_message_proof_job(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpCounterpartyProofJob:
+        record = ToriiClient._ensure_mapping(payload, context)
+        chain_family = ToriiClient._require_choice(
+            record.get("chain_family"),
+            allowed=SCCP_CHAIN_FAMILY_VALUES,
+            context=f"{context}.chain_family",
+        )
+        job = SccpCounterpartyProofJob(
+            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
+            chain_family=chain_family,
+            chain=ToriiClient._require_string(record.get("chain"), f"{context}.chain"),
+            local_domain=ToriiClient._coerce_unsigned(
+                record.get("local_domain"),
+                f"{context}.local_domain",
+            ),
+            counterparty_domain=ToriiClient._coerce_unsigned(
+                record.get("counterparty_domain"),
+                f"{context}.counterparty_domain",
+            ),
+            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
+            message_backend=ToriiClient._require_string(
+                record.get("message_backend"),
+                f"{context}.message_backend",
+            ),
+            registry_backend=ToriiClient._require_string(
+                record.get("registry_backend"),
+                f"{context}.registry_backend",
+            ),
+            manifest_seed=ToriiClient._require_string(record.get("manifest_seed"), f"{context}.manifest_seed"),
+            finality_model=ToriiClient._require_choice(
+                record.get("finality_model"),
+                allowed=SCCP_FINALITY_MODEL_VALUES,
+                context=f"{context}.finality_model",
+            ),
+            verifier_target=ToriiClient._require_choice(
+                record.get("verifier_target"),
+                allowed=SCCP_VERIFIER_TARGET_VALUES,
+                context=f"{context}.verifier_target",
+            ),
+            public_inputs=ToriiClient._parse_sccp_message_transparent_public_inputs(
+                ToriiClient._ensure_mapping(record.get("public_inputs"), f"{context}.public_inputs"),
+                context=f"{context}.public_inputs",
+            ),
+            payload_kind=ToriiClient._require_string(record.get("payload_kind"), f"{context}.payload_kind"),
+            payload_projection=ToriiClient._parse_sccp_payload_projection(
+                ToriiClient._ensure_mapping(
+                    record.get("payload_projection"),
+                    f"{context}.payload_projection",
+                ),
+                context=f"{context}.payload_projection",
+            ),
+            submission_template=ToriiClient._parse_sccp_counterparty_submission_template(
+                ToriiClient._ensure_mapping(
+                    record.get("submission_template"),
+                    f"{context}.submission_template",
+                ),
+                context=f"{context}.submission_template",
+            ),
+            submission_package=ToriiClient._parse_sccp_counterparty_submission_package(
+                ToriiClient._ensure_mapping(
+                    record.get("submission_package"),
+                    f"{context}.submission_package",
+                ),
+                context=f"{context}.submission_package",
+            ),
+            bundle=ToriiClient._parse_sccp_message_proof_bundle(
+                ToriiClient._ensure_mapping(record.get("bundle"), f"{context}.bundle"),
+                context=f"{context}.bundle",
+            ),
+        )
+        if job.bundle.commitment.message_id != job.public_inputs.message_id:
+            raise RuntimeError(
+                f"{context}.bundle.commitment.message_id must match public_inputs.message_id"
+            )
+        if job.bundle.commitment.payload_hash != job.public_inputs.payload_hash:
+            raise RuntimeError(
+                f"{context}.bundle.commitment.payload_hash must match public_inputs.payload_hash"
+            )
+        if job.bundle.commitment_root != job.public_inputs.commitment_root:
+            raise RuntimeError(
+                f"{context}.bundle.commitment_root must match public_inputs.commitment_root"
+            )
+        return job
+
+    @staticmethod
+    def _parse_sccp_message_transparent_public_inputs(
+        value: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpMessageTransparentPublicInputs:
+        record = ToriiClient._ensure_mapping(value, context)
+        return SccpMessageTransparentPublicInputs(
+            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
+            message_id=ToriiClient._require_hex_string(record.get("message_id"), f"{context}.message_id"),
+            payload_hash=ToriiClient._require_hex_string(record.get("payload_hash"), f"{context}.payload_hash"),
+            target_domain=ToriiClient._coerce_unsigned(record.get("target_domain"), f"{context}.target_domain"),
+            commitment_root=ToriiClient._require_hex_string(
+                record.get("commitment_root"),
+                f"{context}.commitment_root",
+            ),
+            finality_height=ToriiClient._coerce_unsigned(
+                record.get("finality_height"),
+                f"{context}.finality_height",
+            ),
+            finality_block_hash=ToriiClient._require_hex_string(
+                record.get("finality_block_hash"),
+                f"{context}.finality_block_hash",
+            ),
+        )
+
+    @staticmethod
+    def _parse_sccp_message_proof_bundle(
+        value: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpMessageProofBundle:
+        record = ToriiClient._ensure_mapping(value, context)
+        return SccpMessageProofBundle(
+            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
+            commitment_root=ToriiClient._require_hex_string(
+                record.get("commitment_root"),
+                f"{context}.commitment_root",
+            ),
+            commitment=ToriiClient._parse_sccp_hub_commitment(
+                ToriiClient._ensure_mapping(record.get("commitment"), f"{context}.commitment"),
+                context=f"{context}.commitment",
+            ),
+            merkle_proof=ToriiClient._parse_sccp_merkle_proof(
+                ToriiClient._ensure_mapping(record.get("merkle_proof"), f"{context}.merkle_proof"),
+                context=f"{context}.merkle_proof",
+            ),
+            payload=ToriiClient._parse_sccp_payload_envelope(
+                record.get("payload"),
+                context=f"{context}.payload",
+            ),
+            finality_proof=ToriiClient._require_hex_string(
+                record.get("finality_proof"),
+                f"{context}.finality_proof",
+            ),
+        )
+
+    @staticmethod
+    def _parse_sccp_hub_commitment(value: Mapping[str, Any], *, context: str) -> SccpHubCommitment:
+        record = ToriiClient._ensure_mapping(value, context)
+        return SccpHubCommitment(
+            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
+            kind=ToriiClient._require_choice(
+                record.get("kind"),
+                allowed=SCCP_HUB_MESSAGE_KIND_VALUES,
+                context=f"{context}.kind",
+            ),
+            target_domain=ToriiClient._coerce_unsigned(record.get("target_domain"), f"{context}.target_domain"),
+            message_id=ToriiClient._require_hex_string(record.get("message_id"), f"{context}.message_id"),
+            payload_hash=ToriiClient._require_hex_string(record.get("payload_hash"), f"{context}.payload_hash"),
+            parliament_certificate_hash=(
+                ToriiClient._require_hex_string(
+                    record.get("parliament_certificate_hash"),
+                    f"{context}.parliament_certificate_hash",
+                )
+                if record.get("parliament_certificate_hash") is not None
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _parse_sccp_merkle_proof(value: Mapping[str, Any], *, context: str) -> SccpMerkleProof:
+        record = ToriiClient._ensure_mapping(value, context)
+        steps = [
+            ToriiClient._parse_sccp_merkle_step(step, context=f"{context}.steps[{index}]")
+            for index, step in enumerate(
+                ToriiClient._parse_mapping_list(record.get("steps"), context=f"{context}.steps")
+            )
+        ]
+        return SccpMerkleProof(steps=steps)
+
+    @staticmethod
+    def _parse_sccp_merkle_step(value: Mapping[str, Any], *, context: str) -> SccpMerkleStep:
+        record = ToriiClient._ensure_mapping(value, context)
+        sibling_is_left = record.get("sibling_is_left")
+        if not isinstance(sibling_is_left, bool):
+            raise RuntimeError(f"{context}.sibling_is_left must be a boolean")
+        return SccpMerkleStep(
+            sibling_hash=ToriiClient._require_hex_string(
+                record.get("sibling_hash"),
+                f"{context}.sibling_hash",
+            ),
+            sibling_is_left=sibling_is_left,
+        )
+
+    @staticmethod
+    def _parse_sccp_payload_envelope(value: Any, *, context: str) -> SccpPayloadEnvelope:
+        record = ToriiClient._ensure_mapping(value, context)
+        if len(record) != 1:
+            raise RuntimeError(f"{context} must contain exactly one SCCP payload variant")
+        kind, inner = next(iter(record.items()))
+        if kind not in SCCP_MESSAGE_PAYLOAD_KIND_VALUES:
+            allowed = ", ".join(sorted(SCCP_MESSAGE_PAYLOAD_KIND_VALUES))
+            raise RuntimeError(f"{context} must use one of: {allowed}")
+        payload_value = ToriiClient._ensure_mapping(inner, f"{context}.{kind}")
+        return SccpPayloadEnvelope(kind=kind, value=payload_value)
+
+    @staticmethod
     def _parse_node_sm_capabilities(value: Any, *, context: str) -> NodeSmCapabilities:
         record = ToriiClient._ensure_mapping(value or {}, context)
         enabled = ToriiClient._coerce_bool(record.get("enabled"), f"{context}.enabled")
@@ -7063,6 +8020,287 @@ class ToriiClient:
             registry_version=registry_version,
             allowed_curve_ids=allowed,
             allowed_curve_bitmap=bitmap,
+        )
+
+    @staticmethod
+    def _parse_contract_deploy_contract_receipt(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> ContractDeployContractReceipt:
+        record = ToriiClient._ensure_mapping(payload, context)
+        tx_hash_hex_value = record.get("tx_hash_hex")
+        tx_hash_hex = None
+        if tx_hash_hex_value is not None:
+            tx_hash_hex = ToriiClient._normalize_hex_string(
+                tx_hash_hex_value,
+                context=f"{context}.tx_hash_hex",
+                expected_length=64,
+            )
+        deploy_nonce_value = record.get("deploy_nonce")
+        deploy_nonce = None
+        if deploy_nonce_value is not None:
+            deploy_nonce = ToriiClient._coerce_unsigned(
+                deploy_nonce_value,
+                f"{context}.deploy_nonce",
+            )
+        return ContractDeployContractReceipt(
+            name=ToriiClient._require_non_empty_string(record.get("name"), f"{context}.name"),
+            contract_alias=ToriiClient._coerce_optional_string(
+                record.get("contract_alias"),
+                context=f"{context}.contract_alias",
+            ),
+            contract_address=ToriiClient._coerce_optional_string(
+                record.get("contract_address"),
+                context=f"{context}.contract_address",
+            ),
+            previous_contract_address=ToriiClient._coerce_optional_string(
+                record.get("previous_contract_address"),
+                context=f"{context}.previous_contract_address",
+            ),
+            upgraded=bool(record.get("upgraded")),
+            dataspace=ToriiClient._coerce_optional_string(
+                record.get("dataspace"),
+                context=f"{context}.dataspace",
+            ),
+            deploy_nonce=deploy_nonce,
+            tx_hash_hex=tx_hash_hex,
+            code_hash_hex=ToriiClient._normalize_hex_string(
+                record.get("code_hash_hex"),
+                context=f"{context}.code_hash_hex",
+                expected_length=64,
+            ),
+            abi_hash_hex=ToriiClient._normalize_hex_string(
+                record.get("abi_hash_hex"),
+                context=f"{context}.abi_hash_hex",
+                expected_length=64,
+            ),
+            status=ToriiClient._require_non_empty_string(
+                record.get("status"),
+                f"{context}.status",
+            ),
+        )
+
+    @staticmethod
+    def _parse_contract_deploy_call_receipt(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> ContractDeployCallReceipt:
+        record = ToriiClient._ensure_mapping(payload, context)
+        tx_hash_hex_value = record.get("tx_hash_hex")
+        tx_hash_hex = None
+        if tx_hash_hex_value is not None:
+            tx_hash_hex = ToriiClient._normalize_hex_string(
+                tx_hash_hex_value,
+                context=f"{context}.tx_hash_hex",
+                expected_length=64,
+            )
+        return ContractDeployCallReceipt(
+            id=ToriiClient._require_non_empty_string(record.get("id"), f"{context}.id"),
+            contract_alias=ToriiClient._coerce_optional_string(
+                record.get("contract_alias"),
+                context=f"{context}.contract_alias",
+            ),
+            entrypoint=ToriiClient._coerce_optional_string(
+                record.get("entrypoint"),
+                context=f"{context}.entrypoint",
+            ),
+            tx_hash_hex=tx_hash_hex,
+            status=ToriiClient._require_non_empty_string(
+                record.get("status"),
+                f"{context}.status",
+            ),
+        )
+
+    @staticmethod
+    def _parse_contract_deploy_assertion_receipt(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> ContractDeployAssertionReceipt:
+        record = ToriiClient._ensure_mapping(payload, context)
+        return ContractDeployAssertionReceipt(
+            id=ToriiClient._require_non_empty_string(record.get("id"), f"{context}.id"),
+            contract_alias=ToriiClient._coerce_optional_string(
+                record.get("contract_alias"),
+                context=f"{context}.contract_alias",
+            ),
+            entrypoint=ToriiClient._coerce_optional_string(
+                record.get("entrypoint"),
+                context=f"{context}.entrypoint",
+            ),
+            status=ToriiClient._require_non_empty_string(
+                record.get("status"),
+                f"{context}.status",
+            ),
+            actual_result=record.get("actual_result"),
+            expected_result=record.get("expected_result"),
+            error=ToriiClient._coerce_optional_string(
+                record.get("error"),
+                context=f"{context}.error",
+            ),
+        )
+
+    @staticmethod
+    def _parse_contract_deploy_response(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> ContractDeployResponse:
+        record = ToriiClient._ensure_mapping(payload, context)
+        contracts = ToriiClient._ensure_list(
+            record.get("contracts"),
+            context=f"{context}.contracts",
+        )
+        init_calls = ToriiClient._ensure_list(
+            record.get("init_calls"),
+            context=f"{context}.init_calls",
+        )
+        assertions = ToriiClient._ensure_list(
+            record.get("assertions"),
+            context=f"{context}.assertions",
+        )
+        return ContractDeployResponse(
+            ok=bool(record.get("ok")),
+            bundle_name=ToriiClient._require_non_empty_string(
+                record.get("bundle_name"),
+                f"{context}.bundle_name",
+            ),
+            bundle_digest=ToriiClient._require_non_empty_string(
+                record.get("bundle_digest"),
+                f"{context}.bundle_digest",
+            ),
+            chain_fingerprint=ToriiClient._require_non_empty_string(
+                record.get("chain_fingerprint"),
+                f"{context}.chain_fingerprint",
+            ),
+            dry_run=bool(record.get("dry_run")),
+            completed_stages=ToriiClient._parse_string_list(
+                record.get("completed_stages"),
+                context=f"{context}.completed_stages",
+            ),
+            failure_point=ToriiClient._coerce_optional_string(
+                record.get("failure_point"),
+                context=f"{context}.failure_point",
+            ),
+            contracts=[
+                ToriiClient._parse_contract_deploy_contract_receipt(
+                    ToriiClient._ensure_mapping(
+                        item,
+                        f"{context}.contracts[{index}]",
+                    ),
+                    context=f"{context}.contracts[{index}]",
+                )
+                for index, item in enumerate(contracts)
+            ],
+            init_calls=[
+                ToriiClient._parse_contract_deploy_call_receipt(
+                    ToriiClient._ensure_mapping(
+                        item,
+                        f"{context}.init_calls[{index}]",
+                    ),
+                    context=f"{context}.init_calls[{index}]",
+                )
+                for index, item in enumerate(init_calls)
+            ],
+            assertions=[
+                ToriiClient._parse_contract_deploy_assertion_receipt(
+                    ToriiClient._ensure_mapping(
+                        item,
+                        f"{context}.assertions[{index}]",
+                    ),
+                    context=f"{context}.assertions[{index}]",
+                )
+                for index, item in enumerate(assertions)
+            ],
+        )
+
+    @staticmethod
+    def _parse_contract_call_response(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> ContractCallResponse:
+        record = ToriiClient._ensure_mapping(payload, context)
+        tx_hash_hex_value = record.get("tx_hash_hex")
+        tx_hash_hex = None
+        if tx_hash_hex_value is not None:
+            tx_hash_hex = ToriiClient._normalize_hex_string(
+                tx_hash_hex_value,
+                context=f"{context}.tx_hash_hex",
+                expected_length=64,
+            )
+        return ContractCallResponse(
+            ok=bool(record.get("ok")),
+            submitted=bool(record.get("submitted")),
+            dataspace=ToriiClient._require_string(
+                record.get("dataspace"),
+                f"{context}.dataspace",
+            ),
+            code_hash_hex=ToriiClient._normalize_hex_string(
+                record.get("code_hash_hex"),
+                context=f"{context}.code_hash_hex",
+                expected_length=64,
+            ),
+            abi_hash_hex=ToriiClient._normalize_hex_string(
+                record.get("abi_hash_hex"),
+                context=f"{context}.abi_hash_hex",
+                expected_length=64,
+            ),
+            creation_time_ms=ToriiClient._coerce_unsigned(
+                record.get("creation_time_ms"),
+                f"{context}.creation_time_ms",
+            ),
+            contract_address=ToriiClient._coerce_optional_string(
+                record.get("contract_address"),
+                context=f"{context}.contract_address",
+            ),
+            tx_hash_hex=tx_hash_hex,
+            entrypoint=ToriiClient._coerce_optional_string(
+                record.get("entrypoint"),
+                context=f"{context}.entrypoint",
+            ),
+            transaction_scaffold_b64=ToriiClient._normalize_optional_base64_payload(
+                record.get("transaction_scaffold_b64"),
+                context=f"{context}.transaction_scaffold_b64",
+            ),
+            signed_transaction_b64=ToriiClient._normalize_optional_base64_payload(
+                record.get("signed_transaction_b64"),
+                context=f"{context}.signed_transaction_b64",
+            ),
+            signing_message_b64=ToriiClient._normalize_optional_base64_payload(
+                record.get("signing_message_b64"),
+                context=f"{context}.signing_message_b64",
+            ),
+        )
+
+    @staticmethod
+    def _parse_governance_contract_response(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> GovernanceContractResponse:
+        record = ToriiClient._ensure_mapping(payload, context)
+        code_hash_hex_value = record.get("code_hash_hex")
+        code_hash_hex = None
+        if code_hash_hex_value is not None:
+            code_hash_hex = ToriiClient._normalize_hex_string(
+                code_hash_hex_value,
+                context=f"{context}.code_hash_hex",
+                expected_length=64,
+            )
+        return GovernanceContractResponse(
+            found=bool(record.get("found")),
+            contract_address=ToriiClient._require_string(
+                record.get("contract_address"),
+                f"{context}.contract_address",
+            ),
+            dataspace=ToriiClient._coerce_optional_string(
+                record.get("dataspace"),
+                context=f"{context}.dataspace",
+            ),
+            code_hash_hex=code_hash_hex,
         )
 
     @staticmethod

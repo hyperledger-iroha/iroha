@@ -38,7 +38,7 @@ Norito پر ایک تعصب CSV بلڈر فراہم کرتا ہے جو ڈھان�
 | `suffix_id` | ہاں | لاحقہ عددی شناخت کنندہ (اعشاریہ یا `0x` ہیکس)۔ |
 | `owner` | ہاں | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | ہاں | انٹیجر `1..=255`۔ |
-| `payment_asset_id` | ہاں | تصفیہ اثاثہ (جیسے `xor#sora`)۔ |
+| `payment_asset_id` | ہاں | تصفیہ اثاثہ (جیسے `61CtjvNd9T3THAR65GsMVHr82Bjc`)۔ |
 | `payment_gross` / `payment_net` | ہاں | اثاثہ کے مقامی اکائیوں کی نمائندگی کرنے والے دستخط شدہ عدد۔ |
 | `settlement_tx` | ہاں | ادائیگی کے لین دین یا ہیش کو بیان کرنے والے JSON قدر یا لفظی تار۔ |
 | `payment_payer` | ہاں | اکاؤنٹ آئی ڈی جس نے ادائیگی کو اختیار دیا۔ |
@@ -77,18 +77,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -112,7 +112,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -132,9 +132,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- مددگار `POST /v1/sns/registrations` فی درخواست کا اخراج کرتا ہے اور پہلے میں رک جاتا ہے
+- مددگار `POST /v1/sns/names` فی درخواست کا اخراج کرتا ہے اور پہلے میں رک جاتا ہے
   HTTP غلطی. جوابات کو لاگ میں این ڈی جےسن ریکارڈ کے طور پر شامل کیا جاتا ہے۔
-- `--poll-status` ہر ایک کے بعد `/v1/sns/registrations/{selector}` کو دوبارہ داخل کرتا ہے
+- `--poll-status` ہر ایک کے بعد `/v1/sns/names/{namespace}/{literal}` کو دوبارہ داخل کرتا ہے
   اس کی تصدیق کرنے کے لئے جمع کرانا (`--poll-attempts` ، پہلے سے طے شدہ 5)
   ریکارڈنگ نظر آتی ہے۔ `--suffix-map` (`suffix_id` کا JSON فراہم کریں
   "لاحقہ" اقدار کو) تاکہ آلے کے لغویوں کو اخذ کیا جائے
@@ -225,7 +225,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -249,7 +249,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   فائلوں کے حوالہ جات CSV کے مقام کے مطابق حل کیے جاتے ہیں۔
   غیر آبجیکٹ میٹا ڈیٹا توثیق کی غلطی پیدا کرتا ہے۔
 - ** کنٹرولرز: ** خالی خلیات `--default-controllers` کا احترام کرتے ہیں۔ فراہم کریں
-  جب آپ تفویض کرتے ہیں تو واضح فہرستیں (جیسے `i105...;i105...`)
+  جب آپ تفویض کرتے ہیں تو واضح فہرستیں (جیسے `<i105-account-id>;<i105-account-id>`)
   غیر مالک اداکار۔
 
 متعلقہ لائن نمبر (جیسے۔

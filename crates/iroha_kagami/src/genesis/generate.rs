@@ -8,12 +8,15 @@ use color_eyre::eyre::WrapErr as _;
 use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
+    account::address::ChainDiscriminantGuard,
+    isi::verifying_keys,
     parameter::{
         Parameter, Parameters,
         custom::{CustomParameter, CustomParameterId},
         system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
     },
     prelude::*,
+    proof::VerifyingKeyId,
 };
 use iroha_executor_data_model::permission::{
     account::CanRegisterAccount, domain::CanRegisterDomain, parameter::CanSetParameters,
@@ -26,22 +29,36 @@ use iroha_version::BuildLine;
 use crate::{
     Outcome, RunArgs,
     genesis::profile::{
-        GenesisProfile, ProfileDefaults, parse_vrf_seed_hex, profile_defaults,
-        profile_requires_npos, resolve_vrf_seed,
+        GenesisProfile, ProfileDefaults, known_chain_discriminant_for_chain_id, parse_vrf_seed_hex,
+        profile_defaults, profile_requires_npos, resolve_vrf_seed,
     },
     tui,
 };
 
+const OFFLINE_NOTE_V2_VK_NAMESPACE: &str = "offline_note_v2";
+
+fn offline_note_v2_verifier_registration()
+-> color_eyre::Result<(VerifyingKeyId, iroha_data_model::proof::VerifyingKeyRecord)> {
+    let id = VerifyingKeyId::new(
+        iroha_core::zk::ZK_BACKEND_HALO2_IPA,
+        iroha_core::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+    );
+    let record =
+        iroha_core::zk::offline_note_v2_recursive_vk_record(OFFLINE_NOTE_V2_VK_NAMESPACE, 1)
+            .map_err(|error| color_eyre::eyre::eyre!(error))?;
+    Ok((id, record))
+}
+
 /// Generate a genesis configuration and standard-output in JSON format
 #[derive(Parser, Debug, Clone)]
 pub struct Args {
-    /// Optional profile: picks Iroha3 defaults for dev/testus/nexus (sets chain id, DA/RBC, collector knobs).
+    /// Optional profile: picks Iroha3 defaults for dev/taira/nexus (sets chain id, DA/RBC, collector knobs).
     #[clap(long, value_enum, value_name = "PROFILE")]
     profile: Option<GenesisProfile>,
     /// Optional explicit chain id (overrides profile default).
     #[clap(long, value_name = "CHAIN_ID")]
     chain_id: Option<ChainId>,
-    /// Optional VRF seed (hex, 32 bytes). Required for `iroha3-testus`/`iroha3-nexus`
+    /// Optional VRF seed (hex, 32 bytes). Required for `iroha3-taira`/`iroha3-nexus`
     /// when NPoS is selected; ignored for permissioned manifests.
     #[clap(long, value_name = "HEX")]
     vrf_seed_hex: Option<String>,
@@ -345,7 +362,7 @@ fn build_genesis_for_mode(
     resolved_vrf_seed: Option<[u8; 32]>,
     build_line: BuildLine,
 ) -> color_eyre::Result<RawGenesisTransaction> {
-    match mode {
+    let genesis = match mode {
         Mode::Default => generate_default(
             builder,
             genesis_public_key,
@@ -375,7 +392,48 @@ fn build_genesis_for_mode(
             resolved_vrf_seed,
             build_line,
         ),
+    }?;
+
+    Ok(apply_npos_crypto_overrides(
+        genesis,
+        consensus_mode,
+        next_consensus_mode,
+    ))
+}
+
+fn apply_npos_crypto_overrides(
+    genesis: RawGenesisTransaction,
+    consensus_mode: SumeragiConsensusMode,
+    next_consensus_mode: Option<SumeragiConsensusMode>,
+) -> RawGenesisTransaction {
+    let npos_bootstrap = matches!(consensus_mode, SumeragiConsensusMode::Npos)
+        || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+    if !npos_bootstrap {
+        return genesis;
     }
+
+    let mut crypto = genesis.crypto().clone();
+    if !crypto
+        .allowed_signing
+        .iter()
+        .any(|algo| matches!(algo, Algorithm::BlsNormal))
+    {
+        crypto.allowed_signing.push(Algorithm::BlsNormal);
+    }
+    crypto.allowed_signing.sort();
+    crypto.allowed_signing.dedup();
+    crypto.allowed_curve_ids = crypto
+        .allowed_signing
+        .iter()
+        .filter_map(|algo| {
+            iroha_data_model::account::curve::CurveId::try_from_algorithm(*algo).ok()
+        })
+        .map(iroha_data_model::account::curve::CurveId::as_u8)
+        .collect();
+    crypto.allowed_curve_ids.sort_unstable();
+    crypto.allowed_curve_ids.dedup();
+
+    genesis.into_builder().with_crypto(crypto).build_raw()
 }
 
 fn format_profile_summary(
@@ -549,6 +607,13 @@ impl<T: Write> RunArgs<T> for Args {
             resolved_vrf_seed,
             build_line,
         )?;
+        let chain_discriminant = profile_defaults
+            .as_ref()
+            .and_then(|defaults| defaults.chain_discriminant)
+            .or_else(|| known_chain_discriminant_for_chain_id(summary_chain.as_str()))
+            .unwrap_or_else(iroha_data_model::account::address::chain_discriminant);
+        let genesis = genesis.with_chain_discriminant(chain_discriminant);
+        let _chain_discriminant = ChainDiscriminantGuard::enter(chain_discriminant);
         let json = norito::json::to_json_pretty(&genesis)?;
         writeln!(writer, "{json}").wrap_err("failed to write serialized genesis to the buffer")?;
         if let Some(profile) = profile {
@@ -581,20 +646,25 @@ pub fn generate_default(
     let genesis_account_id = AccountId::new(genesis_public_key.clone());
     let meta = Metadata::default();
     let wonderland_name: Name = "wonderland".parse()?;
-    let wonderland_domain = DomainId::new(wonderland_name.clone());
+    let universal_dataspace: Name = "universal".parse()?;
+    let wonderland_domain =
+        DomainId::try_new(wonderland_name.as_ref(), universal_dataspace.as_ref())?;
     let garden_of_live_flowers_name: Name = "garden_of_live_flowers".parse()?;
-    let garden_of_live_flowers_domain = DomainId::new(garden_of_live_flowers_name.clone());
+    let garden_of_live_flowers_domain = DomainId::try_new(
+        garden_of_live_flowers_name.as_ref(),
+        universal_dataspace.as_ref(),
+    )?;
     let rose_asset_definition_id =
         AssetDefinitionId::new(wonderland_domain.clone(), "rose".parse()?);
     let cabbage_asset_definition_id =
         AssetDefinitionId::new(garden_of_live_flowers_domain.clone(), "cabbage".parse()?);
 
     let mut builder = builder
-        .domain_with_metadata(wonderland_name, meta.clone())
+        .domain_with_metadata(wonderland_domain.clone(), meta.clone())
         .account_with_metadata(ALICE_ID.signatory().clone(), meta.clone())
         .asset("rose".parse()?, NumericSpec::default())
         .finish_domain()
-        .domain(garden_of_live_flowers_name)
+        .domain(garden_of_live_flowers_domain.clone())
         .account(CARPENTER_ID.signatory().clone())
         .asset("cabbage".parse()?, NumericSpec::default())
         .finish_domain();
@@ -615,6 +685,14 @@ pub fn generate_default(
         Grant::account_permission(CanSetParameters, ALICE_ID.clone());
     let grant_permission_to_register_domains =
         Grant::account_permission(CanRegisterDomain, ALICE_ID.clone());
+    let grant_permission_to_manage_soracloud = Grant::account_permission(
+        Permission::new("CanManageSoracloud".into(), Json::new(())),
+        ALICE_ID.clone(),
+    );
+    let grant_permission_to_manage_verifying_keys = Grant::account_permission(
+        Permission::new("CanManageVerifyingKeys".into(), Json::new(())),
+        genesis_account_id.clone(),
+    );
     let grant_permission_to_register_accounts =
         Grant::account_permission(register_account_permission, ALICE_ID.clone());
     let transfer_rose_ownership = Transfer::asset_definition(
@@ -660,6 +738,16 @@ pub fn generate_default(
             SumeragiParameter::ModeActivationHeight(height),
         ));
     }
+    let (offline_note_v2_vk_id, offline_note_v2_vk_record) =
+        offline_note_v2_verifier_registration()?;
+    builder = builder
+        .next_transaction()
+        .append_instruction(grant_permission_to_manage_verifying_keys)
+        .next_transaction()
+        .append_instruction(verifying_keys::RegisterVerifyingKey {
+            id: offline_note_v2_vk_id,
+            record: offline_note_v2_vk_record,
+        });
 
     // Use transaction-oriented API: separate initial registrations from
     // subsequent state updates.
@@ -670,6 +758,7 @@ pub fn generate_default(
         .append_instruction(transfer_rose_ownership)
         .append_instruction(grant_permission_to_set_parameters)
         .append_instruction(grant_permission_to_register_domains)
+        .append_instruction(grant_permission_to_manage_soracloud)
         .append_instruction(grant_permission_to_register_accounts);
 
     let manifest = builder.build_raw().with_consensus_mode(consensus_mode);
@@ -752,6 +841,137 @@ mod da_tests {
             Some(5),
             "genesis should include mode_activation_height when requested"
         );
+    }
+
+    #[test]
+    fn default_genesis_registers_offline_note_v2_verifier() -> color_eyre::Result<()> {
+        let builder = GenesisBuilder::new_without_executor(
+            ChainId::from("offline-note-v2-genesis"),
+            PathBuf::from("."),
+        );
+        let manifest = generate_default(
+            builder,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Npos,
+            None,
+            None,
+            None,
+            None,
+            BuildLine::Iroha3,
+        )?;
+
+        let offline_vk_id = VerifyingKeyId::new(
+            iroha_core::zk::ZK_BACKEND_HALO2_IPA,
+            iroha_core::zk::OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        );
+        let register = manifest
+            .instructions()
+            .filter_map(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
+            })
+            .find(|register| register.id == offline_vk_id)
+            .expect("default genesis must register the Offline V2 verifier");
+        assert!(register.record.is_active());
+        assert_eq!(register.record.namespace, OFFLINE_NOTE_V2_VK_NAMESPACE);
+        assert_eq!(
+            register.record.public_inputs_schema_hash,
+            iroha_data_model::offline::offline_note_v2_recursive_public_inputs_schema_hash()
+        );
+        assert_eq!(
+            register.record.key.as_ref().map(|key| key.backend.as_str()),
+            Some(iroha_core::zk::ZK_BACKEND_HALO2_IPA)
+        );
+
+        let expected_vk_set_hash =
+            iroha_genesis::compute_genesis_vk_set_hash(manifest.instructions())?
+                .expect("verifier registry hash should be populated");
+        let batches = manifest.parse()?;
+        let declared_vk_set_hash = batches
+            .into_iter()
+            .flatten()
+            .find_map(|instruction| {
+                let set_parameter = instruction.as_any().downcast_ref::<SetParameter>()?;
+                let Parameter::Custom(custom) = set_parameter.inner() else {
+                    return None;
+                };
+                if custom.id()
+                    != &iroha_data_model::parameter::system::confidential_metadata::registry_root_id()
+                {
+                    return None;
+                }
+                let value: norito::json::Value =
+                    custom.payload().try_into_any_norito().ok()?;
+                let Some(norito::json::Value::String(hash)) = value.get("vk_set_hash") else {
+                    return None;
+                };
+                Some(hash.clone())
+            })
+            .expect("confidential registry root must declare the generated VK set hash");
+        assert_eq!(
+            declared_vk_set_hash,
+            format!("0x{}", hex::encode(expected_vk_set_hash))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn default_genesis_grants_verifying_key_permission_before_registration()
+    -> color_eyre::Result<()> {
+        let builder = GenesisBuilder::new_without_executor(
+            ChainId::from("offline-note-v2-permission-order"),
+            PathBuf::from("."),
+        );
+        let manifest = generate_default(
+            builder,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Permissioned,
+            None,
+            None,
+            None,
+            None,
+            BuildLine::Iroha3,
+        )?;
+        let genesis_account_id =
+            AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
+        let batches = manifest.parse()?;
+        let grant_batch = batches
+            .iter()
+            .position(|batch| {
+                batch.iter().any(|instruction| {
+                    let Some(GrantBox::Permission(grant)) =
+                        instruction.as_any().downcast_ref::<GrantBox>()
+                    else {
+                        return false;
+                    };
+                    let permission_name: &str = grant.object().name().as_ref();
+                    grant.destination() == &genesis_account_id
+                        && permission_name == "CanManageVerifyingKeys"
+                })
+            })
+            .expect("default genesis must grant verifying-key management");
+        let registration_batch = batches
+            .iter()
+            .position(|batch| {
+                batch.iter().any(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<verifying_keys::RegisterVerifyingKey>()
+                        .is_some()
+                })
+            })
+            .expect("default genesis must register an offline-note verifier");
+
+        assert!(
+            grant_batch < registration_batch,
+            "verifying-key management grant must commit before verifier registration"
+        );
+
+        Ok(())
     }
 
     #[test]
@@ -850,14 +1070,18 @@ mod profile_cli_tests {
     }
 
     fn run_and_parse(args: Args) -> color_eyre::Result<RawGenesisTransaction> {
+        let json = run_to_string(args)?;
+        let manifest: RawGenesisTransaction =
+            norito::json::from_str(&json).map_err(|err| color_eyre::eyre::eyre!(err))?;
+        Ok(manifest)
+    }
+
+    fn run_to_string(args: Args) -> color_eyre::Result<String> {
         let mut buf = BufWriter::new(Vec::new());
         args.run(&mut buf)?;
         buf.flush().expect("flush buffer");
         let bytes = buf.into_inner().expect("buffer into inner");
-        let json = String::from_utf8(bytes).expect("utf8 output");
-        let manifest: RawGenesisTransaction =
-            norito::json::from_str(&json).map_err(|err| color_eyre::eyre::eyre!(err))?;
-        Ok(manifest)
+        Ok(String::from_utf8(bytes).expect("utf8 output"))
     }
 
     #[test]
@@ -967,11 +1191,11 @@ mod profile_cli_tests {
     }
 
     #[test]
-    fn testus_profile_requires_explicit_seed() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Testus);
+    fn taira_profile_requires_explicit_seed() {
+        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
         args.vrf_seed_hex = None;
 
-        let err = run_and_parse(args).expect_err("testus profile should require seed");
+        let err = run_and_parse(args).expect_err("taira profile should require seed");
         assert!(
             err.to_string().contains("vrf-seed-hex"),
             "unexpected error: {err}"
@@ -979,12 +1203,12 @@ mod profile_cli_tests {
     }
 
     #[test]
-    fn testus_profile_applies_explicit_seed() {
-        let mut args = base_profile_args(GenesisProfile::Iroha3Testus);
+    fn taira_profile_applies_explicit_seed() {
+        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
         let seed = [0x11u8; 32];
         args.vrf_seed_hex = Some(hex::encode(seed));
 
-        let manifest = run_and_parse(args).expect("testus profile with seed should succeed");
+        let manifest = run_and_parse(args).expect("taira profile with seed should succeed");
         let params = manifest.effective_parameters();
         let npos_param_id = SumeragiNposParameters::parameter_id();
         let npos = params
@@ -993,6 +1217,22 @@ mod profile_cli_tests {
             .and_then(SumeragiNposParameters::from_custom_parameter)
             .expect("npos parameters should be present");
         assert_eq!(npos.epoch_seed(), seed);
+    }
+
+    #[test]
+    fn taira_profile_renders_test_prefix_account_literals() {
+        let mut args = base_profile_args(GenesisProfile::Iroha3Taira);
+        args.vrf_seed_hex = Some(hex::encode([0x22u8; 32]));
+
+        let json = run_to_string(args).expect("taira profile should render");
+        assert!(
+            json.contains("\"testu"),
+            "taira profile JSON should contain testnet i105 literals: {json}"
+        );
+        assert!(
+            !json.contains("\"sorau"),
+            "taira profile JSON must not leak mainnet i105 literals: {json}"
+        );
     }
 }
 
@@ -1207,6 +1447,46 @@ mod helper_tests {
     }
 
     #[test]
+    fn build_genesis_for_mode_enables_bls_crypto_for_npos() {
+        let builder = GenesisBuilder::new_without_executor(
+            ChainId::from("mode-build-npos"),
+            PathBuf::from("."),
+        );
+        let manifest = build_genesis_for_mode(
+            Mode::Default,
+            builder,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Npos,
+            None,
+            None,
+            None,
+            None,
+            BuildLine::Iroha3,
+        )
+        .expect("npos manifest should build");
+
+        assert!(
+            manifest
+                .crypto()
+                .allowed_signing
+                .iter()
+                .any(|algo| matches!(algo, Algorithm::BlsNormal)),
+            "npos manifests must advertise bls_normal in allowed_signing"
+        );
+        let bls_curve =
+            iroha_data_model::account::curve::CurveId::try_from_algorithm(Algorithm::BlsNormal)
+                .expect("bls curve id");
+        assert!(
+            manifest
+                .crypto()
+                .allowed_curve_ids
+                .contains(&bls_curve.as_u8()),
+            "npos manifests must advertise the bls curve id"
+        );
+    }
+
+    #[test]
     fn format_profile_summary_includes_expected_fields() {
         let profile = GenesisProfile::Iroha3Dev;
         let defaults = profile_defaults(profile);
@@ -1347,7 +1627,7 @@ fn generate_synthetic(
     let mut builder = default_genesis.into_builder().next_transaction();
 
     for domain in 0..domains {
-        let domain_id: DomainId = format!("domain_{domain}").parse()?;
+        let domain_id = DomainId::try_new(format!("domain_{domain}"), "universal")?;
         builder = builder.append_instruction(Register::domain(Domain::new(domain_id.clone())));
 
         let mut synthetic_asset_definitions = Vec::new();
@@ -1364,9 +1644,8 @@ fn generate_synthetic(
 
         for _ in 0..accounts_per_domain {
             let (account_id, _account_keypair) = gen_account_in(&domain_id);
-            builder = builder.append_instruction(Register::account(Account::new(
-                account_id.to_account_id(domain_id.clone()),
-            )));
+            builder =
+                builder.append_instruction(Register::account(Account::new(account_id.clone())));
 
             for asset_definition_id in &synthetic_asset_definitions {
                 let mint = Mint::asset_numeric(
@@ -1404,6 +1683,11 @@ fn apply_da_rbc_policy_for_line(params: &mut Parameters, line: BuildLine) {
 
 #[cfg(test)]
 mod tests {
+    use std::io::BufWriter;
+
+    use iroha_data_model::isi::GrantBox;
+    use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+
     use super::*;
 
     #[test]
@@ -1422,17 +1706,56 @@ mod tests {
     fn profile_defaults_assign_chain_and_collectors() {
         let dev = profile_defaults(GenesisProfile::Iroha3Dev);
         assert_eq!(dev.chain_id, ChainId::from("iroha3-dev.local"));
+        assert_eq!(dev.chain_discriminant, None);
         assert_eq!(dev.collectors_k, 1);
         assert_eq!(dev.collectors_redundant_send_r, 1);
 
-        let testus = profile_defaults(GenesisProfile::Iroha3Testus);
-        assert_eq!(testus.chain_id, ChainId::from("iroha3-testus"));
-        assert_eq!(testus.collectors_k, 3);
-        assert_eq!(testus.collectors_redundant_send_r, 3);
+        let taira = profile_defaults(GenesisProfile::Iroha3Taira);
+        assert_eq!(taira.chain_id, ChainId::from("iroha3-taira"));
+        assert_eq!(taira.chain_discriminant, Some(369));
+        assert_eq!(taira.collectors_k, 3);
+        assert_eq!(taira.collectors_redundant_send_r, 3);
 
         let nexus = profile_defaults(GenesisProfile::Iroha3Nexus);
         assert_eq!(nexus.chain_id, ChainId::from("iroha3-nexus"));
+        assert_eq!(nexus.chain_discriminant, Some(753));
         assert_eq!(nexus.collectors_k, 5);
         assert_eq!(nexus.collectors_redundant_send_r, 3);
+    }
+
+    #[test]
+    fn generated_genesis_grants_alice_soracloud_management_permission() {
+        let mut output = BufWriter::new(Vec::new());
+        Args {
+            profile: Some(GenesisProfile::Iroha3Dev),
+            chain_id: None,
+            vrf_seed_hex: None,
+            executor: None,
+            ivm_dir: PathBuf::from("."),
+            genesis_public_key: SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
+            mode: None,
+            ivm_gas_limit_per_block: None,
+            consensus_mode: Some(ConsensusModeArg::Permissioned),
+            next_consensus_mode: None,
+            mode_activation_height: None,
+            crypto: CryptoArgs::default(),
+        }
+        .run(&mut output)
+        .expect("genesis generation should succeed");
+        output.flush().expect("flush generated manifest");
+        let manifest: RawGenesisTransaction =
+            norito::json::from_slice(&output.into_inner().expect("manifest bytes"))
+                .expect("generated manifest should parse");
+        let saw_permission = manifest.instructions().any(|instruction| {
+            let Some(GrantBox::Permission(grant)) = instruction.as_any().downcast_ref::<GrantBox>()
+            else {
+                return false;
+            };
+            grant.destination == *ALICE_ID && grant.object.name() == "CanManageSoracloud"
+        });
+        assert!(
+            saw_permission,
+            "generated genesis should grant ALICE_ID CanManageSoracloud"
+        );
     }
 }

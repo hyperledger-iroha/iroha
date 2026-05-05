@@ -91,54 +91,25 @@ Los helpers de inventario de cuentas aceptan un filtro opcional `asset_id` cuand
 
 ```python
 asset_id = "norito:4e52543000000001"
-assets = client.list_account_assets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=5)
-txs = client.list_account_transactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=5)
-holders = client.list_asset_holders("rose#wonderland", asset_id=asset_id, limit=5)
+assets = client.list_account_assets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", asset_id=asset_id, limit=5)
+txs = client.list_account_transactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", asset_id=asset_id, limit=5)
+holders = client.list_asset_holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", asset_id=asset_id, limit=5)
 print(assets, txs, holders)
 ```
 
-## 5. Allowances offline
+## 5. Offline V2 readiness
 
-Usa los endpoints de offline allowance para emitir certificados de wallet y registrarlos en la cadena. `top_up_offline_allowance` encadena los pasos de emitir + registrar (no hay un endpoint único de top-up):
+Use `GET /v1/offline/v2/readiness` through `get_offline_v2_readiness()` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080")
-
-draft = {
-    "controller": "i105:...",
-    "allowance": {"asset": "usd#wonderland", "amount": "10", "commitment": [1, 2]},
-    "spend_public_key": "ed0120deadbeef",
-    "attestation_report": [3, 4],
-    "issued_at_ms": 100,
-    "expires_at_ms": 200,
-    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-    "metadata": {},
-}
-
-top_up = client.top_up_offline_allowance(
-    certificate=draft,
-    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
-    private_key="operator-private-key",
-)
-print("registered", top_up.registration.certificate_id_hex)
+readiness = client.get_offline_v2_readiness()
+print("offline notes", readiness.offline_note_v2)
 ```
-
-Para renovaciones, llama `top_up_offline_allowance_renewal` con el id del certificado actual:
-
-```python
-renewed = client.top_up_offline_allowance_renewal(
-    certificate_id_hex=top_up.registration.certificate_id_hex,
-    certificate=draft,
-    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
-    private_key="operator-private-key",
-)
-print("renewed", renewed.registration.certificate_id_hex)
-```
-
-Si necesitas dividir el flujo, llama `issue_offline_certificate` (o `issue_offline_certificate_renewal`) seguido de `register_offline_allowance` o `renew_offline_allowance`.
-
 ## 6. Stream de eventos
 
 Los endpoints SSE de Torii se exponen como generadores. El SDK reanuda automáticamente cuando `resume=True` y proporcionas un `EventCursor`.

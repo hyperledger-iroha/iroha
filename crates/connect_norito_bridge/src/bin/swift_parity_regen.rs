@@ -9,7 +9,6 @@ use iroha_crypto::{Algorithm, HashOf, KeyPair};
 use iroha_data_model::{
     account::{AccountId, address},
     asset::{AssetId, id::AssetDefinitionId},
-    domain::DomainId,
     isi::{Burn, InstructionBox, Mint, Transfer},
     metadata::Metadata,
     name::Name,
@@ -20,6 +19,7 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::Numeric};
 use norito::{
     codec::Encode,
+    core::NoritoSerialize,
     json::{self, Map, Number, Value},
 };
 
@@ -85,18 +85,8 @@ impl Drop for ChainDiscriminantReset {
 
 fn parse_asset_definition_argument(raw: &str) -> Result<AssetDefinitionId, String> {
     let trimmed = raw.trim();
-    if let Ok(id) = trimmed.parse::<AssetDefinitionId>() {
-        return Ok(id);
-    }
-
-    let (name, domain) = trimmed
-        .split_once('#')
-        .ok_or_else(|| format!("invalid asset definition '{raw}'"))?;
-    let name = Name::from_str(name)
-        .map_err(|_| format!("invalid asset definition '{raw}': invalid name"))?;
-    let domain = DomainId::from_str(domain)
-        .map_err(|_| format!("invalid asset definition '{raw}': invalid domain"))?;
-    Ok(AssetDefinitionId::new(domain, name))
+    AssetDefinitionId::parse_address_literal(trimmed)
+        .map_err(|err| format!("invalid asset definition '{raw}': {err}"))
 }
 
 impl PayloadSpec {
@@ -277,6 +267,7 @@ fn run() -> Result<(), String> {
     let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
     let (_, public_key_bytes) = keypair.public_key().to_bytes();
     let public_key_hex = hex::encode(public_key_bytes);
+    let signed_schema_hash_hex = hex::encode(<SignedTransaction as NoritoSerialize>::schema_hash());
 
     fs::create_dir_all(&out_dir)
         .map_err(|err| format!("failed to create {}: {err}", out_dir.display()))?;
@@ -383,6 +374,10 @@ fn run() -> Result<(), String> {
         "signed".into(),
         Value::String(SIGNED_SCHEMA_NAME.to_string()),
     );
+    schema.insert(
+        "signed_schema_hash_hex".into(),
+        Value::String(signed_schema_hash_hex),
+    );
 
     let mut signing_key = Map::new();
     signing_key.insert("algorithm".into(), Value::String("ed25519".into()));
@@ -405,9 +400,18 @@ fn run() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::DomainId;
 
     fn account_literal(account: &AccountId) -> String {
         account.to_string()
+    }
+
+    fn asset_definition_literal(domain: &str, name: &str) -> String {
+        AssetDefinitionId::new(
+            DomainId::try_new(domain, "universal").expect("domain"),
+            name.parse().expect("name"),
+        )
+        .to_string()
     }
 
     #[test]
@@ -418,7 +422,10 @@ mod tests {
 
         let mut args = BTreeMap::new();
         args.insert("action".into(), "TransferAsset".into());
-        args.insert("asset".into(), "rose#wonderland#alice@wonderland".into());
+        args.insert(
+            "asset".into(),
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#alice@banka.dataspace".into(),
+        );
         args.insert("quantity".into(), "1.2500".into());
         args.insert("destination".into(), account_literal(&destination));
         let instruction = InstructionSpec {
@@ -442,7 +449,10 @@ mod tests {
         let destination = AccountId::new(keypair.public_key().clone());
         let mut args = BTreeMap::new();
         args.insert("action".into(), "TransferAsset".into());
-        args.insert("asset_definition_id".into(), "rose#wonderland".into());
+        args.insert(
+            "asset_definition_id".into(),
+            asset_definition_literal("wonderland", "rose"),
+        );
         args.insert("quantity".into(), "1.2500".into());
         args.insert("destination".into(), account_literal(&destination));
         let payload = PayloadSpec {
@@ -478,13 +488,9 @@ mod tests {
 
     #[test]
     fn parse_asset_definition_argument_accepts_canonical_literal() {
-        let canonical = AssetDefinitionId::new(
-            DomainId::from_str("wonderland").expect("domain"),
-            Name::from_str("rose").expect("name"),
-        )
-        .to_string();
+        let canonical = asset_definition_literal("wonderland", "rose");
         let parsed =
-            parse_asset_definition_argument(&canonical).expect("canonical aid should parse");
+            parse_asset_definition_argument(&canonical).expect("canonical base58 should parse");
         assert_eq!(parsed.to_string(), canonical);
     }
 }

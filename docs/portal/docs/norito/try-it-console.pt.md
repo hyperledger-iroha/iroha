@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/try-it-console.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d38bbaedc2d75fc67e3f027c46834fb5a94d5fccd845014f829f3defcbc782b5
-source_last_modified: "2025-11-20T15:21:55.938588+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: 2b1c75d262ff579d7b04df9122c9a9c55cd8d694a04cd326d3138717f396cfe7
+source_last_modified: "2026-03-26T11:40:25.614954+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -81,7 +81,7 @@ Quando as variaveis OAuth estao presentes, o sandbox renderiza um botao **Sign i
 4. Escolha o tipo de conteudo `application/x-norito` na gaveta "Try it", clique em **Choose File** e selecione seu payload. O proxy reescreve a requisicao para `/proxy/v1/pipeline/submit` e marca com `X-TryIt-Client=docs-portal-rapidoc`.
 5. Para baixar respostas Norito, defina `Accept: application/x-norito`. Swagger/RapiDoc exibem o seletor de cabecalho na mesma gaveta e retransmitem o binario de volta pelo proxy.
 
-Para rotas somente JSON, o sandbox Try it embutido costuma ser mais rapido: informe o caminho (por exemplo, `/v1/accounts/i105.../assets`), selecione o metodo HTTP, cole um corpo JSON quando necessario e clique em **Send request** para inspecionar cabecalhos, duracao e payloads no proprio painel.
+Para rotas somente JSON, o sandbox Try it embutido costuma ser mais rapido: informe o caminho (por exemplo, `/v1/accounts/<i105-account-id>/assets`), selecione o metodo HTTP, cole um corpo JSON quando necessario e clique em **Send request** para inspecionar cabecalhos, duracao e payloads no proprio painel.
 
 ## Solucao de problemas
 

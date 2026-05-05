@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-/** Immutable log entry describing an offline transfer for audit exports. */
+/** Immutable log entry describing an Offline V2 note event for audit exports. */
 public final class OfflineAuditEntry {
 
   private final String txId;

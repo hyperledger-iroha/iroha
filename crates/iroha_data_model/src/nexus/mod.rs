@@ -261,8 +261,8 @@ impl norito::json::JsonDeserialize for ShardId {
 pub struct DataSpaceId(u64);
 
 impl DataSpaceId {
-    /// Placeholder identifier for the singleton global data space.
-    pub const GLOBAL: Self = Self(0);
+    /// Identifier for the reserved `universal` data space.
+    pub const UNIVERSAL: Self = Self(0);
 
     /// Derive a [`DataSpaceId`] from a stable 32-byte hash.
     #[must_use]
@@ -291,7 +291,7 @@ impl DataSpaceId {
 
 impl Default for DataSpaceId {
     fn default() -> Self {
-        Self::GLOBAL
+        Self::UNIVERSAL
     }
 }
 
@@ -338,7 +338,7 @@ impl Default for LaneConfig {
     fn default() -> Self {
         Self {
             id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "default".to_string(),
             description: None,
             visibility: LaneVisibility::Public,
@@ -813,7 +813,7 @@ pub struct DataSpaceMetadata {
 impl Default for DataSpaceMetadata {
     fn default() -> Self {
         Self {
-            id: DataSpaceId::GLOBAL,
+            id: DataSpaceId::UNIVERSAL,
             alias: "universal".to_string(),
             description: None,
             fault_tolerance: 1,
@@ -868,6 +868,12 @@ impl DataSpaceCatalog {
     #[must_use]
     pub fn by_alias(&self, alias: &str) -> Option<&DataSpaceMetadata> {
         self.entries.iter().find(|entry| entry.alias == alias)
+    }
+
+    /// Find an entry by identifier.
+    #[must_use]
+    pub fn by_id(&self, id: DataSpaceId) -> Option<&DataSpaceMetadata> {
+        self.entries.iter().find(|entry| entry.id == id)
     }
 }
 
@@ -968,7 +974,7 @@ mod tests {
         let mut slice: &[u8] = &bytes;
         let decoded = DataSpaceId::decode_all(&mut slice).expect("decode DataSpaceId");
         assert_eq!(decoded, original);
-        assert_eq!(DataSpaceId::GLOBAL.as_u64(), 0);
+        assert_eq!(DataSpaceId::UNIVERSAL.as_u64(), 0);
     }
 
     #[test]

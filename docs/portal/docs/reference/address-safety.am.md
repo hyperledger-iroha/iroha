@@ -1,80 +1,73 @@
 ---
-lang: am
-direction: ltr
-source: docs/portal/docs/reference/address-safety.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: d19690fde1b9e3c6f072cf1ac5ad89fb82578eb1b21e4d8dbc82d399518b4d42
-source_last_modified: "2026-01-28T17:11:30.641899+00:00"
-translation_last_reviewed: 2026-02-07
 title: Address Safety & Accessibility
 description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
-translator: machine-google-reviewed
 ---
 
-ይህ ገጽ ADDR-6c ሊደርስ የሚችለውን ሰነድ ይይዛል። እነዚህን ተግብር
-የኪስ ቦርሳዎች፣ አሳሾች፣ የኤስዲኬ መሳሪያዎች እና ማንኛውም የፖርታል ገጽ ላይ ገደቦች
-ሰውን የሚመለከቱ አድራሻዎችን ይሰጣል ወይም ይቀበላል። ቀኖናዊው የውሂብ ሞዴል በ ውስጥ ይኖራል
-`docs/account_structure.md`; ከዚህ በታች ያለው የማረጋገጫ ዝርዝር እነዚያን እንዴት ማጋለጥ እንደሚቻል ያብራራል።
-ደህንነትን ወይም ተደራሽነትን ሳይጎዳ ቅርጸቶች።
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
-## ደህንነቱ የተጠበቀ መጋራት ይፈስሳል
+## Safe sharing flows
 
-- እያንዳንዱን ቅጂ/ማጋራት ድርጊት ወደ I105 አድራሻ ነባሪ። መፍትሄውን አሳይ
-  ጎራ እንደ ደጋፊ አውድ ስለዚህ የቼክ መደመር ሕብረቁምፊ ፊት እና መሃል ይቆያል።
-- ሙሉውን ግልጽ-ጽሑፍ አድራሻ እና QR የሚያጠቃልለውን የ"አጋራ" አቅም ያቅርቡ
-  ከተመሳሳይ ጭነት የተገኘ ኮድ. ተጠቃሚዎች ከመፈጸምዎ በፊት ሁለቱንም ይመርምሩ።
-- ቦታ መቆራረጥን በሚፈልግበት ጊዜ (ጥቃቅን ካርዶች ፣ ማሳወቂያዎች) መሪነቱን ይቀጥሉ
-  ሰው ሊነበብ የሚችል ቅድመ ቅጥያ፣ ሞላላዎችን አሳይ፣ እና የመጨረሻውን ከ4-6 ቁምፊዎች ያቆይ
-  የቼክሱም መልህቅ ይድናል. ሙሉውን ለመቅዳት የመታ/የቁልፍ ሰሌዳ አቋራጭ ያቅርቡ
-  ሕብረቁምፊ ያለ መቆራረጥ.
-- ቅድመ እይታውን የማረጋገጫ ቶስት በማውጣት የቅንጥብ ሰሌዳ አለመመሳሰልን ይከላከሉ።
-  የተቀዳው ትክክለኛ I105 ሕብረቁምፊ። ቴሌሜትሪ በሚገኝበት ቦታ, ቅጂ ይቁጠሩ
-  የ UX ድግግሞሾች በፍጥነት እንዲታዩ እርምጃዎችን ለመጋራት ሙከራዎች።
+- Default every copy/share action to the canonical I105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-## IME እና የግቤት መከላከያዎች
+## IME & input safeguards
 
-- በአድራሻ መስኮች ውስጥ ASCII ያልሆነ ግብዓት ውድቅ ያድርጉ። የIME ቅንብር ቅርሶች ሲሠሩ (ሙሉ
-  ስፋት፣ ቃና፣ የቃና ምልክቶች) ይታያሉ፣ እንዴት እንደሆነ የሚያብራራ የውስጠ-መስመር ማስጠንቀቂያ ይለጥፉ
-  እንደገና ከመሞከርዎ በፊት የቁልፍ ሰሌዳውን ወደ ላቲን ግቤት ለመቀየር።
-- ምልክቶችን የሚያጣምር እና የሚተካ ግልጽ-ጽሑፍ ለጥፍ ዞን ያቅርቡ
-  ከማረጋገጫው በፊት ነጭ ቦታ ከ ASCII ቦታዎች ጋር። ይህ ተጠቃሚዎች እንዳይሸነፉ ያደርጋቸዋል።
-  የ IME አጋማሽ ፍሰትን ሲያሰናክሉ እድገት።
-- ከዜሮ-ስፋት መጋጠሚያዎች፣ ከተለዋዋጭ መራጮች እና ከሌሎች ጋር መረጋገጥን ያጠናክሩ
-  ስውር የዩኒኮድ ነጥቦች። ውድቅ የተደረገውን የኮድ ነጥብ ምድብ በጣም ግራ የሚያጋባ ነው።
-  ስብስቦች ቴሌሜትሪውን ማስመጣት ይችላሉ።
+- Validate account-id fields as canonical I105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-## አጋዥ የቴክኖሎጂ ተስፋዎች
+## Assistive technology expectations
 
-- እያንዳንዱን የአድራሻ እገዳ በ `aria-label` ወይም `aria-describedby` ያብራሩ
-  በሰው ሊነበብ የሚችለውን ቅድመ ቅጥያ ይጽፋል እና ጭነቱን በ4-8 ቁምፊ ቆርጧል
-  ቡድኖች (“ih dash b three two…”)። ይህ የስክሪን አንባቢዎች አንድ እንዳያዘጋጁ ያግዳቸዋል።
-  የማይታወቅ የቁምፊዎች ፍሰት።
-- የተሳካ ቅጂ/ክስተቶችን በጨዋነት የቀጥታ ክልል ማሻሻያ ያውጁ። ያካትቱ
-  ተጠቃሚው ድርጊቱን እንዲያውቅ መድረሻው (ቅንጥብ ሰሌዳ ፣ መጋራት ሉህ ፣ QR)
-  ያለ ማንቀሳቀስ ትኩረት ተጠናቅቋል.
-- ለQR ቅድመ እይታዎች ገላጭ I18NI0000005X ጽሑፍ ያቅርቡ (ለምሳሌ፣ “I105 አድራሻ ለ
-  `<account>` በሰንሰለት I18NI0000007X”)። "አድራሻ እንደ ጽሑፍ ቅዳ" ያቅርቡ
-  ዝቅተኛ እይታ ላላቸው ተጠቃሚዎች ከQR ሸራ አጠገብ መውደቅ።
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## የሶራ-ብቻ የተጨመቁ አድራሻዎች
+## Single-format policy
 
-- ጌቲንግ፡ የ`i105` የታመቀ ሕብረቁምፊን ከግልጽ ማረጋገጫ ጀርባ ደብቅ።
-  ማረጋገጫው ቅጹ በሶራ I18NT0000000X ሰንሰለቶች ላይ ብቻ እንደሚሰራ በድጋሚ መግለጽ አለበት።
-መለያ መስጠት፡- እያንዳንዱ ክስተት የሚታይ “የሶራ-ብቻ” ባጅ እና ሀ
-  ሌሎች ኔትወርኮች የ I105 ቅጽ ለምን እንደሚያስፈልጋቸው የሚገልጽ መሣሪያ።
-- Guardrails: ንቁ ሰንሰለት አድልዎ የ I18NT0000001X ምደባ ካልሆነ,
-  የተጨመቀውን አድራሻ ሙሉ በሙሉ ለማመንጨት እምቢ ይበሉ እና ተጠቃሚውን ወደነበረበት ይመልሱ
-  I105.
-- ቴሌሜትሪ፡ የተጨመቀው ቅጽ ምን ያህል ጊዜ እንደተጠየቀ እና እንደተገለበጠ ይመዝግቡ
-  የክስተቶች ፕሌይ ደብተር በአጋጣሚ የሚጋሩትን ሹካዎችን መለየት ይችላል።
+- Keep canonical I105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-##ጥራት በሮች
+## Quality gates
 
-- ያንን አድራሻ ለማረጋገጥ አውቶሜትድ የUI ሙከራዎችን (ወይም የታሪክ መጽሐፍ a11y suites) ያራዝሙ
-  አካላት አስፈላጊውን የ ARIA ሜታዳታ እና የ IME ውድቅ መልእክቶችን ያጋልጣሉ
-  ብቅ ይላሉ።
-- ለ IME ግብዓት (ካና፣ ፒንዪን)፣ የስክሪን አንባቢ ማለፊያ በእጅ QA ሁኔታዎችን ያካትቱ
-  (VoiceOver/NVDA)፣ እና QR ከመልቀቃቸው በፊት በከፍተኛ ንፅፅር ገጽታዎች ላይ ይቅዱ።
-- እነዚህን ፍተሻዎች ከI105 እኩልነት ፈተናዎች ጋር በመልቀቂያ ዝርዝር ውስጥ ያሳዩ
-  ስለዚህ ድግግሞሾች እስኪታረሙ ድረስ ይቆያሉ።
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

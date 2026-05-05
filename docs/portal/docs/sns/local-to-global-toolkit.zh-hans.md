@@ -18,7 +18,7 @@ translator: machine-google-reviewed
 
 - `scripts/address_local_toolkit.sh` 包装 `iroha` CLI 以生成：
   - `audit.json` — `iroha tools address audit --format json` 的结构化输出。
-  - `normalized.txt` — 每个本地域选择器的已转换首选 I105/第二佳压缩 (`sora`) 文字。
+  - `normalized.txt` — 每个本地域选择器的已转换首选 i105/第二佳压缩 (`sora`) 文字。
 - 将脚本与地址提取仪表板配对 (`dashboards/grafana/address_ingest.json`)
   和Alertmanager规则（`dashboards/alerts/address_ingest_rules.yml`）来证明Local-8 /
   Local-12 切换是安全的。观看 Local-8 和 Local-12 碰撞面板以及
@@ -39,7 +39,7 @@ scripts/address_local_toolkit.sh \
 
 选项：
 
-- `--format i105` 用于 `i105` 输出而不是 I105。
+- `--format i105` 用于 `i105` 输出而不是 i105。
 - `domainless output (default)` 发出裸文字。
 - `--audit-only` 跳过转换步骤。
 - `--allow-errors` 在出现格式错误的行时继续扫描（与 CLI 行为匹配）。

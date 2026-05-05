@@ -58,7 +58,7 @@ enumerees dans `roadmap.md` en reliant chaque Workflow aux preuves requises،
 | الرسم البياني + الإضافات KPI | `docs/source/sns/governance_addenda/` | تم التوقيع على المخططات مع التحكم في الإصدار، واتفاقيات مؤشرات الأداء الرئيسية، وقرارات الحوكمة المرجعية من خلال أصوات CLI. |
 | مخطط التسجيل | [`registry-schema.md`](./registry-schema.md) | الهياكل Norito canoniques (`NameRecordV1`، `SuffixPolicyV1`، `RevenueAccrualEventV1`). |
 | عقد المسجل | [`registrar-api.md`](./registrar-api.md) | الحمولات النافعة REST/gRPC، تقيس `sns_registrar_status_total` وتراقب خطافات الإدارة. |
-| دليل عناوين تجربة المستخدم | [`address-display-guidelines.md`](./address-display-guidelines.md) | يتم إنتاج Rendus canoniques I105 (المفضل) والضغطات (الخيار الثاني) بواسطة المحافظ/المستكشفين. |
+| دليل عناوين تجربة المستخدم | [`address-display-guidelines.md`](./address-display-guidelines.md) | يتم إنتاج Rendus canoniques i105 (المفضل) والضغطات (الخيار الثاني) بواسطة المحافظ/المستكشفين. |
 | مستندات SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)، [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | يتم تحديد الاشتقاق من قبل المضيفين وسير العمل من خلال تخصيص الشفافية وقواعد التنبيه. |
 | المذكرات التنظيمية | `docs/source/sns/regulatory/` | Notes d'accueil par Judiction (على سبيل المثال الاتحاد الأوروبي DSA)، إقرارات الإقرارات، المرفقات النموذجية. |
 | مجلة الحفر | `ops/drill-log.md` | تتطلب Journal des rehearsals Chaos et IR طلعات جوية مسبقة. |
@@ -96,7 +96,7 @@ enumerees dans `roadmap.md` en reliant chaque Workflow aux preuves requises،
    قم بإلغاء تحديد جزء الشفافية من المحلل لتأكيد الجديد
    حالة GAR/المنطقة الأكثر انتشارًا (الصورة 4.5).
 6. **عميل الإفصاح:** Mettre a jour le ledger oriente client (المحفظة/المستكشف)عبر أجزاء التركيبات في [`address-display-guidelines.md`](./address-display-guidelines.md)،
-   En s'assurant que les rendus I105 et المضغوطات تتوافق مع أدلة النسخ/QR.
+   En s'assurant que les rendus i105 et المضغوطات تتوافق مع أدلة النسخ/QR.
 
 ### 4.3 خزينة التجديد والتفتيت والمصالحة- **سير العمل للتجديد:** يزين المسجلون نافذة نعمة
   30 يومًا + نافذة الاسترداد لمدة 60 يومًا محددة في `SuffixPolicyV1`.
@@ -125,11 +125,11 @@ enumerees dans `roadmap.md` en reliant chaque Workflow aux preuves requises،
 ### 4.4 المواد الهلامية والقضايا والطعون| المرحلة | مالك | العمل والسبق | جيش تحرير السودان |
 |-------|-------------|------------------|-----|
 | الطلب على الجل الناعم | ستيوارد / دعم | قم بإيداع تذكرة `SNS-DF-<id>` مع إجراءات الدفع ومرجع سند التقاضي وحدد التأثير (التأثيرات). | <=4 ساعات بعد الدخول. |
-| حارس التذاكر | حارس المجلس | `sns governance freeze --selector <I105> --reason <text> --until <ts>` المنتج `GuardianFreezeTicketV1`. Stocker le JSON du Ticket sous `artifacts/sns/guardian/<id>.json`. | <=30 دقيقة ACK، <=2 ساعة تنفيذ. |
+| حارس التذاكر | حارس المجلس | `sns governance freeze --selector <i105> --reason <text> --until <ts>` المنتج `GuardianFreezeTicketV1`. Stocker le JSON du Ticket sous `artifacts/sns/guardian/<id>.json`. | <=30 دقيقة ACK، <=2 ساعة تنفيذ. |
 | تصديق المجلس | مجلس الحكم | الموافقة على المواد الهلامية أو رفضها، وتوثيق القرار الخاص بالامتياز مقابل تذكرة الوصي وملخص سند التقاضي. | قم بإجراء جلسة مشورة أو التصويت بشكل غير متزامن. |
 | لوحة التحكيم | مطابق + ستيوارد | قم بتكوين لجنة مكونة من 7 محلفين (خارطة طريق محددة) باستخدام النشرات عبر `sns governance dispute ballot`. انضم إلى قائمة التصويت المجهولة المصدر في حزمة الحوادث. | الحكم <= 7 أيام بعد مستودع السندات. |
 | نداء | الجارديان + المجلس | تضاعف الطلبات السند وتتكرر عملية المحلفين؛ قم بتسجيل البيان Norito `DisputeAppealV1` وقم بالإشارة إلى التذكرة الأولى. | <=10 يوم. |
-| ديجل والعلاج | المسجل + محلل العمليات | قم بتنفيذ `sns governance unfreeze --selector <I105> --ticket <id>`، ومتابعة حالة المسجل، ونشر اختلافات GAR/resolver. | فورًا بعد صدور الحكم. |Les canons d'urgence (الجل المخفف من قبل الوصي <= 72 ساعة) يتبع تدفق الميم
+| ديجل والعلاج | المسجل + محلل العمليات | قم بتنفيذ `sns governance unfreeze --selector <i105> --ticket <id>`، ومتابعة حالة المسجل، ونشر اختلافات GAR/resolver. | فورًا بعد صدور الحكم. |Les canons d'urgence (الجل المخفف من قبل الوصي <= 72 ساعة) يتبع تدفق الميم
 ولكن من الضروري إجراء مراجعة بأثر رجعي للمشورة ومذكرة شفافة للغاية
 `docs/source/sns/regulatory/`.
 

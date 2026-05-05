@@ -19,6 +19,8 @@ fn all_pointer_types() -> Vec<PointerType> {
         AxtDescriptor,
         AssetHandle,
         ProofBlob,
+        SoracloudRequest,
+        SoracloudResponse,
     ]
 }
 

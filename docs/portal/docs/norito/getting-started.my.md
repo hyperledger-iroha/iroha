@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/getting-started.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8e153602cfb465bd5f65bab0cf97c44604bba982a7a7f1edc8d5af8fd67a9e29
-source_last_modified: "2026-01-22T16:26:46.504508+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 3754b8549f90a4f325bb58a6b4e24bc052ec65d46a6352995c13555a8d5544bf
+source_last_modified: "2026-04-08T09:18:21.504260+00:00"
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -22,7 +22,7 @@ Iroha node တစ်ခုသို့။
 2. ပံ့ပိုးပေးထားသော binaries ကို တည်ဆောက်ပါ သို့မဟုတ် ဒေါင်းလုဒ်လုပ်ပါ-
    - `koto_compile` – Kotodama IVM/Norito bytecode ကိုထုတ်လွှတ်သော compiler
    - `ivm_run` နှင့် `ivm_tool` - ဒေသဆိုင်ရာ ကွပ်မျက်ရေးနှင့် စစ်ဆေးရေး အသုံးဝင်မှုများ
-   - `iroha_cli` - Torii မှတစ်ဆင့် စာချုပ်ဖြန့်ကျက်ရာတွင် အသုံးပြုသည်
+   - `iroha` - Torii မှတစ်ဆင့် စာချုပ်ဖြန့်ကျက်ရာတွင် အသုံးပြုသည်
 
    Makefile repository သည် `PATH` တွင် ဤ binaries ကိုမျှော်လင့်ထားသည်။ သင်လည်းကောင်း
    ကြိုတင်တည်ဆောက်ထားသော ရှေးဟောင်းပစ္စည်းများကို ဒေါင်းလုဒ်လုပ်ပါ သို့မဟုတ် ၎င်းတို့ကို အရင်းအမြစ်မှ တည်ဆောက်ပါ။ compile လုပ်ရင်
@@ -34,7 +34,7 @@ Iroha node တစ်ခုသို့။
 
 3. သင်အသုံးပြုမှုအဆင့်သို့ရောက်ရှိသောအခါ Iroha node တစ်ခုလည်ပတ်ကြောင်းသေချာပါစေ။ ဟိ
    အောက်ဖော်ပြပါဥပမာများသည် Torii ကို သင့်တွင်ပြင်ဆင်ထားသော URL တွင်ရောက်ရှိနိုင်သည်ဟုယူဆသည်
-   `iroha_cli` ပရိုဖိုင် (`~/.config/iroha/cli.toml`)။
+   `iroha` ပရိုဖိုင် (`~/.config/iroha/cli.toml`)။
 
 ## 1. Kotodama စာချုပ်ကို စုစည်းပါ။
 
@@ -80,15 +80,15 @@ ivm_run target/examples/hello.to --args '{}'
 ထုတ်ဝေခြင်းမပြုမီ စာချုပ်ယုတ္တိကို ထပ်ခါတလဲလဲ လုပ်ဆောင်နေချိန်တွင် စက်တွင်းတွင် လုပ်ဆောင်ခြင်းသည် အသုံးဝင်ပါသည်။
 ကွင်းဆက်တစ်ခု။
 
-## 4. `iroha_cli` မှတစ်ဆင့် အသုံးပြုပါ။
+## 4. `iroha` မှတစ်ဆင့် အသုံးပြုပါ။
 
 စာချုပ်ကို ကျေနပ်သောအခါ၊ CLI ကို အသုံးပြု၍ node သို့ ဖြန့်ကျက်ပါ။
 အခွင့်အာဏာအကောင့်တစ်ခု၊ ၎င်း၏လက်မှတ်ထိုးသော့နှင့် `.to` ဖိုင်တစ်ခု သို့မဟုတ်
 Base64 ပေးဆောင်မှု-
 
 ```sh
-iroha_cli app contracts deploy \
-  --authority i105... \
+iroha app contracts deploy \
+  --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```
@@ -98,14 +98,13 @@ iroha_cli app contracts deploy \
 တုံ့ပြန်မှုတွင်ပြသထားသော hash ကို မန်နီးဖက်စ်များ သို့မဟုတ် ဖြစ်ရပ်များကို စာရင်းပြုစုရန် အသုံးပြုနိုင်သည်။
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha app contracts manifest get --code-hash 0x<hash>
 ```
 
 ## 5. Torii ကို run ပါ။
 
 bytecode မှတ်ပုံတင်ထားပြီး၊ ညွှန်ကြားချက်တစ်ခုတင်ပြခြင်းဖြင့် ၎င်းကိုသင်တောင်းဆိုနိုင်ပါသည်။
-သိမ်းဆည်းထားသောကုဒ်ကို ရည်ညွှန်းသည် (ဥပမာ၊ `iroha_cli ledger transaction submit` မှတဆင့်
+သိမ်းဆည်းထားသောကုဒ်ကို ရည်ညွှန်းသည် (ဥပမာ၊ `iroha app contracts call --contract-address <contract-address> --entrypoint main --wait` မှတဆင့်
 သို့မဟုတ် သင့်လျှောက်လွှာဖောက်သည်)။ အကောင့်ခွင့်ပြုချက်များ လိုချင်သောကိုခွင့်ပြုကြောင်းသေချာပါစေ။
 syscalls (`set_account_detail`၊ `transfer_asset` စသည်ဖြင့်)။
 
@@ -118,7 +117,7 @@ syscalls (`set_account_detail`၊ `transfer_asset` စသည်ဖြင့်)�
   ပစ်မှတ် နှစ်ခုစလုံးသည် ABI v1 (`koto_compile --abi` ကို စာရင်းသွင်းရန် အကြောင်းပြချက်များမပါဘဲ လုပ်ဆောင်သည်
   ပံ့ပိုးမှု)။
 - CLI သည် hex သို့မဟုတ် Base64 လက်မှတ်ထိုးသော့များကို လက်ခံသည်။ စမ်းသပ်ရန်အတွက်၊ သင်သုံးနိုင်သည်။
-  `iroha_cli tools crypto keypair` မှ ထုတ်လွှတ်သော သော့များ။
+  `kagami keys --json` မှ ထုတ်လွှတ်သော သော့များ။
 - Norito payloads ကို အမှားရှာသောအခါ၊ `ivm_tool disassemble` subcommand သည် ကူညီသည်
   Kotodama အရင်းအမြစ်နှင့် ညွှန်ကြားချက်များ ဆက်စပ်နေသည်။
 

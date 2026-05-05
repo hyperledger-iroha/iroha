@@ -40,6 +40,8 @@ json = [
 ]
 # Enable Chinese SM algorithm family plumbing in dependent crates.
 sm = [
+    "ivm/sm",
+    "iroha_config/sm",
     "iroha_crypto/sm",
     "iroha_data_model/sm",
 ]
@@ -52,7 +54,7 @@ expensive-telemetry = ["telemetry", "iroha_telemetry/metric-instrumentation"]
 # Enable portable SIMD acceleration for small-set helpers.
 simd = []
 profiling = []
-# Marker feature for functions used in benchmarks
+# Compatibility marker for older benchmark commands; Criterion is a dev-dependency.
 bench = []
 # Enable IDs-only query projections
 ids_projection = ["iroha_data_model/ids_projection"]
@@ -77,7 +79,7 @@ circuit-params = ["halo2_proofs/circuit-params"]
 # Enable stateless pre-verify + dedup wiring (mock via metadata)
 zk-preverify = []
 # Gate zk-heavy tests; enable with `--features zk-tests` when needed
-zk-tests = []
+zk-tests = ["iroha-core-tests"]
 # Enable developer Halo2 test vectors (heavy tooling, opt-in only).
 halo2-dev-tests = []
 cuda = ["ivm/cuda"]
@@ -97,7 +99,9 @@ iroha-core-tests = []
 # This forwards to `iroha_crypto/bls` and compiles the BLS path in `block.rs` guarded by `#[cfg(feature = "bls")]`.
 bls = ["iroha_crypto/bls", "iroha_data_model/bls"]
 bls-multi-pairing = ["iroha_crypto/bls-multi-pairing"]
-zk-halo2-jemallocator = ["halo2-ecc/jemallocator"]
+# Compatibility flag kept for downstream feature sets. `halo2-ecc` is no
+# longer linked by `iroha_core`.
+zk-halo2-jemallocator = []
 goldilocks_backend = ["iroha_zkp_halo2/goldilocks_backend", "ivm/goldilocks_backend"]
 
 # Consensus mode (compile-time). Exactly one should be enabled in a given build.
@@ -132,24 +136,22 @@ mv = { workspace = true }
 iroha_schema = { workspace = true }
 sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 settlement_router = { path = "../settlement_router" }
+iroha_sccp = { path = "../iroha_sccp" }
 tracing = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false }
 sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
+serde = { version = "1.0.228", features = ["derive"] }
 rayon = { workspace = true }
 base64 = { workspace = true }
 rust_decimal = { workspace = true }
-crc64fast = "1.1"
+regex = "1.11.0"
 http = "1.3.1"
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"] }
 halo2_gadgets = { version = "0.3.1", optional = true }
-halo2-base = { version = "0.5.1" }
-halo2-ecc = { version = "0.5.1", default-features = false, features = ["halo2-axiom", "display"] }
 ff = "0.13.1"
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
-zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 kaigi_zk = { path = "../kaigi_zk", optional = true }
 
-async-trait = { workspace = true }
 dashmap = { workspace = true }
 eyre = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"] }
@@ -163,8 +165,9 @@ parking_lot = { workspace = true, features = ["deadlock_detection"] }
 derive_more = { workspace = true }
 nonzero_ext = { workspace = true }
 hex = { workspace = true }
-itoa = "1.0.15"
+tempfile = { workspace = true }
 blake3 = "1.8.2"
+zstd = { workspace = true }
 curve25519-dalek = "4.1.3"
 blake2 = { workspace = true }
 iroha_file_mmap = { path = "../iroha_file_mmap" }
@@ -176,19 +179,16 @@ signature = { version = "2.2.0", default-features = false, features = ["std"] }
 once_cell = { workspace = true }
 yasna = "0.5.2"
 
-uuid = { version = "1.18.1", features = ["v4"] }
 indexmap = "2.12.0"
 arc-swap = "1.7.1"
 
 [dev-dependencies]
+criterion = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_config_base = { workspace = true }
 
-criterion = { workspace = true }
 hex = { workspace = true }
-tempfile = { workspace = true }
 expect-test = { workspace = true }
-proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 rcgen = "0.14.5"
 
 [[bench]]
@@ -203,7 +203,6 @@ harness = false
 name = "apply_blocks"
 harness = false
 path = "benches/blocks/apply_blocks_benchmark.rs"
-required-features = ["bench"]
 
 [[bench]]
 name = "validate_blocks"
@@ -224,11 +223,14 @@ harness = false
 name = "queries"
 harness = false
 
+[[bench]]
+name = "queries_client"
+harness = false
+
 [[example]]
 name = "apply_blocks"
 harness = false
 path = "benches/blocks/apply_blocks_oneshot.rs"
-required-features = ["bench"]
 
 [[example]]
 name = "validate_blocks"

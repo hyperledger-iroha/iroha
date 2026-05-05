@@ -4,21 +4,25 @@
 //! plus the settlement commitment and its hash so the merge ledger can verify
 //! relay payloads deterministically.
 
+use core::cmp::Ordering;
+
 use iroha_crypto::{Hash, HashOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::{
-    AccountId,
     block::{BlockHeader, consensus::LaneBlockCommitment},
     consensus::Qc,
     da::commitment::DaCommitmentBundle,
-    nexus::{DataSpaceId, LaneId},
+    nexus::{AxtFastpqBinding, DataSpaceId, LaneId},
+    peer::PeerId,
     prelude::Metadata,
 };
 
 const FASTPQ_PROOF_DIGEST_DOMAIN: &[u8] = b"iroha:nexus:lane-relay:fastpq-proof:v1";
+/// Prefix for contract-visible verified relay state keys.
+pub const VERIFIED_LANE_RELAY_STATE_KEY_PREFIX: &str = "pkdeploy_verified_lane_relay";
 
 /// Relay envelope broadcast by Nexus lanes for merge validation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -52,14 +56,81 @@ pub struct LaneRelayEnvelope {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub manifest_root: Option<[u8; 32]>,
-    /// FastPQ proof material required before this relay can be admitted into the merge path.
+    /// `FastPQ` proof material required before this relay can be admitted into the merge path.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub fastpq_proof: Option<LaneFastpqProofMaterial>,
 }
 
-/// FastPQ proof metadata attached to a lane relay envelope.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+impl PartialOrd for LaneRelayEnvelope {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for LaneRelayEnvelope {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let lhs = norito::to_bytes(self).expect("lane relay envelope should encode");
+        let rhs = norito::to_bytes(other).expect("lane relay envelope should encode");
+        lhs.cmp(&rhs)
+    }
+}
+
+/// Stable business-facing reference for a previously verified lane relay envelope.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct LaneRelayEnvelopeRef {
+    /// Numeric dataspace identifier.
+    pub dataspace_id: DataSpaceId,
+    /// Numeric lane identifier.
+    pub lane_id: LaneId,
+    /// Block height associated with the settlement commitment.
+    pub block_height: u64,
+    /// Norito hash of the settlement payload.
+    pub settlement_hash: HashOf<LaneBlockCommitment>,
+}
+
+impl LaneRelayEnvelopeRef {
+    /// Return the canonical contract-state key for this verified lane relay.
+    #[must_use]
+    pub fn relay_state_key(&self) -> String {
+        let suffix = Hash::new(self.settlement_hash.as_ref());
+        format!(
+            "{VERIFIED_LANE_RELAY_STATE_KEY_PREFIX}_{}_{}_{}_{}",
+            self.dataspace_id.as_u64(),
+            self.lane_id.as_u32(),
+            self.block_height,
+            hex::encode(suffix.as_ref()),
+        )
+    }
+}
+
+/// Verified relay record persisted for restricted-source business effects.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct VerifiedLaneRelayRecord {
+    /// Canonical relay reference used by business flows.
+    pub relay_ref: LaneRelayEnvelopeRef,
+    /// Original relay envelope that passed verification.
+    pub relay_envelope: LaneRelayEnvelope,
+    /// Deterministic hash of the proof payload used during registration.
+    pub proof_payload_hash: Hash,
+    /// Block height where the relay proof was verified and persisted.
+    pub verified_at_height: u64,
+    /// Manifest root enforced during registration.
+    pub manifest_root: [u8; 32],
+    /// FASTPQ binding that contracts consume on-ledger.
+    pub fastpq_binding: AxtFastpqBinding,
+}
+
+/// `FastPQ` proof metadata attached to a lane relay envelope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -92,7 +163,7 @@ pub struct LaneRelayEvidenceBundle {
     pub error_message: String,
 }
 
-/// Emergency validator override for a dataspace when lane relay quorum is at risk.
+/// Emergency validator-peer override for a lane when lane relay quorum is at risk.
 ///
 /// Application of this override is gated by `nexus.lane_relay_emergency.enabled`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -101,11 +172,10 @@ pub struct LaneRelayEvidenceBundle {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct LaneRelayEmergencyValidatorSet {
-    /// Validators temporarily allowed to satisfy lane relay quorum.
-    pub validators: Vec<AccountId>,
-    /// Optional block height (inclusive) after which the override expires.
-    #[norito(default)]
-    pub expires_at_height: Option<u64>,
+    /// Live consensus peers temporarily allowed to fill missing lane-relay committee slots.
+    pub peers: Vec<PeerId>,
+    /// Block height (inclusive) after which the override expires.
+    pub expires_at_height: u64,
     /// Optional metadata describing why the override was applied.
     #[norito(default)]
     pub metadata: Metadata,
@@ -205,6 +275,17 @@ impl LaneRelayEnvelope {
             manifest_root: None,
             fastpq_proof: None,
         })
+    }
+
+    /// Stable business-facing reference for this relay envelope.
+    #[must_use]
+    pub fn relay_ref(&self) -> LaneRelayEnvelopeRef {
+        LaneRelayEnvelopeRef {
+            dataspace_id: self.dataspace_id,
+            lane_id: self.lane_id,
+            block_height: self.block_height,
+            settlement_hash: self.settlement_hash,
+        }
     }
 
     /// Validate QC subject, DA commitment hash, and settlement hash.
@@ -318,7 +399,7 @@ impl LaneRelayEnvelope {
         self
     }
 
-    /// Attach FastPQ proof material to the envelope.
+    /// Attach `FastPQ` proof material to the envelope.
     #[must_use]
     pub fn with_fastpq_proof_material(
         mut self,
@@ -328,13 +409,13 @@ impl LaneRelayEnvelope {
         self
     }
 
-    /// Whether the envelope includes structurally valid FastPQ proof material.
+    /// Whether the envelope includes structurally valid `FastPQ` proof material.
     #[must_use]
     pub fn has_fastpq_proof_material(&self) -> bool {
         self.verify_fastpq_proof_material().is_ok()
     }
 
-    /// Validate FastPQ proof metadata.
+    /// Validate `FastPQ` proof metadata.
     ///
     /// # Errors
     ///
@@ -362,7 +443,7 @@ impl LaneRelayEnvelope {
         Ok(())
     }
 
-    /// Compute the canonical FastPQ proof digest expected for this envelope.
+    /// Compute the canonical `FastPQ` proof digest expected for this envelope.
     #[must_use]
     pub fn expected_fastpq_proof_digest(&self, verified_at_height: Option<u64>) -> Hash {
         let mut payload = Vec::with_capacity(
@@ -395,6 +476,27 @@ impl LaneRelayEnvelope {
             Ok(())
         } else {
             Err(LaneRelayError::SettlementHashMismatch)
+        }
+    }
+}
+
+impl VerifiedLaneRelayRecord {
+    /// Construct a verified relay record from the canonical verified inputs.
+    #[must_use]
+    pub fn new(
+        relay_envelope: LaneRelayEnvelope,
+        proof_payload_hash: Hash,
+        verified_at_height: u64,
+        manifest_root: [u8; 32],
+        fastpq_binding: AxtFastpqBinding,
+    ) -> Self {
+        Self {
+            relay_ref: relay_envelope.relay_ref(),
+            relay_envelope,
+            proof_payload_hash,
+            verified_at_height,
+            manifest_root,
+            fastpq_binding,
         }
     }
 }
@@ -511,10 +613,10 @@ pub enum LaneRelayError {
     /// Aggregate signature bytes are missing, zeroed, or invalid.
     #[error("aggregate signature missing or invalid for QC")]
     AggregateSignatureInvalid,
-    /// FastPQ proof metadata is required for merge admission.
+    /// `FastPQ` proof metadata is required for merge admission.
     #[error("FastPQ proof metadata missing for lane relay envelope")]
     MissingFastpqProof,
-    /// FastPQ proof metadata failed structural validation.
+    /// `FastPQ` proof metadata failed structural validation.
     #[error("FastPQ proof metadata is invalid for lane relay envelope")]
     InvalidFastpqProof,
 }
@@ -693,6 +795,20 @@ mod tests {
         let settlement = sample_commitment(height, 3, 2);
         let header = sample_header(height, None);
         LaneRelayEnvelope::new(header, qc, None, settlement, 0).expect("envelope")
+    }
+
+    #[test]
+    fn relay_envelope_ref_state_key_is_canonical_and_deterministic() {
+        let relay_ref = build_envelope(7, None).relay_ref();
+        let first = relay_ref.relay_state_key();
+        let second = relay_ref.relay_state_key();
+
+        assert_eq!(first, second);
+        assert!(first.starts_with("pkdeploy_verified_lane_relay_2_3_7_"));
+        assert!(!first.contains('/'));
+        let suffix = first.rsplit('_').next().expect("hash suffix");
+        assert_eq!(suffix.len(), 64);
+        assert!(suffix.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 
     fn qc_with_bitmap(bitmap: Vec<u8>, height: u64, signature: Vec<u8>) -> Qc {

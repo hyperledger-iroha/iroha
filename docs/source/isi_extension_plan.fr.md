@@ -1,12 +1,14 @@
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
 ---
 lang: fr
 direction: ltr
 source: docs/source/isi_extension_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
-source_last_modified: "2026-01-03T18:07:57.214581+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 9648381ac7cc1716ffd3c48aca425ed17a6afe1ac73bdeff866ebbbd9147cf68
+source_last_modified: "2026-03-30T18:22:55.972718+00:00"
+translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---
 
@@ -34,17 +36,15 @@ le risque de sécurité et d’opérabilité en premier, le débit UX ensuite.
 - Émettre `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` avec le `AssetId` concerné.
 - Exiger les mêmes jetons d'autorisation que les modifications de métadonnées d'actifs existantes (propriétaire de la définition OU
   Subventions de type `CanModifyAssetMetadata`).
-- Abandonner si l'enregistrement d'actif est manquant (pas de création implicite).
-
-### RotateAccountSignatoire
+- Abandonner si l'enregistrement d'actif est manquant (pas de création implicite).### RotateAccountSignatoire
 - Swap atomique du signataire en `AccountId` tout en préservant les métadonnées du compte et lié
   ressources (actifs, déclencheurs, rôles, autorisations, événements en attente).
 - Vérifiez que le signataire actuel correspond à l'appelant (ou à l'autorité déléguée via un jeton explicite).
-- Rejeter si la nouvelle clé publique soutient déjà un autre compte dans le même domaine.
+- Rejeter si la nouvelle clé publique soutient déjà un autre compte canonique.
 - Mettez à jour toutes les clés canoniques qui intègrent l'ID de compte et invalidez les caches avant la validation.
 - Émettre un `AccountEvent::SignatoryRotated` dédié avec les anciennes/nouvelles clés pour les pistes d'audit.
-- Échafaudage de migration : introduisez `AccountLabel` + `AccountRekeyRecord` (voir `account::rekey`) afin
-  Les comptes existants peuvent être mappés à des étiquettes stables lors d'une mise à niveau continue sans interruption de hachage.
+- Échafaudage de migration : s'appuyer sur `AccountAlias` + `AccountRekeyRecord` (voir `account::rekey`) donc
+  les comptes existants peuvent conserver des liaisons d'alias stables lors d'une mise à niveau continue sans interruption de hachage.
 
 ### DésactiverContractInstance
 - Supprimez ou désactivez la liaison `(namespace, contract_id)` tout en conservant les données de provenance
@@ -72,14 +72,12 @@ le risque de sécurité et d’opérabilité en premier, le débit UX ensuite.
   ou capacité accordée) avant la mutation d’état.
 - Les ensembles d'accès consultatifs doivent regrouper toutes les clés de lecture/écriture pour maintenir la concurrence optimiste correcte.
 
-## Échafaudage de mise en œuvre
-
-- Le modèle de données contient désormais les échafaudages `SetAssetKeyValue`/`RemoveAssetKeyValue` pour les métadonnées d'équilibre.
+## Échafaudage de mise en œuvre- Le modèle de données contient désormais les échafaudages `SetAssetKeyValue`/`RemoveAssetKeyValue` pour les métadonnées d'équilibre.
   modifications (`transparent.rs`).
 - Les visiteurs de l'exécuteur exposent des espaces réservés qui permettront d'obtenir les autorisations une fois le câblage hôte atterri.
   (`default/mod.rs`).
 - Les types de prototypes Rekey (`account::rekey`) fournissent une zone d'atterrissage pour les migrations progressives.
-- L'état mondial inclut `account_rekey_records` saisi par `AccountLabel` afin que nous puissions mettre en scène l'étiquette →
+- L'état mondial inclut `account_rekey_records` saisi par `AccountAlias` afin que nous puissions créer un alias →
   migrations de signataires sans toucher à l’encodage historique `AccountId`.
 
 ## IVM Rédaction d'appel système
@@ -95,5 +93,5 @@ le risque de sécurité et d’opérabilité en premier, le débit UX ensuite.
 
 ## Statut
 
-L'ordre et les invariants ci-dessus sont prêts à être mis en œuvre. Les branches de suivi doivent faire référence
+L'ordre et les invariants ci-dessus sont prêts à être implémentés. Les branches de suivi doivent faire référence
 ce document lors du câblage des chemins d'exécution et de l'exposition des appels système.

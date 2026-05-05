@@ -1786,6 +1786,7 @@ mod tests {
                 metrics: MetricsSnapshot {
                     gas_used: Some(i as u64),
                     fee_units: None,
+                    fee_scale: None,
                 },
                 latency: None,
                 notices: Vec::new(),
@@ -1831,6 +1832,7 @@ mod tests {
             metrics: MetricsSnapshot {
                 gas_used: Some(50),
                 fee_units: None,
+                fee_scale: None,
             },
             latency: Some(Duration::from_millis(30)),
             notices: Vec::new(),

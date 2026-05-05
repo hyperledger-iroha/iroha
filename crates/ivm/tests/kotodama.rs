@@ -1,6 +1,6 @@
 //! Tests for Kotodama parsing, semantics, and compilation.
 
-use std::{convert::TryInto, str::FromStr};
+use std::convert::TryInto;
 
 use iroha_crypto as _;
 use iroha_data_model::nexus::{DataSpaceId, LaneId};
@@ -285,6 +285,26 @@ fn numeric_alias_to_int_overflow_rejected() {
 }
 
 #[test]
+fn assert_builtin_obeys_truthiness() {
+    let compiler = Compiler::new();
+
+    let pass = compiler
+        .compile_source("fn main() { assert(true); }")
+        .expect("compile passing assert");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&pass).expect("load passing assert");
+    vm.run().expect("assert(true) should not abort");
+
+    let fail = compiler
+        .compile_source("fn main() { assert(false); }")
+        .expect("compile failing assert");
+    let mut vm = ivm::IVM::new(u64::MAX);
+    vm.load_program(&fail).expect("load failing assert");
+    let err = vm.run().expect_err("assert(false) should abort");
+    assert!(matches!(err, ivm::VMError::AssertionFailed));
+}
+
+#[test]
 fn many_string_literals_load_under_wide_guard() {
     // Exercise pointer literal emission with offsets beyond the wide 8-bit range.
     let mut src = String::from("fn main() {");
@@ -307,9 +327,9 @@ fn prelude_macros_compile() {
     let src = r#"
         seiyaku MacroDemo {
             kotoage fn run() permission(Admin) {
-                let alice = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
-                let bob = account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
-                let asset = asset_definition!("rose#wonderland");
+                let alice = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+                let bob = account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
+                let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
                 set_account_detail(authority(), name!("cursor"), json!{ query: "sc_dummy", cursor: 1 });
                 transfer_asset(alice, bob, asset, 1);
             }
@@ -326,9 +346,9 @@ fn public_function_without_permission_rejected() {
         seiyaku PermissionDemo {
             kotoage fn run() {
                 transfer_asset(
-                    account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
-                    account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
-                    asset_definition!("rose#wonderland"),
+                    account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+                    account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
+                    asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
                     1
                 );
             }
@@ -366,7 +386,7 @@ fn register_account_requires_permission() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn add() {
-                register_account(account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"));
+                register_account(account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
             }
         }
     "#;
@@ -404,9 +424,9 @@ fn public_function_with_permission_is_allowed() {
         seiyaku PermissionDemo {
             kotoage fn run() permission(Admin) {
                 transfer_asset(
-                    account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
-                    account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
-                    asset_definition!("rose#wonderland"),
+                    account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+                    account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
+                    asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
                     1
                 );
             }
@@ -526,7 +546,7 @@ fn parse_and_type_bounded_map_take_one_ok() {
 fn compile_domain_literal_emits_tlv_domainid() {
     let src = r#"
         fn hajimari() {
-            let d = domain("wonderland");
+            let d = domain("wonderland.universal");
         }
     "#;
     let compiler = Compiler::new();
@@ -542,7 +562,7 @@ fn compile_register_domain_emits_syscall_0x10() {
     use ivm::encoding;
     let src = r#"
         fn hajimari() {
-            register_domain(domain("wonderland"));
+            register_domain(domain("wonderland.universal"));
         }
     "#;
     let compiler = Compiler::new();
@@ -621,6 +641,41 @@ fn compile_emits_get_authority_syscall() {
 }
 
 #[test]
+fn compile_emits_current_time_syscall() {
+    let src = r#"fn f() { let now = current_time_ms(); }"#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let mut words = Vec::new();
+    let mut i = off;
+    while i + 4 <= code.len() {
+        words.push(u32::from_le_bytes(code[i..i + 4].try_into().unwrap()));
+        i += 4;
+    }
+    let scall = instruction::wide::system::SCALL;
+    let want = encoding::wide::encode_sys(scall, syscalls::SYSCALL_CURRENT_TIME_MS as u8);
+    assert!(words.contains(&want), "CURRENT_TIME_MS syscall not found");
+}
+
+#[test]
+fn compile_emits_resolve_account_alias_syscall() {
+    let src = r#"fn f() { let a = resolve_account_alias("banking@centralbank"); }"#;
+    let code = Compiler::new().compile_source(src).expect("compile");
+    let (_, off) = parse_meta_offset(&code).unwrap();
+    let mut words = Vec::new();
+    let mut i = off;
+    while i + 4 <= code.len() {
+        words.push(u32::from_le_bytes(code[i..i + 4].try_into().unwrap()));
+        i += 4;
+    }
+    let scall = instruction::wide::system::SCALL;
+    let want = encoding::wide::encode_sys(scall, syscalls::SYSCALL_RESOLVE_ACCOUNT_ALIAS as u8);
+    assert!(
+        words.contains(&want),
+        "RESOLVE_ACCOUNT_ALIAS syscall not found"
+    );
+}
+
+#[test]
 fn parse_and_type_bounded_map_take_one() {
     let src = r#"fn f(m: Map<int, int>) { for (k, v) in m.take(1) { let z = k; } }"#;
     let prog = parse(src).expect("parse");
@@ -686,7 +741,11 @@ fn compile_and_run_add() {
     let code = compiler.compile_source(src).expect("compile failed");
     let (meta, off) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.mode, 0);
-    assert_eq!(off, 17);
+    assert_eq!(meta.version_minor, 1);
+    assert!(
+        off > 17,
+        "self-describing artifacts must prefix code with CNTR"
+    );
 
     let mut vm = ivm::IVM::new(u64::MAX);
     // Decode trace left disabled by default; first-words dump is printed above.
@@ -767,8 +826,8 @@ fn pointer_constructors_accept_string_variables() {
     // Use variables bound to string literals; constructors should work
     let src = r#"
         fn main() {
-            let did = "wonderland";
-            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+            let did = "wonderland.universal";
+            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
             let key = "cursor";
             let val = "{\"query\":\"sc_dummy\",\"cursor\":1}";
             set_account_detail(account_id(aid), name(key), json(val));
@@ -802,7 +861,7 @@ fn json_constructor_accepts_norito_bytes_pointer() {
             let j = json(jb);
             // Use j to ensure it flows through as Json pointer
             let did = "wonderland";
-            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
             set_account_detail(account_id(aid), name("cursor"), j);
         }
     "#;
@@ -827,7 +886,7 @@ fn json_constructor_accepts_norito_bytes_pointer() {
 fn method_sugar_name_on_variable() {
     let src = r#"
         fn main() {
-            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
             let key = "cursor";
             let val = "{\"x\":1}";
             set_account_detail(aid.account_id(), key.name(), val.json());
@@ -853,7 +912,7 @@ fn method_sugar_json_on_norito_bytes_variable() {
         fn main() {
             let nb = "{\"k\":1}".norito_bytes();
             let j = nb.json();
-            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
             set_account_detail(aid.account_id(), "cursor".name(), j);
         }
     "#;
@@ -880,7 +939,7 @@ fn name_constructor_accepts_norito_bytes_pointer() {
         fn main() {
             let nb = norito_bytes("domain_name");
             let nm = name(nb);
-            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
             transfer_domain(authority(), nm, aid.account_id());
         }
     "#;
@@ -907,7 +966,7 @@ fn method_sugar_name_on_norito_bytes_variable() {
         fn main() {
             let nb = "wonderland".norito_bytes();
             let nm = nb.name();
-            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
             transfer_domain(authority(), nm, aid.account_id());
         }
     "#;
@@ -994,9 +1053,9 @@ fn account_id_constructor_accepts_blob() {
 fn name_pass_through_from_name_pointer() {
     let src = r#"
         fn main() {
-            let nm = name("wonderland");
+            let nm = name("wonderland.universal");
             let nm2 = name(nm);
-            let aid = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
             transfer_domain(authority(), nm2, aid.account_id());
         }
     "#;
@@ -1023,8 +1082,8 @@ fn contains_ephemeral_true_and_false() {
         fn f() -> int {
             let m = Map::new();
             m[7] = 111;
-            let t = contains(m, 7);
-            let f = contains(m, 8);
+            let t = m.contains(7);
+            let f = m.contains(8);
             // return t*2 + f to disambiguate (expect 2*1+0=2)
             return t*2 + f;
         }
@@ -1044,8 +1103,8 @@ fn contains_durable_true_then_false() {
         state Map<int,int> m;
         fn f() -> int {
             m[7] = 1;
-            let t = contains(m, 7);
-            let f = contains(m, 8);
+            let t = m.contains(7);
+            let f = m.contains(8);
             return t*2 + f;
         }
     "#;
@@ -1083,7 +1142,7 @@ fn method_sugar_contains_ephemeral() {
 #[test]
 fn contains_rejects_wrong_types() {
     let src = r#"
-        fn f() { let m = Map::new(); let x = contains(7, m); }
+        fn f() { let m = Map::new(); let x = 7.contains(m); }
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected type error");
@@ -1091,54 +1150,6 @@ fn contains_rejects_wrong_types() {
         err.message
             .contains("contains expects Map<K,V> as first arg")
     );
-}
-
-#[test]
-fn get_or_default_ephemeral() {
-    let src = r#"
-        fn f() -> int {
-            let m = Map::new();
-            m[7] = 111;
-            let a = get_or_default(m, 7, 5);
-            let b = get_or_default(m, 8, 9);
-            return a*2 + b;
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    match vm.run() {
-        Ok(()) => {
-            assert_eq!(vm.register(10), 111 * 2 + 9);
-        }
-        Err(err) => {
-            eprintln!("run err: {:?} pc={}", err, vm.pc());
-            panic!("execute");
-        }
-    }
-}
-
-#[test]
-fn get_or_default_durable() {
-    let src = r#"
-        state Map<int,int> m;
-        fn f() -> int {
-            m[7] = 111;
-            let a = get_or_default(m, 7, 5);
-            let b = get_or_default(m, 8, 9);
-            return a*2 + b;
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.set_host(ivm::CoreHost::new());
-    vm.load_program(&code).unwrap();
-    vm.run().expect("execute");
-    assert_eq!(vm.register(10), 111 * 2 + 9);
 }
 
 #[test]
@@ -1481,10 +1492,10 @@ fn semantic_type_enforcement_for_typed_syscalls() {
     use ivm::kotodama::parser::parse;
     // Wrong types should fail
     let bad =
-        parse("fn f() { mint_asset(name(\"x\"), asset_definition(\"rose#wonderland\"), 1); }")
+        parse("fn f() { mint_asset(name(\"x\"), asset_definition(\"62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"), 1); }")
             .unwrap();
     assert!(analyze(&bad).is_err());
-    let bad2 = parse("fn f() { set_account_detail(account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"), json(\"1\"), name(\"k\")); }").unwrap();
+    let bad2 = parse("fn f() { set_account_detail(account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), json(\"1\"), name(\"k\")); }").unwrap();
     assert!(analyze(&bad2).is_err());
 }
 
@@ -1567,7 +1578,7 @@ fn dynamic_range_start1_end2_executes_second_only() {
 
 #[test]
 fn compile_typed_nft_syscalls() {
-    let src = "fn main() { nft_mint_asset(nft_id(\"n0$wonderland\"), account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\")); nft_transfer_asset(account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"), nft_id(\"n0$wonderland\"), account_id(\"6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU\")); }";
+    let src = "fn main() { nft_mint_asset(nft_id(\"n0$wonderland.universal\"), account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\")); nft_transfer_asset(account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), nft_id(\"n0$wonderland.universal\"), account_id(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile typed NFT");
@@ -1657,7 +1668,7 @@ fn map_get_handles_spills() {
         src.push_str(&format!("a{i}"));
     }
     src.push_str(";\n");
-    src.push_str("  let hit = std::map::has(m, k);\n");
+    src.push_str("  let hit = m.contains(k);\n");
     src.push_str("  return sum + v + hit;\n}\n");
 
     let prog = parse(&src).expect("parse spill map-get");
@@ -1769,7 +1780,7 @@ fn map_load_pair_handles_spilled_map_base() {
         src.push_str(&format!("a{i}"));
     }
     src.push_str(";\n");
-    src.push_str("  let hit = std::map::has(m, 7);\n");
+    src.push_str("  let hit = m.contains(7);\n");
     src.push_str("  return sum + hit;\n}\n");
 
     let prog = parse(&src).expect("parse spill map-load");
@@ -1892,6 +1903,7 @@ fn manifest_includes_entrypoints_and_features() {
                 setvl(8);
                 assert(true);
                 let current = counter;
+                let _digest = poseidon2(current, 1);
                 if current > 0 {
                     info("counter tick");
                 } else {
@@ -1900,9 +1912,17 @@ fn manifest_includes_entrypoints_and_features() {
             }
         }
     "#;
-    let (_code, manifest) = Compiler::new()
+    let (code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("compile manifest with entrypoints");
+    let parsed = ProgramMetadata::parse(&code).expect("parse compiled artifact");
+    assert_eq!(parsed.metadata.version_minor, 1);
+    let contract_interface = parsed
+        .contract_interface
+        .expect("compiled contract must embed a CNTR section");
+    assert_eq!(contract_interface.entrypoints.len(), 2);
+    assert_eq!(contract_interface.entrypoints[0].name, "hajimari");
+    assert_eq!(contract_interface.entrypoints[1].name, "run");
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     assert_eq!(entrypoints.len(), 2);
     assert_eq!(entrypoints[0].name, "hajimari");
@@ -1958,13 +1978,13 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
     use iroha_data_model::{
         account::AccountId,
         asset::id::{AssetDefinitionId, AssetId},
-        domain::DomainId,
     };
 
+    let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let src = r#"
         fn main() {
-            let acc = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
-            let asset = asset_definition("rose#wonderland");
+            let acc = account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+            let asset = asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
             mint_asset(acc, asset, 1);
             burn_asset(acc, asset, 1);
         }
@@ -1976,22 +1996,23 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         .access_set_hints
         .expect("access_set_hints must be present");
     let account: AccountId =
-        AccountId::parse_encoded("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+        AccountId::parse_encoded("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("parse encoded account literal");
-    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
-        "rose".parse().unwrap(),
-    );
-    let domain: DomainId = "wonderland".parse().expect("domain");
+    let asset_def =
+        AssetDefinitionId::parse_address_literal(asset_literal).expect("parse canonical asset");
+    assert!(asset_def.is_opaque_canonical());
     let asset_id = AssetId::of(asset_def.clone(), account.clone());
 
     assert!(hints.read_keys.contains(&format!("account:{account}")));
-    assert!(hints.read_keys.contains(&format!("domain:{domain}")));
     assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
     assert!(hints.write_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(hints.write_keys.contains(&format!("asset:{asset_id}")));
+    assert!(
+        !hints.read_keys.iter().any(|key| key.starts_with("domain:")),
+        "opaque canonical asset definitions should not synthesize domain hints",
+    );
 
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     let main = entrypoints
@@ -1999,11 +2020,14 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         .find(|entry| entry.name == "main")
         .expect("main entrypoint");
     assert!(main.read_keys.contains(&format!("account:{account}")));
-    assert!(main.read_keys.contains(&format!("domain:{domain}")));
     assert!(main.read_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(main.read_keys.contains(&format!("asset:{asset_id}")));
     assert!(main.write_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(main.write_keys.contains(&format!("asset:{asset_id}")));
+    assert!(
+        !main.read_keys.iter().any(|key| key.starts_with("domain:")),
+        "opaque canonical asset definitions should not synthesize domain hints",
+    );
 }
 
 #[test]
@@ -2011,8 +2035,8 @@ fn manifest_emits_wildcard_hints_when_isi_targets_are_opaque() {
     let src = r#"
         fn main() {
             transfer_domain(
-                account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
-                domain("wonderland"),
+                account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+                domain("wonderland.universal"),
                 authority()
             );
         }
@@ -2085,9 +2109,9 @@ fn namespaced_host_calls_and_std_map_new_parse_and_type() {
     let src = r#"
         fn f() {
             host::transfer_asset(
-              account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
-              account_id("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
-              asset_definition("coin#wonder"),
+              account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+              account_id("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
+              asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
               1
             );
         }
@@ -2106,9 +2130,9 @@ fn indirect_sensitive_calls_require_permission() {
     let src = r#"
         fn helper() {
             transfer_asset(
-              account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
-              account_id("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
-              asset_definition("coin#wonder"),
+              account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+              account_id("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
+              asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
               1
             );
         }
@@ -2212,6 +2236,7 @@ seiyaku MyC {
   hajimari() {
     setvl(8);
     assert(true);
+    let _digest = poseidon2(1, 2);
     let a = 1;
   }
 }
@@ -2290,20 +2315,20 @@ fn branch(b: bool) -> int {
         .position(|word| ((word >> 24) as u8) == instruction::wide::control::BNE)
         .expect("expected BNE in lowered branch");
 
-    assert!(
-        words.len() > bne_index + 2,
-        "BNE should be followed by two JAL instructions"
-    );
-
     let bne_word = words[bne_index];
     let imm = (bne_word & 0xFF) as u8 as i8;
     assert_eq!(
-        imm, 2,
-        "BNE should skip the immediate JAL with offset 2 to support wide immediates"
+        imm, 26,
+        "BNE should skip the full fixed-size else transfer stub and land on the then transfer stub"
     );
 
     let jal_else = words[bne_index + 1];
-    let jal_then = words[bne_index + 2];
+    let then_stub_index = bne_index + imm as usize;
+    assert!(
+        words.len() > then_stub_index,
+        "BNE target should land on the start of the second control-transfer stub"
+    );
+    let jal_then = words[then_stub_index];
     assert_eq!(
         (jal_else >> 24) as u8,
         instruction::wide::control::JAL,
@@ -2322,13 +2347,15 @@ fn compile_poseidon2_and_assert_eq() {
     let src = "fn f(a, b) { let h = poseidon2(a, b); }";
     let code = Compiler::new().compile_source(src).expect("compile failed");
     assert!(!code.is_empty());
+    let (meta, _) = parse_meta_offset(&code).unwrap();
+    assert_ne!(meta.mode & 0x01, 0, "poseidon2 should enable ZK mode");
 
-    // assert_eq succeeds
+    // assert_eq succeeds without enabling ZK mode
     let src = "fn g(a, b) { assert_eq(a, b); }";
     let code = Compiler::new().compile_source(src).expect("compile failed");
 
     let (meta, _) = parse_meta_offset(&code).unwrap();
-    assert!(meta.mode & 0x01 != 0);
+    assert_eq!(meta.mode & 0x01, 0);
 
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.set_register(10, 1);
@@ -2733,7 +2760,8 @@ fn parse_burn_asset_builtin() {
 #[test]
 fn parse_register_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(){ register_asset(\"x\", \"X\", 1, 0); }";
+    let src =
+        r#"fn f(){ register_asset(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "X", 1, 0); }"#;
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2748,7 +2776,7 @@ fn parse_register_asset_builtin() {
 #[test]
 fn parse_create_new_asset_builtin() {
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(){ create_new_asset(\"x\", \"X\", 1, 2, 0); }";
+    let src = r#"fn f(){ create_new_asset(asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), "X", 1, account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"), 0); }"#;
     let prog = parse(src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
@@ -2757,6 +2785,17 @@ fn parse_create_new_asset_builtin() {
         instrs
             .iter()
             .any(|i| matches!(i, Instr::CreateNewAsset { .. }))
+    );
+}
+
+#[test]
+fn parse_register_asset_rejects_bare_name_literal() {
+    let src = r#"fn f(){ register_asset("x", "X", 1, 0); }"#;
+    let prog = parse(src).expect("parse failed");
+    let err = analyze(&prog).expect_err("bare asset names should be rejected");
+    assert!(
+        err.message.contains("AssetDefinitionId"),
+        "unexpected semantic error: {err:?}"
     );
 }
 
@@ -2806,6 +2845,7 @@ fn compile_kotodama_samples_supported() {
         "mint_rose_trigger.ko",
         "query_assets_and_save_cursor.ko",
         "smart_contract_can_filter_queries.ko",
+        "threshold_escrow.ko",
     ];
     for file in files {
         let src = std::fs::read_to_string(samples_dir.join(file)).expect("read failed");
@@ -2824,27 +2864,27 @@ fn compile_unary_ops() {
 }
 
 #[test]
-fn std_map_aliases_and_iter_helpers_parse_and_type() {
-    // Ensure std::map::* aliases normalize and typecheck
+fn map_methods_and_iter_helpers_parse_and_type() {
+    // Ensure the new method syntax coexists with the remaining iterator helpers.
     let src = r#"
         fn f(m: Map<int,int>) {
-            let a = std::map::has(m, 1);
-            let b = std::map::get_or_insert_default(m, 2);
+            let a = m.contains(1);
+            let b = m.ensure(2);
             let c = std::map::keys_take2(m, 0, 1);
             let d = std::map::values_take2(m, 0, 0);
         }
     "#;
-    let prog = parse(src).expect("parse std::map aliases");
-    analyze(&prog).expect("analyze std::map aliases");
+    let prog = parse(src).expect("parse map methods");
+    analyze(&prog).expect("analyze map methods");
 }
 
 #[test]
-fn ir_lower_has_alias_ephemeral() {
-    // has(m,k) should lower like contains(m,k) on non-state param maps: MapLoadPair + Eq
+fn ir_lower_contains_method_ephemeral() {
+    // m.contains(k) should lower like contains(m,k) on non-state param maps: MapLoadPair + Eq
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(m: Map<int,int>, k: int) { let x = has(m,k); }";
-    let prog = parse(src).expect("parse has");
-    let typed = analyze(&prog).expect("analyze has");
+    let src = "fn f(m: Map<int,int>, k: int) { let x = m.contains(k); }";
+    let prog = parse(src).expect("parse contains");
+    let typed = analyze(&prog).expect("analyze contains");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let f = &ir.functions[0];
     let mut saw_load_pair = false;
@@ -2857,113 +2897,6 @@ fn ir_lower_has_alias_ephemeral() {
         }
     }
     assert!(saw_load_pair && saw_eq);
-}
-
-#[test]
-fn ir_lower_get_or_insert_default_ephemeral() {
-    // get_or_insert_default on non-state param map should emit MapLoadPair, Branch, MapSet
-    use ivm::kotodama::ir::{Instr, Terminator};
-    let src = "fn f(m: Map<int,int>, k: int) -> int { return get_or_insert_default(m, k); }";
-    let prog = parse(src).expect("parse get_or_insert_default");
-    let typed = analyze(&prog).expect("analyze get_or_insert_default");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-    let f = &ir.functions[0];
-    let mut saw_pair = false;
-    let mut saw_set = false;
-    let mut saw_branch = false;
-    for bb in &f.blocks {
-        for ins in &bb.instrs {
-            match ins {
-                Instr::MapLoadPair { .. } => saw_pair = true,
-                Instr::MapSet { .. } => saw_set = true,
-                _ => {}
-            }
-        }
-        if matches!(bb.terminator, Terminator::Branch { .. }) {
-            saw_branch = true;
-        }
-    }
-    assert!(saw_pair && saw_set && saw_branch);
-}
-
-#[test]
-fn semantic_get_or_insert_default_pointer_requires_explicit_default() {
-    let src = "fn f(m: Map<int, Name>) { let _ = get_or_insert_default(m, 1); }";
-    let prog = parse(src).expect("parse pointer map without default");
-    let err =
-        analyze(&prog).expect_err("pointer-valued get_or_insert_default should require default");
-    assert!(
-        err.message
-            .contains("requires an explicit default for pointer-valued maps")
-    );
-}
-
-#[test]
-fn semantic_get_or_insert_default_non_int_requires_explicit_default() {
-    let src = "fn f(m: Map<int, bool>) { let _ = get_or_insert_default(m, 1); }";
-    let prog = parse(src).expect("parse bool map without default");
-    let err = analyze(&prog).expect_err("non-int map should require explicit default");
-    assert!(
-        err.message
-            .contains("auto-default is only available for Map<*,int>")
-    );
-}
-
-#[test]
-fn ir_lower_get_or_insert_default_pointer_variants_use_pointer_syscalls() {
-    use ivm::kotodama::ir::Instr;
-    let cases = [
-        ("Name", r#"name("alias")"#),
-        (
-            "AccountId",
-            r#"account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")"#,
-        ),
-        (
-            "AssetDefinitionId",
-            r#"asset_definition("rose#wonderland")"#,
-        ),
-        ("DomainId", r#"domain("wonderland")"#),
-        ("NftId", r#"nft_id("rose:uuid:0123$wonderland")"#),
-    ];
-    for (ty, ctor) in cases {
-        let src = format!(
-            r#"
-        seiyaku C {{
-            state S: Map<int, {ty}>;
-            fn hajimari() -> {ty} {{
-                return get_or_insert_default(S, 7, {ctor});
-            }}
-        }}
-        "#
-        );
-        let prog = parse(&src).expect("parse pointer durable map");
-        let typed = analyze(&prog).expect("analyze pointer durable map");
-        let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-        let func = ir
-            .functions
-            .iter()
-            .find(|f| f.name == "hajimari")
-            .expect("hajimari lowered");
-        let mut saw_pointer_to = false;
-        let mut saw_pointer_from = false;
-        for bb in &func.blocks {
-            for ins in &bb.instrs {
-                match ins {
-                    Instr::PointerToNorito { .. } => saw_pointer_to = true,
-                    Instr::PointerFromNorito { .. } => saw_pointer_from = true,
-                    _ => {}
-                }
-            }
-        }
-        assert!(
-            saw_pointer_to,
-            "durable else branch should encode pointer defaults for {ty}"
-        );
-        assert!(
-            saw_pointer_from,
-            "durable then branch should decode stored pointer for {ty}"
-        );
-    }
 }
 
 #[test]
@@ -3062,65 +2995,6 @@ fn ir_tuple_pack_and_get_general() {
 }
 
 #[test]
-fn runtime_durable_get_or_insert_default_state_map() {
-    // Durable path: Map<int,int> declared in state; first call inserts 0; second returns 0 without inserting again.
-    use std::collections::HashMap;
-
-    use ivm::{
-        IVM, PointerType,
-        kotodama::compiler::Compiler,
-        mock_wsv::{MockWorldStateView, ScopedAccountId, WsvHost},
-        validate_tlv_bytes,
-    };
-    let src = r#"
-        seiyaku C {
-            state S: Map<int,int>;
-            fn hajimari() {
-                let x = get_or_insert_default(S, 7);
-                assert(x == 0);
-                let y = get_or_insert_default(S, 7);
-                assert(y == 0);
-            }
-        }
-    "#;
-    let code = Compiler::new()
-        .compile_source(src)
-        .expect("compile durable gid");
-    let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&code).expect("load");
-    let wsv = MockWorldStateView::new();
-    let alice: ScopedAccountId = ScopedAccountId::new(
-        "wonderland".parse().expect("domain id"),
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-            .parse()
-            .expect("public key"),
-    );
-    let host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&alice), HashMap::new());
-    vm.set_host(host);
-    // Run hajimari
-    vm.run().expect("exec");
-    // Verify durable state was set at path "S/7"
-    let host_ref = vm.host_mut_any().unwrap();
-    let host = host_ref.downcast_ref::<WsvHost>().unwrap();
-    let base = iroha_data_model::prelude::Name::from_str("S").expect("valid Name literal");
-    let expected_path = format!("{}/{}", base.as_ref(), 7);
-    let mut val = host.wsv.sc_get(&expected_path);
-    if val.is_none() {
-        // Durable state maps produced by std::map lowerings namespace entries with a sentinel
-        // prefix: 0x01 followed by seven zero bytes, then the "<base>/<key>" path.
-        let namespaced_path = format!("{}\0\0\0\0\0\0\0{}", char::from(0x01), expected_path);
-        val = host.wsv.sc_get(&namespaced_path);
-    }
-    let val = val.expect("durable state entry should exist");
-    let tlv = validate_tlv_bytes(&val).expect("state entry should use NoritoBytes TLV");
-    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    let stored: i64 =
-        norito::decode_from_bytes(tlv.payload).expect("durable int value should be Norito i64");
-    assert_eq!(stored, 0);
-}
-
-#[test]
 fn vrf_and_pointer_syscalls_present() {
     let src = r#"
         fn main() {
@@ -3169,7 +3043,7 @@ fn axt_intrinsics_lower_to_syscalls() {
     let handle = axt::AssetHandle {
         scope: vec!["transfer".to_string()],
         subject: axt::HandleSubject {
-            account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_string(),
+            account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_string(),
             origin_dsid: Some(dsid),
         },
         budget: axt::HandleBudget {

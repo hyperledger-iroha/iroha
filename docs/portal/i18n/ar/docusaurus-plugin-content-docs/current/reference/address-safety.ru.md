@@ -1,44 +1,73 @@
 ---
-lang: ar
-direction: rtl
-source: docs/portal/docs/reference/address-safety.ru.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+title: Address Safety & Accessibility
+description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
 ---
 
----
-العنوان: عنوان السلامة والتسليم
-الوصف: تجربة UX للتصفح الآمن وإرسال عنوان Iroha (ADDR-6c).
----
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
-هذا الجزء من الوثيقة يثبت ADDR-6c. قم بإضافة هذه المزايا إلى المستكشفين والمستكشفين وأدوات SDK والبوابة الشاملة المفضلة التي يتم الإعلان عنها أو تنفيذها عنوان للناس. يقع النموذج الكنسي لهذه البيانات في `docs/account_structure.md`؛ لا داعي للقلق بشأن قائمة التحقق من كيفية عرض هذه التنسيقات دون الحاجة إلى الأمان والتوافر.
+## Safe sharing flows
 
-## سيناريوهات آمنة
+- Default every copy/share action to the canonical I105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-- من خلال الاستخدام الصحيح للنسخ/النسخ، يتم استخدامه على العنوان I105. قم بإظهار مجال رائع مثل السياق المعزز الذي تم تنفيذه من خلال المجموع الاختباري على الفيديو.
-- اقتراح خاصية "المشاركة" التي تتضمن عنوان نص عادي كامل ورمز الاستجابة السريعة، المتوفر أيضًا والحمولة. يرجى التحقق من ذلك قبل التحقق من صحته.
-- Еsли меsta malo (البطاقات الصغيرة، المطابقة)، قم بإدراج البادئات النصية، وإظهار الكثير من البادئات، والتوقف عن المتابعة 4–6 رموز لحفظ المجموع الاختباري. اضغط على الزر/مفتاح رائع للنسخ بعدة خطوات دون أي تعب.
-- Predotvraoyte rassinchronization of the buffer over, pokasыvaya toast vergedenia with touchnoй I105 strokoy, cotoraya skopirovan. ومع ذلك، عند توفر القياس عن بعد، اقرأ نسخ النسخ واتبع "العرض"، مما يؤدي إلى تراجع تجربة المستخدم بسهولة.
+## IME & input safeguards
 
-## IME وحماية المياه- قم بإغلاق المياه غير ASCII في العنوان الرئيسي. عند عرض عناصر IME (عرض كامل، كانا، نغمة واضحة)، عرض الاقتراحات المضمنة، بدقة، من أجل تحديد لوحة المفاتيح على الماء اللاتيني قبل الظهر.
-- قم بإنشاء إعدادات نص عادي تقوم بدمج الأسماء وتقليص اختبارات ASCII قبل التحقق من صحتها. وهذا يساعد على عدم تغيير التقدم عند إلغاء حظر محرر أسلوب الإدخال (IME) في أي وقت.
-- يمكنك التحقق من صحة النجارين ذوي العرض الصفري ومحددات التباين ونقاط كود Unicode النصية الأخرى. قم بتسجيل فئة الرمز غير المتماثل حتى تتمكن أجنحة Fuzzing من استيراد القياس عن بعد.
+- Validate account-id fields as canonical I105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-## مستلزمات التكنولوجيا المساعدة
+## Assistive technology expectations
 
-- قم بالتحقق من عنوان الكتلة باستخدام `aria-label` أو `aria-describedby`، الذي يصحح البادئة ويفصل الحمولة المجموعات من 4 إلى 8 سمفولوف ("ih Dash b three two..."). هذا لا يجعل قارئات الشاشة يقرأون رموزًا سهلة الاستخدام.
-- اشترك في النسخ/المشاركة الناجحة من خلال تحديث المنطقة الحية المهذبة. قم بذكر الأسماء الدقيقة (الحافظة، ورقة المشاركة، QR)، لاستخدامها بشكل أفضل، مما يؤدي إلى الحفاظ على التركيز المستمر.
-- قم بإضافة نص `alt` لـ QR-previan (على سبيل المثال، "عنوان I105 لـ `<account>` على السلسلة `0x1234`"). باستخدام لوحة QR، يمكنك إضافة الخيار الاحتياطي "نسخ العنوان كنص" للمستفيد بضغطة زر واحدة.
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## عنوان بريد إلكتروني فقط لسورا-البوابة: قم بكتابة الملف `i105` للتأكيد النهائي. يجب الإشارة إلى أن التنسيق يعمل فقط على مجموعات Sora Nexus.
-- وضع العلامات: عندما تتضمن التكلفة شريط فيديو "Sora-only" وتلميح الأدوات مع الالتزام، يجب على المجموعة الأخرى استخدام النموذج I105.
-- الدرابزين: إذا لم يتم تحديد الحواجز التمييزية النشطة Nexus، فإن معظم الأشخاص يلاحظون إنشاء عنوان مباشر و قم بضبط المستخدم عبر I105.
-- القياس عن بعد: قم بتدوين معظم الاستفسارات ونسخ النماذج التي يمكن أن تنبهك أحداث قواعد اللعبة التي تمارسها إلى جميع الحالات شارينجا.
+## Single-format policy
 
-## في حالة جيدة
+- Keep canonical I105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-- قم بإعادة اختبارات واجهة المستخدم التلقائية (أو مجموعات القصص القصيرة a11y)، لتتمكن من التحقق من خصائص ومؤثرات ARIA الجديدة شكرًا لك على إرسالك تعديلاً.
-- قم بإضافة سيناريوهات ضمان الجودة الجيدة لـ IME (kana وpinyin) واختبار قارئ الشاشة (VoiceOver/NVDA) ونسخ QR في مواضيع شديدة التباين قبل الإصدار.
-- قم بإدراج هذه الاختبارات في قائمة مراجعة الإصدار باستخدام اختبارات التكافؤ I105، وذلك لمنع التراجع عن الحجب حتى الدقة.
+## Quality gates
+
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

@@ -38,7 +38,7 @@ SN-3b 決定論的 CSV-to-Norito ビルダー Torii CLI
 | `suffix_id` |はい |数値サフィックス識別子 (10 進数、`0x` 16 進数)。 |
 | `owner` |はい | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` |はい |整数 `1..=255`。 |
-| `payment_asset_id` |はい |決済資産 (`xor#sora`)。 |
+| `payment_asset_id` |はい |決済資産 (`61CtjvNd9T3THAR65GsMVHr82Bjc`)。 |
 | `payment_gross` / `payment_net` |はい |符号なし整数は資産固有の単位を表します。 |
 | `settlement_tx` |はい | JSON 値 リテラル文字列 支払いトランザクション ハッシュ値|
 | `payment_payer` |はい | AccountId 支払いを承認する|
@@ -77,18 +77,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -114,7 +114,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -134,10 +134,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- ヘルパーリクエスト `POST /v1/sns/registrations` HTTP リクエスト
+- ヘルパーリクエスト `POST /v1/sns/names` HTTP リクエスト
   エラー 中断 ہے۔応答ログのパスを NDJSON レコードに追加します
   ہوتے ہیں۔
-- `--poll-status` 6 回の提出 ٩ے بعد `/v1/sns/registrations/{selector}` ٩و
+- `--poll-status` 6 回の提出 ٩ے بعد `/v1/sns/names/{namespace}/{literal}` ٩و
   دوبارہ クエリ کرتا ہے (زیادہ سے زیادہ `--poll-attempts`、デフォルト 5) تاکہ レコード
   見える ہونے کی تصدیق ہو۔ `--suffix-map` (JSON と `suffix_id` の「サフィックス」値)
   マップ (マップ)) ツール `{label}.{suffix}` リテラルの派生 کر سکے۔
@@ -222,7 +222,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -245,7 +245,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   CSV の場所を参照します。 相対解決。非オブジェクトメタデータ
   検証エラー دیتا ہے۔
 - **コントローラー:** セル `--default-controllers` 名誉 کرتے ہیں۔非所有者
-  アクター、デリゲート、明示的コントローラー リスト、 (مثال `i105...;i105...`)۔
+  アクター、デリゲート、明示的コントローラー リスト、 (مثال `<i105-account-id>;<i105-account-id>`)۔
 
 失敗コンテキスト行番号レポート ہوتے ہیں (مثال
 `error: row 12 term_years must be between 1 and 255`)。スクリプト検証エラー

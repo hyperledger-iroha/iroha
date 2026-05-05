@@ -1,12 +1,14 @@
+<!-- Auto-generated stub for Russian (ru) translation. Replace this content with the full translation. -->
+
 ---
 lang: ru
 direction: ltr
 source: docs/source/data_model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 683bfb31442f8f4ce7b1bf5038f9dba92fe092545e655f43b51195c21535d3c4
-source_last_modified: "2026-03-12T11:24:23.059339+00:00"
-translation_last_reviewed: 2026-03-12
+source_hash: 8055b28096f5884d2636a19a98e92a74599802fa1bd3ff350dbb636d1300b1f8
+source_last_modified: "2026-03-30T18:22:55.957443+00:00"
+translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---
 
@@ -22,7 +24,7 @@ translator: machine-google-reviewed
 - Ворота FFI: некоторые типы условно аннотированы для FFI через `iroha_ffi` после `ffi_export`/`ffi_import`, чтобы избежать накладных расходов, когда FFI не требуется.
 
 ## Основные черты и помощники- `Identifiable`: объекты имеют стабильные `Id` и `fn id(&self) -> &Self::Id`. Должен быть получен с помощью `IdEqOrdHash` для удобства отображения/набора.
-- `Registrable`/`Registered`: многие объекты (например, `Domain`, `AssetDefinition`, `Role`) используют шаблон построителя. `Registered` связывает тип среды выполнения с упрощенным типом компоновщика (`With`), подходящим для транзакций регистрации.
+- `Registrable`/`Registered`: многие объекты (например, `Domain`, `AssetDefinition`, `Role`) используют шаблон построителя. `Registered` связывает тип среды выполнения с упрощенным типом компоновщика (`With`), подходящим для регистрационных транзакций.
 - `HasMetadata`: унифицированный доступ к карте ключ/значение `Metadata`.
 - `IntoKeyValue`: помощник разделения хранилища для хранения `Key` (ID) и `Value` (данные) отдельно для уменьшения дублирования.
 - `Owned<T>`/`Ref<'world, K, V>`: облегченные оболочки, используемые в хранилищах и фильтрах запросов, чтобы избежать ненужных копий.
@@ -31,37 +33,44 @@ translator: machine-google-reviewed
 - `IdBox`: конверт типа суммы для любого поддерживаемого идентификатора (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Полезно для общих потоков и кодирования Norito как одного типа.
 - `ChainId`: непрозрачный идентификатор цепочки, используемый для защиты от повтора в транзакциях.Строковые формы идентификаторов (возможны двусторонние действия с `Display`/`FromStr`):
 - `DomainId`: `name` (например, `wonderland`).
-- `AccountId`: канонический идентификатор учетной записи без домена, закодированный с помощью `AccountAddress` только как I105. Входные данные парсера должны быть каноническими I105; суффиксы домена (`@domain`), канонические литералы I105, литералы псевдонимов, канонические входные данные шестнадцатеричного анализатора, устаревшие полезные нагрузки `norito:` и формы анализатора учетных записей `uaid:`/`opaque:` отклоняются.
-- `AssetDefinitionId`: канонический `aid:<32-lower-hex-no-dash>` (байты UUID-v4).
-- `AssetId`: канонический литерал `norito:<hex>` (устаревшие текстовые формы не поддерживаются в первом выпуске).
+- `AccountId`: канонический идентификатор учетной записи без домена, закодированный с помощью `AccountAddress` только как I105. Строгие входные данные анализатора должны быть каноническими I105; суффиксы домена (`@domain`), литералы псевдонима учетной записи, канонические входные данные шестнадцатеричного анализатора, устаревшие полезные нагрузки `norito:` и формы анализатора учетной записи `uaid:`/`opaque:` отклоняются. Псевдонимы учетных записей в цепочке используют `name@domain.dataspace` или `name@dataspace` и преобразуются в канонические значения `AccountId`.
+- `AssetDefinitionId`: канонический адрес Base58 без префикса поверх канонических байтов определения актива. Это идентификатор общедоступного актива. Псевдонимы активов в цепочке используют `name#domain.dataspace` или `name#dataspace` и разрешаются только к этому каноническому идентификатору актива Base58.
+- `AssetId`: общедоступный идентификатор актива в канонической простой форме Base58. Псевдонимы активов, такие как `name#dataspace` или `name#domain.dataspace`, преобразуются в `AssetId`. Внутренние активы реестра могут дополнительно отображать разделенные поля `asset + account + optional dataspace`, где это необходимо, но эта составная форма не является общедоступной `AssetId`.
 - `NftId`: `nft$domain` (например, `rose$garden`).
 - `PeerId`: `public_key` (равенство одноранговых узлов осуществляется по открытому ключу).
 
-## Сущности
-
-### Домен
+## Сущности### Домен
 - `DomainId { name: Name }` – уникальное имя.
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Строитель: `NewDomain` с `with_logo`, `with_metadata`, затем `Registrable::build(authority)` устанавливает `owned_by`.### Аккаунт
-- `AccountId` — это канонический идентификатор учетной записи без домена, заданный контроллером и закодированный как канонический I105.
-- `ScopedAccountId { account: AccountId, domain: DomainId }` содержит явный контекст домена только там, где требуется ограниченное представление.
-- `Account { id, metadata, label?, uaid? }` — `label` — это необязательный стабильный псевдоним, используемый записями смены ключей, `uaid` содержит необязательный общий для Nexus [универсальный идентификатор учетной записи] (./universal_accounts_guide.md).
-- Строитель: `NewAccount` через `Account::new(id)`; для регистрации требуется явный домен `ScopedAccountId`, который не выводится из значений по умолчанию.
-
-### Определения и активы активов
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` отображается в текстовом виде как `aid:<32-hex-no-dash>`.
+- `AccountId` — это канонический идентификатор учетной записи без домена, указанный контроллером и закодированный как канонический I105.
+- `Account { id, metadata, label?, uaid?, opaque_ids[] }` — `label` — это необязательный основной `AccountAlias`, используемый записями смены ключей, `uaid` содержит необязательный [универсальный идентификатор учетной записи] Nexus (./universal_accounts_guide.md), и `opaque_ids` отслеживает скрытые идентификаторы, привязанные к этому UAID. Сохраненное состояние учетной записи больше не содержит поля связанного домена.
+- Строители:
+  - `NewAccount` через `Account::new(id)` регистрирует канонический субъект учетной записи без домена.
+- Модель псевдонима:
+  – Идентификация канонической учетной записи никогда не включает сегмент домена или пространства данных.
+  — Значения `AccountAlias` — это отдельные привязки SNS, расположенные поверх `AccountId`.
+  - Псевдонимы с указанием домена, такие как `merchant@banka.paynet`, содержат в привязке псевдонима как домен, так и пространство данных.
+  - Псевдонимы корня пространства данных, такие как `merchant@paynet`, несут только пространство данных и, следовательно, естественным образом сочетаются с `Account::new(...)`.
+  - Тесты и исправления должны сначала инициализировать универсальный `AccountId`, а затем отдельно добавлять аренду псевдонимов, разрешения псевдонимов и любое состояние, принадлежащее домену, вместо кодирования предположений о домене в саму идентификацию учетной записи.
+  - Поиск общедоступных учетных записей теперь фокусируется на псевдонимах (`FindAliasesByAccountId`); Идентификация учетной записи сама по себе остается бездоменной.### Определения и активы активов
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` отображается в текстовом виде как адрес Base58 без префикса с указанием версий и контрольной суммой.
 - `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
   - `name` — это текст, отображаемый человеком, который не должен содержать `#`/`@`.
   - `alias` является необязательным и должен быть одним из:
-    - `<name>#<domain>@<dataspace>`
+    - `<name>#<domain>.<dataspace>`
     - `<name>#<dataspace>`
     левый сегмент точно соответствует `AssetDefinition.name`.
+  - Состояние аренды псевдонима достоверно сохраняется в постоянной записи привязки псевдонима; встроенное поле `alias` получается, когда определения считываются обратно через API ядра/Torii.
+  - Ответы Torii с определением актива могут включать `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, где `status` — это один из `permanent`, `leased_active`, `leased_grace` или `expired_pending_cleanup`.
+  — При разрешении псевдонима используется последняя временная метка зафиксированного блока, а не настенные часы узла. После прохождения `grace_until_ms` селекторы псевдонимов немедленно перестают разрешаться, даже если очистка очистки еще не удалила устаревшую привязку; Чтение прямого определения может по-прежнему сообщать о сохраняющейся привязке как `expired_pending_cleanup`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - Строители: `AssetDefinition::new(id, spec)` или удобство `numeric(id)`; `name` требуется и должен быть установлен через `.with_name(...)`.
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- `Asset { id, value: Numeric }` с удобным для хранения `AssetEntry`/`AssetValue`.
-- `AssetBalanceScope`: `Global` для неограниченных балансов и `Dataspace(DataSpaceId)` для балансов с ограниченным пространством данных.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` доступен для сводных API.### NFT
+- `Asset { id, value: Numeric }` с удобным для хранения `AssetEntry`/`AssetValue`.- `AssetBalanceScope`: `Global` для неограниченных балансов и `Dataspace(DataSpaceId)` для балансов с ограниченным пространством данных.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` доступен для сводных API.
+
+### NFT
 - `NftId { domain: DomainId, name: Name }`.
 - `Nft { id, content: Metadata, owned_by: AccountId }` (содержимое представляет собой произвольные метаданные «ключ/значение»).
 - Строитель: `NewNft` через `Nft::new(id, content)`.
@@ -77,14 +86,14 @@ translator: machine-google-reviewed
 
 ### Криптографические примитивы (функция `sm`)
 - `Sm2PublicKey` и `Sm2Signature`: точки, соответствующие SEC1, и подписи `r∥s` фиксированной ширины для SM2. Конструкторы проверяют принадлежность кривых и различают идентификаторы; Кодировка Norito отражает каноническое представление, используемое `iroha_crypto`.
-- `Sm3Hash`: новый тип `[u8; 32]`, представляющий дайджест GM/T 0004, используемый в манифестах, телеметрии и ответах на системные вызовы.
-- `Sm4Key`: 128-битная оболочка симметричного ключа, используемая совместно системными вызовами хоста и устройствами модели данных.
+- `Sm3Hash`: новый тип `[u8; 32]`, представляющий дайджест GM/T 0004, используемый в манифестах, телеметрии и ответах на системные вызовы.
+- `Sm4Key`: 128-битная оболочка симметричного ключа, совместно используемая системными вызовами хоста и устройствами модели данных.
 Эти типы располагаются рядом с существующими примитивами Ed25519/BLS/ML-DSA и становятся частью общедоступной схемы после создания рабочей области с помощью `--features sm`.### Триггеры и события
 - `TriggerId { name: Name }` и `Trigger { id, action: action::Action }`.
 - `action::Action { executable: Executable, repeats: Repeats, authority: AccountId, filter: EventFilterBox, metadata }`.
   - `Repeats`: `Indefinitely` или `Exactly(u32)`; Утилиты заказа и истощения включены.
   - Безопасность: `TriggerCompleted` нельзя использовать в качестве фильтра действия (проверено во время (де)сериализации).
-- `EventBox`: тип суммы для конвейера, конвейерного пакета, данных, времени, событий запуска и завершения триггера; `EventFilterBox` отражает это для подписок и фильтров запуска.
+- `EventBox`: тип суммы для конвейера, конвейерного пакета, данных, времени, событий запуска и завершения триггера; `EventFilterBox` отражает это для подписок и фильтров триггера.
 
 ## Параметры и конфигурация
 
@@ -98,10 +107,10 @@ translator: machine-google-reviewed
 - Пользовательские параметры: определяются исполнителем, обозначаются как `Json`, идентифицируются как `CustomParameterId` (`Name`).
 
 ## ISI (Iroha Специальные инструкции)- Основная черта: `Instruction` с `dyn_encode`, `as_any` и стабильным идентификатором каждого типа `id()` (по умолчанию используется имя конкретного типа). Все инструкции `Send + Sync + 'static`.
-- `InstructionBox`: принадлежащая `Box<dyn Instruction>` оболочка с клоном/eq/ord, реализованная через идентификатор типа + закодированные байты.
+- `InstructionBox`: принадлежащая `Box<dyn Instruction>` оболочка с клонированием/eq/ord, реализованная через идентификатор типа + закодированные байты.
 - Семейства встроенных инструкций организованы по следующим категориям:
-  - `mint_burn`, `transfer`, `register` и пакет помощников `transparent`.
-  — Введите перечисления для метапотоков: `InstructionType`, упакованные суммы, например `SetKeyValueBox` (домен/аккаунт/asset_def/nft/trigger).
+  - `mint_burn`, `transfer`, `register` и набор помощников `transparent`.
+  — Введите перечисления для метапотоков: `InstructionType`, суммы в штучной упаковке, например `SetKeyValueBox` (домен/аккаунт/asset_def/nft/trigger).
 - Ошибки: расширенная модель ошибок под `isi::error` (ошибки типа оценки, ошибки поиска, возможность чеканки, математика, недопустимые параметры, повторение, инварианты).
 - Реестр инструкций: макрос `instruction_registry!{ ... }` создает реестр декодирования во время выполнения с ключом по имени типа. Используется клоном `InstructionBox` и сердом Norito для достижения динамической (де)сериализации. Если реестр не был явно настроен через `set_instruction_registry(...)`, встроенный реестр по умолчанию со всеми основными ISI лениво устанавливается при первом использовании, чтобы обеспечить надежность двоичных файлов.
 
@@ -125,10 +134,10 @@ translator: machine-google-reviewed
 
 ## Запросы- Два вкуса:
   - Единственное число: реализовать `SingularQuery<Output>` (например, `FindParameters`, `FindExecutorDataModel`).
-  - Итерируемый: реализовать `Query<Item>` (например, `FindAccounts`, `FindAssets`, `FindDomains` и т. д.).
+  - Итерируемый: реализовать `Query<Item>` (например, `FindAccounts`, `FindAssets`, `FindDomains` и т. д.).
 - Тип-стертые формы:
   - `QueryBox<T>` — это упакованный, стертый `Query<Item = T>` с сердом Norito, поддерживаемый глобальным реестром.
-  - `QueryWithFilter<T> { query, predicate, selector }` объединяет запрос с предикатом/селектором DSL; преобразуется в стертый итерируемый запрос через `From`.
+  - `QueryWithFilter<T> { query, predicate, selector }` связывает запрос с предикатом/селектором DSL; преобразуется в стертый итеративный запрос через `From`.
 - Реестр и кодеки:
   - `query_registry!{ ... }` создает глобальный реестр, сопоставляющий конкретные типы запросов с конструкторами по имени типа для динамического декодирования.
   - `QueryRequest = Singular(SingularQueryBox) | Start(QueryWithParams) | Continue(ForwardCursor)` и `QueryResponse = Singular(..) | Iterable(QueryOutput)`.
@@ -148,7 +157,7 @@ translator: machine-google-reviewed
 
 ### CustomInstruction (ISI, определяемый исполнителем)- Тип: `isi::CustomInstruction { payload: Json }` со стабильным идентификатором провода `"iroha.custom"`.
 - Назначение: конверт для инструкций, специфичных для исполнителя, в частных сетях/сетях консорциума или для прототипирования без разветвления общедоступной модели данных.
-- Поведение исполнителя по умолчанию: встроенный исполнитель в `iroha_core` не выполняет `CustomInstruction` и в случае его обнаружения будет паниковать. Пользовательский исполнитель должен преобразовать `InstructionBox` в `CustomInstruction` и детерминированно интерпретировать полезную нагрузку на всех валидаторах.
+- Поведение исполнителя по умолчанию: встроенный исполнитель в `iroha_core` не выполняет `CustomInstruction` и в случае его обнаружения вызовет панику. Пользовательский исполнитель должен преобразовать `InstructionBox` в `CustomInstruction` и детерминированно интерпретировать полезную нагрузку на всех валидаторах.
 - Norito: кодирует/декодирует через `norito::codec::{Encode, Decode}` с включенной схемой; Полезная нагрузка `Json` сериализуется детерминированно. Обмены туда и обратно стабильны, пока реестр инструкций включает `CustomInstruction` (он является частью реестра по умолчанию).
 - IVM: Kotodama компилируется в байт-код IVM (`.to`) и является рекомендуемым путем для логики приложения. Используйте `CustomInstruction` только для расширений уровня исполнителя, которые еще не могут быть выражены в Kotodama. Обеспечьте детерминизм и идентичные двоичные файлы исполнителя на всех узлах.
 - Не для публичных сетей: не используйте для публичных цепочек, где разнородные исполнители рискуют создать консенсусные разветвления. Если вам нужны функции платформы, предпочтительнее предлагать новый встроенный восходящий ISI.
@@ -158,7 +167,7 @@ translator: machine-google-reviewed
 
 ## Особенности и детерминизм
 
-- Функции управления дополнительными API (`std`, `json`, `transparent_api`, `ffi_export`, `ffi_import`, `fast_dsl`, `http`, `fault_injection`).
+- Функции управления дополнительными API-интерфейсами (`std`, `json`, `transparent_api`, `ffi_export`, `ffi_import`, `fast_dsl`, `http`, `fault_injection`).
 - Детерминизм: при любой сериализации используется кодировка Norito для переносимости между оборудованием. Байт-код IVM представляет собой непрозрачный байтовый объект; исполнение не должно приводить к недетерминированным сокращениям. Хост проверяет транзакции и детерминированно подает входные данные в IVM.
 
 ### Прозрачный API (`transparent_api`)- Цель: предоставляет полный изменяемый доступ к структурам/перечислениям `#[model]` для внутренних компонентов, таких как Torii, исполнителей и интеграционных тестов. Без него эти элементы намеренно непрозрачны, поэтому внешние SDK видят только безопасные конструкторы и закодированные полезные данные.
@@ -176,17 +185,20 @@ use iroha_crypto::KeyPair;
 use iroha_primitives::numeric::Numeric;
 
 // Domain
-let domain_id: DomainId = "wonderland".parse().unwrap();
+let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
 let new_domain = Domain::new(domain_id.clone()).with_metadata(Metadata::default());
 
 // Account
 let kp = KeyPair::random();
 let account_id = AccountId::new(kp.public_key().clone());
-let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
+let new_account = Account::new(account_id.clone())
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id = AssetDefinitionId::new(
+    domain_id.clone(),
+    "usd".parse().unwrap(),
+);
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -230,36 +242,36 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / краткий справочник псевдонимов (CLI + Torii):
+Краткий справочник по идентификатору/псевдониму определения актива (CLI + Torii):
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with a canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
-# Mint using alias + account components (no manual norito hex copy/paste)
+# Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
-  --account sorauﾛ1P... \
+  --definition-alias pkr#bankb.paynet \
+  --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```Примечание по миграции:
 — Старые идентификаторы определения актива `name#domain` не принимаются в версии 1.
-— Идентификаторы активов для выпуска/сжигания/передачи остаются каноническими `norito:<hex>`; создайте их с помощью:
-  - `iroha tools encode asset-id --definition aid:... --account <i105>`
-  - или `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
+- Селекторы общедоступных активов используют только один формат определения активов: канонические идентификаторы Base58. Псевдонимы остаются необязательными селекторами, но разрешаются к тому же каноническому идентификатору.
+- При поиске государственных активов учитываются принадлежащие балансы с помощью `asset + account + optional scope`; Литералы `AssetId` с необработанным кодированием являются внутренним представлением и не являются частью поверхности селектора Torii/CLI.
+- `POST /v1/assets/definitions/query` и `GET /v1/assets/definitions` принимают фильтры/сортировки определения актива по `alias_binding.status`, `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms` и `alias_binding.bound_at_ms` в дополнение к `id`, `name`, `alias` и `metadata.*`.
 
 ## Управление версиями
 

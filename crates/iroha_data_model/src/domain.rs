@@ -1,16 +1,16 @@
 //! This module contains [`Domain`](`crate::domain::Domain`) structure
 //! and related implementations and trait implementations.
-use std::{format, string::String, vec::Vec};
+use std::{format, str::FromStr, string::String, vec::Vec};
 
-use derive_more::{Constructor, Display, FromStr};
+use derive_more::Display;
 use iroha_data_model_derive::{IdEqOrdHash, model};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 pub use self::model::*;
 use crate::{
-    HasMetadata, Identifiable, Name, Registered, Registrable, metadata::Metadata, prelude::*,
-    sorafs_uri::SorafsUri,
+    HasMetadata, Identifiable, Name, Registered, Registrable, error::ParseError,
+    metadata::Metadata, name, prelude::*, sorafs_uri::SorafsUri,
 };
 
 #[model]
@@ -23,26 +23,25 @@ mod model {
     #[derive(
         Debug,
         Display,
-        FromStr,
         Clone,
         PartialEq,
         Eq,
         PartialOrd,
         Ord,
         Hash,
-        Constructor,
         Getters,
         Decode,
         Encode,
         IntoSchema,
     )]
-    #[display("{name}")]
+    #[display("{name}.{dataspace}")]
     #[getset(get = "pub")]
-    #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct DomainId {
-        /// [`Name`] unique to a [`Domain`] e.g. company name
+        /// Domain label unique only within its parent dataspace.
         pub name: Name,
+        /// Dataspace alias that owns the domain namespace.
+        pub dataspace: Name,
     }
 
     /// Named group of [`Account`] and [`Asset`](`crate::asset::value::Asset`) entities.
@@ -96,7 +95,80 @@ mod model {
     }
 }
 
-string_id!(DomainId);
+impl DomainId {
+    fn parse_label(raw: &str) -> Result<Name, ParseError> {
+        let canonical = name::canonicalize_domain_label(raw)?;
+        Name::from_str(&canonical)
+    }
+
+    fn from_canonical_parts(name: Name, dataspace: Name) -> Self {
+        Self { name, dataspace }
+    }
+
+    /// Build a dataspace-qualified domain identifier from explicit parts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when either segment is invalid under the domain-label
+    /// canonicalisation rules.
+    pub fn try_new(name: impl AsRef<str>, dataspace: impl AsRef<str>) -> Result<Self, ParseError> {
+        Ok(Self::from_canonical_parts(
+            Self::parse_label(name.as_ref())?,
+            Self::parse_label(dataspace.as_ref())?,
+        ))
+    }
+
+    /// Parse a fully qualified `domain.dataspace` literal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] when the literal is empty, contains surrounding whitespace,
+    /// or does not use the exact `domain.dataspace` format.
+    pub fn parse_fully_qualified(candidate: &str) -> Result<Self, ParseError> {
+        if candidate.trim().is_empty() {
+            return Err(ParseError::new("domain id must not be empty"));
+        }
+        if candidate.trim() != candidate {
+            return Err(ParseError::new(
+                "domain id must not contain leading or trailing whitespace",
+            ));
+        }
+
+        let dot_count = candidate.bytes().filter(|byte| *byte == b'.').count();
+        if dot_count != 1 {
+            return Err(ParseError::new(
+                "domain id must use `domain.dataspace` format",
+            ));
+        }
+
+        let (name, dataspace) = candidate
+            .split_once('.')
+            .expect("validated domain literal must contain exactly one dot");
+        if name.is_empty() || dataspace.is_empty() {
+            return Err(ParseError::new("domain id segments must not be empty"));
+        }
+
+        Self::try_new(name, dataspace)
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for DomainId {
+    fn write_json(&self, out: &mut String) {
+        norito::json::JsonSerialize::json_serialize(&self.to_string(), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for DomainId {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        Self::parse_fully_qualified(&value)
+            .map_err(|err| norito::json::Error::Message(err.reason().into()))
+    }
+}
 
 impl HasMetadata for NewDomain {
     #[inline]
@@ -186,6 +258,19 @@ mod tests {
     fn domain_has_projection_impls() {
         assert_predicate::<Domain>();
         assert_selector::<Domain>();
+    }
+
+    #[test]
+    fn domain_id_try_new_canonicalizes_both_segments() {
+        let domain_id = DomainId::try_new("Treasury", "CentralBank").expect("domain id");
+        assert_eq!(domain_id.to_string(), "treasury.centralbank");
+    }
+
+    #[test]
+    fn domain_id_parse_fully_qualified_requires_both_segments() {
+        let domain_id = DomainId::parse_fully_qualified("treasury.centralbank").expect("domain id");
+        assert_eq!(domain_id.to_string(), "treasury.centralbank");
+        assert!(DomainId::parse_fully_qualified("treasury").is_err());
     }
 }
 

@@ -120,7 +120,7 @@ translator: machine-google-reviewed
 1. **የታቀዱ ክፍለ-ጊዜዎችን ሰርዝ።** ሁልጊዜም የቅድመ እይታ ክፍለ ጊዜዎችን ሰርዝ ስለዚህ ጥልቀት ወረፋ
    ማንቂያዎች ጠቃሚ ሆነው ይቆያሉ
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    ለSwift-only test runs፣ በ Rust/CLI አጋዥ በኩል ተመሳሳዩን የመጨረሻ ነጥብ ይደውሉ።
 2. ** መጽሔቶችን አጽዳ።** ማንኛቸውም የቆዩ የወረፋ መጽሔቶችን ያስወግዱ

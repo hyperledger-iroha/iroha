@@ -33,6 +33,7 @@ Both tracks share the same core components, including Norito serialization, Sume
 ### Build and Test (Workspace)
 
 ```bash
+cargo test
 cargo build --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
@@ -41,9 +42,17 @@ cargo fmt --all
 
 Notes:
 
+- Plain `cargo test` from the repository root runs every workspace member.
+  `cargo test --workspace` is kept in examples when an explicit full-workspace
+  command is clearer. Use `cargo test -p <crate>` for a focused crate suite.
 - Full workspace build can take about 20 minutes.
 - Full workspace tests can take multiple hours.
 - The workspace targets `std` (WASM/no-std builds are not supported).
+- Heavier local UI/media helpers are explicit features in default builds:
+  `cargo run -p mochi-ui --features gui` for the egui desktop shell and
+  `cargo run -p iroha_cli --features offline-visual-codecs -- ...` for Petal
+  visual-codec commands. The SoraFS browser/SDK local QUIC proxy is available
+  with `cargo build -p sorafs_orchestrator --features local-quic-proxy`.
 
 ### Targeted Test Commands
 
@@ -96,6 +105,65 @@ See the full endpoint reference in:
 
 - [`docs/source/telemetry.md`](./docs/source/telemetry.md)
 - [`docs/portal/docs/reference/README.md`](./docs/portal/docs/reference/README.md)
+
+For contract apps, Torii now exposes both single-contract deploy and bundle
+deploy surfaces. The maintained public path is:
+
+- `iroha contract app build|plan|deploy|resume` for `iroha.app.toml` bundles
+- `POST /v1/contracts/deploy-bundle` for compiled bundle deploys (`?dry_run=true`
+  for deterministic planning)
+- `GET /v1/contracts/deploy-bundles/{bundle_digest}` for receipt/status lookup
+- `POST /v1/contracts/deploy` for the single-contract path, implemented through
+  the same planner/executor as a one-contract bundle
+- `POST /v1/contracts/view/batch` for batched read-only contract queries in one
+  round-trip
+
+For the public-safe Torii posture, contract deploy/call/view/status routes stay
+public, while higher-risk app-facing surfaces are opt-in:
+
+- `torii.webhooks_enabled = false` by default
+- `torii.zk_attachments_enabled = false` by default
+- `torii.deploy_rate_per_origin_per_sec = 4` plus
+  `torii.deploy_burst_per_origin = 8` are the public deploy baseline
+- trader/app rollups such as `/v1/contracts/rollups/swaps/fills` and
+  `/v1/contracts/rollups/trader/account` remain app-facing surfaces rather than
+  part of the public-safe baseline
+- enable them explicitly when the node is meant to expose those app features
+
+## Codex Integration
+
+This repo includes Codex-facing SORA live-network surfaces:
+
+- [`plugins/iroha/`](./plugins/iroha): an installable Codex app/plugin with the
+  built-in Taira MCP preset.
+- [`skills/sora-taira-testnet/`](./skills/sora-taira-testnet): a standalone
+  Codex skill for live Taira testnet workflows.
+- [`skills/sora-minamoto-mainnet/`](./skills/sora-minamoto-mainnet): a
+  standalone Codex skill for live Minamoto mainnet workflows.
+
+Install a standalone skill from a GitHub checkout of this repo with:
+
+```bash
+python3 "${CODEX_HOME:-$HOME/.codex}"/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo <owner>/<repo> \
+  --path skills/sora-taira-testnet
+
+python3 "${CODEX_HOME:-$HOME/.codex}"/skills/.system/skill-installer/scripts/install-skill-from-github.py \
+  --repo <owner>/<repo> \
+  --path skills/sora-minamoto-mainnet
+```
+
+Restart Codex after installation so the selected skill appears in the Skills
+tab.
+
+If you are operating the public Taira deployment itself, render per-validator
+configs from `configs/soranexus/taira/validator_roster.example.toml` plus
+`configs/soranexus/taira/validator_secrets.example.toml` with
+`python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ... --output-dir ...`
+instead of cloning the checked-in peer-1 `config.toml` by hand. The secrets
+template now also carries the shared onboarding/faucet authority and streaming
+identity material, so the checked-in Taira config remains a template rather
+than a secret-bearing runtime profile.
 
 ## Core Crates
 

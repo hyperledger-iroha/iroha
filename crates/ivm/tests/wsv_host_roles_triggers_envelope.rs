@@ -4,7 +4,7 @@ use iroha_crypto::PublicKey;
 use ivm::{
     IVM, Memory, PointerType, VMError,
     instruction::wide,
-    mock_wsv::{DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 mod common;
@@ -37,16 +37,18 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn account(domain: &str, public_key: &str) -> ScopedAccountId {
-    let domain: DomainId = domain.parse().unwrap();
+fn account(domain: &str, public_key: &str) -> AccountId {
+    let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
-    ScopedAccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
-fn canonical_account(account: ScopedAccountId) -> ScopedAccountId {
+fn canonical_account(account: AccountId) -> AccountId {
     let value = norito::json::to_value(&account).expect("serialize account");
     let literal = value.as_str().expect("account literal");
-    ScopedAccountId::parse_encoded(literal).expect("canonical account id must parse")
+    AccountId::parse_encoded(literal)
+        .expect("canonical I105 account id must parse")
+        .into_account_id()
 }
 
 fn run_env_result(vm: &mut IVM, env: norito::json::Value) -> Result<(), VMError> {
@@ -81,16 +83,16 @@ fn envelope_roles_permissions_triggers() {
         "wonderland",
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
     ));
+    let rose = iroha_data_model::asset::AssetDefinitionId::new(
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
+        "rose".parse().unwrap(),
+    );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::ManageRoles);
     wsv.grant_permission(&alice, PermissionToken::ManagePermissions);
     wsv.grant_permission(&alice, PermissionToken::ManageTriggers);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -135,10 +137,10 @@ fn envelope_roles_permissions_triggers() {
         host.wsv
             .has_permission(&alice, &PermissionToken::RegisterDomain)
     );
-    assert!(host.wsv.has_permission(
-        &alice,
-        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&alice,)),
-    ));
+    assert!(
+        host.wsv
+            .has_permission(&alice, &PermissionToken::ReadAccountAssets(alice.clone()),)
+    );
 
     // 2) Grant + revoke a direct permission
     let mint_perm_env = json_object([
@@ -147,20 +149,17 @@ fn envelope_roles_permissions_triggers() {
             "payload",
             json_object([
                 ("account_id", json_value(&alice)),
-                ("permission", json_value("mint_asset:rose#domain")),
+                ("permission", json_value(&format!("mint_asset:{rose}"))),
             ]),
         ),
     ]);
     run_env(&mut vm, mint_perm_env);
     let host_any = vm.host_mut_any().unwrap();
     let host = host_any.downcast_ref::<WsvHost>().unwrap();
-    assert!(host.wsv.has_permission(
-        &alice,
-        &PermissionToken::MintAsset(iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
-            "rose".parse().unwrap()
-        ))
-    ));
+    assert!(
+        host.wsv
+            .has_permission(&alice, &PermissionToken::MintAsset(rose.clone()))
+    );
 
     let revoke_perm_env = json_object([
         ("type", json_value("wsv.revoke_permission")),
@@ -172,7 +171,7 @@ fn envelope_roles_permissions_triggers() {
                     "permission",
                     json_object([
                         ("type", json_value("mint_asset")),
-                        ("target", json_value("rose#domain")),
+                        ("target", json_value(&rose.to_string())),
                     ]),
                 ),
             ]),
@@ -181,13 +180,11 @@ fn envelope_roles_permissions_triggers() {
     run_env(&mut vm, revoke_perm_env);
     let host_any = vm.host_mut_any().unwrap();
     let host = host_any.downcast_ref::<WsvHost>().unwrap();
-    assert!(!host.wsv.has_permission(
-        &alice,
-        &PermissionToken::MintAsset(iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
-            "rose".parse().unwrap()
-        ))
-    ));
+    assert!(
+        !host
+            .wsv
+            .has_permission(&alice, &PermissionToken::MintAsset(rose.clone()))
+    );
 
     // 3) Trigger lifecycle: create -> disable -> remove
     let trig_name = "my_trigger";
@@ -253,8 +250,7 @@ fn envelope_missing_payload_is_rejected() {
     ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&alice), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -271,8 +267,7 @@ fn envelope_payload_must_be_object() {
     ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host =
-        WsvHost::new_with_subject(wsv, ivm::mock_wsv::AccountId::from(&alice), HashMap::new());
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -292,11 +287,7 @@ fn envelope_admin_alias_rejects_without_manage_permissions() {
     ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 

@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 Для этого необходимо установить `$ADMIN_ACCOUNT` и `$RECEIVER_ACCOUNT`. В комплект поставки входит:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 По словам президента США:
@@ -46,7 +46,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts داخل wonderland (استبدل --limit بعدد اكبر عند الحاجة)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions الموجودة مسبقا
@@ -61,14 +61,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 Проверьте хеш CLI (например, `0x5f…`). Это произошло в 2007 году.
 
 ## 3. Сделай это в Стиве
 
-Установите флажок `(asset definition, account)`. На 250 секунд от `coffee#wonderland` до `$ADMIN_ACCOUNT`:
+Установите флажок `(asset definition, account)`. На 250 секунд от `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` до `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

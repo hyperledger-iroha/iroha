@@ -1,16 +1,14 @@
 //! Kotodama lending demo: a minimal borrow/mint flow on IVM.
 use std::collections::HashMap;
 
+use iroha_data_model::DomainId;
 use ivm::{
-    AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken, ScopedAccountId,
+    AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,
 };
 
-fn fixture_account(domain: &str, hex_public_key: &str) -> ScopedAccountId {
-    ScopedAccountId::new(
-        domain.parse().expect("domain id"),
-        hex_public_key.parse().expect("public key"),
-    )
+fn fixture_account(_domain: &str, hex_public_key: &str) -> AccountId {
+    AccountId::new(hex_public_key.parse().expect("public key"))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -30,18 +28,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "genesis",
         "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
     );
-    let debt_asset: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "stable".parse()?);
+    let debt_asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "stable".parse()?,
+    );
 
     // Initialize WSV: no balances yet; grant permissions so user can mint via host
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(&user, PermissionToken::MintAsset(debt_asset.clone()));
-    wsv.grant_permission(
-        &user,
-        PermissionToken::ReadAccountAssets(AccountId::from(&user)),
-    );
-    let user_subject = AccountId::from(&user);
-    let vault_subject = AccountId::from(&vault);
+    wsv.grant_permission(&user, PermissionToken::ReadAccountAssets(user.clone()));
+    let user_subject = user.clone();
+    let vault_subject = vault.clone();
 
     // 3) Map small integers to domainless account subjects used by syscalls
     let mut account_map = HashMap::new();

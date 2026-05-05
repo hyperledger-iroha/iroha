@@ -1310,7 +1310,7 @@ mod tests {
     fn disbursement_handles_no_shows_and_forfeits_rewards() {
         let config = AppealSettlementConfig::baseline_v1();
         let panel_size = 7;
-        let domain: DomainId = "panel".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("panel", "universal").expect("domain id");
         let jurors: Vec<AccountId> = (0..panel_size)
             .map(|i| make_account(u8::try_from(i).expect("fits"), &domain))
             .collect();
@@ -1351,7 +1351,7 @@ mod tests {
     #[test]
     fn disbursement_rejects_panel_mismatch() {
         let config = AppealSettlementConfig::baseline_v1();
-        let domain: DomainId = "panel".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("panel", "universal").expect("domain id");
         let jurors: Vec<AccountId> = (0..3)
             .map(|i| make_account(u8::try_from(i).expect("fits"), &domain))
             .collect();

@@ -1,12 +1,18 @@
-// Minimal Kotodama example: writes a detail for the current authority
+// Minimal Kotodama example: logs a greeting and writes a detail for the current authority
 
 seiyaku Hello {
-  // Optional initializer; many runtimes call this on deploy
+  // Optional initializer; deploy-oriented runtimes may call this automatically.
   hajimari() {
     info("Hello from Kotodama");
   }
 
-  // Public entrypoint that sets an account detail on the caller
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm when no selector is supplied.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
+  // Public entrypoint that sets an account detail on the caller.
   kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),

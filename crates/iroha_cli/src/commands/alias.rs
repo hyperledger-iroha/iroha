@@ -7,10 +7,9 @@
 use crate::cli_output::print_with_optional_text;
 use crate::{Run, RunContext};
 use eyre::{Result, eyre};
-use iroha::data_model::{alias::AliasIndex, name::Name};
+use iroha::data_model::alias::AliasIndex;
 use iroha::{client::Client, http::Response, http::StatusCode};
 use std::fmt::Write as _;
-use std::str::FromStr;
 
 #[cfg(test)]
 use iroha_i18n::{Bundle, Language, Localizer};
@@ -23,6 +22,8 @@ pub enum Command {
     Resolve(ResolveArgs),
     /// Resolve an alias by Merkle index (placeholder).
     ResolveIndex(ResolveIndexArgs),
+    /// List aliases bound to a canonical account id.
+    ByAccount(ByAccountArgs),
 }
 
 impl Run for Command {
@@ -31,6 +32,7 @@ impl Run for Command {
             Command::VoprfEvaluate(args) => args.run(context),
             Command::Resolve(args) => args.run(context),
             Command::ResolveIndex(args) => args.run(context),
+            Command::ByAccount(args) => args.run(context),
         }
     }
 }
@@ -86,6 +88,31 @@ impl Run for ResolveIndexArgs {
     }
 }
 
+#[derive(clap::Args, Debug)]
+pub struct ByAccountArgs {
+    /// Canonical I105 account id.
+    #[arg(long)]
+    pub account_id: String,
+    /// Optional dataspace alias filter such as `centralbank`.
+    #[arg(long)]
+    pub dataspace: Option<String>,
+    /// Optional exact domain filter such as `banka`.
+    #[arg(long)]
+    pub domain: Option<String>,
+}
+
+impl Run for ByAccountArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        alias_by_account_with(
+            context,
+            &self.account_id,
+            self.dataspace.as_deref(),
+            self.domain.as_deref(),
+            Client::post_alias_lookup_by_account,
+        )
+    }
+}
+
 fn alias_voprf_evaluate_with<C, F>(context: &mut C, blinded_hex: &str, call: F) -> Result<()>
 where
     C: RunContext,
@@ -120,7 +147,7 @@ where
     C: RunContext,
     F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
 {
-    let _ = Name::from_str(alias).map_err(|err| eyre!("invalid alias: {err}"))?;
+    validate_account_alias_literal(alias)?;
     if dry_run {
         let output = norito::json!({
             "alias": alias,
@@ -156,6 +183,70 @@ where
     }
 }
 
+fn validate_account_alias_literal(alias: &str) -> Result<()> {
+    let trimmed = alias.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!(
+            "invalid alias: account alias must use `name@domain.dataspace` or `name@dataspace` format"
+        ));
+    }
+    if trimmed != alias {
+        return Err(eyre!(
+            "invalid alias: account alias must not contain leading or trailing whitespace"
+        ));
+    }
+
+    let (name, right) = trimmed.split_once('@').ok_or_else(|| {
+        eyre!("invalid alias: account alias must use `name@domain.dataspace` or `name@dataspace` format")
+    })?;
+    if right.contains('@') {
+        return Err(eyre!(
+            "invalid alias: account alias must contain exactly one `@` separator"
+        ));
+    }
+    if name.is_empty() || right.is_empty() {
+        return Err(eyre!(
+            "invalid alias: account alias segments must not be empty"
+        ));
+    }
+
+    let dot_count = right.bytes().filter(|byte| *byte == b'.').count();
+    match dot_count {
+        0 => Ok(()),
+        1 => {
+            let (domain, dataspace) = right.split_once('.').expect("counted dot");
+            if domain.is_empty() || dataspace.is_empty() {
+                return Err(eyre!(
+                    "invalid alias: account alias domain and dataspace segments must not be empty"
+                ));
+            }
+            Ok(())
+        }
+        _ => Err(eyre!(
+            "invalid alias: account alias must use `name@domain.dataspace` or `name@dataspace` format"
+        )),
+    }
+}
+
+fn validate_account_id_literal(account_id: &str) -> Result<()> {
+    iroha::data_model::account::AccountId::parse_encoded(account_id.trim())
+        .map(|_| ())
+        .map_err(|err| eyre!("invalid account_id: {err}"))
+}
+
+fn validate_alias_scope_component(name: &str, value: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("{name} must not be empty"));
+    }
+    if trimmed != value {
+        return Err(eyre!(
+            "{name} must not contain leading or trailing whitespace"
+        ));
+    }
+    Ok(())
+}
+
 fn alias_resolve_index_with<C, F>(context: &mut C, index: u64, call: F) -> Result<()>
 where
     C: RunContext,
@@ -179,6 +270,47 @@ where
         )),
         status => Err(eyre!(
             "alias resolve-index failed with status {status}: {}",
+            format_alias_error("server response", &body)
+        )),
+    }
+}
+
+fn alias_by_account_with<C, F>(
+    context: &mut C,
+    account_id: &str,
+    dataspace: Option<&str>,
+    domain: Option<&str>,
+    call: F,
+) -> Result<()>
+where
+    C: RunContext,
+    F: FnOnce(&Client, &str, Option<&str>, Option<&str>) -> Result<Response<Vec<u8>>>,
+{
+    validate_account_id_literal(account_id)?;
+    if let Some(dataspace) = dataspace {
+        validate_alias_scope_component("dataspace", dataspace)?;
+    }
+    if let Some(domain) = domain {
+        validate_alias_scope_component("domain", domain)?;
+    }
+
+    let client = context.client_from_config();
+    let response = call(&client, account_id, dataspace, domain)?;
+    let status = response.status();
+    let body = response.into_body();
+
+    match status {
+        StatusCode::OK => {
+            let dto: AliasLookupByAccountResponse = norito::json::from_slice(&body)?;
+            let text = render_alias_by_account_text(&dto);
+            print_with_optional_text(context, Some(text), &dto)
+        }
+        StatusCode::NOT_FOUND => Err(eyre!(
+            "{}",
+            format_alias_error(&format!("account `{account_id}` not found"), &body)
+        )),
+        status => Err(eyre!(
+            "alias by-account lookup failed with status {status}: {}",
             format_alias_error("server response", &body)
         )),
     }
@@ -242,6 +374,27 @@ fn render_alias_resolve_index_text(dto: &AliasResolveIndexResponse) -> String {
     out
 }
 
+fn render_alias_by_account_text(dto: &AliasLookupByAccountResponse) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "account `{}` has {} matching alias(es)",
+        dto.account_id, dto.total
+    );
+    for item in &dto.items {
+        let _ = writeln!(out, "alias: {}", item.alias);
+        let _ = writeln!(out, "dataspace: {}", item.dataspace);
+        if let Some(domain) = item.domain.as_deref() {
+            let _ = writeln!(out, "domain: {domain}");
+        }
+        let _ = writeln!(out, "is_primary: {}", item.is_primary);
+    }
+    if let Some(source) = dto.source.as_deref() {
+        let _ = writeln!(out, "source: {source}");
+    }
+    out
+}
+
 #[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct AliasResolveResponse {
     alias: String,
@@ -255,6 +408,24 @@ struct AliasResolveIndexResponse {
     index: u64,
     alias: String,
     account_id: String,
+    #[norito(default)]
+    source: Option<String>,
+}
+
+#[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+struct AliasLookupByAccountItem {
+    alias: String,
+    dataspace: String,
+    #[norito(default)]
+    domain: Option<String>,
+    is_primary: bool,
+}
+
+#[derive(norito::json::JsonSerialize, norito::json::JsonDeserialize)]
+struct AliasLookupByAccountResponse {
+    account_id: String,
+    total: u64,
+    items: Vec<AliasLookupByAccountItem>,
     #[norito(default)]
     source: Option<String>,
 }
@@ -287,7 +458,8 @@ mod tests {
         command: Command,
     }
 
-    const SAMPLE_ACCOUNT_ID: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const SAMPLE_ACCOUNT_ID: &str =
+        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 
     #[test]
     fn parse_voprf_args() {
@@ -296,6 +468,28 @@ mod tests {
         match wrapper.command {
             Command::VoprfEvaluate(args) => {
                 assert_eq!(args.blinded_element_hex, "00");
+            }
+            _ => panic!("unexpected command"),
+        }
+    }
+
+    #[test]
+    fn parse_by_account_args() {
+        let wrapper = Wrapper::parse_from([
+            "iroha",
+            "by-account",
+            "--account-id",
+            SAMPLE_ACCOUNT_ID,
+            "--dataspace",
+            "centralbank",
+            "--domain",
+            "banka",
+        ]);
+        match wrapper.command {
+            Command::ByAccount(args) => {
+                assert_eq!(args.account_id, SAMPLE_ACCOUNT_ID);
+                assert_eq!(args.dataspace.as_deref(), Some("centralbank"));
+                assert_eq!(args.domain.as_deref(), Some("banka"));
             }
             _ => panic!("unexpected command"),
         }
@@ -315,6 +509,8 @@ mod tests {
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
                 account,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair: kp,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://localhost/").unwrap(),
@@ -326,6 +522,7 @@ mod tests {
                 transaction_status_timeout: config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: config::DEFAULT_TRANSACTION_NONCE,
                 connect_queue_root: config::default_connect_queue_root(),
+                soracloud_http_witness_file: None,
                 sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
                 sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
                 sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),
@@ -437,12 +634,12 @@ mod tests {
     #[test]
     fn resolve_helper_prints_result() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
-        alias_resolve_with(&mut ctx, "alice", false, |_, _| {
+        alias_resolve_with(&mut ctx, "alice@centralbank", false, |_, _| {
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
                 .body(norito::json::to_vec(&norito::json!({
-                    "alias": "alice",
+                    "alias": "alice@centralbank",
                     "account_id": SAMPLE_ACCOUNT_ID,
                     "source": "iso_bridge"
                 }))?)
@@ -467,14 +664,17 @@ mod tests {
     #[test]
     fn resolve_helper_handles_not_found() {
         let mut ctx = TestContext::new(CliOutputFormat::Json);
-        let err = alias_resolve_with(&mut ctx, "alice", false, |_, _| {
+        let err = alias_resolve_with(&mut ctx, "alice@centralbank", false, |_, _| {
             Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Vec::new())
                 .unwrap())
         })
         .expect_err("expected error");
-        assert!(err.to_string().contains("alias `alice` not found"));
+        assert!(
+            err.to_string()
+                .contains("alias `alice@centralbank` not found")
+        );
     }
 
     #[test]
@@ -515,6 +715,55 @@ mod tests {
         };
         let text = render_alias_resolve_index_text(&dto);
         assert!(text.contains(&format!("account_id: {SAMPLE_ACCOUNT_ID}")));
+    }
+
+    #[test]
+    fn alias_by_account_helper_prints_result() {
+        let mut ctx = TestContext::new(CliOutputFormat::Json);
+        alias_by_account_with(
+            &mut ctx,
+            SAMPLE_ACCOUNT_ID,
+            Some("centralbank"),
+            Some("banka"),
+            |_, _, _, _| {
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(&norito::json!({
+                        "account_id": SAMPLE_ACCOUNT_ID,
+                        "total": 1,
+                        "items": [{
+                            "alias": "merchant@banka.centralbank",
+                            "dataspace": "centralbank",
+                            "domain": "banka",
+                            "is_primary": true
+                        }],
+                        "source": "on_chain"
+                    }))?)
+                    .unwrap())
+            },
+        )
+        .expect("helper should succeed");
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("merchant@banka.centralbank"));
+    }
+
+    #[test]
+    fn alias_by_account_text_mentions_total() {
+        let dto = AliasLookupByAccountResponse {
+            account_id: SAMPLE_ACCOUNT_ID.to_string(),
+            total: 1,
+            items: vec![AliasLookupByAccountItem {
+                alias: "merchant@banka.centralbank".to_string(),
+                dataspace: "centralbank".to_string(),
+                domain: Some("banka".to_string()),
+                is_primary: true,
+            }],
+            source: Some("on_chain".to_string()),
+        };
+        let text = render_alias_by_account_text(&dto);
+        assert!(text.contains("has 1 matching alias(es)"));
+        assert!(text.contains("merchant@banka.centralbank"));
     }
 
     #[test]

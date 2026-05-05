@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../../fixtures/account/address_vectors.json" Link="Fixtures/address_vectors.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../IrohaSwift/Fixtures/swift_parity_manifest.json" Link="Fixtures/swift_parity_manifest.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../IrohaSwift/Fixtures/swift_parity_payloads.json" Link="Fixtures/swift_parity_payloads.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../IrohaSwift/Fixtures/swift_*.norito" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

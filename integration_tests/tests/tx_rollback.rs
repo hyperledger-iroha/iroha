@@ -20,8 +20,14 @@ fn client_sends_transaction_with_invalid_instruction_should_not_see_any_changes(
 
     //When
     let account_id = ALICE_ID.clone();
-    let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "xor".parse()?);
-    let wrong_asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "ksor".parse()?);
+    let asset_definition_id = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "xor".parse()?,
+    );
+    let wrong_asset_definition_id = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "ksor".parse()?,
+    );
     let create_asset = Register::asset_definition({
         let __asset_definition_id = asset_definition_id;
         AssetDefinition::numeric(__asset_definition_id.clone())

@@ -4,15 +4,16 @@ use std::{
     cmp::Reverse,
     collections::BTreeSet,
     sync::{Arc, mpsc},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest};
 use iroha_data_model::Encode as _;
 use iroha_logger::prelude::*;
 
-use super::locked_qc::qc_extends_locked_with_lookup;
+use super::locked_qc::qc_satisfies_locked_with_lookup;
 use super::pacing::{Pacemaker, PacemakerBackpressure, PacemakerBackpressureAction};
+use super::pending_block::ValidatedCommitArtifact;
 use super::propose::ProposalBackpressure;
 use super::*;
 
@@ -26,13 +27,14 @@ pub(super) enum EpochRefreshPhase {
 pub(super) struct CommitWork {
     pub(super) id: u64,
     pub(super) block: SignedBlock,
+    pub(super) validated_commit_artifact: Option<ValidatedCommitArtifact>,
     pub(super) commit_topology: Vec<PeerId>,
     pub(super) signature_topology: Vec<PeerId>,
+    pub(super) consensus_mode: ConsensusMode,
     pub(super) qc_signers: Option<BTreeSet<ValidatorIndex>>,
     pub(super) commit_qc: Option<crate::sumeragi::consensus::Qc>,
     pub(super) allow_quorum_bypass: bool,
     pub(super) allow_signature_index_recovery: bool,
-    pub(super) persist_required: bool,
     pub(super) events_sender: crate::EventsSender,
 }
 
@@ -84,6 +86,12 @@ impl CommitDrainSummary {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub(super) struct CommitPostApplySnapshot {
+    pub(super) world_peers: Vec<PeerId>,
+    pub(super) stake_snapshot: Option<crate::sumeragi::stake_snapshot::CommitStakeSnapshot>,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct CommitPipelineTimings {
     pub(super) ran: bool,
@@ -112,6 +120,28 @@ impl CommitPipelineTimings {
     }
 }
 
+fn duration_to_ms(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+fn commit_pipeline_sample_from_timings(
+    timings: CommitPipelineTimings,
+) -> crate::sumeragi::status::CommitPipelineSample {
+    crate::sumeragi::status::CommitPipelineSample {
+        total_ms: duration_to_ms(timings.total),
+        validation_ms: duration_to_ms(timings.validation),
+        qc_rebuild_ms: duration_to_ms(timings.qc_rebuild),
+        gate_ms: duration_to_ms(timings.gate),
+        finalize_ms: duration_to_ms(timings.finalize),
+        drain_results_ms: duration_to_ms(timings.drain_results),
+        drain_qc_verify_ms: timings.drain_qc_verify_ms,
+        drain_persist_ms: timings.drain_persist_ms,
+        drain_kura_store_ms: timings.drain_kura_store_ms,
+        drain_state_apply_ms: timings.drain_state_apply_ms,
+        drain_state_commit_ms: timings.drain_state_commit_ms,
+    }
+}
+
 #[derive(Debug)]
 pub(super) enum CommitOutcome {
     Rejected {
@@ -119,6 +149,7 @@ pub(super) enum CommitOutcome {
         error: BlockValidationError,
         pipeline_events: Vec<PipelineEventBox>,
     },
+    #[allow(dead_code)]
     KuraStoreFailed {
         committed_block: crate::block::CommittedBlock,
         error: crate::kura::Error,
@@ -126,16 +157,19 @@ pub(super) enum CommitOutcome {
     StateCommitFailed {
         committed_block: crate::block::CommittedBlock,
         error: String,
+        error_kind: Option<crate::state::storage_transactions::TransactionsBlockError>,
     },
     Success {
         committed_block: crate::block::CommittedBlock,
         exec_witness: Option<ExecWitness>,
         pipeline_events: Vec<PipelineEventBox>,
         state_events: Vec<EventBox>,
+        post_apply_snapshot: CommitPostApplySnapshot,
     },
 }
 
 #[derive(Debug)]
+#[allow(dead_code)] // Spawned from unit-test-only commit worker harnesses.
 pub(super) struct CommitWorkerHandle {
     pub(super) work_tx: mpsc::SyncSender<CommitWork>,
     pub(super) result_rx: mpsc::Receiver<CommitResult>,
@@ -170,6 +204,7 @@ fn peer_ids_outside_topology(
         .collect()
 }
 
+#[allow(dead_code)] // Spawned from unit-test-only commit worker harnesses.
 pub(super) fn spawn_commit_worker(
     state: Arc<State>,
     kura: Arc<Kura>,
@@ -237,14 +272,15 @@ pub(super) fn execute_commit_work(
     let CommitWork {
         block,
         id,
+        validated_commit_artifact,
         commit_topology,
         signature_topology,
+        consensus_mode,
         qc_signers: _qc_signers,
         commit_qc,
         allow_quorum_bypass: _allow_quorum_bypass,
         allow_signature_index_recovery,
-        persist_required,
-        events_sender,
+        events_sender: _events_sender,
         ..
     } = work;
     let mut timings = CommitStageTimings::default();
@@ -284,7 +320,6 @@ pub(super) fn execute_commit_work(
         height = block_height,
         view = block_view,
         block = %block_hash,
-        persist_required,
         "commit work start"
     );
     let qc_start = Instant::now();
@@ -449,56 +484,59 @@ pub(super) fn execute_commit_work(
         Ok((committed_block, mut state_block)) => {
             let exec_witness = state_block.take_exec_witness();
             let persist_start = Instant::now();
-            let mut pipeline_events = pipeline_events;
-            if persist_required {
-                let committed_block_for_kura = committed_block.clone();
-                log_stage_start("kura_store");
-                let kura_start = Instant::now();
-                if let Err(err) = kura.store_block(committed_block_for_kura) {
-                    log_stage_end("kura_store", kura_start);
-                    timings.kura_store_ms = Some(to_ms(kura_start.elapsed()));
-                    timings.persist_ms = Some(to_ms(persist_start.elapsed()));
-                    return (
-                        CommitOutcome::KuraStoreFailed {
-                            committed_block,
-                            error: err,
-                        },
-                        timings,
-                    );
-                }
-                timings.kura_store_ms = Some(to_ms(kura_start.elapsed()));
+            let pipeline_events = pipeline_events;
+            let _validated_commit_artifact = validated_commit_artifact.or_else(|| {
+                exec_witness
+                    .as_ref()
+                    .map(|witness| ValidatedCommitArtifact {
+                        block_hash,
+                        height: block_height,
+                        view: block_view,
+                        parent_state_root: parent_state_from_witness(witness),
+                        post_state_root: post_state_from_witness(witness),
+                    })
+            });
+            let committed_block_for_kura = committed_block.clone();
+            log_stage_start("kura_store");
+            let kura_start = Instant::now();
+            if let Err(err) = kura.store_block(committed_block_for_kura) {
                 log_stage_end("kura_store", kura_start);
+                timings.kura_store_ms = Some(to_ms(kura_start.elapsed()));
+                timings.persist_ms = Some(to_ms(persist_start.elapsed()));
+                return (
+                    CommitOutcome::KuraStoreFailed {
+                        committed_block,
+                        error: err,
+                    },
+                    timings,
+                );
             }
-            log_stage_start("emit_pipeline_events");
-            let emit_start = Instant::now();
-            // Emit pipeline events once durability is confirmed, before state apply.
-            emit_pipeline_events(&events_sender, std::mem::take(&mut pipeline_events));
-            log_stage_end("emit_pipeline_events", emit_start);
-            if let Some(qc) = commit_qc.as_ref() {
-                let header = committed_block.as_ref().header();
-                if qc.phase == crate::sumeragi::consensus::Phase::Commit
-                    && qc.subject_block_hash == committed_block.as_ref().hash()
-                    && qc.height == header.height().get()
-                    && qc.view == header.view_change_index()
-                {
-                    crate::sumeragi::status::record_commit_qc(qc.clone());
-                } else {
-                    warn!(
-                        qc_height = qc.height,
-                        qc_view = qc.view,
-                        qc_phase = ?qc.phase,
-                        qc_block = %qc.subject_block_hash,
-                        block_height = header.height().get(),
-                        block_view = header.view_change_index(),
-                        block = %committed_block.as_ref().hash(),
-                        "skipping commit QC record: mismatched metadata"
-                    );
-                }
-            }
+            timings.kura_store_ms = Some(to_ms(kura_start.elapsed()));
+            log_stage_end("kura_store", kura_start);
             log_stage_start("state_apply");
             let apply_start = Instant::now();
-            let state_events =
-                state_block.apply_without_execution(&committed_block, commit_topology);
+            let stake_snapshot_roster = commit_topology.clone();
+            let state_events = state_block.apply_without_execution_with_commit_qc(
+                &committed_block,
+                commit_topology,
+                commit_qc.as_ref(),
+            );
+            let post_apply_snapshot = {
+                let world = state_block.world();
+                let world_peers = world.peers().iter().cloned().collect::<Vec<_>>();
+                let stake_snapshot = if matches!(consensus_mode, ConsensusMode::Npos) {
+                    crate::sumeragi::stake_snapshot::CommitStakeSnapshot::from_roster(
+                        world,
+                        &stake_snapshot_roster,
+                    )
+                } else {
+                    None
+                };
+                CommitPostApplySnapshot {
+                    world_peers,
+                    stake_snapshot,
+                }
+            };
             timings.state_apply_ms = Some(to_ms(apply_start.elapsed()));
             log_stage_end("state_apply", apply_start);
             log_stage_start("state_commit");
@@ -511,12 +549,30 @@ pub(super) fn execute_commit_work(
                     CommitOutcome::StateCommitFailed {
                         committed_block,
                         error: err.to_string(),
+                        error_kind: Some(err),
                     },
                     timings,
                 );
             }
             timings.state_commit_ms = Some(to_ms(state_commit_start.elapsed()));
             log_stage_end("state_commit", state_commit_start);
+            let wsv_checkpoint_hash = crate::snapshot::canonical_state_snapshot_hash(state);
+            if let Err(err) =
+                kura.store_wsv_checkpoint(block_height, block_hash, wsv_checkpoint_hash)
+            {
+                error!(
+                    ?err,
+                    height = block_height,
+                    block = %block_hash,
+                    checkpoint = %wsv_checkpoint_hash,
+                    "failed to persist Kura WSV checkpoint after state commit"
+                );
+            }
+            crate::sumeragi::status::record_round_gap_state_commit(
+                block_height,
+                block_view,
+                block_hash,
+            );
             timings.persist_ms = Some(to_ms(persist_start.elapsed()));
             (
                 CommitOutcome::Success {
@@ -524,6 +580,7 @@ pub(super) fn execute_commit_work(
                     exec_witness,
                     pipeline_events,
                     state_events,
+                    post_apply_snapshot,
                 },
                 timings,
             )
@@ -668,6 +725,49 @@ fn commit_qc_from_cache_or_history(
 }
 
 impl Actor {
+    fn promote_commit_anchor_qc(&mut self, qc: crate::sumeragi::consensus::QcHeaderRef) {
+        let new_highest = match self.highest_qc {
+            Some(current) if (current.height, current.view) > (qc.height, qc.view) => current,
+            _ => qc,
+        };
+        self.highest_qc = Some(new_highest);
+        super::status::set_highest_qc(new_highest.height, new_highest.view);
+        super::status::set_highest_qc_hash(new_highest.subject_block_hash);
+
+        let previous_lock = self.locked_qc;
+        let new_locked = match self.locked_qc {
+            Some(current) if (current.height, current.view) >= (qc.height, qc.view) => current,
+            _ => qc,
+        };
+        self.locked_qc = Some(new_locked);
+        super::status::set_locked_qc(
+            new_locked.height,
+            new_locked.view,
+            Some(new_locked.subject_block_hash),
+        );
+        if previous_lock != Some(new_locked) {
+            self.prune_precommit_votes_conflicting_with_lock(new_locked);
+        }
+
+        if let Some(lock) = self.locked_qc
+            && let Some(highest) = self.highest_qc
+            && !qc_satisfies_locked_with_lookup(lock, highest, |hash, height| {
+                self.parent_hash_for(hash, height)
+            })
+        {
+            info!(
+                highest_height = highest.height,
+                highest_hash = %highest.subject_block_hash,
+                locked_height = lock.height,
+                locked_hash = %lock.subject_block_hash,
+                "realigning highest QC to locked chain after commit"
+            );
+            self.highest_qc = Some(lock);
+            super::status::set_highest_qc(lock.height, lock.view);
+            super::status::set_highest_qc_hash(lock.subject_block_hash);
+        }
+    }
+
     /// Attach cached commit certificates and votes for the given block to a `BlockSyncUpdate`.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_cached_qcs_to_block_sync_update(
@@ -696,14 +796,38 @@ impl Actor {
             height,
             fallback_consensus_mode,
         );
-        update.commit_qc = cached_qc_for(
-            qc_cache,
-            crate::sumeragi::consensus::Phase::Commit,
-            block_hash,
-            height,
-            view,
-            epoch,
-        );
+        if update.commit_qc.is_none() {
+            let mode_tag = match consensus_mode {
+                ConsensusMode::Permissioned => super::PERMISSIONED_TAG,
+                ConsensusMode::Npos => super::NPOS_TAG,
+            };
+            let commit_topology = update
+                .validator_checkpoint
+                .as_ref()
+                .map(|checkpoint| checkpoint.validator_set.clone())
+                .or_else(|| {
+                    state
+                        .commit_roster_snapshot_for_block(height, block_hash)
+                        .map(|snapshot| snapshot.commit_qc.validator_set)
+                });
+            update.commit_qc = commit_topology
+                .as_ref()
+                .and_then(|topology| {
+                    commit_qc_from_cache_or_history(
+                        qc_cache, block_hash, height, view, epoch, mode_tag, topology,
+                    )
+                })
+                .or_else(|| {
+                    cached_qc_for(
+                        qc_cache,
+                        crate::sumeragi::consensus::Phase::Commit,
+                        block_hash,
+                        height,
+                        view,
+                        epoch,
+                    )
+                });
+        }
         if update.commit_qc.is_none() {
             if let Some(record) = crate::sumeragi::status::precommit_signers_for_round(
                 block_hash, height, view, epoch,
@@ -886,6 +1010,43 @@ impl Actor {
         })
     }
 
+    fn clear_commit_worker_state(&mut self) {
+        self.subsystems.commit.work_tx = None;
+        self.subsystems.commit.result_rx = None;
+    }
+
+    fn warn_commit_worker_disconnected_once(&mut self, message: &'static str) {
+        if self.subsystems.commit.worker_disconnect_logged {
+            return;
+        }
+        self.subsystems.commit.worker_disconnect_logged = true;
+        warn!("{message}");
+    }
+
+    fn execute_commit_job_inline(&mut self, inflight: CommitInFlight, work: CommitWork) -> bool {
+        super::status::record_commit_inflight_start(
+            inflight.id,
+            inflight.pending.height,
+            inflight.pending.view,
+            inflight.block_hash,
+        );
+        self.subsystems.commit.inflight = Some(inflight);
+        let (outcome, timings) = execute_commit_work(
+            self.state.as_ref(),
+            self.kura.as_ref(),
+            &self.common_config.chain,
+            &self.genesis_account,
+            work,
+        );
+        let inflight = self
+            .subsystems
+            .commit
+            .inflight
+            .take()
+            .expect("inline commit must retain inflight marker");
+        self.apply_commit_outcome(inflight, outcome, timings)
+    }
+
     pub(super) fn drain_commit_results(&mut self) -> CommitDrainSummary {
         let mut summary = CommitDrainSummary::default();
         while let Some(recv_result) = self
@@ -923,11 +1084,11 @@ impl Actor {
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    warn!("commit worker result channel closed; falling back to inline commit");
-                    self.subsystems.commit.result_rx = None;
-                    self.subsystems.commit.work_tx = None;
+                    self.warn_commit_worker_disconnected_once(
+                        "commit result channel closed; falling back to inline commit",
+                    );
+                    self.clear_commit_worker_state();
                     if let Some(inflight) = self.subsystems.commit.inflight.take() {
-                        let persist_required = !inflight.pending.kura_persisted;
                         let local_outside_commit_topology = inflight
                             .commit_topology
                             .iter()
@@ -937,13 +1098,16 @@ impl Actor {
                         let work = CommitWork {
                             id: inflight.id,
                             block: inflight.pending.block.clone(),
+                            validated_commit_artifact: inflight.pending.validated_commit_artifact,
                             commit_topology: inflight.commit_topology.clone(),
                             signature_topology: inflight.signature_topology.clone(),
+                            consensus_mode: self
+                                .consensus_context_for_height(inflight.pending.height)
+                                .0,
                             qc_signers: inflight.qc_signers.clone(),
                             commit_qc: inflight.commit_qc.clone(),
                             allow_quorum_bypass: inflight.allow_quorum_bypass,
                             allow_signature_index_recovery,
-                            persist_required,
                             events_sender: self.events_sender.clone(),
                         };
                         let (outcome, timings) = execute_commit_work(
@@ -964,7 +1128,7 @@ impl Actor {
         summary
     }
 
-    fn start_commit_job(&mut self, inflight: CommitInFlight, work: CommitWork) -> bool {
+    pub(super) fn start_commit_job(&mut self, inflight: CommitInFlight, work: CommitWork) -> bool {
         let pending_height = inflight.pending.height;
         let pending_view = inflight.pending.view;
         let block_hash = inflight.block_hash;
@@ -990,59 +1154,43 @@ impl Actor {
             return false;
         }
 
-        if let Some(work_tx) = self.subsystems.commit.work_tx.as_ref() {
-            match work_tx.try_send(work) {
-                Ok(()) => {
-                    super::status::record_commit_inflight_start(
-                        inflight.id,
-                        pending_height,
-                        pending_view,
-                        block_hash,
-                    );
-                    self.subsystems.commit.inflight = Some(inflight);
-                    return false;
-                }
-                Err(mpsc::TrySendError::Full(_work)) => {
-                    warn!(
-                        height = pending_height,
-                        view = pending_view,
-                        block = %block_hash,
-                        "commit worker queue full; deferring finalize"
-                    );
-                    self.pending
-                        .pending_blocks
-                        .insert(block_hash, inflight.pending);
-                    return false;
-                }
-                Err(mpsc::TrySendError::Disconnected(work)) => {
-                    warn!(
-                        height = pending_height,
-                        view = pending_view,
-                        block = %block_hash,
-                        "commit worker channel closed; running commit inline"
-                    );
-                    self.subsystems.commit.work_tx = None;
-                    self.subsystems.commit.result_rx = None;
-                    let (outcome, timings) = execute_commit_work(
-                        self.state.as_ref(),
-                        self.kura.as_ref(),
-                        &self.common_config.chain,
-                        &self.genesis_account,
-                        work,
-                    );
-                    return self.apply_commit_outcome(inflight, outcome, timings);
-                }
-            }
+        let worker_tx = self.subsystems.commit.work_tx.clone();
+        let worker_ready = worker_tx.is_some() && self.subsystems.commit.result_rx.is_some();
+        if !worker_ready {
+            return self.execute_commit_job_inline(inflight, work);
         }
 
-        let (outcome, timings) = execute_commit_work(
-            self.state.as_ref(),
-            self.kura.as_ref(),
-            &self.common_config.chain,
-            &self.genesis_account,
-            work,
-        );
-        self.apply_commit_outcome(inflight, outcome, timings)
+        match worker_tx.expect("worker readiness checked").try_send(work) {
+            Ok(()) => {
+                super::status::record_commit_inflight_start(
+                    inflight.id,
+                    pending_height,
+                    pending_view,
+                    block_hash,
+                );
+                self.subsystems.commit.inflight = Some(inflight);
+                true
+            }
+            Err(mpsc::TrySendError::Full(_work)) => {
+                debug!(
+                    height = pending_height,
+                    view = pending_view,
+                    block = %block_hash,
+                    "commit worker queue full; keeping pending block queued"
+                );
+                self.pending
+                    .pending_blocks
+                    .insert(block_hash, inflight.pending);
+                false
+            }
+            Err(mpsc::TrySendError::Disconnected(work)) => {
+                self.warn_commit_worker_disconnected_once(
+                    "commit worker channel disconnected; falling back to inline commit",
+                );
+                self.clear_commit_worker_state();
+                self.execute_commit_job_inline(inflight, work)
+            }
+        }
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1083,8 +1231,17 @@ impl Actor {
             Duration,
         )> = None;
         let mut committed = false;
+        let mut committed_pending_tail: Option<PendingBlock> = None;
+        let mut committed_block_tail: Option<crate::block::CommittedBlock> = None;
+        let mut committed_cached_qc_tail: Option<crate::sumeragi::consensus::Qc> = None;
+        let mut committed_pipeline_events_tail: Vec<PipelineEventBox> = Vec::new();
+        let mut committed_state_events_tail: Vec<EventBox> = Vec::new();
+        let mut committed_post_apply_snapshot_tail: Option<CommitPostApplySnapshot> = None;
+        let mut committed_consensus_mode_tail: Option<ConsensusMode> = None;
+        let mut committed_mode_tag_tail: Option<&'static str> = None;
+        let mut pending_previously_marked_kura_persisted = false;
 
-        let topology = super::network_topology::Topology::new(signature_topology);
+        let topology = super::network_topology::Topology::new(signature_topology.clone());
         let canonical_topology = super::network_topology::Topology::new(commit_topology.clone());
         let min_votes_for_commit = topology.min_votes_for_commit();
         let quorum_signer_count = qc_signers.as_ref().map(BTreeSet::len);
@@ -1157,8 +1314,9 @@ impl Actor {
                 exec_witness,
                 pipeline_events,
                 state_events,
+                post_apply_snapshot,
             } => {
-                let mut pending = pending_opt.take().expect("pending present");
+                let pending = pending_opt.take().expect("pending present");
                 self.note_view_change_from_block(pending_height, pending_view);
                 let committed_tx_hashes = committed_block
                     .as_ref()
@@ -1171,8 +1329,7 @@ impl Actor {
                     pending_view,
                     block_hash,
                 );
-                let persist_required = !pending.kura_persisted;
-                pending.mark_kura_persisted();
+                pending_previously_marked_kura_persisted = pending.kura_persisted;
                 let qc_key = (
                     crate::sumeragi::consensus::Phase::Commit,
                     block_hash,
@@ -1200,8 +1357,16 @@ impl Actor {
                     if let (Some(signers), Some(view_signers)) =
                         (qc_signers.as_ref(), view_signers.as_ref())
                     {
+                        let accepted_votes = self.accepted_votes_for_qc_slot(
+                            crate::sumeragi::consensus::Phase::Commit,
+                            block_hash,
+                            pending_height,
+                            pending_view,
+                            lock.epoch,
+                            &topology,
+                        );
                         let aggregate_signature = match super::aggregate_vote_signatures(
-                            &self.vote_log,
+                            &accepted_votes,
                             crate::sumeragi::consensus::Phase::Commit,
                             block_hash,
                             pending_height,
@@ -1265,241 +1430,15 @@ impl Actor {
                     "state committed for block"
                 );
                 exec_witness_to_emit = exec_witness;
-                emit_pipeline_events(&self.events_sender, pipeline_events);
-                for event in state_events {
-                    if let Err(err) = self.events_sender.send(event) {
-                        debug!(?err, "failed to send pipeline event");
-                    }
-                }
-
-                let params_snapshot = {
-                    let world = self.state.world_view();
-                    let params = world.parameters();
-                    self.update_effective_timing_status_from_world(&world, self.consensus_mode);
-                    (
-                        params.block().max_transactions().get(),
-                        params.smart_contract().execution_depth(),
-                        params.executor().execution_depth(),
-                    )
-                };
-                debug!(
-                    height = pending_height,
-                    view = pending_view,
-                    max_tx = params_snapshot.0,
-                    sc_depth = params_snapshot.1,
-                    exec_depth = params_snapshot.2,
-                    "state parameters after commit"
-                );
-                self.refresh_p2p_topology();
-                if let Some(qc) = cached_qc.as_ref() {
-                    super::status::record_commit_qc(qc.clone());
-                }
-                if let Some(signers) = qc_signers.as_ref() {
-                    let aggregate_signature = cached_qc.as_ref().map_or_else(
-                        || {
-                            view_signers
-                                .as_ref()
-                                .and_then(|view_signers| {
-                                    super::aggregate_vote_signatures(
-                                        &self.vote_log,
-                                        crate::sumeragi::consensus::Phase::Commit,
-                                        block_hash,
-                                        pending_height,
-                                        pending_view,
-                                        lock.epoch,
-                                        view_signers,
-                                    )
-                                    .ok()
-                                })
-                                .unwrap_or_default()
-                        },
-                        |qc| qc.aggregate.bls_aggregate_signature.clone(),
-                    );
-                    if aggregate_signature.is_empty() {
-                        warn!(
-                            height = pending_height,
-                            view = pending_view,
-                            block = %block_hash,
-                            "skipping precommit signer record: missing aggregate signature"
-                        );
-                    } else {
-                        let roots = cached_qc
-                            .as_ref()
-                            .map(|qc| (qc.parent_state_root, qc.post_state_root))
-                            .or_else(|| pending.parent_state_root.zip(pending.post_state_root));
-                        if let Some((parent_state_root, post_state_root)) = roots {
-                            let stake_snapshot = match consensus_mode {
-                                ConsensusMode::Permissioned => None,
-                                ConsensusMode::Npos => {
-                                    let world = self.state.world_view();
-                                    CommitStakeSnapshot::from_roster(&world, &commit_topology)
-                                }
-                            };
-                            crate::sumeragi::status::record_precommit_signers(
-                                crate::sumeragi::status::PrecommitSignerRecord {
-                                    block_hash,
-                                    height: pending_height,
-                                    view: pending_view,
-                                    epoch: lock.epoch,
-                                    parent_state_root,
-                                    post_state_root,
-                                    signers: signers.clone(),
-                                    bls_aggregate_signature: aggregate_signature,
-                                    roster_len: commit_topology.len(),
-                                    mode_tag: mode_tag.to_string(),
-                                    validator_set: commit_topology.clone(),
-                                    stake_snapshot,
-                                },
-                            );
-                        } else {
-                            warn!(
-                                height = pending_height,
-                                view = pending_view,
-                                block = %block_hash,
-                                "skipping precommit signer record: missing execution roots"
-                            );
-                        }
-                    }
-                } else if let Some(qc) = cached_qc.as_ref() {
-                    let stake_snapshot = match consensus_mode {
-                        ConsensusMode::Permissioned => None,
-                        ConsensusMode::Npos => {
-                            let world = self.state.world_view();
-                            CommitStakeSnapshot::from_roster(&world, &commit_topology)
-                        }
-                    };
-                    if let Some(record) = Self::precommit_signer_record_from_cached_qc(
-                        qc,
-                        &commit_topology,
-                        consensus_mode,
-                        stake_snapshot,
-                    ) {
-                        crate::sumeragi::status::record_precommit_signers(record);
-                    }
-                }
-                self.persist_roster_sidecar_for_commit(committed_block.as_ref(), &commit_topology);
-                if pending_height == 1 {
-                    // Seed the genesis roster after the block is durably persisted.
-                    self.ensure_genesis_commit_roster();
-                }
-                let set_b_signers = |signers: &BTreeSet<ValidatorIndex>| -> usize {
-                    let proxy_tail_idx = topology.proxy_tail_index();
-                    signers
-                        .iter()
-                        .filter(|signer| {
-                            super::view_index_for_canonical_signer(
-                                **signer,
-                                &topology,
-                                &canonical_topology,
-                            )
-                            .and_then(|idx| usize::try_from(idx).ok())
-                            .is_some_and(|idx| idx > proxy_tail_idx)
-                        })
-                        .count()
-                };
-
-                // Commit certificates are carried as QCs and are not always replicated into the
-                // block signature list. Prefer the QC signer bitmap when available.
-                let tally = if let Some(signers) = qc_signers.as_ref() {
-                    crate::block::valid::SignatureTally {
-                        present: signers.len(),
-                        counted: signers.len(),
-                        set_b_signatures: set_b_signers(signers),
-                    }
-                } else if let Some(qc) = cached_qc.as_ref() {
-                    let roster_len = commit_topology.len();
-                    match super::qc_signer_indices(qc, roster_len, roster_len) {
-                        Ok(parsed) => crate::block::valid::SignatureTally {
-                            present: parsed.present.len(),
-                            counted: parsed.voting.len(),
-                            set_b_signatures: set_b_signers(&parsed.voting),
-                        },
-                        Err(_) => crate::block::valid::commit_signature_tally(
-                            committed_block.as_ref(),
-                            &topology,
-                        ),
-                    }
-                } else {
-                    crate::block::valid::commit_signature_tally(committed_block.as_ref(), &topology)
-                };
-                crate::sumeragi::status::record_commit_quorum_snapshot(
-                    pending_height,
-                    pending_view,
-                    block_hash,
-                    tally.present as u64,
-                    tally.counted as u64,
-                    tally.set_b_signatures as u64,
-                    topology.min_votes_for_commit() as u64,
-                );
-                #[cfg(feature = "telemetry")]
-                {
-                    self.telemetry.set_commit_signature_totals(
-                        tally.present as u64,
-                        tally.counted as u64,
-                        tally.set_b_signatures as u64,
-                        topology.min_votes_for_commit() as u64,
-                    );
-                }
-                info!(
-                    height = pending_height,
-                    view = pending_view,
-                    block = %block_hash,
-                    persisted = persist_required,
-                    "stored committed block to kura"
-                );
-                #[cfg(feature = "telemetry")]
-                {
-                    self.telemetry
-                        .report_block_commit_blocking(&committed_block.as_ref().header());
-                }
-                // Proactively gossip the committed block so peers that missed the
-                // QC or payload can synchronize without waiting for block sync
-                // backoff windows.
-                #[cfg(feature = "telemetry")]
-                let block_sync_start = Instant::now();
-                let sync_block: SignedBlock = committed_block.as_ref().clone();
-                let mut sync_update = block_sync_update_with_certified_roster(
-                    &sync_block,
-                    &self.state,
-                    &self.kura,
-                    self.config.consensus_mode,
-                    &self.roster_validation_cache,
-                );
-                let expected_epoch = self.epoch_for_height(pending_height);
-                Self::apply_cached_qcs_to_block_sync_update(
-                    &mut sync_update,
-                    &self.qc_cache,
-                    &self.vote_log,
-                    block_hash,
-                    pending_height,
-                    pending_view,
-                    expected_epoch,
-                    self.state.as_ref(),
-                    self.config.consensus_mode,
-                );
-                let world = self.state.world_view();
-                let world_peers = world.peers().iter().cloned().collect::<Vec<_>>();
-                let (consensus_mode, _, _) = self.consensus_context_for_height(pending_height);
-                if self.prepare_block_sync_update_for_broadcast(&mut sync_update, consensus_mode) {
-                    self.broadcast_block_sync_update(sync_update, &world_peers);
-                } else {
-                    debug!(
-                        height = pending_height,
-                        view = pending_view,
-                        block = %block_hash,
-                        targets = world_peers.len(),
-                        "skipping committed block payload fallback because a verifiable block sync update is unavailable"
-                    );
-                }
-                #[cfg(feature = "telemetry")]
-                {
-                    let ms =
-                        u64::try_from(block_sync_start.elapsed().as_millis()).unwrap_or(u64::MAX);
-                    self.telemetry
-                        .observe_commit_stage_ms(crate::telemetry::CommitStage::BlockSync, ms);
-                }
                 parent_to_cleanup = pending.block.header().prev_block_hash();
-                block_hash_to_clean = Some(block_hash);
+                committed_pipeline_events_tail = pipeline_events;
+                committed_state_events_tail = state_events;
+                committed_post_apply_snapshot_tail = Some(post_apply_snapshot);
+                committed_cached_qc_tail = cached_qc;
+                committed_pending_tail = Some(pending);
+                committed_block_tail = Some(committed_block);
+                committed_consensus_mode_tail = Some(consensus_mode);
+                committed_mode_tag_tail = Some(mode_tag);
                 trace!(
                     height = pending_height,
                     view = pending_view,
@@ -1523,7 +1462,7 @@ impl Actor {
                     height = pending_height,
                     view = pending_view,
                     block = %block_hash,
-                    "failed to enqueue committed block to kura; keeping block pending"
+                    "failed to store committed block in kura; keeping block pending"
                 );
                 crate::sumeragi::status::record_kura_stage_rollback(
                     pending_height,
@@ -1572,6 +1511,7 @@ impl Actor {
             CommitOutcome::StateCommitFailed {
                 committed_block,
                 error,
+                error_kind,
             } => {
                 let mut pending = pending_opt.take().expect("pending present");
                 crate::sumeragi::status::record_kura_stage(
@@ -1592,9 +1532,72 @@ impl Actor {
                     block_hash,
                     kura::KURA_STAGE_ROLLBACK_REASON_STATE,
                 );
-                pending.mark_kura_persisted();
-                pending.block = committed_block.into();
-                self.pending.pending_blocks.insert(block_hash, pending);
+                let state_height = self.state.committed_height();
+                let state_tip_hash = self.state.latest_block_hash_fast();
+                let state_height_u64 = u64::try_from(state_height).unwrap_or(u64::MAX);
+                let state_aligned_with_block = state_tip_hash.is_some_and(|tip| tip == block_hash)
+                    && state_height_u64 >= pending_height;
+                if matches!(
+                    error_kind,
+                    Some(crate::state::storage_transactions::TransactionsBlockError::HeightMismatch { .. })
+                ) && state_height_u64 >= pending_height
+                {
+                    if state_aligned_with_block {
+                        info!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = %block_hash,
+                            state_height,
+                            "state already reflects block after state-commit retry; dropping duplicate pending"
+                        );
+                        self.clean_rbc_sessions_for_committed_block_if_settled(
+                            block_hash,
+                            pending_height,
+                        );
+                        if let Some(parent) = pending.block.header().prev_block_hash() {
+                            self.qc_cache
+                                .retain(|(_, hash, _, _, _), _| hash != &parent);
+                            self.qc_signer_tally
+                                .retain(|(_, hash, _, _, _), _| hash != &parent);
+                        }
+                    } else {
+                        let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
+                        let (requeued, failures, duplicate_failures, _) =
+                            requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
+                        warn!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = %block_hash,
+                            state_height,
+                            state_tip_hash = ?state_tip_hash,
+                            requeued,
+                            failures,
+                            duplicate_failures,
+                            "state advanced to a different head after persisted commit failure; dropping stale pending block"
+                        );
+                        self.clean_rbc_sessions_for_block(block_hash, pending_height);
+                        self.qc_cache
+                            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                        self.qc_signer_tally
+                            .retain(|(_, hash, _, _, _), _| hash != &block_hash);
+                        self.subsystems
+                            .propose
+                            .proposal_cache
+                            .pop_hint(pending_height, pending_view);
+                        self.subsystems
+                            .propose
+                            .proposal_cache
+                            .pop_proposal(pending_height, pending_view);
+                        self.trigger_view_change_after_commit_failure(
+                            pending_height,
+                            pending_view,
+                        );
+                    }
+                } else {
+                    pending.mark_kura_persisted();
+                    pending.block = committed_block.into();
+                    self.pending.pending_blocks.insert(block_hash, pending);
+                }
             }
             CommitOutcome::Rejected {
                 failed_block,
@@ -1633,7 +1636,8 @@ impl Actor {
                     .map(|sig| u32::try_from(sig.index()).unwrap_or_default())
                     .collect();
                 let now = Instant::now();
-                let pending_age = pending.progress_age(now);
+                let pending_age = pending.age();
+                let progress_age = pending.progress_age(now);
                 let vote_count = sig_indices.len();
                 let quorum_timeout = self.quorum_timeout(da_enabled);
                 let availability_timeout = self.availability_timeout(quorum_timeout, da_enabled);
@@ -1641,11 +1645,16 @@ impl Actor {
                     matches!(pending.last_gate, Some(GateReason::MissingLocalData));
                 let quorum_reached = has_quorum_signers || vote_count >= min_votes_for_commit;
                 let fast_timeout = self.pending_fast_path_timeout_current();
-                let has_votes = pending.precommit_vote_sent
+                let has_votes = pending.local_commit_vote_emitted()
                     || vote_count > 0
                     || self.pending_block_has_votes(block_hash, pending_height, pending_view);
-                let has_qc = pending.commit_qc_seen
+                let has_qc = pending.commit_qc_observed()
                     || self.pending_block_has_qc(block_hash, pending_height, pending_view);
+                let quorum_stall_age = if has_votes || has_qc {
+                    progress_age
+                } else {
+                    pending_age
+                };
                 let validation_inflight = pending.validation_status == ValidationStatus::Pending
                     && self
                         .subsystems
@@ -1662,7 +1671,11 @@ impl Actor {
 
                 if commit_signatures_missing
                     && !has_quorum_signers
-                    && missing_quorum_stale(pending_age, effective_quorum_timeout, quorum_reached)
+                    && missing_quorum_stale(
+                        quorum_stall_age,
+                        effective_quorum_timeout,
+                        quorum_reached,
+                    )
                 {
                     let reschedule_backoff =
                         super::quorum_reschedule_backoff_from_timeout(quorum_timeout);
@@ -1701,6 +1714,7 @@ impl Actor {
                                 view = pending_view,
                                 block = ?block_hash,
                                 pending_age_ms = pending_age.as_millis(),
+                                quorum_stall_age_ms = quorum_stall_age.as_millis(),
                                 quorum_timeout_ms = effective_quorum_timeout.as_millis(),
                                 vote_rx_depth = queue_depths.vote_rx,
                                 "deferring quorum reschedule while vote queue is backlogged"
@@ -1711,7 +1725,7 @@ impl Actor {
                             reschedule_quorum = Some((
                                 pending,
                                 pending_age,
-                                pending_age,
+                                quorum_stall_age,
                                 min_votes_for_commit,
                                 vote_count,
                                 quorum_timeout,
@@ -1753,7 +1767,7 @@ impl Actor {
                         let outcome = handle_prev_block_mismatch(
                             self.queue.as_ref(),
                             self.state.as_ref(),
-                            failed_block.transactions_vec().clone(),
+                            failed_block.external_entrypoints_cloned().collect(),
                         );
                         if outcome.failures > 0 {
                             warn!(
@@ -1895,68 +1909,320 @@ impl Actor {
                 vote_count,
                 quorum_timeout,
                 super::quorum_reschedule_backoff_from_timeout(quorum_timeout),
+                None,
                 Instant::now(),
             );
         }
         if committed {
-            if !self.should_retain_rbc_sessions_after_commit(block_hash, pending_height) {
-                // Commit finished; drop any RBC state for the committed block to avoid replaying
-                // READY/DELIVER once availability is settled.
-                self.clean_rbc_sessions_for_block(block_hash, pending_height);
-            }
-            if let Some(witness) = exec_witness_to_emit {
-                self.emit_exec_artifacts(block_hash, pending_height, pending_view, witness);
-            }
             self.finalize_collector_plan(true);
-            let new_highest = match self.highest_qc {
-                Some(current) if (current.height, current.view) > (lock.height, lock.view) => {
-                    current
-                }
-                _ => lock,
-            };
-            self.highest_qc = Some(new_highest);
-            super::status::set_highest_qc(new_highest.height, new_highest.view);
-            super::status::set_highest_qc_hash(new_highest.subject_block_hash);
-            let previous_lock = self.locked_qc;
-            let new_locked = match self.locked_qc {
-                Some(current) if (current.height, current.view) >= (lock.height, lock.view) => {
-                    current
-                }
-                _ => lock,
-            };
-            self.locked_qc = Some(new_locked);
-            super::status::set_locked_qc(
-                new_locked.height,
-                new_locked.view,
-                Some(new_locked.subject_block_hash),
+            self.promote_commit_anchor_qc(lock);
+
+            if let Some(child_qc) = post_commit_qc {
+                self.promote_commit_anchor_qc(child_qc);
+            }
+
+            crate::sumeragi::status::record_round_gap_unblocked(
+                pending_height,
+                pending_view,
+                block_hash,
             );
-            if previous_lock != Some(new_locked) {
-                self.prune_precommit_votes_conflicting_with_lock(new_locked);
-            }
-
-            if let Some(lock) = self.locked_qc
-                && let Some(highest) = self.highest_qc
-                && !qc_extends_locked_with_lookup(lock, highest, |hash, height| {
-                    self.parent_hash_for(hash, height)
-                })
-            {
-                info!(
-                    highest_height = highest.height,
-                    highest_hash = %highest.subject_block_hash,
-                    locked_height = lock.height,
-                    locked_hash = %lock.subject_block_hash,
-                    "realigning highest QC to locked chain after commit"
+            self.record_round_trace_event(super::RoundTraceEvent {
+                key: super::RoundTraceKey {
+                    height: pending_height,
+                    view: pending_view,
+                },
+                phase: super::status::RoundPhaseTrace::Commit,
+                cause: super::status::RoundEventCauseTrace::CommitCompleted,
+                queue_latency_ms: None,
+                no_progress_wake: false,
+            });
+            let refreshed = self.refresh_tip_activated_pending_progress(
+                pending_height,
+                block_hash,
+                Instant::now(),
+            );
+            if refreshed > 0 {
+                debug!(
+                    height = pending_height,
+                    block = %block_hash,
+                    refreshed,
+                    "refreshed pending progress for proposals activated by the committed tip"
                 );
-                self.highest_qc = Some(lock);
-                super::status::set_highest_qc(lock.height, lock.view);
-                super::status::set_highest_qc_hash(lock.subject_block_hash);
             }
-
             let backpressure = self.proposal_backpressure_at(Instant::now());
             let _ =
                 kickstart_pacemaker_after_commit(self.queue.queued_len(), backpressure, |now| {
                     self.on_pacemaker_propose_ready(now)
                 });
+
+            if let (
+                Some(committed_block),
+                Some(pending),
+                Some(post_apply_snapshot),
+                Some(consensus_mode),
+                Some(mode_tag),
+            ) = (
+                committed_block_tail.take(),
+                committed_pending_tail.take(),
+                committed_post_apply_snapshot_tail.take(),
+                committed_consensus_mode_tail,
+                committed_mode_tag_tail,
+            ) {
+                if let Some(qc) = committed_cached_qc_tail.as_ref() {
+                    super::status::record_commit_qc(qc.clone());
+                }
+                emit_pipeline_events(
+                    &self.events_sender,
+                    std::mem::take(&mut committed_pipeline_events_tail),
+                );
+                for event in std::mem::take(&mut committed_state_events_tail) {
+                    if let Err(err) = self.events_sender.send(event) {
+                        debug!(?err, "failed to send pipeline event");
+                    }
+                }
+
+                let params_snapshot = {
+                    let world = self.state.world_view();
+                    let params = world.parameters();
+                    self.update_effective_timing_status_from_world(&world, self.consensus_mode);
+                    (
+                        params.block().max_transactions().get(),
+                        params.smart_contract().execution_depth(),
+                        params.executor().execution_depth(),
+                    )
+                };
+                debug!(
+                    height = pending_height,
+                    view = pending_view,
+                    max_tx = params_snapshot.0,
+                    sc_depth = params_snapshot.1,
+                    exec_depth = params_snapshot.2,
+                    "state parameters after commit"
+                );
+                self.refresh_p2p_topology_with_current(
+                    post_apply_snapshot.world_peers.iter().cloned().collect(),
+                );
+
+                if let Some(signers) = qc_signers.as_ref() {
+                    let accepted_votes = self.accepted_votes_for_qc_slot(
+                        crate::sumeragi::consensus::Phase::Commit,
+                        block_hash,
+                        pending_height,
+                        pending_view,
+                        lock.epoch,
+                        &topology,
+                    );
+                    let aggregate_signature = committed_cached_qc_tail.as_ref().map_or_else(
+                        || {
+                            view_signers
+                                .as_ref()
+                                .and_then(|view_signers| {
+                                    super::aggregate_vote_signatures(
+                                        &accepted_votes,
+                                        crate::sumeragi::consensus::Phase::Commit,
+                                        block_hash,
+                                        pending_height,
+                                        pending_view,
+                                        lock.epoch,
+                                        view_signers,
+                                    )
+                                    .ok()
+                                })
+                                .unwrap_or_default()
+                        },
+                        |qc| qc.aggregate.bls_aggregate_signature.clone(),
+                    );
+                    if aggregate_signature.is_empty() {
+                        warn!(
+                            height = pending_height,
+                            view = pending_view,
+                            block = %block_hash,
+                            "skipping precommit signer record: missing aggregate signature"
+                        );
+                    } else {
+                        let roots = committed_cached_qc_tail
+                            .as_ref()
+                            .map(|qc| (qc.parent_state_root, qc.post_state_root))
+                            .or_else(|| pending.parent_state_root.zip(pending.post_state_root));
+                        if let Some((parent_state_root, post_state_root)) = roots {
+                            let stake_snapshot = post_apply_snapshot.stake_snapshot.clone();
+                            crate::sumeragi::status::record_precommit_signers(
+                                crate::sumeragi::status::PrecommitSignerRecord {
+                                    block_hash,
+                                    height: pending_height,
+                                    view: pending_view,
+                                    epoch: lock.epoch,
+                                    parent_state_root,
+                                    post_state_root,
+                                    signers: signers.clone(),
+                                    bls_aggregate_signature: aggregate_signature,
+                                    roster_len: commit_topology.len(),
+                                    mode_tag: mode_tag.to_string(),
+                                    validator_set: commit_topology.clone(),
+                                    stake_snapshot,
+                                },
+                            );
+                        } else {
+                            warn!(
+                                height = pending_height,
+                                view = pending_view,
+                                block = %block_hash,
+                                "skipping precommit signer record: missing execution roots"
+                            );
+                        }
+                    }
+                } else if let Some(qc) = committed_cached_qc_tail.as_ref() {
+                    if let Some(record) = Self::precommit_signer_record_from_cached_qc(
+                        qc,
+                        &commit_topology,
+                        consensus_mode,
+                        post_apply_snapshot.stake_snapshot.clone(),
+                    ) {
+                        crate::sumeragi::status::record_precommit_signers(record);
+                    }
+                }
+                if let Some(qc) = committed_cached_qc_tail.as_ref() {
+                    let checkpoint = ValidatorSetCheckpoint::new(
+                        qc.height,
+                        qc.view,
+                        qc.subject_block_hash,
+                        qc.parent_state_root,
+                        qc.post_state_root,
+                        qc.validator_set.clone(),
+                        qc.aggregate.signers_bitmap.clone(),
+                        qc.aggregate.bls_aggregate_signature.clone(),
+                        qc.validator_set_hash_version,
+                        None,
+                    );
+                    if self.state.record_commit_roster_with_sidecar(
+                        qc,
+                        &checkpoint,
+                        post_apply_snapshot.stake_snapshot.clone(),
+                    ) {
+                        debug!(
+                            height = qc.height,
+                            view = qc.view,
+                            block = %qc.subject_block_hash,
+                            "persisted commit roster sidecar from commit certificate"
+                        );
+                    }
+                } else {
+                    self.persist_roster_sidecar_for_commit(
+                        committed_block.as_ref(),
+                        &commit_topology,
+                    );
+                }
+                self.flush_pending_fetch_requests_if_ready(committed_block.as_ref());
+                self.flush_pending_block_body_requests_if_ready(committed_block.as_ref());
+                if pending_height == 1 {
+                    // Seed the genesis roster after the block is durably persisted.
+                    self.ensure_genesis_commit_roster();
+                }
+
+                let set_b_signers = |signers: &BTreeSet<ValidatorIndex>| -> usize {
+                    let proxy_tail_idx = topology.proxy_tail_index();
+                    signers
+                        .iter()
+                        .filter(|signer| {
+                            super::view_index_for_canonical_signer(
+                                **signer,
+                                &topology,
+                                &canonical_topology,
+                            )
+                            .and_then(|idx| usize::try_from(idx).ok())
+                            .is_some_and(|idx| idx > proxy_tail_idx)
+                        })
+                        .count()
+                };
+
+                let tally = if let Some(signers) = qc_signers.as_ref() {
+                    crate::block::valid::SignatureTally {
+                        present: signers.len(),
+                        counted: signers.len(),
+                        set_b_signatures: set_b_signers(signers),
+                    }
+                } else if let Some(qc) = committed_cached_qc_tail.as_ref() {
+                    let roster_len = commit_topology.len();
+                    match super::qc_signer_indices(qc, roster_len, roster_len) {
+                        Ok(parsed) => crate::block::valid::SignatureTally {
+                            present: parsed.present.len(),
+                            counted: parsed.voting.len(),
+                            set_b_signatures: set_b_signers(&parsed.voting),
+                        },
+                        Err(_) => crate::block::valid::commit_signature_tally(
+                            committed_block.as_ref(),
+                            &topology,
+                        ),
+                    }
+                } else {
+                    crate::block::valid::commit_signature_tally(committed_block.as_ref(), &topology)
+                };
+                crate::sumeragi::status::record_commit_quorum_snapshot(
+                    pending_height,
+                    pending_view,
+                    block_hash,
+                    tally.present as u64,
+                    tally.counted as u64,
+                    tally.set_b_signatures as u64,
+                    topology.min_votes_for_commit() as u64,
+                );
+                #[cfg(feature = "telemetry")]
+                {
+                    self.telemetry.set_commit_signature_totals(
+                        tally.present as u64,
+                        tally.counted as u64,
+                        tally.set_b_signatures as u64,
+                        topology.min_votes_for_commit() as u64,
+                    );
+                }
+                info!(
+                    height = pending_height,
+                    view = pending_view,
+                    block = %block_hash,
+                    pending_previously_marked_kura_persisted,
+                    "stored committed block to kura"
+                );
+                if let Some((height, payload_len)) =
+                    self.kura.durable_block_payload_len_by_hash(block_hash)
+                {
+                    self.schedule_background(BackgroundRequest::Broadcast {
+                        msg: BlockMessageWire::new(BlockMessage::KuraReplicaAdvert(
+                            super::message::KuraReplicaAdvert {
+                                height,
+                                block_hash,
+                                payload_len,
+                            },
+                        )),
+                    });
+                }
+                #[cfg(feature = "telemetry")]
+                {
+                    self.telemetry
+                        .report_block_commit_blocking(&committed_block.as_ref().header());
+                }
+
+                #[cfg(feature = "telemetry")]
+                let block_sync_start = Instant::now();
+                let sync_block: SignedBlock = committed_block.as_ref().clone();
+                self.broadcast_block_created_for_block_sync(
+                    self.frontier_block_created_for_wire(&sync_block),
+                    &post_apply_snapshot.world_peers,
+                );
+                #[cfg(feature = "telemetry")]
+                {
+                    let ms =
+                        u64::try_from(block_sync_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    self.telemetry
+                        .observe_commit_stage_ms(crate::telemetry::CommitStage::BlockSync, ms);
+                }
+            }
+
+            if let Some(witness) = exec_witness_to_emit {
+                self.emit_exec_artifacts(block_hash, pending_height, pending_view, witness);
+            }
+            // Commit finished; keep undelivered RBC sessions alive under DA so peers that
+            // committed through another path can still converge their local RBC status.
+            self.clean_rbc_sessions_for_committed_block_if_settled(block_hash, pending_height);
 
             self.prune_descendants_not_on_tip(pending_height, block_hash);
             let obsolete_missing: Vec<_> = self
@@ -2021,38 +2287,7 @@ impl Actor {
             self.vote_log
                 .retain(|(_, height, _, _, _), _| *height >= retention_floor);
             self.try_replay_deferred_votes();
-
-            if let Some(child_qc) = post_commit_qc {
-                let previous_lock = self.locked_qc;
-                let promoted_lock = match self.locked_qc {
-                    Some(current)
-                        if (current.height, current.view) >= (child_qc.height, child_qc.view) =>
-                    {
-                        current
-                    }
-                    _ => child_qc,
-                };
-                self.locked_qc = Some(promoted_lock);
-                super::status::set_locked_qc(
-                    promoted_lock.height,
-                    promoted_lock.view,
-                    Some(promoted_lock.subject_block_hash),
-                );
-                if previous_lock != Some(promoted_lock) {
-                    self.prune_precommit_votes_conflicting_with_lock(promoted_lock);
-                }
-                let new_highest = match self.highest_qc {
-                    Some(current)
-                        if (current.height, current.view) >= (child_qc.height, child_qc.view) =>
-                    {
-                        current
-                    }
-                    _ => child_qc,
-                };
-                self.highest_qc = Some(new_highest);
-                super::status::set_highest_qc(new_highest.height, new_highest.view);
-                super::status::set_highest_qc_hash(new_highest.subject_block_hash);
-            }
+            let _ = self.maybe_request_frontier_gap_realign_after_commit(Instant::now());
         }
         committed
     }
@@ -2091,14 +2326,37 @@ impl Actor {
         let state_tip_hash = self.state.latest_block_hash_fast();
         if pending.aborted {
             let pending_parent = pending.block.header().prev_block_hash();
-            if pending.commit_qc_seen
-                && super::pending_extends_tip(
-                    pending_height,
-                    pending_parent,
-                    state_height,
-                    state_tip_hash,
-                )
-            {
+            let extends_tip = super::pending_extends_tip(
+                pending_height,
+                pending_parent,
+                state_height,
+                state_tip_hash,
+            );
+            let conflicting_local_vote = self
+                .local_conflicting_slot_vote(pending_height, lock.epoch, block_hash)
+                .is_some();
+            if pending.is_retired_same_height() {
+                if pending.commit_qc_observed() && extends_tip {
+                    debug!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %block_hash,
+                        conflicting_local_vote,
+                        "finalizing retired same-height pending block with matching commit QC"
+                    );
+                } else {
+                    debug!(
+                        height = pending_height,
+                        view = pending_view,
+                        block = %block_hash,
+                        extends_tip,
+                        conflicting_local_vote,
+                        "retired same-height pending block not eligible for finalize"
+                    );
+                    self.pending.pending_blocks.insert(block_hash, pending);
+                    return false;
+                }
+            } else if pending.commit_qc_observed() && extends_tip {
                 debug!(
                     height = pending_height,
                     view = pending_view,
@@ -2131,7 +2389,11 @@ impl Actor {
                 block = %block_hash,
                 "pending block already committed; skipping finalize"
             );
-            self.clean_rbc_sessions_for_block(block_hash, pending_height);
+            self.promote_commit_anchor_qc(lock);
+            if let Some(child_qc) = post_commit_qc {
+                self.promote_commit_anchor_qc(child_qc);
+            }
+            self.clean_rbc_sessions_for_committed_block_if_settled(block_hash, pending_height);
             if let Some(parent) = pending.block.header().prev_block_hash() {
                 self.qc_cache
                     .retain(|(_, hash, _, _, _), _| hash != &parent);
@@ -2140,7 +2402,7 @@ impl Actor {
             }
             return true;
         }
-        if !pending.commit_qc_seen {
+        if !pending.commit_qc_observed() {
             debug!(
                 height = pending_height,
                 view = pending_view,
@@ -2171,7 +2433,7 @@ impl Actor {
                 view = pending_view,
                 block = %block_hash,
                 state_height,
-                "block already persisted in kura; retrying state commit without re-enqueue"
+                "block already persisted in kura; retrying commit with mandatory durability check"
             );
             pending.mark_kura_persisted();
         }
@@ -2187,7 +2449,44 @@ impl Actor {
             );
         }
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(pending_height);
-        let commit_topology = self.roster_for_live_vote_with_mode(pending_height, consensus_mode);
+        let qc_key = (
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            pending_height,
+            pending_view,
+            lock.epoch,
+        );
+        let cached_commit_qc = self.qc_cache.get(&qc_key).cloned();
+        let certified_roster = cached_commit_qc
+            .as_ref()
+            .map(|qc| qc.validator_set.clone())
+            .filter(|roster| !roster.is_empty());
+        let cached_vote_roster = self
+            .vote_roster_cache
+            .get(&block_hash)
+            .filter(|cached| {
+                cached.height == pending_height
+                    && cached.view == pending_view
+                    && !cached.roster.is_empty()
+            })
+            .map(|cached| {
+                super::roster::canonicalize_roster_for_mode(cached.roster.clone(), consensus_mode)
+            });
+        let mut commit_topology = cached_vote_roster
+            // A cached QC's validator_set is order-sensitive: block and aggregate
+            // signature indices are validated against this exact roster.
+            .or(certified_roster)
+            .unwrap_or_else(|| {
+                self.roster_for_vote_with_mode(
+                    block_hash,
+                    pending_height,
+                    pending_view,
+                    consensus_mode,
+                )
+            });
+        if commit_topology.is_empty() {
+            commit_topology = self.roster_for_live_vote_with_mode(pending_height, consensus_mode);
+        }
         iroha_logger::info!(
             commit_topology_len = commit_topology.len(),
             commit_topology = ?commit_topology,
@@ -2221,13 +2520,6 @@ impl Actor {
             return false;
         }
         let signature_topology = topology.as_ref().to_vec();
-        let qc_key = (
-            crate::sumeragi::consensus::Phase::Commit,
-            block_hash,
-            pending_height,
-            pending_view,
-            lock.epoch,
-        );
         let quorum_signers = self
             .qc_signer_tally
             .get(&qc_key)
@@ -2262,21 +2554,31 @@ impl Actor {
                 None
             }
         });
-        let mut commit_qc = commit_qc_from_cache_or_history(
-            &self.qc_cache,
-            block_hash,
-            pending_height,
-            pending_view,
-            lock.epoch,
-            mode_tag,
-            &commit_topology,
-        );
+        let mut commit_qc = cached_commit_qc.or_else(|| {
+            commit_qc_from_cache_or_history(
+                &self.qc_cache,
+                block_hash,
+                pending_height,
+                pending_view,
+                lock.epoch,
+                mode_tag,
+                &commit_topology,
+            )
+        });
         if !allow_quorum_bypass && commit_qc.is_none() {
             if let (Some(signers), Some(view_signers)) =
                 (quorum_signers.as_ref(), view_signers.as_ref())
             {
+                let accepted_votes = self.accepted_votes_for_qc_slot(
+                    crate::sumeragi::consensus::Phase::Commit,
+                    block_hash,
+                    pending_height,
+                    pending_view,
+                    lock.epoch,
+                    &topology,
+                );
                 let aggregate_signature = match super::aggregate_vote_signatures(
-                    &self.vote_log,
+                    &accepted_votes,
                     crate::sumeragi::consensus::Phase::Commit,
                     block_hash,
                     pending_height,
@@ -2342,7 +2644,18 @@ impl Actor {
         );
 
         let id = self.subsystems.commit.next_id();
-        let persist_required = !pending.kura_persisted;
+        if pending.validated_commit_artifact.is_none()
+            && let Some((parent_state_root, post_state_root)) =
+                pending.parent_state_root.zip(pending.post_state_root)
+        {
+            pending.note_validated_commit_artifact(
+                block_hash,
+                pending_height,
+                pending_view,
+                parent_state_root,
+                post_state_root,
+            );
+        }
         let local_outside_commit_topology = commit_topology
             .iter()
             .all(|peer| peer != self.common_config.peer.id());
@@ -2350,13 +2663,14 @@ impl Actor {
         let work = CommitWork {
             id,
             block: pending.block.clone(),
+            validated_commit_artifact: pending.validated_commit_artifact,
             commit_topology: commit_topology.clone(),
             signature_topology: signature_topology.clone(),
+            consensus_mode,
             qc_signers: quorum_signers.clone(),
             commit_qc: commit_qc.clone(),
             allow_quorum_bypass,
             allow_signature_index_recovery,
-            persist_required,
             events_sender: self.events_sender.clone(),
         };
         let inflight = CommitInFlight {
@@ -2372,6 +2686,16 @@ impl Actor {
             post_commit_qc,
             enqueue_time: now,
         };
+        self.record_round_trace_event(super::RoundTraceEvent {
+            key: super::RoundTraceKey {
+                height: pending_height,
+                view: pending_view,
+            },
+            phase: super::status::RoundPhaseTrace::Commit,
+            cause: super::status::RoundEventCauseTrace::CommitRequested,
+            queue_latency_ms: None,
+            no_progress_wake: false,
+        });
         self.start_commit_job(inflight, work)
     }
 }
@@ -2407,7 +2731,7 @@ impl Actor {
         let height = pending.height;
         let view = pending.view;
         let block_hash = inflight.block_hash;
-        let txs = pending.block.transactions_vec().clone();
+        let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
         let (requeued, failures, duplicate_failures, _) =
             requeue_block_transactions(self.queue.as_ref(), self.state.as_ref(), txs);
         if failures > 0 {
@@ -2435,7 +2759,6 @@ impl Actor {
             .propose
             .proposal_cache
             .pop_proposal(height, view);
-        // Keep proposals_seen so we don't re-propose in the same view after timeout.
         let session_key = Self::session_key(&block_hash, height, view);
         self.subsystems
             .da_rbc
@@ -2452,7 +2775,6 @@ impl Actor {
             .rbc
             .deliver_deferral
             .remove(&session_key);
-        // Retain the aborted payload so late commit QCs can still recover via block sync.
         self.pending.pending_blocks.insert(block_hash, pending);
         super::status::record_commit_inflight_timeout(height, view, block_hash, elapsed);
         super::status::record_commit_inflight_finish(inflight.id);
@@ -2542,7 +2864,24 @@ impl Actor {
         trigger: CommitPipelineTrigger,
         tick_deadline: Option<Instant>,
     ) -> CommitPipelineTimings {
+        self.process_commit_candidates_with_trigger_inner(trigger, tick_deadline, false)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn process_commit_candidates_with_trigger_inner(
+        &mut self,
+        trigger: CommitPipelineTrigger,
+        tick_deadline: Option<Instant>,
+        include_recovery_candidates: bool,
+    ) -> CommitPipelineTimings {
         let pipeline_start = Instant::now();
+        let finish_timings = |timings: CommitPipelineTimings| {
+            let timings = timings.finish(pipeline_start);
+            crate::sumeragi::status::record_commit_pipeline_sample(
+                commit_pipeline_sample_from_timings(timings),
+            );
+            timings
+        };
         let stale_validation = self.prune_validation_inflight_without_pending();
         if stale_validation > 0 {
             debug!(
@@ -2568,7 +2907,7 @@ impl Actor {
         let _ = self.abort_inflight_commit_if_timed_out(now);
         timings.abort_inflight += abort_start.elapsed();
         if self.commit_pipeline_budget_exhausted(tick_deadline, now) {
-            return timings.finish(pipeline_start);
+            return finish_timings(timings);
         }
 
         if matches!(trigger, CommitPipelineTrigger::Event) {
@@ -2597,7 +2936,7 @@ impl Actor {
         let rebroadcast_cooldown = self.control_plane_rebroadcast_cooldown();
         let local_peer_id = self.common_config.peer.id().clone();
 
-        if self.active_pending_blocks_len() == 0 {
+        if self.commit_candidate_blocks_len(include_recovery_candidates) == 0 {
             let inflight = self.subsystems.commit.inflight.is_some();
             if matches!(trigger, CommitPipelineTrigger::Tick) {
                 super::status::note_commit_pipeline_tick(self.consensus_mode, inflight);
@@ -2605,7 +2944,7 @@ impl Actor {
                 self.telemetry
                     .note_commit_pipeline_tick(self.mode_tag(), inflight);
             }
-            return timings.finish(pipeline_start);
+            return finish_timings(timings);
         }
 
         if matches!(trigger, CommitPipelineTrigger::Tick) {
@@ -2615,7 +2954,7 @@ impl Actor {
                 .note_commit_pipeline_tick(self.mode_tag(), true);
         }
         if self.commit_pipeline_budget_exhausted(tick_deadline, Instant::now()) {
-            return timings.finish(pipeline_start);
+            return finish_timings(timings);
         }
 
         let world = self.state.world_view();
@@ -2669,7 +3008,7 @@ impl Actor {
                 );
                 continue;
             }
-            let fast_timeout = self.pending_fast_path_timeout_current();
+            let inline_fallback_timeout = self.commit_validation_inline_fallback_timeout();
             // Prefer validating via background workers to keep the tick loop responsive under load.
             // Inline validation can take hundreds of milliseconds and risks stalling vote/proposal
             // handling, which in turn causes view changes and reschedules.
@@ -2684,22 +3023,23 @@ impl Actor {
                 {
                     let mut should_inline_validation = false;
                     if let Some(inflight_elapsed) = self.validation_inflight_elapsed(hash) {
-                        if inflight_elapsed >= fast_timeout {
+                        if inflight_elapsed >= inline_fallback_timeout {
                             if self.supersede_validation_inflight(hash).is_some() {
                                 warn!(
                                     height = pending_height_snapshot,
                                     view = pending_view_snapshot,
                                     block = %hash,
                                     inflight_elapsed_ms = inflight_elapsed.as_millis(),
-                                    fast_timeout_ms = fast_timeout.as_millis(),
-                                    "validation inflight exceeded fast timeout; forcing inline pre-vote validation"
+                                    inline_fallback_timeout_ms =
+                                        inline_fallback_timeout.as_millis(),
+                                    "validation inflight exceeded inline fallback timeout; forcing inline pre-vote validation"
                                 );
                             }
                             should_inline_validation = true;
                         }
-                    } else if pending_age >= fast_timeout {
+                    } else if pending_age >= inline_fallback_timeout {
                         // No worker accepted the validation task (typically queue-full); avoid
-                        // indefinite deferral by validating inline after fast-timeout.
+                        // indefinite deferral by validating inline after the fallback timeout.
                         should_inline_validation = true;
                     }
 
@@ -2719,7 +3059,7 @@ impl Actor {
                 ValidationGateOutcome::Deferred => {
                     if let Some(pending) = self.pending.pending_blocks.get(&hash) {
                         let pending_age = pending.age();
-                        if pending_age >= fast_timeout {
+                        if pending_age >= inline_fallback_timeout {
                             let rbc_log = {
                                 let key: super::rbc_store::SessionKey =
                                     (hash, pending_height, pending_view);
@@ -2748,7 +3088,8 @@ impl Actor {
                                 view = pending.view,
                                 block = %hash,
                                 pending_age_ms = pending_age.as_millis(),
-                                fast_timeout_ms = fast_timeout.as_millis(),
+                                inline_fallback_timeout_ms =
+                                    inline_fallback_timeout.as_millis(),
                                 validation_status = ?pending.validation_status,
                                 inflight_validations = self.subsystems.validation.inflight.len(),
                                 validation_workers = self.subsystems.validation.work_txs.len(),
@@ -2762,7 +3103,7 @@ impl Actor {
                                 rbc_sent_ready = rbc_log.as_ref().map(|entry| entry.5),
                                 rbc_invalid = rbc_log.as_ref().map(|entry| entry.6),
                                 trigger = ?trigger,
-                                "commit pipeline defers validation past fast timeout"
+                                "commit pipeline defers validation past inline fallback timeout"
                             );
                         }
                     }
@@ -2822,11 +3163,19 @@ impl Actor {
                 if let Some(pending) = self.pending.pending_blocks.remove(&hash) {
                     self.subsystems.validation.inflight.remove(&hash);
                     self.subsystems.validation.superseded_results.remove(&hash);
-                    self.clean_rbc_sessions_for_block(hash, pending.height);
+                    self.clean_rbc_sessions_for_committed_block_if_settled(hash, pending.height);
                 }
                 continue;
             }
-            if aborted {
+            let certified_aborted_pending = self
+                .pending
+                .pending_blocks
+                .get(&hash)
+                .is_some_and(|pending| pending.commit_qc_observed())
+                || self
+                    .cached_commit_qc_for_block(hash, pending_height, pending_view)
+                    .is_some();
+            if aborted && !certified_aborted_pending {
                 debug!(
                     ?hash,
                     height = pending_height,
@@ -2836,6 +3185,9 @@ impl Actor {
                 continue;
             }
             let topology = super::network_topology::Topology::new(commit_topology.clone());
+            let local_vote_topology = super::network_topology::Topology::new(
+                self.local_commit_vote_roster(pending_height, &commit_topology),
+            );
             let roster_len = topology.as_ref().len();
             let min_votes_for_commit = self.commit_min_votes(&topology);
             let missing_local_data = da_enabled && !payload_available;
@@ -2850,9 +3202,18 @@ impl Actor {
                 Some(pending) => pending,
                 None => continue,
             };
-            let has_commit_qc = pending.commit_qc_seen
+            if !pending.commit_qc_observed()
+                && let Some(qc) =
+                    self.cached_commit_qc_for_block(hash, pending_height, pending_view)
+            {
+                pending.note_commit_qc_observed(qc.epoch);
+            }
+            let proposal_evidence_seen =
+                self.slot_has_proposal_evidence(pending_height, pending_view);
+            let qc_evidence_seen = pending.commit_qc_observed()
                 || self.pending_block_has_qc(hash, pending_height, pending_view);
-            if !has_commit_qc && !self.slot_has_proposal_evidence(pending_height, pending_view) {
+            let priority_reason = self.pending_block_validation_priority_reason(hash, &pending);
+            if !qc_evidence_seen && !proposal_evidence_seen && priority_reason.is_none() {
                 debug!(
                     height = pending_height,
                     view = pending_view,
@@ -2863,15 +3224,14 @@ impl Actor {
                 self.pending.pending_blocks.insert(hash, pending);
                 continue;
             }
-            if !pending.commit_qc_seen {
-                if let Some(qc) = qc_cache_for_subject(&self.qc_cache, hash).find(|qc| {
-                    matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
-                        && qc.height == pending_height
-                        && qc.view == pending_view
-                }) {
-                    pending.commit_qc_seen = true;
-                    pending.commit_qc_epoch = Some(qc.epoch);
-                }
+            if !proposal_evidence_seen && let Some(reason) = priority_reason {
+                debug!(
+                    height = pending_height,
+                    view = pending_view,
+                    block = %hash,
+                    reason,
+                    "allowing commit pipeline before proposal evidence due to near-tip consensus readiness"
+                );
             }
             self.pending.pending_processing.set(Some(hash));
             self.pending
@@ -2884,7 +3244,7 @@ impl Actor {
             let kura_ready = pending.kura_retry_due(now);
             let vote_epoch = self.epoch_for_height(pending_height);
             let commit_epoch = pending.commit_qc_epoch.unwrap_or(vote_epoch);
-            let ready_to_finalize = pending.commit_qc_seen && kura_ready;
+            let ready_to_finalize = pending.commit_qc_observed() && kura_ready;
             if pending.kura_aborted {
                 warn!(
                     ?hash,
@@ -2896,8 +3256,28 @@ impl Actor {
                 abort_due_to_kura = true;
                 precommit_action = Some("kura_aborted");
             } else if kura_ready {
-                if enable_qc_pipeline && !pending.precommit_vote_sent && !pending.commit_qc_seen {
-                    emit_precommit = true;
+                if enable_qc_pipeline
+                    && !pending.local_commit_vote_emitted()
+                    && !pending.commit_qc_observed()
+                    && !missing_local_data
+                {
+                    if self.should_defer_tip_precommit_for_same_height_conflict(
+                        hash,
+                        pending_height,
+                        pending_view,
+                        vote_epoch,
+                    ) {
+                        debug!(
+                            block = %hash,
+                            height = pending_height,
+                            view = pending_view,
+                            epoch = vote_epoch,
+                            "deferring precommit: conflicting same-height consensus evidence is pending or cached"
+                        );
+                        precommit_action = Some("same_height_conflict_evidence");
+                    } else {
+                        emit_precommit = true;
+                    }
                 }
             } else {
                 debug!(
@@ -2956,7 +3336,7 @@ impl Actor {
                         hash,
                         pending_height,
                         pending_view,
-                        false,
+                        true,
                     );
                     if rebroadcasted > 0 {
                         pending.mark_precommit_rebroadcast(now);
@@ -2998,6 +3378,7 @@ impl Actor {
             }
 
             let finalize_start = Instant::now();
+            let fast_timeout = self.pending_fast_path_timeout_current();
             if enable_qc_pipeline && emit_precommit {
                 let parent_hash = pending.block.header().prev_block_hash();
                 let pending_roots = pending.parent_state_root.zip(pending.post_state_root);
@@ -3007,23 +3388,39 @@ impl Actor {
                     pending_view,
                     vote_epoch,
                     pending.validation_status,
-                    &topology,
+                    &local_vote_topology,
                     parent_hash,
                     pending_roots,
                 ) {
-                    pending.precommit_vote_sent = true;
-                    if let Some(vote) = self.local_precommit_vote_for(
+                    pending.note_local_commit_vote_emitted();
+                    self.note_frontier_owner_local_vote_emitted(hash, pending_height, pending_view);
+                    let _ = self.maybe_replay_known_block_commit_evidence(
+                        hash,
+                        pending_height,
+                        pending_view,
+                        local_vote_topology.as_ref(),
+                        "local_commit_vote_emitted",
+                    );
+                    precommit_action = Some("emitted");
+                } else if self
+                    .local_same_slot_vote(
+                        crate::sumeragi::consensus::Phase::Commit,
                         pending_height,
                         pending_view,
                         vote_epoch,
-                        &topology,
-                    ) {
-                        self.maybe_broadcast_block_sync_update_for_precommit_vote(
-                            &mut pending,
-                            &vote,
-                        );
-                    }
-                    precommit_action = Some("emitted");
+                    )
+                    .is_some_and(|existing| existing.block_hash == hash)
+                {
+                    pending.note_local_commit_vote_emitted();
+                    self.note_frontier_owner_local_vote_emitted(hash, pending_height, pending_view);
+                    let _ = self.maybe_replay_known_block_commit_evidence(
+                        hash,
+                        pending_height,
+                        pending_view,
+                        local_vote_topology.as_ref(),
+                        "local_commit_vote_already_recorded",
+                    );
+                    precommit_action = Some("already_recorded");
                 } else {
                     precommit_action = Some("emit_failed");
                 }
@@ -3031,14 +3428,14 @@ impl Actor {
             if precommit_action.is_none() {
                 if !enable_qc_pipeline {
                     precommit_action = Some("qc_pipeline_disabled");
-                } else if pending.commit_qc_seen {
+                } else if pending.commit_qc_observed() {
                     precommit_action = Some("commit_qc_seen");
-                } else if pending.precommit_vote_sent {
+                } else if pending.local_commit_vote_emitted() {
                     precommit_action = Some("already_sent");
                 }
             }
             if let Some(action) = precommit_action {
-                if pending_age >= fast_timeout && !pending.commit_qc_seen {
+                if pending_age >= fast_timeout && !pending.commit_qc_observed() {
                     let rbc_log = {
                         let key: super::rbc_store::SessionKey =
                             (hash, pending_height, pending_view);
@@ -3068,8 +3465,8 @@ impl Actor {
                         fast_timeout_ms = fast_timeout.as_millis(),
                         kura_ready,
                         kura_attempts = pending.kura_retry_attempts,
-                        precommit_sent = pending.precommit_vote_sent,
-                        commit_qc_seen = pending.commit_qc_seen,
+                        precommit_sent = pending.local_commit_vote_emitted(),
+                        commit_qc_seen = pending.commit_qc_observed(),
                         gate = ?gate_reason,
                         gate_satisfied = ?gate.satisfaction,
                         delivered,
@@ -3142,9 +3539,18 @@ impl Actor {
                 break;
             }
         }
-        timings.finish(pipeline_start)
+        if matches!(trigger, CommitPipelineTrigger::Event)
+            && !drain_summary.progress
+            && timings.blocks_processed == 0
+            && !self.pending.pending_blocks.is_empty()
+        {
+            self.record_round_no_progress_wake();
+        }
+        finish_timings(timings)
     }
 
+    #[cfg(test)]
+    #[allow(dead_code)] // Queried by unit-test-only vote-log assertions.
     pub(super) fn local_precommit_vote_for(
         &self,
         height: u64,
@@ -3186,8 +3592,7 @@ impl Actor {
         let canonical_signature_topology =
             topology_for_view(&canonical_topology, height, view, mode_tag, prf_seed);
         let local_peer = self.common_config.peer.id();
-        self.vote_log
-            .values()
+        self.stored_votes()
             .find(|vote| {
                 if vote.phase != crate::sumeragi::consensus::Phase::Commit
                     || vote.height != height
@@ -3219,98 +3624,666 @@ impl Actor {
             .cloned()
     }
 
-    pub(super) fn maybe_broadcast_block_sync_update_for_precommit_vote(
+    fn broadcast_cached_commit_qc_to_targets(
         &mut self,
-        pending: &mut PendingBlock,
-        vote: &crate::sumeragi::consensus::Vote,
-    ) {
-        if pending.aborted {
+        qc: crate::sumeragi::consensus::Qc,
+        targets: &[PeerId],
+    ) -> usize {
+        if self.relay_backpressure_active(Instant::now(), self.control_plane_rebroadcast_cooldown())
+        {
             debug!(
-                height = vote.height,
-                view = vote.view,
-                block = %vote.block_hash,
-                "skipping block sync update for aborted pending block"
+                height = qc.height,
+                view = qc.view,
+                block = %qc.subject_block_hash,
+                "skipping cached commit QC replay due to relay backpressure"
             );
-            return;
+            return 0;
         }
+        let local_peer_id = self.common_config.peer.id().clone();
+        let mut replayed = 0usize;
+        let msg = Arc::new(BlockMessage::Qc(qc));
+        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
+        for peer in targets {
+            if *peer == local_peer_id {
+                continue;
+            }
+            self.schedule_background(BackgroundRequest::Post {
+                peer: peer.clone(),
+                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
+            });
+            replayed = replayed.saturating_add(1);
+        }
+        replayed
+    }
+
+    pub(super) fn maybe_replay_known_block_commit_evidence(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        topology_peers: &[PeerId],
+        trigger: &'static str,
+    ) -> bool {
+        let Some(pending) = self.pending.pending_blocks.get(&block_hash) else {
+            return false;
+        };
+        if pending.height != height || pending.view != view || pending.aborted {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                "skipping known-block commit evidence replay for inactive pending block"
+            );
+            return false;
+        }
+        let commit_votes = self.pending_block_commit_votes_count(block_hash, height, view);
+        let commit_qc = self.cached_commit_qc_for_block(block_hash, height, view);
+        let has_commit_qc = commit_qc.is_some();
+
         let world = self.state.world_view();
         let block_time = self.block_time_for_mode_from_world(&world, self.consensus_mode);
         let cooldown = block_time.max(std::time::Duration::from_millis(200));
         let now = std::time::Instant::now();
-        if self
+        if !self
             .block_sync_rebroadcast_log
-            .allow(vote.block_hash, now, cooldown)
+            .allow(block_hash, now, cooldown)
         {
-            let mut update = self.block_sync_update_for_precommit_vote(
-                &pending.block,
-                self.state.as_ref(),
-                self.kura.as_ref(),
-                &self.qc_cache,
-                &self.vote_log,
-                vote,
-            );
-            let commit_votes = update.commit_votes.len();
-            let has_commit_qc = update.commit_qc.is_some();
-            if !pending.should_broadcast_block_sync_update(vote.view, commit_votes, has_commit_qc) {
-                iroha_logger::trace!(
-                    height = vote.height,
-                    view = vote.view,
-                    block = %vote.block_hash,
-                    commit_votes,
-                    has_commit_qc,
-                    "skipping block sync update broadcast: no new commit votes"
-                );
-                return;
-            }
-            let (consensus_mode, _, _) = self.consensus_context_for_height(vote.height);
-            let mut topology_peers = self.roster_for_vote_with_mode(
-                vote.block_hash,
-                vote.height,
-                vote.view,
-                consensus_mode,
-            );
-            if topology_peers.is_empty() {
-                topology_peers = self.effective_commit_topology();
-            }
-            if topology_peers.is_empty() {
-                return;
-            }
-            let has_verifiable_roster = self
-                .state
-                .commit_roster_snapshot_for_block(vote.height, vote.block_hash)
-                .is_some();
-            if has_verifiable_roster
-                && self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode)
-            {
-                self.broadcast_block_sync_update(update, &topology_peers);
-                iroha_logger::info!(
-                    height = vote.height,
-                    view = vote.view,
-                    block = %vote.block_hash,
-                    signer = vote.signer,
-                    targets = topology_peers.len(),
-                    "sending block sync update to commit topology after emitting local precommit vote"
-                );
-            } else {
-                iroha_logger::debug!(
-                    height = vote.height,
-                    view = vote.view,
-                    block = %vote.block_hash,
-                    signer = vote.signer,
-                    targets = topology_peers.len(),
-                    "skipping BlockCreated payload fallback after local precommit vote because roster proof is unavailable"
-                );
-            }
-        } else {
             iroha_logger::trace!(
-                height = vote.height,
-                view = vote.view,
-                block = %vote.block_hash,
-                signer = vote.signer,
+                height,
+                view,
+                block = %block_hash,
                 cooldown_ms = cooldown.as_millis(),
-                "skipping block sync update broadcast due to cooldown"
+                trigger,
+                "skipping known-block commit evidence replay due to cooldown"
             );
+            return false;
         }
+
+        let should_replay = {
+            let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) else {
+                return false;
+            };
+            pending.should_replay_commit_evidence(view, commit_votes, has_commit_qc)
+        };
+        if !should_replay {
+            iroha_logger::trace!(
+                height,
+                view,
+                block = %block_hash,
+                commit_votes,
+                has_commit_qc,
+                trigger,
+                "skipping known-block commit evidence replay: no new progress"
+            );
+            return false;
+        }
+
+        let targets =
+            self.known_block_commit_qc_recovery_targets(block_hash, height, view, topology_peers);
+        if targets.is_empty() {
+            return false;
+        }
+
+        let replayed = if let Some(commit_qc) = commit_qc {
+            self.broadcast_cached_commit_qc_to_targets(commit_qc, &targets)
+        } else {
+            self.rebroadcast_block_votes_to_targets(
+                crate::sumeragi::consensus::Phase::Commit,
+                block_hash,
+                height,
+                view,
+                &targets,
+            )
+        };
+        if replayed == 0 {
+            return false;
+        }
+
+        iroha_logger::info!(
+            height,
+            view,
+            block = %block_hash,
+            replayed,
+            has_commit_qc,
+            trigger,
+            "replaying known-block commit evidence"
+        );
+        true
+    }
+
+    pub(super) fn known_block_commit_qc_recovery_targets(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        topology_peers: &[PeerId],
+    ) -> Vec<PeerId> {
+        let mut targets = topology_peers.to_vec();
+        if targets.is_empty() {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            targets = self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+            if targets.is_empty() {
+                targets = self.effective_commit_topology();
+            }
+        }
+        targets
+    }
+
+    fn tip_extending_local_payload_known_at_height(&self, height: u64) -> bool {
+        let state_height = self.state.committed_height();
+        let state_tip_hash = self.state.latest_block_hash_fast();
+        self.pending.pending_blocks.values().any(|pending| {
+            !pending.is_retry_aborted()
+                && !matches!(pending.validation_status, ValidationStatus::Invalid)
+                && pending.height == height
+                && super::pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    state_height,
+                    state_tip_hash,
+                )
+        }) || self
+            .subsystems
+            .commit
+            .inflight
+            .as_ref()
+            .is_some_and(|inflight| {
+                !inflight.pending.aborted
+                    && !matches!(
+                        inflight.pending.validation_status,
+                        ValidationStatus::Invalid
+                    )
+                    && inflight.pending.height == height
+                    && super::pending_extends_tip(
+                        inflight.pending.height,
+                        inflight.pending.block.header().prev_block_hash(),
+                        state_height,
+                        state_tip_hash,
+                    )
+            })
+            || self.deferred_block_sync_updates.values().any(|entry| {
+                let block = &entry.update.block;
+                block.header().height().get() == height
+                    && super::pending_extends_tip(
+                        height,
+                        block.header().prev_block_hash(),
+                        state_height,
+                        state_tip_hash,
+                    )
+            })
+    }
+
+    fn highest_future_frontier_recovery_evidence_height(
+        &self,
+        frontier_height: u64,
+    ) -> Option<u64> {
+        let observed_head = self.observed_recovery_qc_head().map(|qc| qc.height);
+        let highest_qc = self.highest_qc.map(|qc| qc.height);
+        let cached_qc = self
+            .qc_cache
+            .keys()
+            .filter(|(_, _, height, _, _)| *height > frontier_height)
+            .map(|(_, _, height, _, _)| *height)
+            .max();
+        let deferred_qc = self
+            .deferred_missing_payload_qcs
+            .values()
+            .filter(|entry| entry.qc.height > frontier_height)
+            .map(|entry| entry.qc.height)
+            .max();
+        let deferred_block_sync = self
+            .deferred_block_sync_updates
+            .keys()
+            .filter(|(height, _, _)| *height > frontier_height)
+            .map(|(height, _, _)| *height)
+            .max();
+
+        [
+            observed_head,
+            highest_qc,
+            cached_qc,
+            deferred_qc,
+            deferred_block_sync,
+        ]
+        .into_iter()
+        .flatten()
+        .max()
+    }
+
+    pub(super) fn maybe_request_frontier_gap_realign_after_commit(&mut self, now: Instant) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        let frontier_height = committed_height.saturating_add(1);
+        let Some(future_evidence_height) =
+            self.highest_future_frontier_recovery_evidence_height(frontier_height)
+        else {
+            return false;
+        };
+        if future_evidence_height <= frontier_height {
+            return false;
+        }
+        if self.tip_extending_local_payload_known_at_height(frontier_height) {
+            trace!(
+                committed_height,
+                frontier_height,
+                future_evidence_height,
+                "skipping post-commit frontier reanchor because a tip-extending frontier payload is already local"
+            );
+            return false;
+        }
+
+        let requested =
+            self.request_range_pull_from_anchor(frontier_height, "frontier_gap_realign", now);
+        debug!(
+            committed_height,
+            frontier_height,
+            future_evidence_height,
+            requested,
+            "evaluated post-commit canonical frontier reanchor"
+        );
+        requested
+    }
+
+    pub(super) fn maybe_request_known_block_commit_qc_recovery(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        targets: &[PeerId],
+        pending_override: Option<&PendingBlock>,
+        trigger: &'static str,
+    ) -> bool {
+        let local_round_known = pending_override
+            .map(|pending| pending.height == height && pending.view == view)
+            .unwrap_or_else(|| {
+                self.pending
+                    .pending_blocks
+                    .get(&block_hash)
+                    .is_some_and(|pending| {
+                        pending.height == height
+                            && pending.view == view
+                            && !matches!(pending.validation_status, ValidationStatus::Invalid)
+                    })
+                    || self
+                        .local_signed_block_for_hash(block_hash)
+                        .is_some_and(|block| {
+                            let header = block.header();
+                            header.height().get() == height && header.view_change_index() == view
+                        })
+            });
+        if !local_round_known {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                trigger,
+                "skipping known-block commit-QC recovery because the local block for this round is unavailable"
+            );
+            return false;
+        }
+        if self
+            .cached_commit_qc_for_block(block_hash, height, view)
+            .is_some()
+        {
+            trace!(
+                height,
+                view,
+                block = %block_hash,
+                trigger,
+                "skipping known-block commit-QC recovery because cached commit QC is available"
+            );
+            return false;
+        }
+
+        let filtered_targets = super::missing_block_request_targets_without_local(
+            self.common_config.peer.id(),
+            targets,
+        );
+        if filtered_targets.is_empty() {
+            return false;
+        }
+
+        let now = Instant::now();
+        let payload_materialized_locally = self.frontier_block_materialized_locally(block_hash);
+        let recovery_tracked_before_decision = self
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash);
+        let mut request_stalled = false;
+        if height == self.committed_height_snapshot().saturating_add(1) {
+            let stall_window = self.frontier_slot_lag_window();
+            let dwell_window = stall_window.checked_mul(2).unwrap_or(stall_window);
+            let (dependency_stalled, dwell_stalled) = self
+                .pending
+                .missing_commit_qc_requests
+                .get(&block_hash)
+                .map_or((false, false), |stats| {
+                    (
+                        now.saturating_duration_since(stats.last_dependency_progress)
+                            >= stall_window,
+                        now.saturating_duration_since(stats.first_seen) >= dwell_window,
+                    )
+                });
+            request_stalled = dependency_stalled || dwell_stalled;
+            let lag_window_expired =
+                !payload_materialized_locally && self.frontier_slot_lag_window_expired(height, now);
+            let catchup_stalled =
+                dependency_stalled || (!payload_materialized_locally && dwell_stalled);
+            let mut catchup_advance = FrontierRecoveryAdvance::None;
+            if catchup_stalled || lag_window_expired {
+                catchup_advance = self.handle_frontier_slot_event(
+                    now,
+                    super::FrontierSlotEvent::OnLagWindowExpired {
+                        reason: "frontier_stall_reset",
+                    },
+                );
+            }
+            if matches!(catchup_advance, FrontierRecoveryAdvance::None)
+                && catchup_stalled
+                && self.request_range_pull_from_anchor(height, "frontier_stall_reset_fallback", now)
+            {
+                catchup_advance = FrontierRecoveryAdvance::CatchUp;
+            }
+            if (!payload_materialized_locally
+                && self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset"))
+                || matches!(catchup_advance, FrontierRecoveryAdvance::CatchUp)
+            {
+                info!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    request_stalled,
+                    catchup_advance = ?catchup_advance,
+                    trigger,
+                    "routing known-block commit-QC recovery through frontier stall-reset catch-up"
+                );
+                return true;
+            }
+        }
+
+        let retry_window = self.missing_block_retry_window_with_rbc_progress(
+            block_hash,
+            height,
+            view,
+            self.rebroadcast_cooldown(),
+        );
+        let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+        let topology = super::network_topology::Topology::new(filtered_targets.clone());
+        let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
+        let decision = super::plan_missing_block_fetch_with_mode(
+            &mut self.pending.missing_commit_qc_requests,
+            block_hash,
+            height,
+            view,
+            crate::sumeragi::consensus::Phase::Commit,
+            super::MissingBlockPriority::Consensus,
+            &BTreeSet::new(),
+            &topology,
+            now,
+            retry_window,
+            view_change_window,
+            signer_fallback_attempts,
+            super::MissingBlockFetchMode::AggressiveTopology,
+            false,
+        );
+        let dwell = self
+            .pending
+            .missing_commit_qc_requests
+            .get(&block_hash)
+            .map(|stats| now.saturating_duration_since(stats.first_seen))
+            .unwrap_or_default();
+        let dwell_ms = dwell.as_millis().try_into().unwrap_or(u64::MAX);
+        let targets_len = match &decision {
+            super::MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+            _ => 0,
+        };
+        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+        super::status::record_missing_block_fetch(targets_len, dwell_ms);
+
+        let requester_roster_proof_known =
+            self.requester_has_local_roster_proof(block_hash, height, view);
+        match decision {
+            super::MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                if height == self.committed_height_snapshot().saturating_add(1)
+                    && (!payload_materialized_locally || !recovery_tracked_before_decision)
+                    && !request_stalled
+                    && self.try_route_missing_block_through_exact_frontier_slot(
+                        block_hash, height, view, &targets,
+                    )
+                {
+                    info!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        targets = ?targets,
+                        target_kind = target_kind.label(),
+                        trigger,
+                        retry_window_ms = retry_window.as_millis(),
+                        dwell_ms,
+                        "routing known-block commit-QC recovery through exact frontier body repair"
+                    );
+                    return true;
+                }
+                super::send_missing_block_request(
+                    &self.network,
+                    &self.common_config.peer.id,
+                    block_hash,
+                    height,
+                    view,
+                    super::MissingBlockPriority::Consensus,
+                    requester_roster_proof_known,
+                    &targets,
+                );
+                info!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    targets = ?targets,
+                    target_kind = target_kind.label(),
+                    trigger,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    "requesting known-block pending update to recover missing commit QC"
+                );
+                true
+            }
+            super::MissingBlockFetchDecision::NoTargets => {
+                warn!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    trigger,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    "unable to request known-block pending update: no peers available"
+                );
+                false
+            }
+            super::MissingBlockFetchDecision::Backoff => {
+                trace!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    trigger,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    "skipping known-block commit-QC recovery during retry backoff"
+                );
+                false
+            }
+        }
+    }
+
+    pub(super) fn retry_known_block_commit_qc_requests(
+        &mut self,
+        now: Instant,
+        tick_deadline: Option<Instant>,
+    ) -> bool {
+        if self.pending.missing_commit_qc_requests.is_empty() {
+            return false;
+        }
+
+        let mut progress = false;
+        let pending_keys: Vec<_> = self
+            .pending
+            .missing_commit_qc_requests
+            .keys()
+            .copied()
+            .collect();
+        for block_hash in pending_keys {
+            if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
+                break;
+            }
+            let Some(stats_snapshot) = self
+                .pending
+                .missing_commit_qc_requests
+                .get(&block_hash)
+                .cloned()
+            else {
+                continue;
+            };
+            let committed_height = self.committed_height_snapshot();
+            if !self.missing_commit_qc_request_has_actionable_dependency(
+                block_hash,
+                &stats_snapshot,
+                committed_height,
+                now,
+            ) {
+                self.clear_missing_commit_qc_request(
+                    &block_hash,
+                    MissingBlockClearReason::Obsolete,
+                );
+                progress = true;
+                continue;
+            }
+
+            let targets = self.known_block_commit_qc_recovery_targets(
+                block_hash,
+                stats_snapshot.height,
+                stats_snapshot.view,
+                &[],
+            );
+            if self.maybe_request_known_block_commit_qc_recovery(
+                block_hash,
+                stats_snapshot.height,
+                stats_snapshot.view,
+                &targets,
+                None,
+                "retry_known_block_commit_qc",
+            ) {
+                progress = true;
+            }
+        }
+
+        progress
+    }
+
+    pub(super) fn maybe_emit_local_commit_vote_for_pending_event(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        commit_topology: &[PeerId],
+        trigger: &'static str,
+    ) -> bool {
+        let now = Instant::now();
+        let Some(pending) = self.pending.pending_blocks.get(&block_hash) else {
+            return false;
+        };
+        if pending.height != height
+            || pending.view != view
+            || pending.aborted
+            || pending.local_commit_vote_emitted()
+            || pending.commit_qc_observed()
+            || pending.validation_status != ValidationStatus::Valid
+            || !pending.kura_retry_due(now)
+        {
+            return false;
+        }
+        let local_commit_topology = self.local_commit_vote_roster(height, commit_topology);
+        if local_commit_topology.is_empty() {
+            return false;
+        }
+
+        let topology = super::network_topology::Topology::new(local_commit_topology);
+        let vote_epoch = self.epoch_for_height(height);
+        if self.should_defer_tip_precommit_for_same_height_conflict(
+            block_hash, height, view, vote_epoch,
+        ) {
+            debug!(
+                block = %block_hash,
+                height,
+                view,
+                epoch = vote_epoch,
+                trigger,
+                "deferring event-driven precommit: conflicting same-height consensus evidence is pending or cached"
+            );
+            return false;
+        }
+        let parent_hash = pending.block.header().prev_block_hash();
+        let pending_roots = pending.parent_state_root.zip(pending.post_state_root);
+        let emitted = self.emit_precommit_vote(
+            block_hash,
+            height,
+            view,
+            vote_epoch,
+            pending.validation_status,
+            &topology,
+            parent_hash,
+            pending_roots,
+        );
+        if !emitted {
+            return false;
+        }
+
+        if let Some(pending) = self.pending.pending_blocks.get_mut(&block_hash) {
+            pending.note_local_commit_vote_emitted();
+        }
+        self.note_frontier_owner_local_vote_emitted(block_hash, height, view);
+        let _ = self.maybe_replay_known_block_commit_evidence(
+            block_hash,
+            height,
+            view,
+            topology.as_ref(),
+            trigger,
+        );
+        self.request_commit_pipeline_for_pending(
+            block_hash,
+            super::status::RoundEventCauseTrace::VoteReceived,
+            None,
+        );
+        true
+    }
+
+    fn local_commit_vote_roster(&self, height: u64, commit_topology: &[PeerId]) -> Vec<PeerId> {
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if height == committed_height.saturating_add(1) {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            let live = self.roster_for_live_vote_with_mode(height, consensus_mode);
+            if !live.is_empty() {
+                return live;
+            }
+        }
+
+        commit_topology.to_vec()
+    }
+
+    fn vote_emission_topology_for_height(
+        &self,
+        height: u64,
+        consensus_mode: ConsensusMode,
+        fallback: &super::network_topology::Topology,
+    ) -> super::network_topology::Topology {
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if height == committed_height.saturating_add(1) {
+            let live = self.roster_for_live_vote_with_mode(height, consensus_mode);
+            if !live.is_empty() {
+                return super::network_topology::Topology::new(live);
+            }
+        }
+        fallback.clone()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3384,19 +4357,55 @@ impl Actor {
         added
     }
 
+    fn restore_initial_precommit_collector_state(&mut self) {
+        let Some(primary) = self
+            .subsystems
+            .propose
+            .collector_plan_targets
+            .first()
+            .cloned()
+        else {
+            return;
+        };
+        let targets = self.subsystems.propose.collector_plan_targets.clone();
+        self.subsystems.propose.collector_plan =
+            Some(super::collectors::CollectorPlan::with_sent(targets, 1));
+        self.subsystems.propose.collectors_contacted.clear();
+        self.note_collector_contact(primary, false);
+    }
+
     fn vote_recorded_or_queued_for_validation(
         &self,
         vote: &crate::sumeragi::consensus::Vote,
     ) -> bool {
-        let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+        let local_public_key = self.common_config.peer.id().public_key().clone();
+        let identity_key = (
+            vote.phase,
+            vote.height,
+            vote.view,
+            vote.epoch,
+            vote.signer,
+            local_public_key.clone(),
+        );
         if self
-            .vote_log
-            .get(&key)
+            .vote_log_identities
+            .get(&identity_key)
             .is_some_and(|existing| existing.block_hash == vote.block_hash)
         {
             return true;
         }
-        let verify_key = super::VoteVerifyKey::from_vote(vote);
+        if self
+            .vote_log
+            .get(&(vote.phase, vote.height, vote.view, vote.epoch, vote.signer))
+            .filter(|existing| {
+                self.vote_identity_key_from_vote(existing).as_ref() == Some(&identity_key)
+            })
+            .is_some_and(|existing| existing.block_hash == vote.block_hash)
+        {
+            return true;
+        }
+        let verify_key =
+            super::VoteVerifyKey::from_vote_with_signer_public_key(vote, Some(local_public_key));
         self.subsystems
             .vote_verify
             .pending_validation
@@ -3438,8 +4447,10 @@ impl Actor {
             );
             return false;
         }
-        let (_, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
+        self.process_committed_blocks_before_consensus("emit_precommit_vote");
+        let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
+        let topology = self.vote_emission_topology_for_height(height, consensus_mode, topology);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
                 height,
@@ -3474,14 +4485,15 @@ impl Actor {
             );
             return false;
         }
-        let sent_key = (
-            crate::sumeragi::consensus::Phase::Commit,
-            height,
-            view,
-            epoch,
-            local_idx,
-        );
-        if self.vote_log.contains_key(&sent_key) {
+        if self
+            .local_same_slot_vote(
+                crate::sumeragi::consensus::Phase::Commit,
+                height,
+                view,
+                epoch,
+            )
+            .is_some_and(|existing| existing.block_hash == block_hash)
+        {
             debug!(
                 height,
                 view,
@@ -3491,28 +4503,74 @@ impl Actor {
             );
             return false;
         }
-        let conflicting_vote = self.vote_log.get(&sent_key).filter(|vote| {
-            vote.phase == crate::sumeragi::consensus::Phase::Commit
-                && vote.height == height
-                && vote.view == view
-                && vote.epoch == epoch
-                && vote.block_hash != block_hash
-        });
+        let conflicting_vote = self.local_conflicting_slot_vote(height, epoch, block_hash);
         if let Some(conflict) = conflicting_vote {
-            warn!(
+            let new_view_qc_supersedes = self
+                .proposal_highest_qc_for_slot(height, view)
+                .is_some_and(|highest_qc| {
+                    self.new_view_qc_supersedes_same_height_vote_conflict(
+                        height,
+                        view,
+                        highest_qc,
+                        conflict.block_hash,
+                        conflict.view,
+                    )
+                });
+            if new_view_qc_supersedes {
+                info!(
+                    height,
+                    view,
+                    epoch,
+                    block = ?block_hash,
+                    previous_view = conflict.view,
+                    previous_phase = ?conflict.phase,
+                    previous_block = ?conflict.block_hash,
+                    signer = local_idx,
+                    "allowing precommit: NEW_VIEW QC supersedes raw same-height local vote"
+                );
+            } else {
+                warn!(
+                    height,
+                    view,
+                    epoch,
+                    block = ?block_hash,
+                    previous_view = conflict.view,
+                    previous_phase = ?conflict.phase,
+                    previous_block = ?conflict.block_hash,
+                    signer = local_idx,
+                    "skipping precommit: local validator already voted for a different same-height block"
+                );
+                return false;
+            }
+        }
+        if let Some(lock) = self.locked_qc {
+            let candidate = crate::sumeragi::consensus::QcHeaderRef {
+                phase: crate::sumeragi::consensus::Phase::Commit,
+                subject_block_hash: block_hash,
                 height,
                 view,
                 epoch,
-                block = ?block_hash,
-                previous_view = conflict.view,
-                previous_block = ?conflict.block_hash,
-                signer = local_idx,
-                "skipping precommit: local validator already voted for a different block at this height"
-            );
-            return false;
-        }
-        if let Some(lock) = self.locked_qc {
-            if !self.block_known_for_lock(lock.subject_block_hash) {
+            };
+            let locked_payload_known = self.block_known_for_lock(lock.subject_block_hash);
+            let locked_hash_committed =
+                self.committed_block_hash_for_height(lock.height) == Some(lock.subject_block_hash);
+            if (locked_payload_known || locked_hash_committed)
+                && candidate.height == lock.height
+                && candidate.subject_block_hash != lock.subject_block_hash
+            {
+                warn!(
+                    height,
+                    view,
+                    block = ?block_hash,
+                    locked_height = lock.height,
+                    locked_view = lock.view,
+                    locked_hash = %lock.subject_block_hash,
+                    "skipping precommit: block conflicts with locked block at the same height"
+                );
+                return false;
+            }
+            if !locked_payload_known && candidate.view <= lock.view {
+                let _ = self.request_missing_locked_qc_payload("emit_precommit_vote");
                 warn!(
                     height,
                     view,
@@ -3523,15 +4581,8 @@ impl Actor {
                 );
                 return false;
             }
-            let candidate = crate::sumeragi::consensus::QcHeaderRef {
-                phase: crate::sumeragi::consensus::Phase::Commit,
-                subject_block_hash: block_hash,
-                height,
-                view,
-                epoch,
-            };
             let extends_locked =
-                qc_extends_locked_with_lookup(lock, candidate, |hash, lookup_height| {
+                qc_satisfies_locked_with_lookup(lock, candidate, |hash, lookup_height| {
                     if hash == block_hash && lookup_height == height {
                         parent_hash
                     } else {
@@ -3575,8 +4626,20 @@ impl Actor {
         ) else {
             return false;
         };
-        self.handle_vote(vote.clone());
-        if !self.vote_recorded_or_queued_for_validation(&vote) {
+        let chain_id = self.common_config.chain.clone();
+        let evidence_context = super::evidence::EvidenceValidationContext {
+            topology: &topology,
+            chain_id: &chain_id,
+            mode_tag,
+            prf_seed,
+        };
+        if !self.validate_and_record_vote_with_signature_result(
+            &vote,
+            &signature_topology,
+            &evidence_context,
+            mode_tag,
+            None,
+        ) {
             warn!(
                 height,
                 view,
@@ -3587,88 +4650,86 @@ impl Actor {
             );
             return false;
         }
+        let topology_peers = topology.as_ref().to_vec();
+        let roster_hash = HashOf::new(&topology_peers);
+        let pops = self.cached_vote_verify_pops(&topology_peers, &roster_hash);
+        let context = super::VoteProcessingContext {
+            topology: topology.clone(),
+            signature_topology: Arc::new(signature_topology.clone()),
+            consensus_mode,
+            mode_tag,
+            prf_seed,
+            stale_view: self.stale_view(height, view),
+            pops,
+        };
+        self.apply_validated_vote(vote.clone(), context);
+        debug!(
+            height,
+            view,
+            epoch,
+            block = %block_hash,
+            signer = local_idx,
+            "emitted local precommit vote"
+        );
 
         let vote_msg = Arc::new(BlockMessage::QcVote(vote));
         let vote_encoded = Arc::new(BlockMessageWire::encode_message(vote_msg.as_ref()));
         self.ensure_collector_plan(&signature_topology, height, view);
-        while let Some(peer) = self.next_redundant_collector() {
-            self.note_collector_contact(peer.clone(), true);
-        }
-        let mut collector_targets: Vec<_> = self
-            .subsystems
-            .propose
-            .collectors_contacted
-            .iter()
-            .cloned()
-            .collect();
-        let mut fallback_to_topology = false;
-        if collector_targets.is_empty() {
-            fallback_to_topology = true;
-            collector_targets = signature_topology.as_ref().to_vec();
-        }
+        self.restore_initial_precommit_collector_state();
         let local_peer_id = self.common_config.peer.id().clone();
-        collector_targets.retain(|peer| peer != &local_peer_id);
-        if collector_targets.is_empty() {
-            fallback_to_topology = true;
-            collector_targets = signature_topology.as_ref().to_vec();
-            collector_targets.retain(|peer| peer != &local_peer_id);
+        let min_votes_for_commit = topology.min_votes_for_commit().max(1);
+        let mut vote_targets = self.quorum_retransmit_targets_for_missing_votes(
+            block_hash,
+            height,
+            view,
+            topology.as_ref(),
+            min_votes_for_commit,
+            1,
+        );
+        let mut fallback_to_collector_seed = false;
+        if vote_targets.is_empty() {
+            fallback_to_collector_seed = true;
+            vote_targets = self
+                .subsystems
+                .propose
+                .collectors_contacted
+                .iter()
+                .cloned()
+                .collect();
         }
-        let remote_floor = usize::from(self.subsystems.propose.collector_redundant_limit.max(1))
-            .min(signature_topology.as_ref().len().saturating_sub(1));
-        let mut parallel_added = 0usize;
-        if !fallback_to_topology {
-            let parallel = self.config.collectors.parallel_topology_fanout;
-            if parallel > 0 {
-                let mut parallel_targets: Vec<_> = signature_topology
-                    .topology_fanout_from_tail(parallel)
-                    .into_iter()
-                    .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
-                    .collect();
-                parallel_targets.retain(|peer| peer != &local_peer_id);
-                for peer in parallel_targets {
-                    if collector_targets.iter().all(|existing| existing != &peer) {
-                        collector_targets.push(peer);
-                        parallel_added = parallel_added.saturating_add(1);
-                    }
-                }
-            }
-            let _ = Self::top_up_remote_targets_to_floor(
-                &signature_topology,
-                &local_peer_id,
-                &mut collector_targets,
-                remote_floor,
-            );
+        vote_targets.retain(|peer| peer != &local_peer_id);
+        if vote_targets.is_empty() {
+            fallback_to_collector_seed = true;
+            vote_targets = signature_topology.as_ref().to_vec();
+            vote_targets.retain(|peer| peer != &local_peer_id);
         }
-        if fallback_to_topology {
-            iroha_logger::info!(
+        let initial_targets = u64::try_from(vote_targets.len()).unwrap_or(u64::MAX);
+        super::status::set_collectors_targeted_current(initial_targets);
+        #[cfg(feature = "telemetry")]
+        self.telemetry
+            .set_collectors_targeted_current(initial_targets);
+        iroha_logger::info!(
+            height,
+            view,
+            block = ?block_hash,
+            signer = local_idx,
+            initial_targets = vote_targets.len(),
+            min_votes_for_commit,
+            seeded_collectors = self.subsystems.propose.collectors_contacted.len(),
+            fallback_to_collector_seed,
+            "sending initial precommit vote"
+        );
+        if vote_targets.is_empty() {
+            debug!(
                 height,
                 view,
                 block = ?block_hash,
                 signer = local_idx,
-                targets = collector_targets.len(),
-                "sending precommit vote to commit topology (collector plan empty or local-only)"
-            );
-        } else if parallel_added > 0 {
-            iroha_logger::info!(
-                height,
-                view,
-                block = ?block_hash,
-                signer = local_idx,
-                targets = collector_targets.len(),
-                "sending precommit vote to collectors with parallel topology fanout"
-            );
-        } else {
-            iroha_logger::info!(
-                height,
-                view,
-                block = ?block_hash,
-                signer = local_idx,
-                targets = collector_targets.len(),
-                "sending precommit vote to collectors"
+                "initial precommit vote had no remote targets after local-only topology fallback"
             );
         }
-        for peer in collector_targets {
-            self.schedule_background_via_queue(BackgroundRequest::Post {
+        for peer in vote_targets {
+            self.schedule_background(BackgroundRequest::Post {
                 peer,
                 msg: BlockMessageWire::with_encoded(
                     Arc::clone(&vote_msg),
@@ -3700,9 +4761,20 @@ impl Actor {
             );
             return false;
         }
+        if self.suppress_contiguous_frontier_owned_by_committed_edge_conflict(
+            height,
+            view,
+            "new_view_vote",
+            Instant::now(),
+            false,
+        ) {
+            return false;
+        }
+        self.process_committed_blocks_before_consensus("emit_new_view_vote");
         let epoch = self.epoch_for_height(height);
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
+        let topology = self.vote_emission_topology_for_height(height, consensus_mode, topology);
+        let signature_topology = topology_for_view(&topology, height, view, mode_tag, prf_seed);
         let Some(local_idx) = self.local_validator_index_for_topology(&signature_topology) else {
             warn!(
                 height,
@@ -3753,14 +4825,12 @@ impl Actor {
                 return false;
             }
         }
-        let sent_key = (
+        if let Some(existing) = self.local_same_slot_vote(
             crate::sumeragi::consensus::Phase::NewView,
             height,
             view,
             epoch,
-            local_idx,
-        );
-        if let Some(existing) = self.vote_log.get(&sent_key) {
+        ) {
             if existing.block_hash != highest_qc.subject_block_hash {
                 warn!(
                     height,
@@ -3829,7 +4899,7 @@ impl Actor {
             .min(signature_topology.as_ref().len().saturating_sub(1));
         let mut parallel_added = 0usize;
         if !fallback_to_topology {
-            let parallel = self.config.collectors.parallel_topology_fanout;
+            let parallel = self.effective_parallel_topology_fanout();
             if parallel > 0 {
                 let mut parallel_targets: Vec<_> = signature_topology
                     .topology_fanout_from_tail(parallel)
@@ -3886,7 +4956,7 @@ impl Actor {
             );
         }
         for peer in targets {
-            self.schedule_background_via_queue(BackgroundRequest::Post {
+            self.schedule_background(BackgroundRequest::Post {
                 peer,
                 msg: BlockMessageWire::with_encoded(
                     Arc::clone(&vote_msg),
@@ -3907,7 +4977,7 @@ impl Actor {
     ) -> Option<u64> {
         let local_peer = self.common_config.peer.id();
         let mut highest: Option<u64> = None;
-        for vote in self.vote_log.values() {
+        for vote in self.stored_votes() {
             if vote.phase != crate::sumeragi::consensus::Phase::NewView {
                 continue;
             }
@@ -3963,15 +5033,24 @@ impl Actor {
             epoch,
             &signature_topology,
         );
+        let mut accepted_votes = self.accepted_votes_for_qc_slot(
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            &signature_topology,
+        );
         if !signers.is_empty() {
             let (filtered, _groups) = super::qc::select_commit_root_signers(
-                &self.vote_log,
+                &accepted_votes,
                 block_hash,
                 height,
                 view,
                 epoch,
                 &signers,
             );
+            accepted_votes.retain(|signer, _| filtered.contains(signer));
             signers = filtered;
         }
         let vote_count = signers.len();
@@ -4059,6 +5138,14 @@ impl Actor {
         if let Some(telemetry) = self.telemetry_handle() {
             telemetry.set_commit_qc_summary(cert);
         }
+        let qc_header = crate::sumeragi::consensus::QcHeaderRef {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            height,
+            view,
+            epoch: cert.epoch,
+        };
+        self.promote_commit_anchor_qc(qc_header);
         let Some(pending) = self.pending.pending_blocks.remove(&block_hash) else {
             return;
         };
@@ -4068,15 +5155,7 @@ impl Actor {
             .superseded_results
             .remove(&block_hash);
         let mut pending = pending;
-        pending.commit_qc_seen = true;
-        pending.commit_qc_epoch = Some(cert.epoch);
-        let qc_header = crate::sumeragi::consensus::QcHeaderRef {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: block_hash,
-            height,
-            view,
-            epoch: cert.epoch,
-        };
+        pending.note_commit_qc_observed(cert.epoch);
         let _ = self.finalize_pending_block(qc_header, pending, None);
     }
 
@@ -4088,6 +5167,52 @@ impl Actor {
         view: u64,
         target_missing_only: bool,
     ) -> usize {
+        if target_missing_only {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            let mut topology_peers = if matches!(phase, crate::sumeragi::consensus::Phase::NewView)
+            {
+                self.roster_for_new_view_with_mode(block_hash, height, view, consensus_mode)
+            } else {
+                self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
+            };
+            if topology_peers.is_empty() {
+                topology_peers = self.effective_commit_topology();
+            }
+            if topology_peers.is_empty() {
+                return 0;
+            }
+            let topology = super::network_topology::Topology::new(topology_peers.clone());
+            let votes: Vec<_> = self
+                .vote_log
+                .values()
+                .filter(|vote| {
+                    vote.phase == phase
+                        && vote.block_hash == block_hash
+                        && vote.height == height
+                        && vote.view == view
+                })
+                .cloned()
+                .collect();
+            if votes.is_empty() {
+                return 0;
+            }
+            let min_votes_for_commit = topology.min_votes_for_commit().max(1);
+            let missing_targets = self.quorum_retransmit_targets_for_missing_votes(
+                block_hash,
+                height,
+                view,
+                &topology_peers,
+                min_votes_for_commit,
+                votes.len(),
+            );
+            return self.rebroadcast_block_votes_to_targets(
+                phase,
+                block_hash,
+                height,
+                view,
+                &missing_targets,
+            );
+        }
         if self.relay_backpressure_active(Instant::now(), self.control_plane_rebroadcast_cooldown())
         {
             debug!(
@@ -4114,8 +5239,11 @@ impl Actor {
             return 0;
         }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
-        let mut topology_peers =
-            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+        let mut topology_peers = if matches!(phase, crate::sumeragi::consensus::Phase::NewView) {
+            self.roster_for_new_view_with_mode(block_hash, height, view, consensus_mode)
+        } else {
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
+        };
         if topology_peers.is_empty() {
             topology_peers = self.effective_commit_topology();
         }
@@ -4151,7 +5279,7 @@ impl Actor {
             .min(signature_topology.as_ref().len().saturating_sub(1));
         let mut parallel_added = 0usize;
         if !fallback_to_topology {
-            let parallel = self.config.collectors.parallel_topology_fanout;
+            let parallel = self.effective_parallel_topology_fanout();
             if parallel > 0 {
                 let mut parallel_targets: Vec<_> = signature_topology
                     .topology_fanout_from_tail(parallel)
@@ -4174,32 +5302,6 @@ impl Actor {
             );
         }
 
-        let mut missing_targets = 0usize;
-        let mut targeted_to_missing = false;
-        if target_missing_only {
-            let signer_peers: BTreeSet<PeerId> = votes
-                .iter()
-                .filter_map(|vote| usize::try_from(vote.signer).ok())
-                .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
-                .collect();
-            let missing_target_set: BTreeSet<PeerId> = signature_topology
-                .as_ref()
-                .iter()
-                .filter(|peer| *peer != &local_peer_id && !signer_peers.contains(*peer))
-                .cloned()
-                .collect();
-            if missing_target_set.is_empty() {
-                return 0;
-            }
-            missing_targets = missing_target_set.len();
-            collector_targets.retain(|peer| missing_target_set.contains(peer));
-            if collector_targets.is_empty() {
-                fallback_to_topology = true;
-                collector_targets = missing_target_set.into_iter().collect();
-            }
-            targeted_to_missing = true;
-        }
-
         debug!(
             height,
             view,
@@ -4209,8 +5311,6 @@ impl Actor {
             fallback_to_topology,
             parallel_added,
             target_missing_only,
-            targeted_to_missing,
-            missing_targets,
             "rebroadcasting votes"
         );
 
@@ -4224,7 +5324,83 @@ impl Actor {
             let msg = Arc::new(msg);
             let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
             for peer in &collector_targets {
-                self.schedule_background_via_queue(BackgroundRequest::Post {
+                self.schedule_background(BackgroundRequest::Post {
+                    peer: peer.clone(),
+                    msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
+                });
+            }
+            rebroadcasted = rebroadcasted.saturating_add(1);
+        }
+
+        rebroadcasted
+    }
+
+    pub(super) fn rebroadcast_block_votes_to_targets(
+        &mut self,
+        phase: crate::sumeragi::consensus::Phase,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        targets: &[PeerId],
+    ) -> usize {
+        if self.relay_backpressure_active(Instant::now(), self.control_plane_rebroadcast_cooldown())
+        {
+            debug!(
+                height,
+                view,
+                block = ?block_hash,
+                phase = ?phase,
+                "skipping vote rebroadcast due to relay backpressure"
+            );
+            return 0;
+        }
+        let mut explicit_targets: Vec<_> = targets
+            .iter()
+            .filter(|peer| *peer != self.common_config.peer.id())
+            .cloned()
+            .collect();
+        if explicit_targets.is_empty() {
+            return 0;
+        }
+        explicit_targets.sort();
+        explicit_targets.dedup();
+
+        let votes: Vec<_> = self
+            .vote_log
+            .values()
+            .filter(|vote| {
+                vote.phase == phase
+                    && vote.block_hash == block_hash
+                    && vote.height == height
+                    && vote.view == view
+            })
+            .cloned()
+            .collect();
+        if votes.is_empty() {
+            return 0;
+        }
+
+        debug!(
+            height,
+            view,
+            block = ?block_hash,
+            phase = ?phase,
+            targets = explicit_targets.len(),
+            explicit_targets = true,
+            "rebroadcasting votes"
+        );
+
+        let mut rebroadcasted = 0usize;
+        for vote in votes {
+            let msg = match phase {
+                crate::sumeragi::consensus::Phase::Prepare
+                | crate::sumeragi::consensus::Phase::Commit
+                | crate::sumeragi::consensus::Phase::NewView => BlockMessage::QcVote(vote),
+            };
+            let msg = Arc::new(msg);
+            let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
+            for peer in &explicit_targets {
+                self.schedule_background(BackgroundRequest::Post {
                     peer: peer.clone(),
                     msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
                 });
@@ -4269,20 +5445,32 @@ impl Actor {
             return;
         };
         let (collectors_k, redundant_r) = self.collector_plan_params_for_mode(consensus_mode);
+        let routing_collectors_k = self.effective_collector_k_for_routing(
+            consensus_mode,
+            &signature_topology,
+            collectors_k,
+        );
         let mut collector_targets = if collectors_k == 0 {
             Vec::new()
         } else {
             super::collectors::deterministic_collectors(
                 &signature_topology,
                 consensus_mode,
-                collectors_k,
+                routing_collectors_k,
                 prf_seed,
                 height,
                 view,
             )
         };
         if !collector_targets.is_empty() {
-            let redundant_limit = signature_topology.redundant_send_r_floor(redundant_r);
+            let redundant_limit = if self.config.resilience.enabled
+                && self.subsystems.propose.adaptive_state.applied()
+            {
+                signature_topology
+                    .redundant_send_r_floor(self.subsystems.propose.collector_redundant_limit)
+            } else {
+                signature_topology.redundant_send_r_floor(redundant_r)
+            };
             let limit = usize::from(redundant_limit.max(1));
             collector_targets.truncate(limit);
         }
@@ -4348,17 +5536,18 @@ impl Actor {
         }
     }
 
-    /// Check whether an RBC session has delivered a payload matching `payload_hash`.
-    /// Consults both in-memory sessions and the persisted status snapshot so restarts
-    /// and multi-view deliveries update availability status deterministically.
+    /// Check whether an RBC session already has authoritative local payload for this exact slot.
+    /// Consults both in-memory sessions and the persisted status snapshot so restarts and
+    /// multi-view recovery continue to expose availability deterministically.
     fn ensure_block_matches_rbc_payload(
         sessions: &BTreeMap<super::rbc_store::SessionKey, RbcSession>,
         handle: &rbc_status::Handle,
         block_hash: &HashOf<BlockHeader>,
         height: u64,
+        view: u64,
         payload_hash: &Hash,
     ) -> bool {
-        rbc_payload_matches(sessions, handle, block_hash, height, payload_hash)
+        rbc_payload_matches(sessions, handle, block_hash, height, view, payload_hash)
     }
 
     fn local_payload_matches_hash(block: &SignedBlock, payload_hash: &Hash) -> bool {
@@ -4380,6 +5569,7 @@ impl Actor {
             handle,
             &pending.block.hash(),
             pending.height,
+            pending.view,
             &pending.payload_hash,
         )
     }
@@ -4520,54 +5710,6 @@ impl Actor {
     }
 
     #[allow(clippy::needless_pass_by_value)]
-    pub(super) fn broadcast_block_sync_update(
-        &mut self,
-        update: super::message::BlockSyncUpdate,
-        peers: &[PeerId],
-    ) {
-        let height = update.block.header().height().get();
-        let view = update.block.header().view_change_index();
-        let fanout_peers =
-            self.transport_fanout_targets_for_round(peers, height, view, "block_sync_update");
-        let online_peers = self
-            .network
-            .online_peers(|set| set.iter().map(|peer| peer.id().clone()).collect::<Vec<_>>());
-        let world = self.state.world_view();
-        let registered_peers = world.peers().iter().cloned().collect::<Vec<_>>();
-        let trusted = self.common_config.trusted_peers.value();
-        let trusted_peers: Vec<PeerId> = std::iter::once(trusted.myself.id().clone())
-            .chain(trusted.others.iter().map(|peer| peer.id().clone()))
-            .collect();
-        let seed = update.block.hash();
-        let targets = Self::block_sync_update_targets_for_peers(
-            self.common_config.peer.id(),
-            self.block_sync_gossip_limit,
-            &fanout_peers,
-            &registered_peers,
-            &trusted_peers,
-            &online_peers,
-            seed.as_ref(),
-        );
-        if targets.is_empty() {
-            trace!(
-                height = update.block.header().height().get(),
-                view = update.block.header().view_change_index(),
-                block = ?update.block.hash(),
-                "skipping block sync update gossip: no targets"
-            );
-            return;
-        }
-        let msg = Arc::new(BlockMessage::BlockSyncUpdate(update));
-        let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
-        for peer in targets {
-            self.schedule_background(BackgroundRequest::Post {
-                peer,
-                msg: BlockMessageWire::with_encoded(Arc::clone(&msg), Arc::clone(&encoded)),
-            });
-        }
-    }
-
-    #[allow(clippy::needless_pass_by_value)]
     pub(super) fn broadcast_block_created_for_block_sync(
         &mut self,
         created: super::message::BlockCreated,
@@ -4606,26 +5748,17 @@ impl Actor {
             );
             return;
         }
-        if let Some(hint) = self
+        let created = self
             .subsystems
             .propose
             .proposal_cache
-            .get_hint(height, view)
-            .copied()
-            .filter(|hint| hint.block_hash == block_hash)
-        {
-            let hint_msg = Arc::new(BlockMessage::ProposalHint(hint));
-            let hint_encoded = Arc::new(BlockMessageWire::encode_message(hint_msg.as_ref()));
-            for peer in &targets {
-                self.schedule_background(BackgroundRequest::Post {
-                    peer: peer.clone(),
-                    msg: BlockMessageWire::with_encoded(
-                        Arc::clone(&hint_msg),
-                        Arc::clone(&hint_encoded),
-                    ),
-                });
-            }
-        }
+            .get_proposal(height, view)
+            .and_then(|proposal| {
+                (block_hash == created.block.hash())
+                    .then(|| self.frontier_block_created_from_proposal(&created.block, proposal))
+                    .flatten()
+            })
+            .unwrap_or(created);
         let msg = Arc::new(BlockMessage::BlockCreated(created));
         let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
         for peer in targets {
@@ -4720,9 +5853,12 @@ impl Actor {
         out
     }
 
-    #[allow(dead_code)]
     #[allow(clippy::needless_pass_by_value)]
-    fn broadcast_block_created(&mut self, created: super::message::BlockCreated, peers: &[PeerId]) {
+    pub(super) fn broadcast_block_created(
+        &mut self,
+        created: super::message::BlockCreated,
+        peers: &[PeerId],
+    ) {
         let msg = Arc::new(BlockMessage::BlockCreated(created));
         let encoded = Arc::new(BlockMessageWire::encode_message(msg.as_ref()));
         for peer in peers {
@@ -4749,26 +5885,6 @@ impl Actor {
             .and_then(|height| self.kura.get_block(height));
         if let Some(block) = block_from_kura {
             let block_height = block.header().height().get();
-            let mut update = block_sync_update_with_certified_roster(
-                block.as_ref(),
-                self.state.as_ref(),
-                self.kura.as_ref(),
-                self.config.consensus_mode,
-                &self.roster_validation_cache,
-            );
-            let expected_epoch = qc.epoch;
-            Self::apply_cached_qcs_to_block_sync_update(
-                &mut update,
-                &self.qc_cache,
-                &self.vote_log,
-                block_hash,
-                block_height,
-                qc.view,
-                expected_epoch,
-                self.state.as_ref(),
-                self.config.consensus_mode,
-            );
-            let (consensus_mode, _, _) = self.consensus_context_for_height(block_height);
             debug!(
                 height = block_height,
                 view = qc.view,
@@ -4776,14 +5892,10 @@ impl Actor {
                 targets = topology_peers.len(),
                 "rebroadcasting committed block for highest QC"
             );
-            if self.prepare_block_sync_update_for_broadcast(&mut update, consensus_mode) {
-                self.broadcast_block_sync_update(update, topology_peers);
-            } else {
-                self.broadcast_block_created_for_block_sync(
-                    super::message::BlockCreated::from(block.as_ref()),
-                    topology_peers,
-                );
-            }
+            self.broadcast_block_created_for_block_sync(
+                self.frontier_block_created_for_wire(block.as_ref()),
+                topology_peers,
+            );
             return;
         }
 
@@ -4798,7 +5910,7 @@ impl Actor {
                 return;
             }
             let block_height = pending.block.header().height().get();
-            let created = super::message::BlockCreated::from(&pending.block);
+            let created = self.frontier_block_created_for_wire(&pending.block);
             debug!(
                 height = block_height,
                 view = qc.view,
@@ -4896,15 +6008,24 @@ impl Actor {
             qc.epoch,
             &signature_topology,
         );
+        let mut accepted_votes = self.accepted_votes_for_qc_slot(
+            qc.phase,
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            qc.epoch,
+            &signature_topology,
+        );
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && !signers.is_empty() {
             let (filtered, _groups) = super::qc::select_commit_root_signers(
-                &self.vote_log,
+                &accepted_votes,
                 qc.subject_block_hash,
                 qc.height,
                 qc.view,
                 qc.epoch,
                 &signers,
             );
+            accepted_votes.retain(|signer, _| filtered.contains(signer));
             signers = filtered;
         }
         if signers.is_empty() {
@@ -4974,7 +6095,7 @@ impl Actor {
             return None;
         }
         let aggregate_signature = match super::aggregate_vote_signatures(
-            &self.vote_log,
+            &accepted_votes,
             qc.phase,
             qc.subject_block_hash,
             qc.height,
@@ -5218,24 +6339,43 @@ impl Actor {
         }
     }
 
-    pub(super) fn clean_rbc_sessions_for_block(
+    fn clean_rbc_sessions_for_block_inner(
         &mut self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
+        purge_persisted_sessions: bool,
     ) {
         let chunk_store = if self.ensure_rbc_chunk_store() {
             self.subsystems.da_rbc.rbc.chunk_store.as_ref()
         } else {
             None
         };
+        let telemetry = self.telemetry_handle().cloned();
+        let delivered_payload_fallbacks = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .iter()
+            .filter_map(|(key, session)| {
+                ((*key).0 == block_hash).then_some(*key).and_then(|key| {
+                    self.rbc_session_authoritative_payload_bytes_for_telemetry(key, session)
+                        .map(|bytes| (key, bytes))
+                })
+            })
+            .collect();
         let (lane_totals, dataspace_totals) = super::drain_rbc_state_for_block(
             block_hash,
             &mut self.subsystems.da_rbc.rbc.sessions,
             &mut self.subsystems.da_rbc.rbc.pending,
             &mut self.subsystems.da_rbc.rbc.session_rosters,
             &mut self.subsystems.da_rbc.rbc.session_roster_sources,
+            Some(&mut self.subsystems.da_rbc.rbc.payload_metric_recorded_sessions),
             &self.subsystems.da_rbc.rbc.status_handle,
+            telemetry.as_ref(),
+            Some(&delivered_payload_fallbacks),
             chunk_store,
+            purge_persisted_sessions,
         );
         self.deferred_votes.remove(&block_hash);
         self.deferred_qcs
@@ -5249,7 +6389,36 @@ impl Actor {
             .into_iter()
             .collect();
         for key in orphan_keys {
-            self.purge_rbc_state(key, key.0, key.1, key.2);
+            self.refresh_retained_rbc_summary_from_local_payload(key);
+            // Commit cleanup should retain the final status summary for observability and
+            // restart recovery, while still clearing all runtime-only RBC state. If the live
+            // session has already retired (for example, exact-frontier snapshots), commit means
+            // the retained summary has reached the same delivered terminal state with the
+            // complete deterministic chunk set available from the local block payload.
+            if let Some(mut summary) = self.subsystems.da_rbc.rbc.status_handle.get(&key)
+                && !summary.invalid
+            {
+                let mut changed = false;
+                if self.block_payload_available_for_progress(key.0)
+                    && summary.received_chunks != summary.total_chunks
+                {
+                    summary.received_chunks = summary.total_chunks;
+                    changed = true;
+                }
+                if !summary.delivered {
+                    summary.delivered = true;
+                    changed = true;
+                }
+                if changed {
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .status_handle
+                        .update(summary, SystemTime::now());
+                }
+            }
+            self.maybe_record_rbc_payload_bytes_metric_for_retained_summary(key);
+            self.clear_rbc_runtime_state(key, false);
         }
 
         let telemetry_ref = self.telemetry_handle();
@@ -5274,6 +6443,87 @@ impl Actor {
         self.publish_rbc_backlog_snapshot();
     }
 
+    fn maybe_record_rbc_payload_bytes_metric_for_retained_summary(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+    ) {
+        let Some(summary) = self.subsystems.da_rbc.rbc.status_handle.get(&key) else {
+            return;
+        };
+        if summary.invalid || !summary.delivered {
+            return;
+        }
+        if self
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_metric_recorded_sessions
+            .contains(&key)
+        {
+            return;
+        }
+        let expected_payload_hash = summary.payload_hash;
+        let bytes = self
+            .with_local_payload_for_progress(
+                key.0,
+                |_height, _view, payload_bytes, local_payload_hash| {
+                    expected_payload_hash
+                        .is_none_or(|expected| local_payload_hash == expected)
+                        .then(|| u64::try_from(payload_bytes.len()).unwrap_or(u64::MAX))
+                },
+            )
+            .flatten();
+        if let Some(bytes) = bytes {
+            self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
+        }
+    }
+
+    fn refresh_retained_rbc_summary_from_local_payload(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+    ) {
+        let needs_refresh = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .get(&key)
+            .is_none_or(|summary| {
+                !summary.invalid && summary.received_chunks < summary.total_chunks
+            });
+        if !needs_refresh {
+            return;
+        }
+
+        let Some(block) = self.local_signed_block_for_hash(key.0) else {
+            return;
+        };
+        let payload_bytes = super::proposals::block_payload_bytes(block.as_ref());
+        let payload_hash = Hash::new(&payload_bytes);
+        if let Err(err) = self.persist_exact_frontier_rbc_recovery_snapshot(
+            key,
+            block.as_ref(),
+            payload_bytes.as_slice(),
+            payload_hash,
+        ) {
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                ?err,
+                "failed to refresh retained committed RBC snapshot from local payload"
+            );
+        }
+    }
+
+    pub(super) fn clean_rbc_sessions_for_block(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+    ) {
+        self.clean_rbc_sessions_for_block_inner(block_hash, height, true);
+    }
+
     pub(super) fn should_retain_rbc_sessions_after_commit(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -5293,6 +6543,21 @@ impl Actor {
                     && !session.is_invalid()
                     && !session.delivered
             })
+    }
+
+    pub(super) fn clean_rbc_sessions_for_committed_block_if_settled(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+    ) -> bool {
+        if self.should_retain_rbc_sessions_after_commit(block_hash, height) {
+            return false;
+        }
+
+        // Keep the persisted RBC snapshot after commit so lagging peers and restart recovery
+        // can still hydrate block bodies from disk even after runtime session state is drained.
+        self.clean_rbc_sessions_for_block_inner(block_hash, height, false);
+        true
     }
 
     pub(super) fn refresh_npos_seed(
@@ -5429,6 +6694,7 @@ impl Actor {
         self.refresh_roster_validation_cache();
         self.subsystems.propose.new_view_tracker.prune(height);
         self.prune_proposals_seen_horizon(height);
+        self.slot_tracker.prune_committed(height);
         self.prune_vote_caches_horizon(height);
         self.subsystems.propose.forced_view_after_timeout = self
             .subsystems
@@ -5440,6 +6706,8 @@ impl Actor {
         self.prune_stale_missing_requests_for_committed_height(height, now);
         self.clear_missing_block_recovery_for_height(height, now);
         self.clear_sidecar_mismatch_for_height(height);
+        self.prune_frontier_slot_state();
+        let _ = self.maybe_release_committed_edge_conflict_owner("committed_height_advanced");
         self.prune_missing_block_recovery_state(now);
         self.refresh_p2p_topology();
         if let Some(baseline_roster) = self.recovery_pending_baseline_restore.remove(&height) {
@@ -5487,6 +6755,16 @@ impl Actor {
             .and_then(|nz| self.kura.get_block(nz));
         if let Some(block) = committed_block.as_ref() {
             self.prune_descendants_not_on_tip(height, block.hash());
+            let refreshed =
+                self.refresh_tip_activated_pending_progress(height, block.hash(), Instant::now());
+            if refreshed > 0 {
+                debug!(
+                    height,
+                    block = %block.hash(),
+                    refreshed,
+                    "refreshed pending progress for proposals activated by the new committed tip"
+                );
+            }
             self.note_view_change_from_block(height, block.header().view_change_index());
         }
         if let Some(committed_qc) = self.latest_committed_qc() {
@@ -5796,12 +7074,10 @@ impl Actor {
         };
 
         let mut record_map: BTreeMap<PeerId, PublicLaneValidatorRecord> = BTreeMap::new();
-        for ((_lane_id, validator_id), record) in world.public_lane_validators().iter() {
-            if let Some(pk) = validator_id.try_signatory() {
-                record_map
-                    .entry(PeerId::from(pk.clone()))
-                    .or_insert_with(|| record.clone());
-            }
+        for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
+            record_map
+                .entry(record.peer_id.clone())
+                .or_insert_with(|| record.clone());
         }
 
         let mut share_map: BTreeMap<(LaneId, AccountId), Vec<PublicLaneStakeShare>> =
@@ -5911,11 +7187,15 @@ impl Actor {
         self.subsystems.validation.inflight.clear();
         self.subsystems.validation.superseded_results.clear();
         self.pending.pending_fetch_requests.clear();
+        self.pending.pending_block_body_requests.clear();
         self.pending.missing_block_requests.clear();
+        self.pending.missing_commit_qc_requests.clear();
         self.pending.pending_processing.set(None);
         self.pending.pending_processing_parent.set(None);
         self.vote_log.clear();
+        self.vote_log_identities.clear();
         self.vote_validation_cache.clear();
+        self.vote_validation_cache_identities.clear();
         self.deferred_votes.clear();
         self.consensus_recovery.clear();
         self.recovery_pending_baseline_restore.clear();
@@ -5930,8 +7210,11 @@ impl Actor {
         self.block_signer_cache.clear();
         self.voting_block = None;
         if !preserve_proposals_seen {
-            self.subsystems.propose.proposals_seen.clear();
+            self.slot_tracker.proposals_seen.clear();
         }
+        self.slot_tracker.authoritative_block_slots.clear();
+        self.slot_tracker.authoritative_block_frontiers.clear();
+        self.slot_tracker.retained_branches.clear();
         self.subsystems.propose.proposal_cache =
             ProposalCache::new(self.recovery_pending_proposal_cap());
         self.reset_collector_state();
@@ -5950,9 +7233,11 @@ impl Actor {
             .ready_rebroadcast_last_sent
             .clear();
         self.subsystems.da_rbc.rbc.deliver_deferral.clear();
-        self.subsystems.da_rbc.rbc.persisted_full_sessions.clear();
+        self.subsystems.da_rbc.rbc.persisted_sessions.clear();
         self.subsystems.da_rbc.rbc.persist_inflight.clear();
-        self.subsystems.da_rbc.rbc.status_handle.clear();
+        self.subsystems.da_rbc.rbc.persist_pending_refresh.clear();
+        // Preserve operator-facing RBC summaries across roster resets so sessions recovered from
+        // disk remain observable while the runtime-only consensus state is cleared.
         self.subsystems.da_rbc.da.da_bundles.clear();
         self.subsystems.da_rbc.da.da_pin_bundles.clear();
         self.subsystems.da_rbc.da.sealed_commitments.clear();
@@ -5985,6 +7270,11 @@ impl Actor {
     pub(super) fn refresh_p2p_topology(&mut self) {
         let world = self.state.world_view();
         let current: BTreeSet<_> = world.peers().iter().cloned().collect::<BTreeSet<_>>();
+        drop(world);
+        self.refresh_p2p_topology_with_current(current);
+    }
+
+    fn refresh_p2p_topology_with_current(&mut self, current: BTreeSet<PeerId>) {
         let trusted_peers = self.common_config.trusted_peers.value();
         let expected_topology = p2p_topology_with_trusted(&current, trusted_peers);
 
@@ -6002,13 +7292,11 @@ impl Actor {
                 "local peer removed from world state; disconnecting from p2p"
             );
             self.queue.clear_all();
-            if let Some(advertise) =
-                super::topology_update_for_local_removal(&self.last_advertised_topology)
-            {
-                self.last_advertised_topology.clone_from(&advertise);
-                self.peers_gossiper
-                    .update_topology(UpdateTopology(advertise.into_iter().collect()));
-            }
+            let advertise =
+                super::topology_update_for_local_removal(&self.last_advertised_topology);
+            self.last_advertised_topology.clone_from(&advertise);
+            self.peers_gossiper
+                .update_topology(UpdateTopology(advertise.into_iter().collect()));
             return;
         }
 
@@ -6080,10 +7368,10 @@ impl Actor {
             matches!(backpressure_action, PacemakerBackpressureAction::First);
         let should_fire_now = pacemaker.should_fire(now);
         if deferring {
-            if backpressure.only_queue_saturation() {
+            if backpressure.only_pacing_backpressure() {
                 if should_fire_now {
-                    // Allow proposals to proceed once the pacemaker deadline elapses when queue
-                    // saturation is the only backpressure signal, but keep logging deferral.
+                    // Allow proposals to proceed once the pacemaker deadline elapses when only
+                    // pacing pressure is present; keep logging the deferral.
                     return (log_initial_deferral, true, true);
                 }
                 // Defer proposal assembly under backpressure, but still request a log on the first
@@ -6150,6 +7438,72 @@ mod tests {
     // This suite runs with the default parallel test runner and can be CPU-contended on CI.
     // Use a conservative timeout to avoid flakiness in wake/result channel assertions.
     const COMMIT_WORKER_TIMEOUT: Duration = Duration::from_secs(60);
+
+    struct CommitFixture {
+        genesis_key: KeyPair,
+        genesis_account_id: AccountId,
+        chain_id: ChainId,
+        state: State,
+        kura: Arc<Kura>,
+    }
+
+    fn commit_fixture_with_kura(kura: Arc<Kura>) -> CommitFixture {
+        let genesis_key = KeyPair::random();
+        let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
+        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let world = World::with([genesis_domain], [genesis_account], []);
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
+        let chain_id = state.view().chain_id().clone();
+
+        CommitFixture {
+            genesis_key,
+            genesis_account_id,
+            chain_id,
+            state,
+            kura,
+        }
+    }
+
+    fn genesis_log_block(
+        chain_id: &ChainId,
+        genesis_account_id: &AccountId,
+        genesis_key: &KeyPair,
+        message: &str,
+    ) -> SignedBlock {
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            &time_source,
+        )
+        .with_instructions([Log::new(Level::DEBUG, message.to_owned())])
+        .sign(genesis_key.private_key());
+        SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None)
+    }
+
+    fn single_peer_topology() -> Vec<PeerId> {
+        let peer_key = KeyPair::random();
+        vec![PeerId::new(peer_key.public_key().clone())]
+    }
+
+    fn commit_work(id: u64, block: SignedBlock, topology: Vec<PeerId>) -> CommitWork {
+        let (events_sender, _events_rx) = tokio::sync::broadcast::channel(4);
+        CommitWork {
+            id,
+            block,
+            validated_commit_artifact: None,
+            commit_topology: topology.clone(),
+            signature_topology: topology,
+            consensus_mode: ConsensusMode::Permissioned,
+            qc_signers: None,
+            commit_qc: None,
+            allow_quorum_bypass: false,
+            allow_signature_index_recovery: false,
+            events_sender,
+        }
+    }
 
     fn signers_from_bitmap(signers_bitmap: &[u8], roster_len: usize) -> Vec<usize> {
         let mut signers = Vec::new();
@@ -6226,12 +7580,7 @@ mod tests {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account = Account::new(
-            genesis_account_id
-                .clone()
-                .to_account_id(GENESIS_DOMAIN_ID.clone()),
-        )
-        .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let temp_dir = TempDir::new().expect("create temp dir");
         let kura_cfg = KuraConfig {
@@ -6245,6 +7594,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -6274,13 +7625,14 @@ mod tests {
         let work = CommitWork {
             id: 1,
             block,
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology,
+            consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: true,
             events_sender,
         };
 
@@ -6298,8 +7650,8 @@ mod tests {
         assert!(timings.state_apply_ms.is_some());
         assert!(timings.state_commit_ms.is_some());
         assert!(
-            pipeline_events.is_empty(),
-            "pipeline events should be emitted early"
+            !pipeline_events.is_empty(),
+            "commit worker should defer pipeline events until the main loop applies the result"
         );
 
         let mut got_pipeline_event = false;
@@ -6319,11 +7671,14 @@ mod tests {
                 }
             }
         }
-        assert!(got_pipeline_event, "expected pipeline event emission");
+        assert!(
+            !got_pipeline_event,
+            "commit worker should not emit pipeline events before the main loop unblocks proposals"
+        );
     }
 
     #[test]
-    fn execute_commit_work_records_commit_qc_for_state_apply() {
+    fn execute_commit_work_persists_commit_roster_without_recording_status_history() {
         let _guard = crate::sumeragi::status::commit_history_test_guard();
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
@@ -6331,12 +7686,7 @@ mod tests {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account = Account::new(
-            genesis_account_id
-                .clone()
-                .to_account_id(GENESIS_DOMAIN_ID.clone()),
-        )
-        .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
@@ -6397,13 +7747,14 @@ mod tests {
         let work = CommitWork {
             id: 7,
             block,
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology,
+            consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
-            commit_qc: Some(qc),
+            commit_qc: Some(qc.clone()),
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: true,
             events_sender,
         };
 
@@ -6422,40 +7773,32 @@ mod tests {
             }
         }
         let history = crate::sumeragi::status::commit_qc_history();
-        let commit_cert = history
-            .iter()
-            .find(|qc| {
-                qc.subject_block_hash == block_hash
-                    && qc.height == height
-                    && qc.view == view
-                    && matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
-            })
-            .expect("commit QC should be recorded for the committed block");
-        let view_snapshot = state.view();
-        let committed_topology: Vec<_> = view_snapshot.commit_topology.iter().cloned().collect();
         assert!(
-            !committed_topology.is_empty(),
-            "commit topology should be recorded during apply"
+            history.is_empty(),
+            "commit worker should not record commit QC before the main loop applies the result"
         );
+        let view = state.view();
+        let stored = view.world().commit_qcs().get(&block_hash);
         assert_eq!(
-            commit_cert.validator_set, committed_topology,
-            "commit QC validator set should match committed topology"
+            stored,
+            Some(&qc),
+            "commit worker should persist commit QC into world state for restart recovery"
+        );
+        let snapshot = state.commit_roster_snapshot_for_block(height, block_hash);
+        assert!(
+            snapshot.is_some(),
+            "commit worker should persist commit-roster evidence before the main loop records status history"
         );
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
     }
 
     #[test]
-    fn execute_commit_work_reports_kura_store_failure() {
+    fn execute_commit_work_does_not_advance_state_when_kura_store_fails() {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account = Account::new(
-            genesis_account_id
-                .clone()
-                .to_account_id(GENESIS_DOMAIN_ID.clone()),
-        )
-        .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let temp_dir = TempDir::new().expect("create temp dir");
         let kura_cfg = KuraConfig {
@@ -6469,6 +7812,8 @@ mod tests {
             fsync_interval: FSYNC_INTERVAL,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) =
             Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("initialize kura");
@@ -6494,22 +7839,22 @@ mod tests {
         let work = CommitWork {
             id: 1,
             block,
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology,
+            consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: true,
             events_sender,
         };
 
         let (outcome, timings) =
             execute_commit_work(&state, kura.as_ref(), &chain_id, &genesis_account_id, work);
-        let CommitOutcome::KuraStoreFailed { error, .. } = outcome else {
-            panic!("expected kura store failure");
+        let CommitOutcome::KuraStoreFailed { error: _, .. } = outcome else {
+            panic!("expected Kura store failure");
         };
-        assert!(matches!(error, crate::kura::Error::IO(_, _)));
         assert!(timings.persist_ms.is_some());
         assert!(timings.kura_store_ms.is_some());
         assert!(timings.state_apply_ms.is_none());
@@ -6519,16 +7864,171 @@ mod tests {
     }
 
     #[test]
+    fn execute_commit_work_persists_block_before_exposing_committed_state() {
+        let genesis_key = KeyPair::random();
+        let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
+        let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
+        let world = World::with([genesis_domain], [genesis_account], []);
+        let kura = Arc::new(Kura::blank_kura_for_testing());
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, Arc::clone(&kura), query_handle);
+        let chain_id = state.view().chain_id().clone();
+
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_secs(0));
+        let tx = TransactionBuilder::new_with_time_source(
+            chain_id.clone(),
+            genesis_account_id.clone(),
+            &time_source,
+        )
+        .with_instructions([Log::new(Level::DEBUG, "kura ordering test".to_string())])
+        .sign(genesis_key.private_key());
+        let block = SignedBlock::genesis(vec![tx], genesis_key.private_key(), None, None);
+
+        let peer_key = KeyPair::random();
+        let peer_id = PeerId::new(peer_key.public_key().clone());
+        let topology = vec![peer_id];
+        let (events_sender, _events_rx) = tokio::sync::broadcast::channel(4);
+        let work = CommitWork {
+            id: 2,
+            block,
+            validated_commit_artifact: None,
+            commit_topology: topology.clone(),
+            signature_topology: topology,
+            consensus_mode: ConsensusMode::Permissioned,
+            qc_signers: None,
+            commit_qc: None,
+            allow_quorum_bypass: false,
+            allow_signature_index_recovery: false,
+            events_sender,
+        };
+
+        let (outcome, timings) =
+            execute_commit_work(&state, kura.as_ref(), &chain_id, &genesis_account_id, work);
+        let CommitOutcome::Success {
+            committed_block, ..
+        } = outcome
+        else {
+            panic!("expected commit success");
+        };
+        assert!(timings.kura_store_ms.is_some());
+        assert!(timings.state_apply_ms.is_some());
+        assert!(timings.state_commit_ms.is_some());
+        assert_eq!(state.view().height(), 1);
+        assert_eq!(kura.blocks_count(), 1);
+        let latest = state.view().latest_block().expect("latest committed block");
+        assert_eq!(latest.hash(), committed_block.as_ref().hash());
+    }
+
+    #[test]
+    fn execute_commit_work_accepts_already_durable_block_without_duplicate_append() {
+        let fixture = commit_fixture_with_kura(Kura::blank_kura_for_testing());
+        let block = genesis_log_block(
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            &fixture.genesis_key,
+            "idempotent kura retry",
+        );
+        let block_hash = block.hash();
+        fixture
+            .kura
+            .store_block(block.clone())
+            .expect("pre-store committed block in Kura");
+        let lengths_before = fixture.kura.block_file_lengths_for_tests();
+
+        let (outcome, timings) = execute_commit_work(
+            &fixture.state,
+            fixture.kura.as_ref(),
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            commit_work(3, block, single_peer_topology()),
+        );
+        let CommitOutcome::Success { .. } = outcome else {
+            panic!("expected idempotent commit success");
+        };
+
+        assert!(timings.kura_store_ms.is_some());
+        assert!(timings.state_commit_ms.is_some());
+        assert_eq!(fixture.state.view().height(), 1);
+        assert_eq!(fixture.kura.blocks_count(), 1);
+        assert_eq!(
+            fixture
+                .kura
+                .get_durable_block_hash(std::num::NonZeroUsize::new(1).expect("non-zero height")),
+            Some(block_hash)
+        );
+        let lengths_after = fixture.kura.block_file_lengths_for_tests();
+        assert_eq!(
+            lengths_after, lengths_before,
+            "retrying an already durable block must not append duplicate bytes"
+        );
+    }
+
+    #[test]
+    fn execute_commit_work_rejects_kura_height_conflict_before_state_commit() {
+        let fixture = commit_fixture_with_kura(Kura::blank_kura_for_testing());
+        let stored = genesis_log_block(
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            &fixture.genesis_key,
+            "stored competing genesis",
+        );
+        let candidate = genesis_log_block(
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            &fixture.genesis_key,
+            "candidate genesis",
+        );
+        let stored_hash = stored.hash();
+        let candidate_hash = candidate.hash();
+        assert_ne!(stored_hash, candidate_hash);
+        fixture
+            .kura
+            .store_block(stored)
+            .expect("pre-store conflicting block in Kura");
+
+        let (outcome, timings) = execute_commit_work(
+            &fixture.state,
+            fixture.kura.as_ref(),
+            &fixture.chain_id,
+            &fixture.genesis_account_id,
+            commit_work(4, candidate, single_peer_topology()),
+        );
+        let CommitOutcome::KuraStoreFailed { error, .. } = outcome else {
+            panic!("expected Kura conflict before state commit");
+        };
+
+        assert!(matches!(
+            error,
+            crate::kura::Error::BlockHeightConflict {
+                height: 1,
+                expected,
+                actual,
+            } if expected == stored_hash && actual == candidate_hash
+        ));
+        assert!(timings.kura_store_ms.is_some());
+        assert!(timings.state_apply_ms.is_none());
+        assert!(timings.state_commit_ms.is_none());
+        assert_eq!(
+            fixture.state.view().height(),
+            0,
+            "state must not advance when Kura rejects the canonical height"
+        );
+        assert_eq!(fixture.kura.blocks_count(), 1);
+        assert_eq!(
+            fixture
+                .kura
+                .get_durable_block_hash(std::num::NonZeroUsize::new(1).expect("non-zero height")),
+            Some(stored_hash)
+        );
+    }
+
+    #[test]
     fn commit_worker_wakes_on_result() {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account = Account::new(
-            genesis_account_id
-                .clone()
-                .to_account_id(GENESIS_DOMAIN_ID.clone()),
-        )
-        .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
@@ -6569,13 +8069,14 @@ mod tests {
         let work = CommitWork {
             id: 42,
             block,
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology,
+            consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: false,
             events_sender,
         };
 
@@ -6586,7 +8087,7 @@ mod tests {
             .expect("commit result");
         assert!(result.timings.qc_verify_ms.is_some());
         assert!(result.timings.persist_ms.is_some());
-        assert!(result.timings.kura_store_ms.is_none());
+        assert!(result.timings.kura_store_ms.is_some());
         assert!(result.timings.state_apply_ms.is_some());
         assert!(result.timings.state_commit_ms.is_some());
         wake_rx
@@ -6604,12 +8105,7 @@ mod tests {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account = Account::new(
-            genesis_account_id
-                .clone()
-                .to_account_id(GENESIS_DOMAIN_ID.clone()),
-        )
-        .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
@@ -6651,13 +8147,14 @@ mod tests {
         let work = CommitWork {
             id: 100,
             block: block.clone(),
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology.clone(),
+            consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: false,
             events_sender: events_sender.clone(),
         };
 
@@ -6670,13 +8167,14 @@ mod tests {
         let work = CommitWork {
             id: 101,
             block,
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology,
+            consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: false,
             events_sender,
         };
         handle.work_tx.send(work).expect("send commit work 2");
@@ -6705,12 +8203,7 @@ mod tests {
         let genesis_key = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key.public_key().clone());
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
-        let genesis_account = Account::new(
-            genesis_account_id
-                .clone()
-                .to_account_id(GENESIS_DOMAIN_ID.clone()),
-        )
-        .build(&genesis_account_id);
+        let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
         let world = World::with([genesis_domain], [genesis_account], []);
         let kura = Arc::new(Kura::blank_kura_for_testing());
         let query_handle = LiveQueryStore::start_test();
@@ -6752,13 +8245,14 @@ mod tests {
         let work = CommitWork {
             id: 43,
             block,
+            validated_commit_artifact: None,
             commit_topology: topology.clone(),
             signature_topology: topology,
+            consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
             commit_qc: None,
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
-            persist_required: false,
             events_sender,
         };
 
@@ -6769,7 +8263,7 @@ mod tests {
             .expect("commit result");
         assert!(result.timings.qc_verify_ms.is_some());
         assert!(result.timings.persist_ms.is_some());
-        assert!(result.timings.kura_store_ms.is_none());
+        assert!(result.timings.kura_store_ms.is_some());
         assert!(result.timings.state_apply_ms.is_some());
         assert!(result.timings.state_commit_ms.is_some());
 
@@ -7026,6 +8520,8 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            execution_context_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: view,
             confidential_features: None,
@@ -7077,16 +8573,39 @@ mod tests {
             height: pending.height,
             view: pending.view,
             total_chunks: 0,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
             received_chunks: 0,
             ready_count: 0,
             delivered: true,
             payload_hash: Some(pending.payload_hash),
             recovered_from_disk: false,
             invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };
         handle.update(summary, std::time::SystemTime::now());
+
+        assert!(Actor::payload_available_for_da(
+            &sessions, &handle, &pending
+        ));
+    }
+
+    #[test]
+    fn payload_available_for_da_accepts_complete_rbc_payload_without_delivery() {
+        let block = sample_block(2, 0);
+        let payload = b"authoritative-rbc-payload".to_vec();
+        let payload_hash = Hash::new(&payload);
+        let pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
+        let mut sessions = BTreeMap::new();
+        let handle = rbc_status::Handle::new();
+
+        let session = Actor::build_rbc_session_from_payload(&payload, payload_hash, 1024, 0)
+            .expect("rbc session");
+        sessions.insert((block.hash(), 2, 0), session);
 
         assert!(Actor::payload_available_for_da(
             &sessions, &handle, &pending
@@ -7536,6 +9055,113 @@ mod tests {
         );
 
         assert_eq!(fetched, Some(qc));
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+    }
+
+    #[test]
+    fn apply_cached_qcs_to_block_sync_update_uses_checkpoint_roster_to_recover_history_qc() {
+        let _guard = crate::sumeragi::status::commit_history_test_guard();
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+
+        let chain: ChainId = "apply-cached-qc-history-via-checkpoint"
+            .parse()
+            .expect("chain id parses");
+        let block = sample_block(11, 2);
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let epoch = 0;
+        let signers_bitmap = vec![0b0000_0111];
+        let keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let validator_set: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let aggregate_signature = aggregate_signature_for_bitmap(
+            &chain,
+            super::super::PERMISSIONED_TAG,
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            &signers_bitmap,
+            &keypairs,
+        );
+        let qc = crate::sumeragi::consensus::Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            height,
+            view,
+            epoch,
+            mode_tag: super::super::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: validator_set.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature.clone(),
+            },
+        };
+        crate::sumeragi::status::record_commit_qc(qc.clone());
+
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let (trusted, me_id) = trusted_self();
+        let roster_cache = {
+            let view = state.view();
+            super::RosterValidationCache::from_world(view.world(), super::EPOCH_LENGTH_BLOCKS, None)
+        };
+        let mut update = block_sync_update_with_roster(
+            &block,
+            &state,
+            kura.as_ref(),
+            ConsensusMode::Permissioned,
+            &trusted,
+            &me_id,
+            &roster_cache,
+        );
+        update.commit_qc = None;
+        update.validator_checkpoint = Some(ValidatorSetCheckpoint::new(
+            height,
+            view,
+            block_hash,
+            qc.parent_state_root,
+            qc.post_state_root,
+            validator_set,
+            signers_bitmap,
+            aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        ));
+
+        let qc_cache = BTreeMap::new();
+        let vote_log = BTreeMap::new();
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &qc_cache,
+            &vote_log,
+            block_hash,
+            height,
+            view,
+            epoch,
+            &state,
+            ConsensusMode::Permissioned,
+        );
+
+        assert_eq!(update.commit_qc, Some(qc));
         crate::sumeragi::status::reset_commit_certs_for_tests();
     }
 

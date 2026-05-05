@@ -254,7 +254,7 @@ public final class AndroidKeystoreAttestationHarness {
         return certificates;
       }
     } catch (final CertificateException ex) {
-      // Fall back to single-certificate decoding below.
+      // Decode as a single certificate below.
     }
 
     try (InputStream single = new ByteArrayInputStream(data)) {
@@ -578,7 +578,7 @@ public final class AndroidKeystoreAttestationHarness {
           "                             Bundles named trust_root_bundle_*.zip inside the bundle directory",
           "                             are detected automatically.",
           "  --chain <path>           Explicit attestation chain file (PEM/DER). Overrides bundle.",
-          "  --alias <alias>          Override alias (falls back to alias.txt).",
+          "  --alias <alias>          Override alias (default: alias.txt).",
           "  --challenge-hex <hex>    Verification challenge (hex encoded).",
           "  --challenge-file <path>  File containing hex-encoded challenge.",
           "  --require-strongbox      Enforce StrongBox attestation.",

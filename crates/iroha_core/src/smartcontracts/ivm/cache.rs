@@ -322,22 +322,11 @@ mod tests {
 
     /// Assemble a minimal program containing only a HALT instruction.
     fn minimal_program() -> Vec<u8> {
-        fn assemble(code: &[u8]) -> Vec<u8> {
-            let mut v = Vec::new();
-            v.extend_from_slice(b"IVM\0");
-            v.push(1); // version major
-            v.push(0); // version minor
-            v.push(0); // mode flags
-            v.push(4); // default vector length
-            v.extend_from_slice(&0u64.to_le_bytes()); // max_cycles = 0 (unspecified)
-            v.push(0); // abi_version
-            v.extend_from_slice(code);
-            v
-        }
-
+        let mut program = ivm::ProgramMetadata::default().encode();
         let mut code = Vec::new();
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        assemble(&code)
+        program.extend_from_slice(&code);
+        program
     }
 
     #[test]

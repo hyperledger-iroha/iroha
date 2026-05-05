@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a91fc8841580a836c80129942df7f79f5bc5dd5f6a72dccf1394b740d02536a5
-source_last_modified: "2025-11-23T15:30:33.687233+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 4d7cdc798ae9f1b69608c2b287a76a06a3d8d51116185ff6a5326e755b7b05bd
+source_last_modified: "2026-04-08T09:19:38.794575+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -20,9 +20,9 @@ Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_ass
 
 ## Roteiro do livro razao
 
-- Financie a autoridade do contrato (por exemplo `i105...`) com o ativo que ela transferira e conceda a autoridade o papel `CanTransfer` ou permissao equivalente.
-- Chame o entrypoint `call_transfer_asset` para transferir 5 unidades da conta do contrato para `i105...`, refletindo como a automacao on-chain pode envolver chamadas do host.
-- Verifique saldos via `FindAccountAssets` ou `iroha_cli ledger assets list --account i105...` e inspecione eventos para confirmar que o guard de metadados registrou o contexto da transferencia.
+- Financie a autoridade do contrato (por exemplo `<i105-account-id>`) com o ativo que ela transferira e conceda a autoridade o papel `CanTransfer` ou permissao equivalente.
+- Chame o entrypoint `call_transfer_asset` para transferir 5 unidades da conta do contrato para `<i105-account-id>`, refletindo como a automacao on-chain pode envolver chamadas do host.
+- Verifique saldos via `FindAccountAssets` ou `iroha ledger asset list all --verbose` e inspecione eventos para confirmar que o guard de metadados registrou o contexto da transferencia.
 
 ## Guias de SDK relacionados
 
@@ -37,9 +37,9 @@ Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_ass
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
-      asset_definition!("rose#wonderland"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
   }

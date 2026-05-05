@@ -1,12 +1,14 @@
+<!-- Auto-generated stub for Uzbek (uz) translation. Replace this content with the full translation. -->
+
 ---
 lang: uz
 direction: ltr
 source: docs/source/isi_extension_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
-source_last_modified: "2025-12-29T18:16:35.969398+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 9648381ac7cc1716ffd3c48aca425ed17a6afe1ac73bdeff866ebbbd9147cf68
+source_last_modified: "2026-03-30T18:22:55.972718+00:00"
+translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---
 
@@ -34,17 +36,15 @@ birinchi navbatda xavfsizlik va ishlash xavfi, ikkinchidan UX o'tkazish qobiliya
 - Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` ta'sirlangan `AssetId` bilan.
 - Mavjud aktiv meta-ma'lumotlarini tahrirlash bilan bir xil ruxsat tokenlarini talab qiling (ta'rif egasi OR
   `CanModifyAssetMetadata` uslubidagi grantlar).
-- Agar aktiv yozuvi yo'q bo'lsa, to'xtating (so'zsiz yaratilmaydi).
-
-### RotateAccount Signatory
+- Agar aktiv yozuvi yo'q bo'lsa, to'xtating (so'zsiz yaratilmaydi).### RotateAccount Signatory
 - `AccountId` da imzolovchining atom almashinuvi, shu bilan birga hisob meta-ma'lumotlari va bog'langan
   resurslar (aktivlar, triggerlar, rollar, ruxsatlar, kutilayotgan voqealar).
 - Joriy imzo qo'ygan shaxs qo'ng'iroq qiluvchiga (yoki aniq token orqali berilgan vakolatga) mos kelishini tekshiring.
-- Agar yangi ochiq kalit bir xil domendagi boshqa hisob qaydnomasini qo'llab-quvvatlasa, rad qiling.
+- Agar yangi ochiq kalit boshqa kanonik hisobni qo'llab-quvvatlasa, rad eting.
 - Qabul qilishdan oldin hisob identifikatorini o'rnatadigan va keshlarni bekor qiladigan barcha kanonik kalitlarni yangilang.
 - Audit izlari uchun eski/yangi kalitlarga ega maxsus `AccountEvent::SignatoryRotated` chiqaring.
-- Migratsiya iskala: `AccountLabel` + `AccountRekeyRecord` (qarang: `account::rekey`) shuning uchun
-  mavjud hisoblarni xesh tanaffuslarsiz yangilash paytida barqaror teglar bilan taqqoslash mumkin.
+- Migratsiya iskala: `AccountAlias` + `AccountRekeyRecord` ga tayaning (qarang: `account::rekey`)
+  mavjud hisoblar xesh tanaffuslarsiz yangilanish paytida barqaror taxallus bog'lashlarini saqlab qolishi mumkin.
 
 ### Shartnoma misolini o'chirish
 - `(namespace, contract_id)` bog'lanishini olib tashlang yoki qabr toshini toshga qo'ying, shu bilan birga kelib chiqish ma'lumotlarini saqlang
@@ -66,20 +66,18 @@ birinchi navbatda xavfsizlik va ishlash xavfi, ikkinchidan UX o'tkazish qobiliya
   effektlar.
 - Kirish vektorlari aniq tartiblangan bo'lishi kerak (to'liq tartiblash yo'q) va konfiguratsiya bilan chegaralangan bo'lishi kerak
   (`max_batch_isi_items`).
-- Har bir ob'ekt bo'yicha aktiv hodisalarini emissiya qilish, shuning uchun quyi oqim buxgalteriya hisobi izchil bo'lib qoladi; ommaviy kontekst qo'shimcha hisoblanadi,
+- Har bir ob'ekt bo'yicha aktiv hodisalarini emissiya qilish, shuning uchun quyi oqim buxgalteriya hisobi izchil bo'lib qoladi; to'plam konteksti qo'shimcha,
   almashtirish emas.
 - Ruxsat tekshiruvlari har bir maqsad uchun mavjud bitta elementli mantiqni qayta ishlatadi (aktiv egasi, ta'rif egasi,
   yoki berilgan qobiliyat) holat mutatsiyasidan oldin.
 - Maslahat kirish to'plamlari optimistik parallellikni to'g'ri saqlash uchun barcha o'qish/yozish kalitlarini birlashtirishi kerak.
 
-## Amalga oshirish iskala
-
-- Ma'lumotlar modeli endi balans metama'lumotlari uchun `SetAssetKeyValue` / `RemoveAssetKeyValue` skafoldlarini olib yuradi
+## Amalga oshirish iskala- Ma'lumotlar modeli endi balans metama'lumotlari uchun `SetAssetKeyValue` / `RemoveAssetKeyValue` skafoldlarini olib yuradi
   tahrirlar (`transparent.rs`).
 - Ijrochi tashrif buyuruvchilar simli erlarni mezbonlik qilgandan so'ng ruxsatnomalarni o'tkazadigan joy egalarini ko'rsatadi
   (`default/mod.rs`).
 - Rekey prototip turlari (`account::rekey`) aylanma migratsiya uchun qo'nish zonasini ta'minlaydi.
-- Jahon holati `AccountLabel` tomonidan kalitlangan `account_rekey_records` ni o'z ichiga oladi, shuning uchun biz yorliqni joylashtirishimiz mumkin →
+- Dunyo holati `AccountAlias` tomonidan kalitlangan `account_rekey_records` ni o'z ichiga oladi, shuning uchun biz taxallusni sahnalashtira olamiz →
   tarixiy `AccountId` kodlashiga tegmasdan imzolangan migratsiya.
 
 ## IVM Syscall loyihasini tuzish
@@ -90,7 +88,7 @@ birinchi navbatda xavfsizlik va ishlash xavfi, ikkinchidan UX o'tkazish qobiliya
   kanonik ISI tuzilmalari.
 - `abi_syscall_list()` ni faqat xost ishlovchilari `iroha_core` ijro yoʻllarini aks ettirgandan soʻng kengaytiring.
   Rivojlanish jarayonida ABI xeshlari barqaror.
-- Kotodama ni yangilang, tizim qo'ng'irog'i raqamlari barqarorlashgandan keyin pasaytirish; kengaytirilgan uchun oltin qoplama qo'shing
+- Kotodama ni yangilang, tizim qo'ng'irog'i raqamlari barqarorlashgandan so'ng pasaytirish; kengaytirilgan uchun oltin qoplama qo'shing
   bir vaqtning o'zida sirt.
 
 ## Holat

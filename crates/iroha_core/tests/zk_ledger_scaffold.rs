@@ -90,15 +90,15 @@ fn register_zk_asset_writes_policy_metadata() {
     let mut stx = block.transaction();
 
     // Setup: domain and asset def
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "zcoin".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
@@ -182,15 +182,15 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "desk".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
@@ -271,15 +271,15 @@ fn schedule_confidential_policy_transition_records_pending() {
     let mut stx = block.transaction();
 
     // Setup base entities.
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "schedule".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
@@ -387,15 +387,15 @@ fn confidential_policy_transition_applies_at_effective_height() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "transition".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
@@ -513,15 +513,15 @@ fn cancel_confidential_policy_transition_clears_pending() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "cancel".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
@@ -632,16 +632,16 @@ fn transfer_rejects_when_nullifiers_exceed_cap() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "capcoin".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
 
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
@@ -694,6 +694,66 @@ fn transfer_rejects_when_nullifiers_exceed_cap() {
 }
 
 #[test]
+fn transfer_rejects_repeated_nullifier_in_same_instruction() {
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
+    let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        DomainId::try_new("zkd", "universal").unwrap(),
+        "dupnf".parse().unwrap(),
+    );
+    let (owner, _owner_key) = gen_account_in("zkd");
+
+    let domain = Domain::new(domain_id.clone()).build(&owner);
+    let account = iroha_data_model::account::Account::new(owner.clone()).build(&owner);
+    let asset_def =
+        AssetDefinition::numeric(asset_def_id.clone()).with_name(asset_def_id.name().to_string());
+    let world = World::with_assets([domain], [account], [asset_def.build(&owner)], [], []);
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = State::new_for_testing(world, kura, query);
+
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(
+        asset_def_id.clone(),
+        iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+        true,
+        true,
+        None,
+        None,
+        None,
+    );
+    stx.world
+        .executor()
+        .clone()
+        .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
+        .expect("register zk asset");
+
+    let transfer = iroha_data_model::isi::zk::ZkTransfer::new(
+        asset_def_id.clone(),
+        vec![[7u8; 32], [7u8; 32]],
+        vec![[9u8; 32]],
+        native_ipa_attachment(),
+        None,
+    );
+    let err = stx
+        .world
+        .executor()
+        .clone()
+        .execute_instruction(&mut stx, &owner, InstructionBox::from(transfer))
+        .expect_err("transfer should reject repeated nullifier");
+    match err {
+        iroha_data_model::ValidationFail::InstructionFailed(
+            InstructionExecutionError::InvariantViolation(msg),
+        ) => {
+            assert!(msg.contains("duplicate nullifier"));
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
 fn shield_rejected_when_policy_disallows() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -710,15 +770,15 @@ fn shield_rejected_when_policy_disallows() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "denyshield".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
@@ -794,15 +854,15 @@ fn unshield_rejected_when_policy_disallows() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "denyunshield".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
@@ -878,15 +938,15 @@ fn zk_transfer_rejected_when_policy_transparent() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "ztrans".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
@@ -1015,9 +1075,9 @@ fn shield_burns_and_unshield_mints() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "zcoin".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
@@ -1025,7 +1085,7 @@ fn shield_burns_and_unshield_mints() {
     // Setup: register domain/account/asset and mint
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
@@ -1244,15 +1304,15 @@ fn zk_roots_are_bounded_in_world_state() {
     let mut stx = block.transaction();
 
     // Setup domain/account/asset and mint
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "zcoin".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
     for instr in [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
@@ -1397,9 +1457,9 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         },
     });
 
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "zcoin".parse().unwrap(),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
@@ -1412,7 +1472,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         let mut stx = block.transaction();
         for instr in [
             Register::domain(Domain::new(domain_id.clone())).into(),
-            Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone())).into(),
+            Register::account(NewAccount::new(owner.clone())).into(),
             Register::asset_definition(
                 AssetDefinition::numeric(asset_def_id.clone())
                     .with_name(asset_def_id.name().to_string()),

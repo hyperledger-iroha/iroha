@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
 use iroha_core::{
@@ -13,7 +14,11 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::peer::PeerId;
-use iroha_data_model::{Registrable, account::Account, domain::Domain};
+use iroha_data_model::{
+    Registrable,
+    account::Account,
+    domain::{Domain, DomainId},
+};
 #[cfg(feature = "telemetry")]
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::ALICE_ID;
@@ -33,9 +38,10 @@ async fn account_query_subrouter_exposes_endpoints() {
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let account_id = ALICE_ID.clone();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone().to_account_id(domain_id)).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let mut world = World::with([domain], [account], []);
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
@@ -108,6 +114,7 @@ async fn account_query_subrouter_exposes_endpoints() {
         .oneshot(
             Request::builder()
                 .uri(format!("/v1/accounts/{account_segment}/assets"))
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -126,6 +133,7 @@ async fn account_query_subrouter_exposes_endpoints() {
                 .method("POST")
                 .uri(format!("/v1/accounts/{account_segment}/assets/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),
         )
@@ -144,6 +152,7 @@ async fn account_query_subrouter_exposes_endpoints() {
                 .method("POST")
                 .uri(format!("/v1/accounts/{account_segment}/transactions/query"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),
         )
@@ -162,6 +171,7 @@ async fn account_query_subrouter_exposes_endpoints() {
                 .uri(format!(
                     "/v1/accounts/{account_segment}/permissions?limit=10"
                 ))
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

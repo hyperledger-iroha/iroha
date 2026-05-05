@@ -103,16 +103,10 @@ mod mochi;
 mod nexus;
 mod nexus_lane_maintenance;
 mod norito_rpc;
-mod offline_bundle;
-mod offline_pos_provision;
-mod offline_pos_verify;
-mod offline_poseidon;
-mod offline_provision;
-mod offline_tooling;
-mod offline_topup;
 mod poseidon_bench;
 mod sm;
 mod sns;
+mod soracloud_inrou;
 mod soradns;
 mod sorafs;
 mod soranet;
@@ -139,16 +133,9 @@ mod stage1_bench;
 mod streaming_bench;
 mod taikai;
 mod taikai_anchor;
-use crate::{
-    norito_rpc::{
-        FixtureOptions as NoritoRpcFixtureOptions, generate_fixtures as run_norito_rpc_fixtures,
-        run_verify,
-    },
-    offline_bundle::OfflineBundleOptions,
-    offline_pos_provision::OfflinePosProvisionOptions,
-    offline_pos_verify::OfflinePosVerifyOptions,
-    offline_provision::OfflineProvisionOptions,
-    offline_topup::{OfflineTopupOptions, RegisterMode, RegisterOptions},
+use crate::norito_rpc::{
+    FixtureOptions as NoritoRpcFixtureOptions, generate_fixtures as run_norito_rpc_fixtures,
+    run_verify,
 };
 
 fn main() {
@@ -257,6 +244,9 @@ enum CommandKind {
     },
     SorafsGatewayProbe {
         options: Box<sorafs::GatewayProbeOptions>,
+    },
+    SoracloudInrouSmoke {
+        mode: soracloud_inrou::CommandMode,
     },
     SorafsGatewayCli {
         command: Box<sorafs::GatewayCliCommand>,
@@ -393,6 +383,7 @@ enum CommandKind {
     },
     SoradnsHosts {
         names: Vec<String>,
+        pretty_suffix: String,
         json: Option<JsonTarget>,
         verify: Vec<PathBuf>,
     },
@@ -513,12 +504,6 @@ enum CommandKind {
     NoritoRpcFixtures {
         options: NoritoRpcFixtureOptions,
     },
-    OfflinePosProvision(OfflinePosProvisionOptions),
-    OfflinePosVerify(OfflinePosVerifyOptions),
-    OfflineProvision(OfflineProvisionOptions),
-    OfflineTopup(OfflineTopupOptions),
-    OfflineBundle(OfflineBundleOptions),
-    OfflinePoseidonFixtures(offline_poseidon::OfflinePoseidonFixtureOptions),
     AccelerationState {
         format: AccelerationOutputFormat,
     },
@@ -1340,6 +1325,9 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         CommandKind::SorafsGatewayProbe { options } => {
             sorafs::run_gateway_probe(*options)?;
         }
+        CommandKind::SoracloudInrouSmoke { mode } => {
+            soracloud_inrou::run(mode)?;
+        }
         CommandKind::SorafsGatewayCli { command } => {
             sorafs::run_gateway_cli(*command)?;
         }
@@ -1693,10 +1681,12 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         }
         CommandKind::SoradnsHosts {
             names,
+            pretty_suffix,
             json,
             verify,
         } => {
-            let summaries = soradns::derive_host_summaries(&names)?;
+            let summaries =
+                soradns::derive_host_summaries_with_pretty_suffix(&names, &pretty_suffix)?;
             if let Some(target) = json {
                 let mut rendered = serde_json::to_string_pretty(&summaries)?;
                 rendered.push('\n');
@@ -1937,24 +1927,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         CommandKind::MinistryJury(command) => {
             ministry_jury::run(command)?;
         }
-        CommandKind::OfflinePosProvision(options) => {
-            offline_pos_provision::run(options)?;
-        }
-        CommandKind::OfflinePosVerify(options) => {
-            offline_pos_verify::run(options)?;
-        }
-        CommandKind::OfflineProvision(options) => {
-            offline_provision::run(options)?;
-        }
-        CommandKind::OfflineTopup(options) => {
-            offline_topup::run(options)?;
-        }
-        CommandKind::OfflineBundle(options) => {
-            offline_bundle::run(options)?;
-        }
-        CommandKind::OfflinePoseidonFixtures(options) => {
-            offline_poseidon::generate(options)?;
-        }
         CommandKind::Help => {
             print_usage();
         }
@@ -1975,317 +1947,52 @@ where
 
     match cmd.as_str() {
         "-h" | "--help" => Ok(CommandKind::Help),
-        "offline-pos-provision" => {
-            let mut spec_path: Option<PathBuf> = None;
-            let mut output_root: Option<PathBuf> = None;
-            let mut operator_key: Option<String> = None;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--spec" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --spec".into());
-                        };
-                        spec_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--output" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --output".into());
-                        };
-                        output_root = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--operator-key" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --operator-key".into());
-                        };
-                        operator_key = Some(value);
-                    }
-                    flag => {
-                        return Err(
-                            format!("unknown flag for offline-pos-provision: {flag}").into()
-                        );
-                    }
-                }
-            }
-            let spec_path = spec_path
-                .ok_or_else(|| "offline-pos-provision requires --spec <path>".to_string())?;
-            let output_root = output_root
-                .map(Ok)
-                .unwrap_or_else(|| normalize_path(Path::new("artifacts/offline_pos_provision")))?;
-            Ok(CommandKind::OfflinePosProvision(
-                OfflinePosProvisionOptions {
-                    spec_path,
-                    output_root,
-                    operator_key_override: operator_key,
-                },
-            ))
-        }
-        "offline-provision" => {
-            let mut spec_path: Option<PathBuf> = None;
-            let mut output_root: Option<PathBuf> = None;
-            let mut inspector_key: Option<String> = None;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--spec" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --spec".into());
-                        };
-                        spec_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--output" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --output".into());
-                        };
-                        output_root = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--inspector-key" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --inspector-key".into());
-                        };
-                        inspector_key = Some(value);
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for offline-provision: {flag}").into());
-                    }
-                }
-            }
-            let spec_path =
-                spec_path.ok_or_else(|| "offline-provision requires --spec <path>".to_string())?;
-            let output_root = output_root
-                .map(Ok)
-                .unwrap_or_else(|| normalize_path(Path::new("artifacts/offline_provision")))?;
-            Ok(CommandKind::OfflineProvision(OfflineProvisionOptions {
-                spec_path,
-                output_root,
-                inspector_key_override: inspector_key,
-            }))
-        }
-        "offline-pos-verify" => {
-            let mut bundle_path: Option<PathBuf> = None;
-            let mut manifest_path: Option<PathBuf> = None;
-            let mut allowance_summaries: Vec<PathBuf> = Vec::new();
-            let mut policy_path: Option<PathBuf> = None;
-            let mut audit_log_path: Option<PathBuf> = None;
-            let mut api_snapshot: Option<PathBuf> = None;
-            let mut now_ms_override: Option<u64> = None;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--bundle" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --bundle".into());
-                        };
-                        bundle_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--manifest" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --manifest".into());
-                        };
-                        manifest_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--allowance-summary" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --allowance-summary".into());
-                        };
-                        allowance_summaries.push(normalize_path(Path::new(&path))?);
-                    }
-                    "--policy" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --policy".into());
-                        };
-                        policy_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--audit-log" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --audit-log".into());
-                        };
-                        audit_log_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--api-snapshot" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --api-snapshot".into());
-                        };
-                        api_snapshot = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--now-ms" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --now-ms".into());
-                        };
-                        let parsed = value.parse::<u64>().map_err(|err| {
-                            format!("invalid value for --now-ms `{value}`: {err}")
-                        })?;
-                        now_ms_override = Some(parsed);
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for offline-pos-verify: {flag}").into());
-                    }
-                }
-            }
-            if bundle_path.is_none() && manifest_path.is_none() && allowance_summaries.is_empty() {
+        "soracloud-inrou-smoke" => {
+            let Some(mode) = args.next() else {
                 return Err(
-                    "offline-pos-verify requires --bundle, --manifest, or --allowance-summary"
+                    "soracloud-inrou-smoke requires a mode (portable|firecracker|mixed-host)"
                         .into(),
                 );
-            }
-            if bundle_path.is_none() && api_snapshot.is_some() {
-                return Err("--api-snapshot requires --bundle".into());
-            }
-            Ok(CommandKind::OfflinePosVerify(OfflinePosVerifyOptions {
-                bundle_json: bundle_path,
-                manifest_json: manifest_path,
-                allowance_summaries,
-                policy_path,
-                audit_log_path,
-                api_snapshot_path: api_snapshot,
-                now_ms_override,
-            }))
-        }
-        "offline-topup" => {
-            let mut spec_path: Option<PathBuf> = None;
-            let mut output_root: Option<PathBuf> = None;
-            let mut operator_key: Option<String> = None;
-            let mut register_config: Option<PathBuf> = None;
-            let mut register_mode = RegisterMode::Blocking;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--spec" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --spec".into());
-                        };
-                        spec_path = Some(normalize_path(Path::new(&path))?);
+            };
+            match mode.as_str() {
+                "portable" => Ok(CommandKind::SoracloudInrouSmoke {
+                    mode: soracloud_inrou::CommandMode::Portable,
+                }),
+                "firecracker" => Ok(CommandKind::SoracloudInrouSmoke {
+                    mode: soracloud_inrou::CommandMode::Firecracker,
+                }),
+                "mixed-host" => {
+                    let mut inventory: Option<PathBuf> = None;
+                    let mut pending = args.peekable();
+                    while let Some(arg) = pending.next() {
+                        match arg.as_str() {
+                            "--inventory" => {
+                                let Some(path) = pending.next() else {
+                                    return Err("expected path after --inventory".into());
+                                };
+                                inventory = Some(normalize_path(Path::new(&path))?);
+                            }
+                            flag => {
+                                return Err(
+                                    format!("unknown flag for soracloud-inrou-smoke mixed-host: {flag}")
+                                        .into(),
+                                );
+                            }
+                        }
                     }
-                    "--output" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --output".into());
-                        };
-                        output_root = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--operator-key" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --operator-key".into());
-                        };
-                        operator_key = Some(value);
-                    }
-                    "--register-config" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --register-config".into());
-                        };
-                        register_config = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--register-mode" => {
-                        let Some(mode) = pending.next() else {
-                            return Err("expected mode after --register-mode".into());
-                        };
-                        register_mode =
-                            match mode.as_str() {
-                                "blocking" => RegisterMode::Blocking,
-                                "immediate" => RegisterMode::Immediate,
-                                other => return Err(format!(
-                                    "register mode must be `blocking` or `immediate` (got {other})"
-                                )
-                                .into()),
-                            };
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for offline-topup: {flag}").into());
-                    }
+                    let inventory = inventory.ok_or_else(|| {
+                        "soracloud-inrou-smoke mixed-host requires --inventory <path>"
+                            .to_string()
+                    })?;
+                    Ok(CommandKind::SoracloudInrouSmoke {
+                        mode: soracloud_inrou::CommandMode::MixedHost { inventory },
+                    })
                 }
+                other => Err(format!(
+                    "unknown soracloud-inrou-smoke mode `{other}` (expected portable|firecracker|mixed-host)"
+                )
+                .into()),
             }
-            let spec_path =
-                spec_path.ok_or_else(|| "offline-topup requires --spec <path>".to_string())?;
-            let output_root = output_root
-                .map(Ok)
-                .unwrap_or_else(|| normalize_path(Path::new("artifacts/offline_topup")))?;
-            let register = register_config.map(|config_path| RegisterOptions {
-                config_path,
-                mode: register_mode,
-            });
-            Ok(CommandKind::OfflineTopup(OfflineTopupOptions {
-                spec_path,
-                output_root,
-                operator_key_override: operator_key,
-                register,
-            }))
-        }
-        "offline-bundle" => {
-            let mut spec_path: Option<PathBuf> = None;
-            let mut output_root: Option<PathBuf> = None;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--spec" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --spec".into());
-                        };
-                        spec_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--output" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --output".into());
-                        };
-                        output_root = Some(normalize_path(Path::new(&path))?);
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for offline-bundle: {flag}").into());
-                    }
-                }
-            }
-            let spec_path =
-                spec_path.ok_or_else(|| "offline-bundle requires --spec <path>".to_string())?;
-            let output_root = output_root
-                .map(Ok)
-                .unwrap_or_else(|| normalize_path(Path::new("artifacts/offline_bundle")))?;
-            Ok(CommandKind::OfflineBundle(OfflineBundleOptions {
-                spec_path,
-                output_root,
-            }))
-        }
-        "offline-poseidon-fixtures" => {
-            let mut constants_path: Option<PathBuf> = None;
-            let mut vectors_path: Option<PathBuf> = None;
-            let mut domain_tag: Option<String> = None;
-            let mut mirror_sdk = true;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--constants" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --constants".into());
-                        };
-                        constants_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--vectors" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --vectors".into());
-                        };
-                        vectors_path = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--tag" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --tag".into());
-                        };
-                        domain_tag = Some(value);
-                    }
-                    "--no-sdk-mirror" => {
-                        mirror_sdk = false;
-                    }
-                    flag => {
-                        return Err(
-                            format!("unknown flag for offline-poseidon-fixtures: {flag}").into(),
-                        );
-                    }
-                }
-            }
-            Ok(CommandKind::OfflinePoseidonFixtures(
-                offline_poseidon::OfflinePoseidonFixtureOptions::new(
-                    constants_path,
-                    vectors_path,
-                    domain_tag,
-                    mirror_sdk,
-                ),
-            ))
         }
         "openapi" => {
             let mut outputs = Vec::new();
@@ -5543,10 +5250,9 @@ where
             let mut catalog_path: Option<PathBuf> = None;
             let mut guardrails_path: Option<PathBuf> = None;
             let mut output_dir: Option<PathBuf> = None;
-            let mut payer = "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string();
-            let mut treasury =
-                "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string();
-            let mut asset = "xor#wonderland".to_string();
+            let mut payer = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_string();
+            let mut treasury = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_string();
+            let mut asset = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
             let mut allow_hard_cap = false;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
@@ -6279,6 +5985,7 @@ where
                 matrix_manifest,
                 label_max_operation_ms: BTreeMap::new(),
                 label_min_operation_speedup: BTreeMap::new(),
+                label_operation_filters: BTreeMap::new(),
             };
             if options.benches.is_empty() {
                 return Err(
@@ -6421,6 +6128,20 @@ where
                             .parse::<usize>()
                             .map_err(|err| format!("invalid --columns `{value}`: {err}"))?;
                     }
+                    "--operation" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --operation".into());
+                        };
+                        options.operation = if value.eq_ignore_ascii_case("all") {
+                            None
+                        } else {
+                            Some(fastpq::StageKind::from_str(&value).ok_or_else(|| {
+                                format!(
+                                    "invalid --operation `{value}`: expected fft, ifft, lde, poseidon_hash_columns, poseidon, poseidon-hash, or all"
+                                )
+                            })?)
+                        };
+                    }
                     "-o" | "--out" | "--output" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --output".into());
@@ -6523,7 +6244,11 @@ where
                     }
                 }
             }
-            if output_overridden && !raw_overridden {
+            if !output_overridden {
+                options.output =
+                    fastpq::default_cuda_bench_output_path_for_operation(options.operation);
+            }
+            if !raw_overridden {
                 options.raw_output = fastpq::default_cuda_raw_output(&options.output);
             }
             Ok(CommandKind::FastpqCudaSuite {
@@ -6619,6 +6344,7 @@ where
         }
         "soradns-hosts" => {
             let mut names = Vec::new();
+            let mut pretty_suffix = soradns::default_pretty_gateway_suffix();
             let mut json_out: Option<JsonTarget> = None;
             let mut verify_paths: Vec<PathBuf> = Vec::new();
             let mut pending = args.peekable();
@@ -6633,6 +6359,16 @@ where
                             return Err("--name requires a non-empty value".into());
                         }
                         names.push(trimmed.to_string());
+                    }
+                    "--pretty-suffix" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --pretty-suffix".into());
+                        };
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            return Err("--pretty-suffix requires a non-empty value".into());
+                        }
+                        pretty_suffix = trimmed.to_string();
                     }
                     "--json-out" => {
                         let Some(path) = pending.next() else {
@@ -6660,6 +6396,7 @@ where
             }
             Ok(CommandKind::SoradnsHosts {
                 names,
+                pretty_suffix,
                 json: json_out,
                 verify: verify_paths,
             })
@@ -6799,6 +6536,7 @@ where
             let mut hsts_template: Option<String> = None;
             let mut permissions_template: Option<String> = None;
             let mut telemetry_labels: Vec<String> = Vec::new();
+            let mut pretty_suffix = soradns::default_pretty_gateway_suffix();
             let mut json_out: Option<JsonTarget> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
@@ -6892,6 +6630,16 @@ where
                             telemetry_labels.push(trimmed.to_string());
                         }
                     }
+                    "--pretty-suffix" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --pretty-suffix".into());
+                        };
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            return Err("--pretty-suffix requires a non-empty value".into());
+                        }
+                        pretty_suffix = trimmed.to_string();
+                    }
                     "--json-out" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --json-out".into());
@@ -6970,6 +6718,7 @@ where
             let default_valid_from = unix_timestamp_now()?;
             let options = soradns::GarTemplateOptions {
                 name,
+                pretty_suffix,
                 manifest_cid,
                 manifest_digest: resolved_manifest_digest,
                 csp_template,
@@ -6989,6 +6738,7 @@ where
             let mut directory_url: Option<String> = None;
             let mut include_pretty = true;
             let mut include_canonical_wildcard = true;
+            let mut pretty_suffix = soradns::default_pretty_gateway_suffix();
             let mut generated_at: Option<OffsetDateTime> = None;
             let mut json_out: Option<JsonTarget> = None;
             let mut pending = args.peekable();
@@ -7005,6 +6755,16 @@ where
                             return Err("expected value after --directory-url".into());
                         };
                         directory_url = Some(value);
+                    }
+                    "--pretty-suffix" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --pretty-suffix".into());
+                        };
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            return Err("--pretty-suffix requires a non-empty value".into());
+                        }
+                        pretty_suffix = trimmed.to_string();
                     }
                     "--json-out" => {
                         let Some(path) = pending.next() else {
@@ -7043,6 +6803,7 @@ where
                     .unwrap_or_else(|| soradns::DEFAULT_ACME_DIRECTORY_URL.to_string()),
                 include_canonical_wildcard,
                 include_pretty_hosts: include_pretty,
+                pretty_suffix,
                 generated_at: generated_at.unwrap_or_else(OffsetDateTime::now_utc),
             };
             Ok(CommandKind::SoradnsAcmePlan {
@@ -7053,6 +6814,7 @@ where
         "soradns-cache-plan" => {
             let mut names: Vec<String> = Vec::new();
             let mut include_pretty_hosts = true;
+            let mut pretty_suffix = soradns::default_pretty_gateway_suffix();
             let mut paths: Vec<String> = Vec::new();
             let mut http_method: Option<String> = None;
             let mut auth_header: Option<String> = None;
@@ -7101,6 +6863,16 @@ where
                         generated_at = Some(parsed);
                     }
                     "--no-pretty" => include_pretty_hosts = false,
+                    "--pretty-suffix" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --pretty-suffix".into());
+                        };
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            return Err("--pretty-suffix requires a non-empty value".into());
+                        }
+                        pretty_suffix = trimmed.to_string();
+                    }
                     "--json-out" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --json-out".into());
@@ -7122,6 +6894,7 @@ where
             let options = soradns::CacheInvalidationPlanOptions {
                 names,
                 include_pretty_hosts,
+                pretty_suffix,
                 paths,
                 http_method: http_method.unwrap_or_else(|| "PURGE".to_string()),
                 auth_header,
@@ -7136,6 +6909,7 @@ where
         "soradns-route-plan" => {
             let mut names: Vec<String> = Vec::new();
             let mut include_pretty_hosts = true;
+            let mut pretty_suffix = soradns::default_pretty_gateway_suffix();
             let mut generated_at: Option<OffsetDateTime> = None;
             let mut json_out: Option<JsonTarget> = None;
             let mut pending = args.peekable();
@@ -7148,6 +6922,16 @@ where
                         names.push(value);
                     }
                     "--no-pretty" => include_pretty_hosts = false,
+                    "--pretty-suffix" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --pretty-suffix".into());
+                        };
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            return Err("--pretty-suffix requires a non-empty value".into());
+                        }
+                        pretty_suffix = trimmed.to_string();
+                    }
                     "--generated-at" => {
                         let Some(value) = pending.next() else {
                             return Err("expected value after --generated-at".into());
@@ -7177,6 +6961,7 @@ where
             let options = soradns::RoutePlanOptions {
                 names,
                 include_pretty_hosts,
+                pretty_suffix,
                 generated_at: generated_at.unwrap_or_else(OffsetDateTime::now_utc),
             };
             Ok(CommandKind::SoradnsRoutePlan {
@@ -7190,6 +6975,7 @@ where
             let mut manifest_cid: Option<String> = None;
             let mut manifest_digest: Option<String> = None;
             let mut telemetry_labels: Vec<String> = Vec::new();
+            let mut pretty_suffix = soradns::default_pretty_gateway_suffix();
             let mut json_out: Option<JsonTarget> = None;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
@@ -7230,6 +7016,16 @@ where
                             telemetry_labels.push(value);
                         }
                     }
+                    "--pretty-suffix" => {
+                        let Some(value) = pending.next() else {
+                            return Err("expected value after --pretty-suffix".into());
+                        };
+                        let trimmed = value.trim();
+                        if trimmed.is_empty() {
+                            return Err("--pretty-suffix requires a non-empty value".into());
+                        }
+                        pretty_suffix = trimmed.to_string();
+                    }
                     "--json-out" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --json-out".into());
@@ -7250,6 +7046,7 @@ where
             let name = name.ok_or("soradns-verify-gar requires --name <fqdn>")?;
             let options = soradns::GarVerifyOptions {
                 name,
+                pretty_suffix,
                 expected_manifest_cid: manifest_cid,
                 expected_manifest_digest: manifest_digest,
                 required_telemetry_labels: telemetry_labels,
@@ -10380,6 +10177,40 @@ mod acceleration_state_tests {
     }
 
     #[test]
+    fn parse_fastpq_cuda_suite_operation_updates_default_artifact_names() {
+        let args = ["xtask", "fastpq-cuda-suite", "--operation", "lde"];
+        let iter = args.into_iter().map(String::from);
+        let command = parse_command(iter).expect("parse fastpq-cuda-suite");
+        match command {
+            CommandKind::FastpqCudaSuite { options } => {
+                let output = options
+                    .output
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("output filename");
+                let raw_output = options
+                    .raw_output
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("raw output filename");
+                assert!(
+                    output.starts_with("fastpq_cuda_bench_lde_"),
+                    "unexpected output filename: {output}"
+                );
+                assert!(
+                    raw_output.starts_with("fastpq_cuda_bench_lde_"),
+                    "unexpected raw output filename: {raw_output}"
+                );
+                assert!(
+                    raw_output.ends_with("_raw.json"),
+                    "unexpected raw output filename: {raw_output}"
+                );
+            }
+            _ => panic!("expected fastpq-cuda-suite command"),
+        }
+    }
+
+    #[test]
     fn render_outputs_include_last_error() {
         let config = ivm::AccelerationConfig {
             enable_simd: true,
@@ -10548,7 +10379,7 @@ mod space_directory_tests {
         "dataspace": 11,
         "program": "cbdc.transfer",
         "method": "transfer",
-        "asset": "aid:6e156b5010e645f883eb831946b88db8",
+        "asset": "61CtjvNd9T3THAR65GsMVHr82Bjc",
         "role": "Initiator"
       },
       "effect": {
@@ -11510,6 +11341,12 @@ fn parse_rollout_artifact_spec(spec: &str) -> Result<(String, String), Box<dyn E
 
 fn print_usage() {
     eprintln!("xtask usage:");
+    eprintln!(
+        "  cargo xtask soracloud-inrou-smoke <portable|firecracker|mixed-host> [--inventory <path>]"
+    );
+    eprintln!(
+        "    Run the hosted-HTTP Inrou smoke harness for PortableVm, Firecracker/KVM, or a mixed-host inventory gate."
+    );
     eprintln!("  cargo xtask openapi [--output <path>] [--allow-stub]");
     eprintln!(
         "    Generate the Torii OpenAPI spec from a live Torii router. Defaults to docs/portal/static/openapi/torii.json; use --allow-stub only for emergency stub output"
@@ -11545,7 +11382,7 @@ fn print_usage() {
         "    Measure PoR verification time against the Halo2 verifier budget using the provided manifest/payload (defaults to fixtures/da/reconstruct/rs_parity_v1). Fails if verification exceeds the budget."
     );
     eprintln!(
-        "  cargo xtask kagami-profiles [--profile <iroha3-dev|iroha3-testus|iroha3-nexus>] [--out <dir>] [--kagami <path>]"
+        "  cargo xtask kagami-profiles [--profile <iroha3-dev|iroha3-taira|iroha3-nexus>] [--out <dir>] [--kagami <path>]"
     );
     eprintln!(
         "    Rebuild the canned Kagami profile bundles (genesis + PoPs + snippets) under defaults/kagami for Iroha 3 smoke tests; use --kagami to point at a specific binary."
@@ -11718,7 +11555,7 @@ fn print_usage() {
         "    Regenerate the provider admission proposal/envelope fixtures. Defaults to fixtures/sorafs_manifest/provider_admission"
     );
     eprintln!(
-        "  cargo xtask soradns-hosts --name <fqdn> [--name <fqdn> ...] [--json-out <path|->] [--verify-host-patterns <path> ...]"
+        "  cargo xtask soradns-hosts --name <fqdn> [--name <fqdn> ...] [--pretty-suffix <suffix>] [--json-out <path|->] [--verify-host-patterns <path> ...]"
     );
     eprintln!(
         "    Derive canonical and pretty gateway hosts for SoraDNS names. Use --json-out to write structured output and --verify-host-patterns to compare derived hosts against GAR host_patterns JSON."
@@ -11730,22 +11567,22 @@ fn print_usage() {
         "    Generate a portal.gateway.binding.json replacement plus the matching headers.txt block so DG-3 tickets can diff alias/CID/route metadata without running the Node helper."
     );
     eprintln!(
-        "  cargo xtask soradns-gar-template --name <fqdn> [--manifest <path> | --manifest-cid <cid>] [--manifest-digest <hex>] [--valid-from <secs>] [--valid-until <secs>] [--csp-template <string>] [--hsts-template <string>] [--permissions-template <string>] [--telemetry-label <label> ...] [--json-out <path|->]"
+        "  cargo xtask soradns-gar-template --name <fqdn> [--pretty-suffix <suffix>] [--manifest <path> | --manifest-cid <cid>] [--manifest-digest <hex>] [--valid-from <secs>] [--valid-until <secs>] [--csp-template <string>] [--hsts-template <string>] [--permissions-template <string>] [--telemetry-label <label> ...] [--json-out <path|->]"
     );
     eprintln!(
         "    Scaffold a Gateway Authorization Record payload with canonical host patterns, default CSP/HSTS templates, and optional telemetry labels. Use --json-out - to emit the JSON on stdout."
     );
     eprintln!(
-        "  cargo xtask soradns-acme-plan --name <fqdn> [--name <fqdn> ...] [--directory-url <url>] [--no-pretty] [--no-canonical-wildcard] [--generated-at <RFC3339>] [--json-out <path|->]"
+        "  cargo xtask soradns-acme-plan --name <fqdn> [--name <fqdn> ...] [--pretty-suffix <suffix>] [--directory-url <url>] [--no-pretty] [--no-canonical-wildcard] [--generated-at <RFC3339>] [--json-out <path|->]"
     );
     eprintln!(
-        "  cargo xtask soradns-cache-plan --name <fqdn> [--name <fqdn> ...] [--path <path> ...] [--http-method <verb>] [--no-pretty] [--auth-header <name>] [--auth-env <env>] [--generated-at <RFC3339>] [--json-out <path|->]"
+        "  cargo xtask soradns-cache-plan --name <fqdn> [--name <fqdn> ...] [--pretty-suffix <suffix>] [--path <path> ...] [--http-method <verb>] [--no-pretty] [--auth-header <name>] [--auth-env <env>] [--generated-at <RFC3339>] [--json-out <path|->]"
     );
     eprintln!(
         "    Emit deterministic cache invalidation plans (hosts + paths + auth hints) so DG-3 change packets can include purge flows alongside GAR/binding templates."
     );
     eprintln!(
-        "  cargo xtask soradns-route-plan --name <fqdn> [--name <fqdn> ...] [--no-pretty] [--generated-at <RFC3339>] [--json-out <path|->]"
+        "  cargo xtask soradns-route-plan --name <fqdn> [--name <fqdn> ...] [--pretty-suffix <suffix>] [--no-pretty] [--generated-at <RFC3339>] [--json-out <path|->]"
     );
     eprintln!(
         "    Produce promotion + rollback checklists per alias, including canonical/pretty hosts and staging notes, so DG-3 route changes ship with preflight + revert evidence."
@@ -11754,7 +11591,7 @@ fn print_usage() {
         "    Render the wildcard + pretty-host SAN plan with recommended ACME challenges and DNS-01 labels so TLS automation and GAR reviewers share the same evidence bundle."
     );
     eprintln!(
-        "  cargo xtask soradns-verify-gar --gar <path> --name <fqdn> [--manifest-cid <cid>] [--manifest-digest <hex>] [--telemetry-label <label> ...] [--json-out <path|->]"
+        "  cargo xtask soradns-verify-gar --gar <path> --name <fqdn> [--pretty-suffix <suffix>] [--manifest-cid <cid>] [--manifest-digest <hex>] [--telemetry-label <label> ...] [--json-out <path|->]"
     );
     eprintln!(
         "    Validate a GAR payload against the deterministic host policy before signing or attaching it to DG-3 tickets. Confirms canonical/pretty hosts, manifest metadata, and required telemetry labels."
@@ -11827,18 +11664,6 @@ fn print_usage() {
     eprintln!("  cargo xtask sorafs-pin-fixtures [--out <path>]");
     eprintln!(
         "    Rebuild the pin registry snapshot fixture (manifests, aliases, replication orders). Defaults to crates/iroha_core/tests/fixtures/sorafs_pin_registry/snapshot.json"
-    );
-    eprintln!(
-        "  cargo xtask offline-pos-provision --spec <path> [--output <dir>] [--operator-key <ed25519:...>]"
-    );
-    eprintln!(
-        "    Generate POS manifest and revocation bundles for OA12 pilots. Defaults to artifacts/offline_pos_provision."
-    );
-    eprintln!(
-        "  cargo xtask offline-pos-verify --bundle <revocations.json> [--api-snapshot <path|->]"
-    );
-    eprintln!(
-        "    Verify the signature on a revocation bundle and optionally emit a Torii-style `/v1/offline/revocations` snapshot for USB/QR distribution."
     );
     eprintln!("  cargo xtask nexus-fixtures [--out <dir>] [--verify]");
     eprintln!(
@@ -11954,10 +11779,10 @@ fn print_usage() {
         "    Run the Metal bench across selected stages, capture optional traces, and emit per-stage summaries for local profiling."
     );
     eprintln!(
-        "  cargo xtask fastpq-cuda-suite [--rows <count>] [--warmups <count>] [--iterations <count>] [--columns <count>] [--output <path>] [--raw-output <path>] [--row-usage <path>] [--label key=value]... [--device <label>] [--notes <text>] [--require-gpu] [--sign-output] [--gpg-key <id>] [--accel-instance <label>] [--accel-state-json <path>] [--accel-state-prom <path>] [--no-wrap] [--dry-run]"
+        "  cargo xtask fastpq-cuda-suite [--rows <count>] [--warmups <count>] [--iterations <count>] [--columns <count>] [--operation <fft|ifft|lde|poseidon_hash_columns|all>] [--output <path>] [--raw-output <path>] [--row-usage <path>] [--label key=value]... [--device <label>] [--notes <text>] [--require-gpu] [--sign-output] [--gpg-key <id>] [--accel-instance <label>] [--accel-state-json <path>] [--accel-state-prom <path>] [--no-wrap] [--dry-run]"
     );
     eprintln!(
-        "    Drive the CUDA bench harness, optionally wrap/sign the bundle with row-usage/acceleration-state metadata, and record a plan JSON so GPU runners produce reproducible Stage7 evidence."
+        "    Drive the CUDA bench harness, optionally wrap/sign the bundle with row-usage/acceleration-state metadata, and record a plan JSON so GPU runners produce reproducible Stage7 evidence. Filtered runs only enforce wrap thresholds for the selected operation."
     );
     eprintln!(
         "  cargo xtask soranet-rollout-plan --regions <r1,r2,...> --start <RFC3339> [--window <dur>] [--spacing <dur>] [--client-offset <dur>] [--phase <label>] [--environment <name>] [--out <path>] [--markdown-out <path>]"
@@ -12105,31 +11930,6 @@ fn print_usage() {
     );
     eprintln!(
         "    Lint ISO bridge reference data and fixture bundles (defaults to repository samples)."
-    );
-    eprintln!(
-        "  cargo xtask offline-pos-provision --spec <path> [--output <dir>] [--operator-key <key>]"
-    );
-    eprintln!(
-        "    Generate OfflinePosProvisionManifest fixtures (and optional revocation bundles). Defaults to artifacts/offline_pos_provision."
-    );
-    eprintln!(
-        "  cargo xtask offline-provision --spec <path> [--output <dir>] [--inspector-key <key>]"
-    );
-    eprintln!(
-        "    Produce AndroidProvisioned proofs (inspector manifests) for kiosks. Defaults to artifacts/offline_provision."
-    );
-    eprintln!(
-        "  cargo xtask offline-topup --spec <path> [--output <dir>] [--operator-key <key>] [--register-config <path>] [--register-mode blocking|immediate]"
-    );
-    eprintln!("  cargo xtask offline-bundle --spec <path> [--output <dir>]");
-    eprintln!(
-        "    Emit OfflineToOnlineTransfer fixtures plus FASTPQ witness requests. Defaults to artifacts/offline_bundle."
-    );
-    println!(
-        "  cargo xtask offline-poseidon-fixtures [--constants <path>] [--vectors <path>] [--tag <domain_tag>] [--no-sdk-mirror]"
-    );
-    eprintln!(
-        "    Generate offline allowance fixtures and optionally register them against a Torii config. Defaults to fixtures/offline_allowance."
     );
     eprintln!("  cargo xtask acceleration-state [--format table|json]");
     eprintln!(

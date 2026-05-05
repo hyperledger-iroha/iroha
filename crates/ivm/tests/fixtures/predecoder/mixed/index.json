@@ -1,27 +1,27 @@
 {
   "artifacts": [
     {
-      "artifact_sha256": "b0e5edf251edd803b66fd6cead24ca6ae9d8873fc7d1a4a87b74f270b75cfaa9",
-      "file": "artifact_v1_0_mode00_vlen0_cycles0_abi1.to",
+      "artifact_sha256": "381a2d6f8bc7a6334c577ee4185f924369ed2f8d0643bc0c5fdbe607a6fc4429",
+      "file": "artifact_v1_1_mode00_vlen0_cycles0_abi1.to",
       "meta": {
         "abi_version": 1,
         "max_cycles": 0,
         "mode": 0,
         "vector_length": 0,
         "version_major": 1,
-        "version_minor": 0
+        "version_minor": 1
       }
     },
     {
-      "artifact_sha256": "0febb29199de3cd2120f07a93879495397e19c7e577ba3d47771fdbbfac6edd5",
-      "file": "artifact_v1_0_mode03_vlen8_cycles1000_abi1.to",
+      "artifact_sha256": "1f745ad7fd05d7aca8712d1cc40b8dfbf7fcbd5294077a1726997dd4dc29b841",
+      "file": "artifact_v1_1_mode03_vlen8_cycles1000_abi1.to",
       "meta": {
         "abi_version": 1,
         "max_cycles": 1000,
         "mode": 3,
         "vector_length": 8,
         "version_major": 1,
-        "version_minor": 0
+        "version_minor": 1
       }
     }
   ],

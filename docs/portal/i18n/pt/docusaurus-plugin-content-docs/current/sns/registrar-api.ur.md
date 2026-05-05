@@ -107,17 +107,17 @@ Struct ReservedAssignmentRequestV1 {
 
 | Ponto final | طریقہ | Carga útil | تفصیل |
 |----------|-------|---------|-------|
-| `/v1/sns/registrations` | POSTAR | `RegisterNameRequestV1` | Não há nenhum problema com você nível de preços حل کرتا ہے، provas de pagamento/governança کی توثیق کرتا ہے، eventos de registro emitem کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/renew` | POSTAR | `RenewNameRequestV1` | مدت بڑھاتا ہے۔ پالیسی سے janelas de graça/redenção نافذ کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/transfer` | POSTAR | `TransferNameRequestV1` | حکمرانی aprovações لگنے کے بعد propriedade منتقل کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/controllers` | COLOCAR | `UpdateControllersRequestV1` | controladores endereços de contas assinadas کی توثیق کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/freeze` | POSTAR | `FreezeNameRequestV1` | guardião/conselho congelar۔ bilhete de guardião ou súmula de governança کا حوالہ درکار۔ |
-| `/v1/sns/registrations/{selector}/freeze` | EXCLUIR | `GovernanceHookV1` | remediação کے بعد descongelar؛ substituição do conselho ریکارڈ ہونے کو یقینی بناتا ہے۔ |
+| `/v1/sns/names` | POSTAR | `RegisterNameRequestV1` | Não há nenhum problema com você nível de preços حل کرتا ہے، provas de pagamento/governança کی توثیق کرتا ہے، eventos de registro emitem کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POSTAR | `RenewNameRequestV1` | مدت بڑھاتا ہے۔ پالیسی سے janelas de graça/redenção نافذ کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POSTAR | `TransferNameRequestV1` | حکمرانی aprovações لگنے کے بعد propriedade منتقل کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | COLOCAR | `UpdateControllersRequestV1` | controladores endereços de contas assinadas کی توثیق کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POSTAR | `FreezeNameRequestV1` | guardião/conselho congelar۔ bilhete de guardião ou súmula de governança کا حوالہ درکار۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | EXCLUIR | `GovernanceHookV1` | remediação کے بعد descongelar؛ substituição do conselho ریکارڈ ہونے کو یقینی بناتا ہے۔ |
 | `/v1/sns/reserved/{selector}` | POSTAR | `ReservedAssignmentRequestV1` | nomes reservados کی administrador/conselho کی طرف سے atribuição۔ |
 | `/v1/sns/policies/{suffix_id}` | OBTER | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (armazenável em cache)۔ |
-| `/v1/sns/registrations/{selector}` | OBTER | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) واپس کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}` | OBTER | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) واپس کرتا ہے۔ |
 
-**Codificação do seletor:** `{selector}` segmento de caminho I105, compactado (`sora`) یا hexadecimal canônico ADDR-5 کے مطابق قبول کرتا ہے؛ Torii `NameSelectorV1` سے normalizar کرتا ہے۔**Modelo de erro:** Defina os endpoints Norito JSON `code`, `message`, `details` واپس کرتے ہیں۔ Códigos میں `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` شامل ہیں۔
+**Codificação do seletor:** `{selector}` segmento de caminho i105, compactado (`sora`) یا hexadecimal canônico ADDR-5 کے مطابق قبول کرتا ہے؛ Torii `NameSelectorV1` سے normalizar کرتا ہے۔**Modelo de erro:** Defina os endpoints Norito JSON `code`, `message`, `details` واپس کرتے ہیں۔ Códigos میں `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` شامل ہیں۔
 
 ### 3.1 Auxiliares CLI (N0 دستی registrador ضرورت)
 
@@ -128,7 +128,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -153,7 +153,7 @@ Renovações, transferências de ajudantes adicionais e ações do guardião ک�
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -161,7 +161,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -176,7 +176,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (id da proposta, hashes de voto, assinaturas do administrador/guardião)۔ ہر کمانڈ متعلقہ `/v1/sns/registrations/{selector}/...` endpoint کی عکاسی کرتی ہے تاکہ beta operadores بالکل وہی Torii superfícies ensaiam کر O que há de melhor em SDKs
+`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (id da proposta, hashes de voto, assinaturas do administrador/guardião)۔ ہر کمانڈ متعلقہ `/v1/sns/names/{namespace}/{literal}/...` endpoint کی عکاسی کرتی ہے تاکہ beta operadores بالکل وہی Torii superfícies ensaiam کر O que há de melhor em SDKs
 
 ## 4. serviço gRPC
 
@@ -221,7 +221,7 @@ Verificações falhadas `sns_err_governance_missing` واپس کرتے ہیں۔
 
 ### 6.1 Registro Padrão1. Cliente `/v1/sns/policies/{suffix_id}` کو consulta کرتا ہے تاکہ preços, graça e دستیاب níveis حاصل کرے۔
 2. Cliente `RegisterNameRequestV1` بناتا ہے:
-   - `selector` ترجیحی I105 یا segundo melhor rótulo compactado (`sora`) سے derivado ہے۔
+   - `selector` ترجیحی i105 یا segundo melhor rótulo compactado (`sora`) سے derivado ہے۔
    - `term_years` پالیسی حدود میں۔
    - `payment` transferência de divisão de tesouraria/administrador کو consulte کرتا ہے۔
 3. Torii validar o valor:
@@ -246,7 +246,7 @@ Renovações de carência میں solicitação padrão کے ساتھ detecção 
 
 1. Guardian `FreezeNameRequestV1` enviar کرتا ہے جس میں ID do incidente کا حوالہ دینے والا ticket ہوتا ہے۔
 2. Registro Torii کو `NameStatus::Frozen` میں منتقل کرتا ہے, `NameFrozen` emite کرتا ہے۔
-3. Remediação کے بعد substituição do conselho جاری کرتا ہے؛ operador DELETE `/v1/sns/registrations/{selector}/freeze` کو `GovernanceHookV1` کے ساتھ بھیجتا ہے۔
+3. Remediação کے بعد substituição do conselho جاری کرتا ہے؛ operador DELETE `/v1/sns/names/{namespace}/{literal}/freeze` کو `GovernanceHookV1` کے ساتھ بھیجتا ہے۔
 4. Torii substituir validar کرتا ہے, `NameUnfrozen` emitir کرتا ہے۔
 
 ## 7. Validação e códigos de erro

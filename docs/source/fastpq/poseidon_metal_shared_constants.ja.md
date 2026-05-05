@@ -25,9 +25,9 @@ Metal カーネル、CUDA カーネル、Rust 証明者、およびすべての 
 
 |パス |目的 | SHA-256 |
 |------|--------|----------|
-| `artifacts/offline_poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` から生成された正規スナップショット。 GPU ビルドの信頼できる情報源。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` |正規のスナップショットをミラーリングするため、Swift 単体テストと XCFramework スモーク ハーネスは、Metal カーネルが期待するのと同じ定数をロードします。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin フィクスチャは、パリティ テストとシリアル化テスト用に同一のマニフェストを共有します。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` から生成された正規スナップショット。 GPU ビルドの信頼できる情報源。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` |正規のスナップショットをミラーリングするため、Swift 単体テストと XCFramework スモーク ハーネスは、Metal カーネルが期待するのと同じ定数をロードします。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Android/Kotlin フィクスチャは、パリティ テストとシリアル化テスト用に同一のマニフェストを共有します。 | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 すべてのコンシューマは、定数を GPU に接続する前にハッシュを検証する必要があります
 パイプライン。マニフェストが変更されると (新しいパラメーター セットまたはプロファイル)、SHA と
@@ -39,7 +39,7 @@ Metal カーネル、CUDA カーネル、Rust 証明者、およびすべての 
 ヘルパー。このコマンドは、正規ファイルと SDK ミラーの両方を書き込みます。
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 `--constants <path>`/`--vectors <path>` を使用して宛先をオーバーライドするか、

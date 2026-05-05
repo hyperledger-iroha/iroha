@@ -36,7 +36,7 @@ Espelha `docs/source/sns/bulk_onboarding_toolkit.md` للمشغلين الخار
 | `suffix_id` | سيم | المعرف الرقمي اللاحق (عشري أو `0x` سداسي عشري). |
 | `owner` | سيم | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | سيم | انتيرو `1..=255`. |
-| `payment_asset_id` | سيم | قضية التسوية (على سبيل المثال `xor#sora`). |
+| `payment_asset_id` | سيم | قضية التسوية (على سبيل المثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | سيم | إن Inteiros لا تمثل سوى وحدات وطنية ذات أهمية. |
 | `settlement_tx` | سيم | تقوم قيمة JSON أو سلسلة حرفية بالفصل عن عملية الدفع أو التجزئة. |
 | `payment_payer` | سيم | معرف الحساب الذي يسمح بالدفع. |
@@ -73,18 +73,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -110,7 +110,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -128,9 +128,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- يا مساعد ابعث um `POST /v1/sns/registrations` للطلب والإجهاض بدون أول
+```- يا مساعد ابعث um `POST /v1/sns/names` للطلب والإجهاض بدون أول
   خطأ HTTP. كما تم الرد على استفسارك في السجل كتسجيل NDJSON.
-- `--poll-status` إعادة استشارة `/v1/sns/registrations/{selector}` بعد كل إرسال
+- `--poll-status` إعادة استشارة `/v1/sns/names/{namespace}/{literal}` بعد كل إرسال
   (ate `--poll-attempts`, default 5) لتأكيد رؤية السجل.
   Forneca `--suffix-map` (JSON de `suffix_id` للقيم "اللاحقة") من أجل ذلك
   تشتق الأدوات حرفيًا `{label}.{suffix}` للاقتراع.
@@ -214,7 +214,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -236,7 +236,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   المراجع والملفات ذات الحلول المتعلقة بموقع ملف CSV. البيانات الوصفية
   لا يوجد خطأ في المنتج.
 - **وحدات التحكم:** شاشات بيضاء قابلة للاسترداد `--default-controllers`. فورنيكا
-  القوائم الصريحة (على سبيل المثال `i105...;i105...`) لتفويضها إلى المالك.
+  القوائم الصريحة (على سبيل المثال `<i105-account-id>;<i105-account-id>`) لتفويضها إلى المالك.
 
 Falhas sao Reportadas com numeros de linha contextuais (على سبيل المثال
 `error: row 12 term_years must be between 1 and 255`). يا سكريبت ساي كوم كوديجو

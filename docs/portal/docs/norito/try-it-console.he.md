@@ -4,9 +4,9 @@ direction: rtl
 source: docs/portal/docs/norito/try-it-console.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d38bbaedc2d75fc67e3f027c46834fb5a94d5fccd845014f829f3defcbc782b5
-source_last_modified: "2025-11-20T15:21:55.938588+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: 2b1c75d262ff579d7b04df9122c9a9c55cd8d694a04cd326d3138717f396cfe7
+source_last_modified: "2026-03-26T11:40:25.614954+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -81,7 +81,7 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 4. בחרו את סוג התוכן `application/x-norito` במגירת "Try it", לחצו **Choose File**, ובחרו את המטען שלכם. הפרוקסי משכתב את הבקשה ל-`/proxy/v1/pipeline/submit` ומסמן אותה עם `X-TryIt-Client=docs-portal-rapidoc`.
 5. כדי להוריד תגובות Norito הגדירו `Accept: application/x-norito`. Swagger/RapiDoc מציגים את בורר הכותרות באותה מגירה ומזרימים את הבינארי בחזרה דרך הפרוקסי.
 
-לנתיבים של JSON בלבד ה-sandbox המובנה של Try it לרוב מהיר יותר: הזינו את הנתיב (לדוגמה `/v1/accounts/i105.../assets`), בחרו את שיטת ה-HTTP, הדביקו גוף JSON כשצריך, ולחצו **Send request** כדי לבדוק כותרות, משך זמן ומטענים במקום.
+לנתיבים של JSON בלבד ה-sandbox המובנה של Try it לרוב מהיר יותר: הזינו את הנתיב (לדוגמה `/v1/accounts/<i105-account-id>/assets`), בחרו את שיטת ה-HTTP, הדביקו גוף JSON כשצריך, ולחצו **Send request** כדי לבדוק כותרות, משך זמן ומטענים במקום.
 
 ## פתרון תקלות
 

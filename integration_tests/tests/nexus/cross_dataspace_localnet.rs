@@ -1,6 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Localnet cross-dataspace atomic swap regression test.
 
+use super::localnet_npos::npos_override_transactions;
+
 use std::{
     collections::BTreeSet,
     num::{NonZeroU32, NonZeroU64},
@@ -17,7 +19,7 @@ use iroha::{
     data_model::{
         Level, ValidationFail,
         account::{Account, AccountId},
-        asset::{AssetDefinition, AssetDefinitionId, AssetId},
+        asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::consensus::SumeragiStatusWire,
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
@@ -37,21 +39,23 @@ use iroha::{
         nexus::{DataSpaceId, LaneCatalog, LaneConfig as ModelLaneConfig, LaneId, LaneVisibility},
         peer::PeerId,
         permission::Permission,
-        prelude::{FindAssetById, FindPermissionsByAccountId, Numeric},
-        transaction::TransactionEntrypoint,
+        prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId, Numeric},
+        transaction::{SignedTransaction, TransactionEntrypoint},
     },
     query::QueryError,
 };
 use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
-use iroha_crypto::PrivateKey;
-use iroha_data_model::prelude::QueryBuilderExt;
-use iroha_data_model::query::{
-    CommittedTxFilters,
-    dsl::CompoundPredicate,
-    error::{FindError, QueryExecutionFail},
-    parameters::{FetchSize, Pagination},
-    transaction::prelude::FindTransactions,
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
+use iroha_data_model::{
+    prelude::QueryBuilderExt,
+    query::{
+        CommittedTxFilters,
+        dsl::CompoundPredicate,
+        error::{FindError, QueryExecutionFail},
+        parameters::{FetchSize, Pagination},
+        transaction::prelude::FindTransactions,
+    },
 };
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
@@ -75,16 +79,18 @@ const DS2_LANE_INDEX: u32 = 2;
 const TOTAL_PEERS: usize = 12;
 const VALIDATORS_PER_LANE: usize = 4;
 const VALIDATOR_STAKE: u64 = 2_000;
+const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const ROUTE_PROBE_APPROVAL_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
 const ROUTE_PROBE_SSE_HANDSHAKE_DELAY: Duration = Duration::from_millis(100);
-const BALANCE_WAIT_TICK_EVERY_POLLS: u64 = 5;
-const PERMISSION_WAIT_TICK_EVERY_POLLS: u64 = 5;
 const SETUP_BARRIER_TICK_EVERY_POLLS: u64 = 5;
+const OBSERVER_QUERY_TIMEOUT_CAP: Duration = Duration::from_secs(12);
+const OBSERVER_QUERY_TIMEOUT_FLOOR: Duration = Duration::from_secs(2);
+const PERMISSION_VISIBILITY_WAIT_TIMEOUT: Duration = Duration::from_secs(90);
 const SETUP_REGISTER_MINT_QUERY_TIMEOUT: Duration = Duration::from_secs(20);
+const SUBMIT_ENQUEUE_REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const BLOCKING_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(20);
-const SWAP_BLOCKING_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(30);
 const ROLLBACK_CAPPED_ATTEMPTS: usize = 2;
 const ROLLBACK_HISTORY_RETRY_TIMEOUT: Duration = Duration::from_secs(4);
 const ROLLBACK_HISTORY_FALLBACK_TIMEOUT: Duration = Duration::from_secs(25);
@@ -101,13 +107,20 @@ const SOAK_ITERATIONS_ENV: &str = "IROHA_NEXUS_CROSS_SOAK_ITERATIONS";
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        "nexus".parse().expect("nexus domain"),
+        DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
 
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
+}
+
+fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::new(
+        DomainId::try_new("universal", "universal").expect("fee asset domain"),
+        "xor".parse().expect("fee asset name"),
+    )
 }
 
 fn parse_positive_usize_override(raw: Option<&str>, default: usize) -> usize {
@@ -128,10 +141,31 @@ fn cross_dataspace_gas_account_id() -> AccountId {
     ALICE_ID.clone()
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct ExpectedLaneValidatorBinding {
+    validator: String,
+    peer_id: String,
+}
+
+fn validator_authority_account_for_peer(index: usize) -> AccountId {
+    let mut seed = vec![0_u8; 32];
+    seed[0] = 0xC1;
+    seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
+    let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+    AccountId::new(keypair.public_key().clone())
+}
+
+fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLaneValidatorBinding {
+    ExpectedLaneValidatorBinding {
+        validator: validator_authority_account_for_peer(index).to_string(),
+        peer_id: peer_id.to_string(),
+    }
+}
+
 fn localnet_builder() -> NetworkBuilder {
     let gas_account_str = cross_dataspace_gas_account_id()
         .canonical_i105()
-        .expect("canonical i105 escrow account literal");
+        .expect("canonical I105 escrow account literal");
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .without_npos_genesis_bootstrap()
@@ -139,7 +173,7 @@ fn localnet_builder() -> NetworkBuilder {
             let post_topology =
                 npos_multilane_genesis_post_topology_transactions(topology.as_ref());
             let mut genesis = genesis_factory_with_post_topology(
-                Vec::new(),
+                npos_override_transactions(VALIDATORS_PER_LANE, TOTAL_PEERS),
                 post_topology,
                 topology,
                 topology_entries,
@@ -238,6 +272,7 @@ fn localnet_builder() -> NetworkBuilder {
             layer
                 .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 3_i64)
+                .write(["norito", "allow_gpu_compression"], false)
                 .write(
                     ["nexus", "lane_catalog"],
                     TomlValue::Array(vec![
@@ -279,20 +314,7 @@ fn localnet_builder() -> NetworkBuilder {
                     ["nexus", "staking", "max_validators"],
                     VALIDATORS_PER_LANE as i64,
                 )
-                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true)
-                .write(
-                    ["sumeragi", "npos", "election", "max_validators"],
-                    VALIDATORS_PER_LANE as i64,
-                )
-                .write(["sumeragi", "npos", "epoch_length_blocks"], 3600_i64)
-                .write(
-                    ["sumeragi", "npos", "vrf", "commit_deadline_offset_blocks"],
-                    100_i64,
-                )
-                .write(
-                    ["sumeragi", "npos", "vrf", "reveal_deadline_offset_blocks"],
-                    40_i64,
-                );
+                .write(["sumeragi", "npos", "use_stake_snapshot_roster"], true);
         })
 }
 
@@ -335,24 +357,34 @@ fn npos_multilane_genesis_post_topology_transactions(
         "expected {TOTAL_PEERS} peers in genesis topology, got {}",
         topology.len()
     );
-    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-    let ds1_domain: DomainId = "ds1".parse().expect("ds1 domain");
-    let ds2_domain: DomainId = "ds2".parse().expect("ds2 domain");
+    let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
+    let universal_domain: DomainId =
+        DomainId::try_new("universal", "universal").expect("universal domain");
+    let ds1_domain: DomainId = DomainId::try_new("ds1", "universal").expect("ds1 domain");
+    let ds2_domain: DomainId = DomainId::try_new("ds2", "universal").expect("ds2 domain");
     let stake_asset_id = stake_asset_definition_id();
+    let fee_asset_id = nexus_fee_asset_definition_id();
     let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "nexus".parse().expect("asset definition domain"),
+        DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds1coin".parse().expect("asset definition name"),
     );
     let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "nexus".parse().expect("asset definition domain"),
+        DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds2coin".parse().expect("asset definition name"),
     );
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
+        Register::domain(Domain::new(universal_domain)).into(),
         Register::domain(Domain::new(ds1_domain)).into(),
         Register::domain(Domain::new(ds2_domain)).into(),
         Register::asset_definition({
             let __asset_definition_id = stake_asset_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        })
+        .into(),
+        Register::asset_definition({
+            let __asset_definition_id = fee_asset_id.clone();
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
         })
@@ -374,6 +406,16 @@ fn npos_multilane_genesis_post_topology_transactions(
             AssetId::new(ds1_asset_def.clone(), ALICE_ID.clone()),
         )
         .into(),
+        Mint::asset_numeric(
+            NEXUS_FEE_SEED_AMOUNT,
+            AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
+        )
+        .into(),
+        Mint::asset_numeric(
+            NEXUS_FEE_SEED_AMOUNT,
+            AssetId::new(fee_asset_id.clone(), BOB_ID.clone()),
+        )
+        .into(),
         Mint::asset_numeric(200_u32, AssetId::new(ds2_asset_def, BOB_ID.clone())).into(),
     ];
 
@@ -386,13 +428,8 @@ fn npos_multilane_genesis_post_topology_transactions(
             DS2_LANE_INDEX
         };
         let lane_id = LaneId::new(lane_index);
-        let validator_id = AccountId::new(peer.public_key().clone());
-        bootstrap_tx.push(
-            Register::account(Account::new(
-                validator_id.to_account_id(nexus_domain.clone()),
-            ))
-            .into(),
-        );
+        let validator_id = validator_authority_account_for_peer(index);
+        bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         bootstrap_tx.push(
             Mint::asset_numeric(
                 VALIDATOR_STAKE,
@@ -401,9 +438,17 @@ fn npos_multilane_genesis_post_topology_transactions(
             .into(),
         );
         bootstrap_tx.push(
+            Mint::asset_numeric(
+                NEXUS_FEE_SEED_AMOUNT,
+                AssetId::new(fee_asset_id.clone(), validator_id.clone()),
+            )
+            .into(),
+        );
+        bootstrap_tx.push(
             RegisterPublicLaneValidator::new(
                 lane_id,
                 validator_id.clone(),
+                peer.clone(),
                 validator_id.clone(),
                 Numeric::from(VALIDATOR_STAKE),
                 Metadata::default(),
@@ -455,9 +500,8 @@ fn wait_for_height_with_timeout(
     ))
 }
 
-fn wait_for_height_with_tick_timeout(
-    client: &Client,
-    tick_submitter: &Client,
+fn wait_for_height_with_tick_timeout_across_clients(
+    mut clients_factory: impl FnMut() -> Vec<Client>,
     target_height: u64,
     context: &str,
     timeout_duration: Duration,
@@ -466,26 +510,46 @@ fn wait_for_height_with_tick_timeout(
     let started = Instant::now();
     let mut last_height = 0;
     let mut last_error: Option<String> = None;
-    let mut polls = 0_u64;
+    let mut poll_count = 0;
     while started.elapsed() <= timeout_duration {
-        match client.get_sumeragi_status_wire() {
-            Ok(status) => {
-                last_height = status.commit_qc.height;
-                if status.commit_qc.height >= target_height {
-                    return Ok(status);
+        let mut best_status = None;
+        let clients = clients_factory();
+        if should_submit_tick(poll_count, tick_every_polls)
+            && let Some(tick_submitter) = clients.first()
+        {
+            submit_wait_tick(
+                tick_submitter,
+                context,
+                poll_count,
+                started,
+                timeout_duration,
+                &mut last_error,
+            );
+        }
+        for client in clients {
+            match client.get_sumeragi_status_wire() {
+                Ok(status) => {
+                    last_height = last_height.max(status.commit_qc.height);
+                    if best_status
+                        .as_ref()
+                        .is_none_or(|best: &SumeragiStatusWire| {
+                            status.commit_qc.height >= best.commit_qc.height
+                        })
+                    {
+                        best_status = Some(status);
+                    }
+                }
+                Err(err) => {
+                    last_error = Some(err.to_string());
                 }
             }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
         }
-        polls = polls.saturating_add(1);
-        if polls % tick_every_polls == 0 {
-            let _ = tick_submitter.submit(Log::new(
-                Level::INFO,
-                format!("{context} height tick {}", polls / tick_every_polls),
-            ));
+        if let Some(status) = best_status
+            && status.commit_qc.height >= target_height
+        {
+            return Ok(status);
         }
+        poll_count = poll_count.saturating_add(1);
         thread::sleep(STATUS_POLL_INTERVAL);
     }
     let suffix = last_error
@@ -493,6 +557,79 @@ fn wait_for_height_with_tick_timeout(
         .unwrap_or_default();
     Err(eyre!(
         "{context}: timed out waiting for block height >= {target_height}; last observed {last_height}{suffix}"
+    ))
+}
+
+fn wait_for_lane_peers_commit_qc_at_least(
+    network: &sandbox::SerializedNetwork,
+    lane_index: u32,
+    expected_status: &SumeragiStatusWire,
+    tick_submitter: &Client,
+    context: &str,
+    timeout_duration: Duration,
+    tick_every_polls: u64,
+) -> Result<()> {
+    let start = lane_index as usize * VALIDATORS_PER_LANE;
+    let end = start
+        .saturating_add(VALIDATORS_PER_LANE)
+        .min(network.peers().len());
+    let peers = &network.peers()[start..end];
+    let expected_height = expected_status.commit_qc.height;
+    let expected_hash = expected_status.commit_qc.block_hash;
+
+    let started = Instant::now();
+    let mut last_observed = Vec::with_capacity(peers.len());
+    let mut last_error: Option<String> = None;
+    let mut poll_count = 0;
+    while started.elapsed() <= timeout_duration {
+        if should_submit_tick(poll_count, tick_every_polls) {
+            submit_wait_tick(
+                tick_submitter,
+                context,
+                poll_count,
+                started,
+                timeout_duration,
+                &mut last_error,
+            );
+        }
+        last_observed.clear();
+        let mut all_match = true;
+        for peer in peers {
+            match peer.client().get_sumeragi_status_wire() {
+                Ok(status) => {
+                    let observed_height = status.commit_qc.height;
+                    let observed_hash = status.commit_qc.block_hash;
+                    let converged = observed_height > expected_height
+                        || (observed_height == expected_height && observed_hash == expected_hash);
+                    if !converged {
+                        all_match = false;
+                    }
+                    last_observed.push(format!(
+                        "{}@h{}:{:?}",
+                        peer.id(),
+                        observed_height,
+                        observed_hash
+                    ));
+                }
+                Err(err) => {
+                    last_error = Some(err.to_string());
+                    all_match = false;
+                    break;
+                }
+            }
+        }
+        if all_match {
+            return Ok(());
+        }
+        poll_count = poll_count.saturating_add(1);
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+
+    let suffix = last_error
+        .map(|err| format!("; last status query error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for lane {lane_index} peers to converge on commit QC at least h{expected_height}:{expected_hash:?}; last observed {last_observed:?}{suffix}"
     ))
 }
 
@@ -506,11 +643,183 @@ fn asset_balance(client: &Client, asset_id: &AssetId) -> Result<Numeric> {
     }
 }
 
+fn asset_balance_variants(client: &Client, asset_id: &AssetId) -> Result<Vec<Numeric>> {
+    Ok(vec![asset_balance(client, asset_id)?])
+}
+
+fn render_error_with_debug(err: &(impl core::fmt::Display + core::fmt::Debug)) -> String {
+    format!("{err} ({err:?})")
+}
+
+fn bounded_observer_request_timeout(
+    started: Instant,
+    overall_timeout: Duration,
+    remaining_clients: usize,
+) -> Duration {
+    let remaining = overall_timeout.saturating_sub(started.elapsed());
+    if remaining.is_zero() {
+        return Duration::from_millis(1);
+    }
+    let divisor = u32::try_from(remaining_clients.max(1)).unwrap_or(u32::MAX);
+    let slice = remaining.checked_div(divisor).unwrap_or(remaining);
+    slice
+        .min(OBSERVER_QUERY_TIMEOUT_CAP)
+        .max(OBSERVER_QUERY_TIMEOUT_FLOOR)
+        .min(remaining)
+}
+
+fn should_submit_tick(poll_count: u64, tick_every_polls: u64) -> bool {
+    tick_every_polls > 0 && poll_count % tick_every_polls == 0
+}
+
+fn submit_wait_tick(
+    tick_submitter: &Client,
+    context: &str,
+    poll_count: u64,
+    started: Instant,
+    timeout_duration: Duration,
+    last_error: &mut Option<String>,
+) {
+    let mut tick_client = tick_submitter.clone();
+    tick_client.torii_request_timeout =
+        tick_client
+            .torii_request_timeout
+            .min(bounded_observer_request_timeout(
+                started,
+                timeout_duration,
+                1,
+            ));
+    let message = format!("{context} tick {poll_count}");
+    if let Err(err) = tick_client.submit(Log::new(Level::INFO, message)) {
+        *last_error = Some(format!(
+            "tick submit error: {}",
+            render_error_with_debug(&err)
+        ));
+    }
+}
+
+#[test]
+fn bounded_observer_request_timeout_slices_remaining_budget() {
+    let timeout = bounded_observer_request_timeout(Instant::now(), STATUS_WAIT_TIMEOUT, 4);
+    assert!(
+        timeout <= OBSERVER_QUERY_TIMEOUT_CAP,
+        "observer timeout should respect the per-peer cap"
+    );
+    assert!(
+        timeout >= OBSERVER_QUERY_TIMEOUT_FLOOR,
+        "observer timeout should keep a minimum per-peer slice"
+    );
+    assert!(
+        timeout <= STATUS_WAIT_TIMEOUT,
+        "observer timeout should not exceed the remaining outer budget"
+    );
+}
+
+#[derive(Debug)]
+struct RoutedJsonGetResponse {
+    body: JsonValue,
+    routed_by: Option<String>,
+    route_lane_id: Option<String>,
+    route_dataspace_id: Option<String>,
+}
+
+fn routed_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned)
+}
+
+fn add_client_headers(
+    client: &Client,
+    mut request: reqwest::RequestBuilder,
+) -> reqwest::RequestBuilder {
+    for (name, value) in &client.headers {
+        request = request.header(name, value);
+    }
+    request
+}
+
+async fn torii_json_get(
+    client: &Client,
+    path_segments: &[String],
+    query_pairs: &[(String, String)],
+) -> Result<RoutedJsonGetResponse> {
+    let mut url = client.torii_url.clone();
+    let torii_url_literal = url.to_string();
+    {
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| eyre!("torii URL `{torii_url_literal}` cannot accept path segments"))?;
+        segments.pop_if_empty();
+        for segment in path_segments {
+            segments.push(segment);
+        }
+    }
+    if !query_pairs.is_empty() {
+        let mut query = url.query_pairs_mut();
+        for (key, value) in query_pairs {
+            query.append_pair(key, value);
+        }
+    }
+
+    let request = reqwest::Client::new()
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json");
+    let response = add_client_headers(client, request).send().await?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = response.bytes().await?;
+    if status != reqwest::StatusCode::OK {
+        return Err(eyre!(
+            "Torii GET failed with status {}: {}",
+            status,
+            String::from_utf8_lossy(&body)
+        ));
+    }
+
+    Ok(RoutedJsonGetResponse {
+        body: norito::json::from_slice(&body)?,
+        routed_by: routed_header_string(&headers, "x-iroha-routed-by"),
+        route_lane_id: routed_header_string(&headers, "x-iroha-route-lane-id"),
+        route_dataspace_id: routed_header_string(&headers, "x-iroha-route-dataspace-id"),
+    })
+}
+
+fn expect_local_or_proxy_fanout_headers(
+    response: &RoutedJsonGetResponse,
+    context: &str,
+) -> Result<()> {
+    ensure!(
+        matches!(response.routed_by.as_deref(), Some("local" | "proxy")),
+        "{context}: expected local or proxy fanout read, observed {:?}",
+        response.routed_by
+    );
+    ensure!(
+        response.route_lane_id.is_none(),
+        "{context}: fanout response should not expose a singular route lane {:?}",
+        response.route_lane_id
+    );
+    ensure!(
+        response.route_dataspace_id.is_none(),
+        "{context}: fanout response should not expose a singular route dataspace {:?}",
+        response.route_dataspace_id
+    );
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug)]
 struct DataspaceCommitmentObservation {
     height: u64,
     elapsed: Duration,
     approval_observed: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RoutedTransactionObservation {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    approved_height: Option<u64>,
 }
 
 async fn wait_for_route_probe_approval(
@@ -536,7 +845,7 @@ async fn wait_for_route_probe_approval(
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
 
     // Give the SSE subscription handshake a brief head start so we can
-    // reliably observe the queued routing decision event.
+    // opportunistically observe the queued routing decision event.
     sleep(ROUTE_PROBE_SSE_HANDSHAKE_DELAY).await;
 
     let submitter_for_submit = submitter.clone();
@@ -545,80 +854,54 @@ async fn wait_for_route_probe_approval(
         .map_err(|err| eyre!("{context}: route probe submit task join error: {err}"))?
         .map_err(|err| eyre!("{context}: failed to submit route probe transaction: {err}"))?;
 
-    let queued_elapsed = timeout(STATUS_WAIT_TIMEOUT, async {
-        loop {
-            let Some(next) = events.next().await else {
-                return Err(eyre!("{context}: transaction event stream closed"));
-            };
-            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
-                continue;
-            };
-            match event.status() {
-                TransactionStatus::Queued => {
-                    ensure!(
-                        event.lane_id() == expected_lane_id,
-                        "{context}: expected queued lane {}, observed {}",
-                        expected_lane_id.as_u32(),
-                        event.lane_id().as_u32()
-                    );
-                    ensure!(
-                        event.dataspace_id() == expected_dataspace_id,
-                        "{context}: expected queued dataspace {}, observed {}",
-                        expected_dataspace_id.as_u64(),
-                        event.dataspace_id().as_u64()
-                    );
-                    return Ok(started.elapsed());
-                }
-                TransactionStatus::Approved => {
-                    return Err(eyre!(
-                        "{context}: approved event observed before queued routing event"
-                    ));
-                }
-                TransactionStatus::Rejected(reason) => {
-                    return Err(eyre!(
-                        "{context}: route probe transaction rejected: {reason}"
-                    ));
-                }
-                TransactionStatus::Expired => {
-                    return Err(eyre!("{context}: route probe transaction expired"));
-                }
+    let mut first_seen_elapsed: Option<Duration> = None;
+    let mut approved_height = None;
+    let event_poll_deadline = Instant::now() + ROUTE_PROBE_APPROVAL_WAIT_TIMEOUT;
+    while Instant::now() <= event_poll_deadline {
+        let Some(next) = timeout(STATUS_POLL_INTERVAL, events.next())
+            .await
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
+            continue;
+        };
+        match event.status() {
+            TransactionStatus::Queued => {
+                ensure!(
+                    event.lane_id() == expected_lane_id,
+                    "{context}: expected queued lane {}, observed {}",
+                    expected_lane_id.as_u32(),
+                    event.lane_id().as_u32()
+                );
+                ensure!(
+                    event.dataspace_id() == expected_dataspace_id,
+                    "{context}: expected queued dataspace {}, observed {}",
+                    expected_dataspace_id.as_u64(),
+                    event.dataspace_id().as_u64()
+                );
+                first_seen_elapsed.get_or_insert_with(|| started.elapsed());
+            }
+            TransactionStatus::Approved => {
+                first_seen_elapsed.get_or_insert_with(|| started.elapsed());
+                approved_height =
+                    Some(event.block_height().map(NonZeroU64::get).ok_or_else(|| {
+                        eyre!("{context}: approved transaction event missing block height")
+                    })?);
+                break;
+            }
+            TransactionStatus::Rejected(reason) => {
+                return Err(eyre!(
+                    "{context}: route probe transaction rejected: {reason}"
+                ));
+            }
+            TransactionStatus::Expired => {
+                return Err(eyre!("{context}: route probe transaction expired"));
             }
         }
-    })
-    .await
-    .map_err(|_| eyre!("{context}: timed out waiting for queued routing event"))??;
-
-    let approved_height = timeout(ROUTE_PROBE_APPROVAL_WAIT_TIMEOUT, async {
-        loop {
-            let Some(next) = events.next().await else {
-                return Err(eyre!("{context}: transaction event stream closed"));
-            };
-            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
-                continue;
-            };
-            match event.status() {
-                TransactionStatus::Queued => continue,
-                TransactionStatus::Approved => {
-                    let approved_height =
-                        event.block_height().map(NonZeroU64::get).ok_or_else(|| {
-                            eyre!("{context}: approved transaction event missing block height")
-                        })?;
-                    return Ok(approved_height);
-                }
-                TransactionStatus::Rejected(reason) => {
-                    return Err(eyre!(
-                        "{context}: route probe transaction rejected: {reason}"
-                    ));
-                }
-                TransactionStatus::Expired => {
-                    return Err(eyre!("{context}: route probe transaction expired"));
-                }
-            }
-        }
-    })
-    .await
-    .ok()
-    .transpose()?;
+    }
 
     events.close().await;
     let (height, approval_observed) = if let Some(height) = approved_height {
@@ -635,22 +918,95 @@ async fn wait_for_route_probe_approval(
     };
     Ok(DataspaceCommitmentObservation {
         height,
-        elapsed: queued_elapsed,
+        elapsed: first_seen_elapsed.unwrap_or_else(|| started.elapsed()),
         approval_observed,
     })
 }
 
+async fn submit_transaction_with_route_observation(
+    submitter: &Client,
+    transaction: &SignedTransaction,
+    context: &str,
+) -> Result<RoutedTransactionObservation> {
+    let hash = transaction.hash();
+    let mut events = timeout(
+        STATUS_WAIT_TIMEOUT,
+        submitter.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
+    )
+    .await
+    .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
+
+    sleep(ROUTE_PROBE_SSE_HANDSHAKE_DELAY).await;
+
+    let submitter_for_submit = submitter.clone();
+    let transaction_for_submit = transaction.clone();
+    spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction_for_submit))
+        .await
+        .map_err(|err| eyre!("{context}: route-observed submit task join error: {err}"))?
+        .map_err(|err| eyre!("{context}: failed to submit route-observed transaction: {err}"))?;
+
+    let mut observed = None;
+    let event_poll_deadline = Instant::now() + BLOCKING_CONFIRMATION_TIMEOUT;
+    while Instant::now() <= event_poll_deadline {
+        let Some(next) = timeout(STATUS_POLL_INTERVAL, events.next())
+            .await
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = next? else {
+            continue;
+        };
+        match event.status() {
+            TransactionStatus::Queued => {
+                observed.get_or_insert(RoutedTransactionObservation {
+                    lane_id: event.lane_id(),
+                    dataspace_id: event.dataspace_id(),
+                    approved_height: None,
+                });
+            }
+            TransactionStatus::Approved => {
+                let approved_height = event.block_height().map(NonZeroU64::get);
+                observed = Some(RoutedTransactionObservation {
+                    lane_id: event.lane_id(),
+                    dataspace_id: event.dataspace_id(),
+                    approved_height,
+                });
+                break;
+            }
+            TransactionStatus::Rejected(reason) => {
+                events.close().await;
+                return Err(eyre!(
+                    "{context}: route-observed transaction rejected: {reason}"
+                ));
+            }
+            TransactionStatus::Expired => {
+                events.close().await;
+                return Err(eyre!("{context}: route-observed transaction expired"));
+            }
+        }
+    }
+
+    events.close().await;
+    observed.ok_or_else(|| eyre!("{context}: timed out observing queued transaction route"))
+}
+
 fn wait_for_expected_balances(
-    client: &Client,
-    expectations: &[(&AssetId, Numeric)],
+    expectations: &[BalanceExpectation<'_>],
     context: &str,
 ) -> Result<()> {
-    wait_for_expected_balances_with_timeout(client, expectations, context, STATUS_WAIT_TIMEOUT)
+    wait_for_expected_balances_with_timeout(expectations, context, STATUS_WAIT_TIMEOUT)
+}
+
+struct BalanceExpectation<'a> {
+    client: &'a Client,
+    asset_id: &'a AssetId,
+    expected: Numeric,
 }
 
 fn wait_for_expected_balances_with_timeout(
-    client: &Client,
-    expectations: &[(&AssetId, Numeric)],
+    expectations: &[BalanceExpectation<'_>],
     context: &str,
     timeout_duration: Duration,
 ) -> Result<()> {
@@ -660,19 +1016,29 @@ fn wait_for_expected_balances_with_timeout(
     while started.elapsed() <= timeout_duration {
         last_observed.clear();
         let mut all_match = true;
-        for (asset_id, expected) in expectations {
-            let observed = match asset_balance(client, asset_id) {
+        let expectation_count = expectations.len();
+        for (index, expectation) in expectations.iter().enumerate() {
+            let mut client = expectation.client.clone();
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        timeout_duration,
+                        expectation_count.saturating_sub(index),
+                    ));
+            let observed = match asset_balance_variants(&client, expectation.asset_id) {
                 Ok(observed) => observed,
                 Err(err) => {
-                    last_error = Some(err.to_string());
+                    last_error = Some(render_error_with_debug(&err));
                     all_match = false;
                     break;
                 }
             };
-            if observed != *expected {
+            if !observed.iter().any(|value| value == &expectation.expected) {
                 all_match = false;
             }
-            last_observed.push(((*asset_id).clone(), observed));
+            last_observed.push((expectation.asset_id.clone(), observed));
         }
         if all_match {
             return Ok(());
@@ -687,75 +1053,106 @@ fn wait_for_expected_balances_with_timeout(
     ))
 }
 
-fn wait_for_expected_balances_with_tick(
-    client: &Client,
-    tick_submitter: &Client,
-    expectations: &[(&AssetId, Numeric)],
-    context: &str,
-) -> Result<()> {
-    wait_for_expected_balances_with_tick_timeout(
-        client,
-        tick_submitter,
-        expectations,
-        context,
-        STATUS_WAIT_TIMEOUT,
-    )
-}
-
 fn wait_for_expected_balances_with_tick_timeout(
-    client: &Client,
     tick_submitter: &Client,
-    expectations: &[(&AssetId, Numeric)],
+    expectations: &[BalanceExpectation<'_>],
     context: &str,
     timeout_duration: Duration,
 ) -> Result<()> {
     let started = Instant::now();
     let mut last_observed = Vec::with_capacity(expectations.len());
     let mut last_error: Option<String> = None;
-    let mut polls = 0_u64;
+    let mut poll_count = 0;
     while started.elapsed() <= timeout_duration {
+        if should_submit_tick(poll_count, SETUP_BARRIER_TICK_EVERY_POLLS) {
+            submit_wait_tick(
+                tick_submitter,
+                context,
+                poll_count,
+                started,
+                timeout_duration,
+                &mut last_error,
+            );
+        }
         last_observed.clear();
         let mut all_match = true;
-        for (asset_id, expected) in expectations {
-            let observed = match asset_balance(client, asset_id) {
+        let expectation_count = expectations.len();
+        for (index, expectation) in expectations.iter().enumerate() {
+            let mut client = expectation.client.clone();
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        timeout_duration,
+                        expectation_count.saturating_sub(index),
+                    ));
+            let observed = match asset_balance_variants(&client, expectation.asset_id) {
                 Ok(observed) => observed,
                 Err(err) => {
-                    last_error = Some(err.to_string());
+                    last_error = Some(render_error_with_debug(&err));
                     all_match = false;
                     break;
                 }
             };
-            if observed != *expected {
+            if !observed.iter().any(|value| value == &expectation.expected) {
                 all_match = false;
             }
-            last_observed.push(((*asset_id).clone(), observed));
+            last_observed.push((expectation.asset_id.clone(), observed));
         }
         if all_match {
             return Ok(());
         }
-        polls = polls.saturating_add(1);
-        if polls % BALANCE_WAIT_TICK_EVERY_POLLS == 0 {
-            let _ = tick_submitter.submit(Log::new(
-                Level::INFO,
-                format!(
-                    "{context} balance tick {}",
-                    polls / BALANCE_WAIT_TICK_EVERY_POLLS
-                ),
-            ));
-        }
+        poll_count = poll_count.saturating_add(1);
         thread::sleep(STATUS_POLL_INTERVAL);
     }
     let suffix = last_error
         .map(|err| format!("; last balance query error: {err}"))
         .unwrap_or_default();
+    let bucket_context = expectations
+        .iter()
+        .enumerate()
+        .map(|(index, expectation)| {
+            let mut client = expectation.client.clone();
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        timeout_duration,
+                        expectations.len().saturating_sub(index),
+                    ));
+            let matches = client
+                .query(FindAssets::new())
+                .execute_all()
+                .map(|assets: Vec<Asset>| {
+                    assets
+                        .into_iter()
+                        .filter(|asset| {
+                            asset.id.definition() == expectation.asset_id.definition()
+                                && asset.id.account() == expectation.asset_id.account()
+                        })
+                        .map(|asset| format!("{}={}", asset.id.canonical_literal(), asset.value()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|err| {
+                    vec![format!("query error: {}", render_error_with_debug(&err))]
+                });
+            format!(
+                "{} => [{}]",
+                expectation.asset_id.canonical_literal(),
+                matches.join(", ")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
     Err(eyre!(
-        "{context}: timed out waiting for expected balances with tick assist; last observed {last_observed:?}{suffix}"
+        "{context}: timed out waiting for expected balances with tick assist; last observed {last_observed:?}; buckets {bucket_context}{suffix}"
     ))
 }
 
-fn wait_for_account_permissions(
-    client: &Client,
-    tick_submitter: &Client,
+fn wait_for_account_permissions_across_clients(
+    mut clients_factory: impl FnMut() -> Vec<Client>,
     account_id: &AccountId,
     required_permissions: &[Permission],
     context: &str,
@@ -763,45 +1160,45 @@ fn wait_for_account_permissions(
     let started = Instant::now();
     let mut last_observed = Vec::new();
     let mut last_error: Option<String> = None;
-    let mut polls = 0_u64;
-    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let permissions = match client
-            .query(FindPermissionsByAccountId::new(account_id.clone()))
-            .execute_all()
-        {
-            Ok(permissions) => permissions,
-            Err(err) => {
-                last_error = Some(err.to_string());
-                polls = polls.saturating_add(1);
-                if polls % PERMISSION_WAIT_TICK_EVERY_POLLS == 0 {
-                    let _ = tick_submitter.submit(Log::new(
-                        Level::INFO,
-                        format!(
-                            "{context} permission tick {}",
-                            polls / PERMISSION_WAIT_TICK_EVERY_POLLS
-                        ),
+    while started.elapsed() <= PERMISSION_VISIBILITY_WAIT_TIMEOUT {
+        let mut observed = Vec::new();
+        let mut saw_success = false;
+        let clients = clients_factory();
+        let client_count = clients.len();
+        for (index, mut client) in clients.into_iter().enumerate() {
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        PERMISSION_VISIBILITY_WAIT_TIMEOUT,
+                        client_count.saturating_sub(index),
                     ));
+            match client
+                .query(FindPermissionsByAccountId::new(account_id.clone()))
+                .execute_all()
+            {
+                Ok(permissions) => {
+                    saw_success = true;
+                    for permission in permissions {
+                        if !observed.iter().any(|existing| existing == &permission) {
+                            observed.push(permission);
+                        }
+                    }
                 }
-                thread::sleep(STATUS_POLL_INTERVAL);
-                continue;
+                Err(err) => {
+                    last_error = Some(render_error_with_debug(&err));
+                }
             }
-        };
-        last_observed = permissions.clone();
-        let all_present = required_permissions
-            .iter()
-            .all(|required| permissions.iter().any(|permission| permission == required));
-        if all_present {
-            return Ok(());
         }
-        polls = polls.saturating_add(1);
-        if polls % PERMISSION_WAIT_TICK_EVERY_POLLS == 0 {
-            let _ = tick_submitter.submit(Log::new(
-                Level::INFO,
-                format!(
-                    "{context} permission tick {}",
-                    polls / PERMISSION_WAIT_TICK_EVERY_POLLS
-                ),
-            ));
+        if saw_success {
+            last_observed = observed.clone();
+            let all_present = required_permissions
+                .iter()
+                .all(|required| observed.iter().any(|permission| permission == required));
+            if all_present {
+                return Ok(());
+            }
         }
         thread::sleep(STATUS_POLL_INTERVAL);
     }
@@ -809,14 +1206,15 @@ fn wait_for_account_permissions(
         .map(|err| format!("; last permission query error: {err}"))
         .unwrap_or_default();
     Err(eyre!(
-        "{context}: timed out waiting for permissions on {account_id}; required {required_permissions:?}; last observed {last_observed:?}{suffix}"
+        "{context}: timed out after {:?} waiting for permissions on {account_id}; required {required_permissions:?}; last observed {last_observed:?}{suffix}",
+        PERMISSION_VISIBILITY_WAIT_TIMEOUT
     ))
 }
 
 fn lane_validator_snapshot(
     snapshot: &JsonValue,
     context: &str,
-) -> Result<(usize, BTreeSet<String>)> {
+) -> Result<(usize, BTreeSet<ExpectedLaneValidatorBinding>)> {
     let root = snapshot
         .as_object()
         .ok_or_else(|| eyre!("{context}: lane validator response is not an object"))?;
@@ -838,6 +1236,10 @@ fn lane_validator_snapshot(
             .get("validator")
             .and_then(JsonValue::as_str)
             .ok_or_else(|| eyre!("{context}: validator entry missing validator literal"))?;
+        let peer_id = entry
+            .get("peer_id")
+            .and_then(JsonValue::as_str)
+            .ok_or_else(|| eyre!("{context}: validator entry missing peer_id literal"))?;
         let status_type = entry
             .get("status")
             .and_then(JsonValue::as_object)
@@ -845,7 +1247,10 @@ fn lane_validator_snapshot(
             .and_then(JsonValue::as_str)
             .ok_or_else(|| eyre!("{context}: validator entry missing status.type"))?;
         if status_type == "Active" {
-            active.insert(validator.to_owned());
+            active.insert(ExpectedLaneValidatorBinding {
+                validator: validator.to_owned(),
+                peer_id: peer_id.to_owned(),
+            });
         }
     }
 
@@ -855,7 +1260,7 @@ fn lane_validator_snapshot(
 fn wait_for_active_lane_validators(
     client: &Client,
     lane_id: LaneId,
-    expected_active: &BTreeSet<String>,
+    expected_active: &BTreeSet<ExpectedLaneValidatorBinding>,
     context: &str,
 ) -> Result<()> {
     let started = Instant::now();
@@ -930,27 +1335,55 @@ fn lane_bounded_peer_index(
     status_client: &Client,
     lane_index: u32,
 ) -> usize {
+    lane_bounded_peer_indices(network, status_client, lane_index)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| leader_or_highest_height_peer_index(network, status_client))
+}
+
+fn lane_bounded_peer_indices(
+    network: &sandbox::SerializedNetwork,
+    status_client: &Client,
+    lane_index: u32,
+) -> Vec<usize> {
     let peers = network.peers();
     if peers.is_empty() {
-        return 0;
+        return Vec::new();
     }
 
     let lane_index = lane_index as usize;
     let start = lane_index.saturating_mul(VALIDATORS_PER_LANE);
     let end = start.saturating_add(VALIDATORS_PER_LANE).min(peers.len());
     if start >= end {
-        return leader_or_highest_height_peer_index(network, status_client);
+        return vec![leader_or_highest_height_peer_index(network, status_client)];
     }
 
-    (start..end)
-        .max_by_key(|index| {
-            peers[*index]
+    let leader_index = status_client
+        .get_sumeragi_status_wire()
+        .ok()
+        .and_then(|status| usize::try_from(status.leader_index).ok());
+    let mut ranked = (start..end)
+        .map(|index| {
+            let observed_height = peers[index]
                 .client()
                 .get_sumeragi_status_wire()
                 .map(|status| status.commit_qc.height)
-                .unwrap_or(0)
+                .unwrap_or(0);
+            (
+                index,
+                observed_height,
+                leader_index.is_some_and(|leader| leader == index),
+            )
         })
-        .unwrap_or_else(|| leader_or_highest_height_peer_index(network, status_client))
+        .collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        right
+            .2
+            .cmp(&left.2)
+            .then_with(|| right.1.cmp(&left.1))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    ranked.into_iter().map(|(index, _, _)| index).collect()
 }
 
 fn leader_targeted_client_for_lane(
@@ -962,6 +1395,19 @@ fn leader_targeted_client_for_lane(
 ) -> Client {
     let index = lane_bounded_peer_index(network, status_client, lane_index);
     network.peers()[index].client_for(account_id, private_key.clone())
+}
+
+fn lane_targeted_clients_for_lane(
+    network: &sandbox::SerializedNetwork,
+    status_client: &Client,
+    account_id: &AccountId,
+    private_key: &PrivateKey,
+    lane_index: u32,
+) -> Vec<Client> {
+    lane_bounded_peer_indices(network, status_client, lane_index)
+        .into_iter()
+        .map(|index| network.peers()[index].client_for(account_id, private_key.clone()))
+        .collect()
 }
 
 fn duration_min_avg_max_secs(samples: &[Duration]) -> Option<(f64, f64, f64)> {
@@ -1010,39 +1456,55 @@ enum CommittedTxOutcome {
     Rejected(String),
 }
 
-fn wait_for_committed_tx_outcome(
+fn query_committed_tx_outcome(
     client: &Client,
+    entry_hash: &HashOf<TransactionEntrypoint>,
+) -> core::result::Result<Option<CommittedTxOutcome>, QueryError> {
+    let one = NonZeroU64::new(1).expect("nonzero");
+    let filters = CommittedTxFilters {
+        entry_eq: Some(entry_hash.clone()),
+        ..Default::default()
+    };
+    client
+        .query(FindTransactions::new())
+        .filter(CompoundPredicate::from_filters(filters))
+        .with_pagination(Pagination::new(Some(one), 0))
+        .with_fetch_size(FetchSize::new(Some(one)))
+        .execute_all()
+        .map(|snapshot| {
+            snapshot.first().map(|tx| match &tx.result().0 {
+                Ok(_) => CommittedTxOutcome::Applied,
+                Err(reason) => CommittedTxOutcome::Rejected(render_rejection_reason(reason)),
+            })
+        })
+}
+
+fn wait_for_committed_tx_outcome_across_clients(
+    mut clients_factory: impl FnMut() -> Vec<Client>,
     entry_hash: HashOf<TransactionEntrypoint>,
     context: &str,
     timeout_duration: Duration,
 ) -> Result<CommittedTxOutcome> {
     let started = Instant::now();
     let mut last_error: Option<String> = None;
-    let one = NonZeroU64::new(1).expect("nonzero");
     while started.elapsed() <= timeout_duration {
-        let filters = CommittedTxFilters {
-            entry_eq: Some(entry_hash.clone()),
-            ..Default::default()
-        };
-        match client
-            .query(FindTransactions::new())
-            .filter(CompoundPredicate::from_filters(filters))
-            .with_pagination(Pagination::new(Some(one), 0))
-            .with_fetch_size(FetchSize::new(Some(one)))
-            .execute_all()
-        {
-            Ok(snapshot) => {
-                if let Some(tx) = snapshot.first() {
-                    return match &tx.result().0 {
-                        Ok(_) => Ok(CommittedTxOutcome::Applied),
-                        Err(reason) => Ok(CommittedTxOutcome::Rejected(render_rejection_reason(
-                            reason,
-                        ))),
-                    };
+        let clients = clients_factory();
+        let client_count = clients.len();
+        for (index, mut client) in clients.into_iter().enumerate() {
+            client.torii_request_timeout =
+                client
+                    .torii_request_timeout
+                    .min(bounded_observer_request_timeout(
+                        started,
+                        timeout_duration,
+                        client_count.saturating_sub(index),
+                    ));
+            match query_committed_tx_outcome(&client, &entry_hash) {
+                Ok(Some(outcome)) => return Ok(outcome),
+                Ok(None) => {}
+                Err(err) => {
+                    last_error = Some(err.to_string());
                 }
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
             }
         }
         thread::sleep(STATUS_POLL_INTERVAL);
@@ -1055,13 +1517,18 @@ fn wait_for_committed_tx_outcome(
     ))
 }
 
-fn wait_for_committed_success(
-    client: &Client,
+fn wait_for_committed_success_across_clients(
+    clients_factory: impl FnMut() -> Vec<Client>,
     entry_hash: HashOf<TransactionEntrypoint>,
     context: &str,
     timeout_duration: Duration,
 ) -> Result<()> {
-    match wait_for_committed_tx_outcome(client, entry_hash.clone(), context, timeout_duration)? {
+    match wait_for_committed_tx_outcome_across_clients(
+        clients_factory,
+        entry_hash.clone(),
+        context,
+        timeout_duration,
+    )? {
         CommittedTxOutcome::Applied => Ok(()),
         CommittedTxOutcome::Rejected(reason) => Err(eyre!(
             "{context}: transaction {entry_hash} rejected unexpectedly: {reason}"
@@ -1069,13 +1536,18 @@ fn wait_for_committed_success(
     }
 }
 
-fn wait_for_committed_rejection_reason(
-    client: &Client,
+fn wait_for_committed_rejection_reason_across_clients(
+    clients_factory: impl FnMut() -> Vec<Client>,
     entry_hash: HashOf<TransactionEntrypoint>,
     context: &str,
     timeout_duration: Duration,
 ) -> Result<String> {
-    match wait_for_committed_tx_outcome(client, entry_hash.clone(), context, timeout_duration)? {
+    match wait_for_committed_tx_outcome_across_clients(
+        clients_factory,
+        entry_hash.clone(),
+        context,
+        timeout_duration,
+    )? {
         CommittedTxOutcome::Applied => Err(eyre!(
             "{context}: transaction {entry_hash} committed successfully, expected rejection"
         )),
@@ -1083,9 +1555,37 @@ fn wait_for_committed_rejection_reason(
     }
 }
 
-fn wait_for_committed_success_or_height_fallback(
-    observer: &Client,
-    tick_submitter: &Client,
+fn submit_transaction_across_clients(
+    mut clients_factory: impl FnMut() -> Vec<Client>,
+    transaction: &SignedTransaction,
+    context: &str,
+    request_timeout: Duration,
+) -> Result<HashOf<SignedTransaction>> {
+    let mut last_error: Option<String> = None;
+    let clients = clients_factory();
+    ensure!(
+        !clients.is_empty(),
+        "{context}: no clients available for transaction submission"
+    );
+    for mut client in clients {
+        client.torii_request_timeout = client.torii_request_timeout.min(request_timeout);
+        match client.submit_transaction(transaction) {
+            Ok(hash) => return Ok(hash),
+            Err(err) => {
+                last_error = Some(render_error_with_debug(&err));
+            }
+        }
+    }
+    let suffix = last_error
+        .map(|err| format!("; last submit error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: failed to submit transaction through any routed observer{suffix}"
+    ))
+}
+
+fn wait_for_committed_success_or_height_fallback_across_clients(
+    mut observer_factory: impl FnMut() -> Vec<Client>,
     entry_hash: HashOf<TransactionEntrypoint>,
     committed_context: &str,
     fallback_context: &str,
@@ -1093,39 +1593,42 @@ fn wait_for_committed_success_or_height_fallback(
     committed_timeout: Duration,
     post_barrier_outcome_timeout: Duration,
 ) -> Result<SumeragiStatusWire> {
-    match wait_for_committed_success(
-        observer,
+    match wait_for_committed_success_across_clients(
+        &mut observer_factory,
         entry_hash.clone(),
         committed_context,
         committed_timeout,
     ) {
-        Ok(()) => observer
-            .get_sumeragi_status_wire()
-            .map_err(|err| eyre!(err)),
+        Ok(()) => observer_factory()
+            .into_iter()
+            .filter_map(|client| client.get_sumeragi_status_wire().ok())
+            .max_by_key(|status| status.commit_qc.height)
+            .ok_or_else(|| eyre!("{committed_context}: no observer returned a status snapshot")),
         Err(err) => {
             let error_text = err.to_string();
             if !is_inconclusive_committed_outcome_error(&error_text) {
                 return Err(err);
             }
             eprintln!("[swap] committed outcome inconclusive; falling back to height barrier");
-            let barrier_status = wait_for_height_with_tick_timeout(
-                observer,
-                tick_submitter,
+            let barrier_status = wait_for_height_with_tick_timeout_across_clients(
+                &mut observer_factory,
                 pre_barrier_height.saturating_add(1),
                 fallback_context,
                 STATUS_WAIT_TIMEOUT,
                 SETUP_BARRIER_TICK_EVERY_POLLS,
             )?;
             let post_context = format!("{committed_context} (post-barrier)");
-            match wait_for_committed_success(
-                observer,
+            match wait_for_committed_success_across_clients(
+                &mut observer_factory,
                 entry_hash,
                 post_context.as_str(),
                 post_barrier_outcome_timeout,
             ) {
-                Ok(()) => observer
-                    .get_sumeragi_status_wire()
-                    .map_err(|err| eyre!(err)),
+                Ok(()) => observer_factory()
+                    .into_iter()
+                    .filter_map(|client| client.get_sumeragi_status_wire().ok())
+                    .max_by_key(|status| status.commit_qc.height)
+                    .ok_or_else(|| eyre!("{post_context}: no observer returned a status snapshot")),
                 Err(post_err) => {
                     let post_error_text = post_err.to_string();
                     if is_inconclusive_committed_outcome_error(&post_error_text) {
@@ -1242,22 +1745,25 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             "expected {TOTAL_PEERS} peers for cross-dataspace topology, got {}",
             peers.len()
         );
-        let nexus_lane_validators: Vec<AccountId> = peers
+        let nexus_lane_validators: Vec<ExpectedLaneValidatorBinding> = peers
             .iter()
+            .enumerate()
             .take(VALIDATORS_PER_LANE)
-            .map(|peer| AccountId::new(peer.id().public_key().clone()))
+            .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
             .collect();
-        let ds1_lane_validators: Vec<AccountId> = peers
+        let ds1_lane_validators: Vec<ExpectedLaneValidatorBinding> = peers
             .iter()
+            .enumerate()
             .skip(VALIDATORS_PER_LANE)
             .take(VALIDATORS_PER_LANE)
-            .map(|peer| AccountId::new(peer.id().public_key().clone()))
+            .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
             .collect();
-        let ds2_lane_validators: Vec<AccountId> = peers
+        let ds2_lane_validators: Vec<ExpectedLaneValidatorBinding> = peers
             .iter()
+            .enumerate()
             .skip(VALIDATORS_PER_LANE * 2)
             .take(VALIDATORS_PER_LANE)
-            .map(|peer| AccountId::new(peer.id().public_key().clone()))
+            .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
             .collect();
         let mut all_validators = Vec::with_capacity(TOTAL_PEERS);
         all_validators.extend(nexus_lane_validators.iter().cloned());
@@ -1269,18 +1775,10 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             "validator groups must be disjoint and total {}",
             TOTAL_PEERS
         );
-        let expected_nexus_validators: BTreeSet<_> = nexus_lane_validators
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        let expected_ds1_validators: BTreeSet<_> = ds1_lane_validators
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        let expected_ds2_validators: BTreeSet<_> = ds2_lane_validators
-            .iter()
-            .map(ToString::to_string)
-            .collect();
+        let expected_nexus_validators: BTreeSet<_> =
+            nexus_lane_validators.iter().cloned().collect();
+        let expected_ds1_validators: BTreeSet<_> = ds1_lane_validators.iter().cloned().collect();
+        let expected_ds2_validators: BTreeSet<_> = ds2_lane_validators.iter().cloned().collect();
         (
             expected_nexus_validators,
             expected_ds1_validators,
@@ -1320,33 +1818,33 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         )?;
     }
 
-    let ds1_submitter = leader_targeted_client_for_lane(
+    let nexus_alice_submitter = leader_targeted_client_for_lane(
         &network,
         &alice,
         &ALICE_ID,
         ALICE_KEYPAIR.private_key(),
-        DS1_LANE_INDEX,
+        NEXUS_LANE_INDEX,
     );
-    let ds2_submitter = leader_targeted_client_for_lane(
+    let nexus_bob_submitter = leader_targeted_client_for_lane(
         &network,
         &bob,
         &BOB_ID,
         BOB_KEYPAIR.private_key(),
-        DS2_LANE_INDEX,
+        NEXUS_LANE_INDEX,
     );
     let (ds1_observation, ds2_observation) = {
         let _phase = phase_timings.phase("route probes ds1+ds2: tx submit + route wait");
         rt.block_on(async {
             tokio::try_join!(
                 wait_for_route_probe_approval(
-                    &ds1_submitter,
+                    &nexus_alice_submitter,
                     InstructionBox::from(Log::new(Level::INFO, "route probe ds1".to_string())),
                     LaneId::new(DS1_LANE_INDEX),
                     DataSpaceId::new(DS1_ID_U64),
                     "route probe ds1",
                 ),
                 wait_for_route_probe_approval(
-                    &ds2_submitter,
+                    &nexus_bob_submitter,
                     InstructionBox::from(Log::new(Level::INFO, "route probe ds2".to_string())),
                     LaneId::new(DS2_LANE_INDEX),
                     DataSpaceId::new(DS2_ID_U64),
@@ -1403,11 +1901,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         }
     }
     let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "nexus".parse().expect("asset definition"),
+        DomainId::try_new("nexus", "universal").expect("asset definition"),
         "ds1coin".parse().expect("asset definition"),
     );
     let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "nexus".parse().expect("asset definition"),
+        DomainId::try_new("nexus", "universal").expect("asset definition"),
         "ds2coin".parse().expect("asset definition"),
     );
     let bob_transfer_ds1_permission: Permission = CanTransferAssetWithDefinition {
@@ -1418,21 +1916,174 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
     let bob_ds1_asset = AssetId::new(ds1_asset_def.clone(), BOB_ID.clone());
     let alice_ds2_asset = AssetId::new(ds2_asset_def.clone(), ALICE_ID.clone());
     let bob_ds2_asset = AssetId::new(ds2_asset_def.clone(), BOB_ID.clone());
+    let alice_on_ds1 = leader_targeted_client_for_lane(
+        &network,
+        &alice,
+        &ALICE_ID,
+        ALICE_KEYPAIR.private_key(),
+        DS1_LANE_INDEX,
+    );
+    let bob_on_ds1 = leader_targeted_client_for_lane(
+        &network,
+        &alice,
+        &BOB_ID,
+        BOB_KEYPAIR.private_key(),
+        DS1_LANE_INDEX,
+    );
+    let alice_on_ds2 = leader_targeted_client_for_lane(
+        &network,
+        &alice,
+        &ALICE_ID,
+        ALICE_KEYPAIR.private_key(),
+        DS2_LANE_INDEX,
+    );
+    let bob_on_ds2 = leader_targeted_client_for_lane(
+        &network,
+        &alice,
+        &BOB_ID,
+        BOB_KEYPAIR.private_key(),
+        DS2_LANE_INDEX,
+    );
 
-    let setup_grants_barrier_target = {
-        let submitter = leader_targeted_client_for_lane(
-            &network,
-            &alice,
-            &ALICE_ID,
-            ALICE_KEYPAIR.private_key(),
-            DS1_LANE_INDEX,
+    {
+        let _phase = phase_timings.phase("route probes: wrong-dataspace query/assert");
+        ensure!(
+            asset_balance(&nexus_alice_submitter, &alice_ds1_asset)? == Numeric::from(100_u32),
+            "Alice ds1 balance query through Nexus ingress did not route to ds1"
         );
+        ensure!(
+            asset_balance(&nexus_bob_submitter, &bob_ds2_asset)? == Numeric::from(200_u32),
+            "Bob ds2 balance query through Nexus ingress did not route to ds2"
+        );
+    }
+    {
+        let _phase = phase_timings.phase("route probes: wrong-dataspace app-api query/assert");
+        let ds1_asset_literal = ds1_asset_def.to_string();
+        let alice_account_literal = ALICE_ID.to_string();
+        let expected_ds1_lane_literal = DS1_LANE_INDEX.to_string();
+        let expected_ds1_dataspace_literal = DS1_ID_U64.to_string();
+        let validators_path = vec![
+            "v1".to_owned(),
+            "nexus".to_owned(),
+            "public_lanes".to_owned(),
+            DS1_LANE_INDEX.to_string(),
+            "validators".to_owned(),
+        ];
+        let account_assets_path = vec![
+            "v1".to_owned(),
+            "accounts".to_owned(),
+            alice_account_literal.clone(),
+            "assets".to_owned(),
+        ];
+        let asset_definition_path = vec![
+            "v1".to_owned(),
+            "assets".to_owned(),
+            "definitions".to_owned(),
+            ds1_asset_literal.clone(),
+        ];
+        let account_summary_path = vec![
+            "v1".to_owned(),
+            "nexus".to_owned(),
+            "dataspaces".to_owned(),
+            "accounts".to_owned(),
+            alice_account_literal.clone(),
+            "summary".to_owned(),
+        ];
+        rt.block_on(async {
+            let validators = torii_json_get(&nexus_alice_submitter, &validators_path, &[]).await?;
+            ensure!(
+                validators.routed_by.as_deref() == Some("proxy"),
+                "DS1 validator query through Nexus ingress should be proxied, observed {:?}",
+                validators.routed_by
+            );
+            ensure!(
+                validators.route_lane_id.as_deref() == Some(expected_ds1_lane_literal.as_str()),
+                "DS1 validator query should advertise lane {DS1_LANE_INDEX}, observed {:?}",
+                validators.route_lane_id
+            );
+            ensure!(
+                validators.route_dataspace_id.as_deref()
+                    == Some(expected_ds1_dataspace_literal.as_str()),
+                "DS1 validator query should advertise dataspace {DS1_ID_U64}, observed {:?}",
+                validators.route_dataspace_id
+            );
+            let (total, active) =
+                lane_validator_snapshot(&validators.body, "nexus-routed ds1 validator query")?;
+            ensure!(
+                total == expected_ds1_validators.len() && active == expected_ds1_validators,
+                "DS1 validator query through Nexus ingress returned total {total} active {:?}, expected total {} active {:?}",
+                active,
+                expected_ds1_validators.len(),
+                expected_ds1_validators
+            );
+
+            let account_assets =
+                torii_json_get(&nexus_alice_submitter, &account_assets_path, &[]).await?;
+            expect_local_or_proxy_fanout_headers(
+                &account_assets,
+                "account assets query through Nexus ingress",
+            )?;
+            let account_asset_items = account_assets
+                .body
+                .get("items")
+                .and_then(JsonValue::as_array)
+                .ok_or_else(|| eyre!("account assets response missing items array"))?;
+            ensure!(
+                account_asset_items.iter().any(|item| {
+                    item.get("asset").and_then(JsonValue::as_str) == Some(ds1_asset_literal.as_str())
+                }),
+                "account assets query through Nexus ingress did not include routed asset definition {} in {:?}",
+                ds1_asset_literal,
+                account_asset_items
+            );
+
+            let asset_definition =
+                torii_json_get(&nexus_alice_submitter, &asset_definition_path, &[]).await?;
+            expect_local_or_proxy_fanout_headers(
+                &asset_definition,
+                "asset definition query through Nexus ingress",
+            )?;
+            ensure!(
+                asset_definition.body["id"].as_str() == Some(ds1_asset_literal.as_str()),
+                "asset definition query through Nexus ingress returned unexpected id {:?}",
+                asset_definition.body["id"].as_str()
+            );
+
+            let account_summary =
+                torii_json_get(&nexus_alice_submitter, &account_summary_path, &[]).await?;
+            expect_local_or_proxy_fanout_headers(
+                &account_summary,
+                "dataspace summary query through Nexus ingress",
+            )?;
+            ensure!(
+                account_summary.body["account_id"].as_str() == Some(alice_account_literal.as_str()),
+                "dataspace summary query through Nexus ingress returned unexpected account_id {:?}",
+                account_summary.body["account_id"].as_str()
+            );
+            let summary_rows = account_summary
+                .body
+                .get("dataspaces")
+                .and_then(JsonValue::as_array)
+                .ok_or_else(|| eyre!("dataspace summary response missing dataspaces array"))?;
+            let summary_totals = account_summary
+                .body
+                .get("totals")
+                .and_then(JsonValue::as_object)
+                .ok_or_else(|| eyre!("dataspace summary response missing totals object"))?;
+            ensure!(
+                summary_totals.get("dataspaces").and_then(JsonValue::as_u64)
+                    == Some(summary_rows.len() as u64),
+                "dataspace summary query through Nexus ingress returned inconsistent totals {:?} vs rows {:?}",
+                summary_totals,
+                summary_rows
+            );
+            Ok::<(), eyre::Report>(())
+        })?;
+    }
+
+    let (setup_grants_tx, setup_grants_authoritative_lane_index, setup_grants_pre_barrier_height) = {
+        let submitter = alice_on_ds1.clone();
         let _phase = phase_timings.phase("setup grants: tx submit enqueue");
-        let pre_barrier_height = alice
-            .get_sumeragi_status_wire()
-            .map_err(|err| eyre!(err))?
-            .commit_qc
-            .height;
         let setup_grants_tx = submitter.build_transaction(
             vec![InstructionBox::from(Grant::account_permission(
                 CanTransferAssetWithDefinition {
@@ -1442,51 +2093,155 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             ))],
             Metadata::default(),
         );
-        submitter.submit_transaction(&setup_grants_tx)?;
-        pre_barrier_height.saturating_add(1)
+        let nexus_pre_barrier_height = nexus_alice_submitter
+            .get_sumeragi_status_wire()
+            .map_err(|err| eyre!(err))?
+            .commit_qc
+            .height;
+        let ds1_pre_barrier_height = alice_on_ds1
+            .get_sumeragi_status_wire()
+            .map_err(|err| eyre!(err))?
+            .commit_qc
+            .height;
+        let ds2_pre_barrier_height = alice_on_ds2
+            .get_sumeragi_status_wire()
+            .map_err(|err| eyre!(err))?
+            .commit_qc
+            .height;
+        let route_observation = rt.block_on(submit_transaction_with_route_observation(
+            &submitter,
+            &setup_grants_tx,
+            "setup grants route observation",
+        ))?;
+        // A queued event from the ingress listener can still reflect the submitter-side lane even
+        // after the authoritative router forwards the transaction. This grant targets a universal
+        // asset-definition permission, so the authoritative route is the Nexus lane regardless of
+        // the route event lane observed through the submitter.
+        let authoritative_lane_index = NEXUS_LANE_INDEX;
+        let pre_barrier_height = match authoritative_lane_index {
+            NEXUS_LANE_INDEX => nexus_pre_barrier_height,
+            DS1_LANE_INDEX => ds1_pre_barrier_height,
+            DS2_LANE_INDEX => ds2_pre_barrier_height,
+            _ => {
+                leader_targeted_client_for_lane(
+                    &network,
+                    &alice,
+                    &ALICE_ID,
+                    ALICE_KEYPAIR.private_key(),
+                    authoritative_lane_index,
+                )
+                .get_sumeragi_status_wire()
+                .map_err(|err| eyre!(err))?
+                .commit_qc
+                .height
+            }
+        };
+        eprintln!(
+            "[setup-grants] observed lane={} dataspace={} approved_height={:?} authoritative_lane={}",
+            route_observation.lane_id.as_u32(),
+            route_observation.dataspace_id.as_u64(),
+            route_observation.approved_height,
+            authoritative_lane_index,
+        );
+        (
+            setup_grants_tx,
+            authoritative_lane_index,
+            pre_barrier_height,
+        )
     };
     {
-        let _phase = phase_timings.phase("setup grants: barrier wait");
-        let _setup_grants_synced = wait_for_height_with_tick_timeout(
-            &alice,
-            &alice,
-            setup_grants_barrier_target,
-            "grant setup barrier on alice",
-            STATUS_WAIT_TIMEOUT,
-            SETUP_BARRIER_TICK_EVERY_POLLS,
+        let _phase = phase_timings.phase("setup grants: tx committed outcome");
+        let setup_grants_entry_hash = setup_grants_tx.hash_as_entrypoint();
+        wait_for_committed_success_or_height_fallback_across_clients(
+            || {
+                lane_targeted_clients_for_lane(
+                    &network,
+                    &alice,
+                    &ALICE_ID,
+                    ALICE_KEYPAIR.private_key(),
+                    setup_grants_authoritative_lane_index,
+                )
+            },
+            setup_grants_entry_hash,
+            "setup grants committed outcome on authoritative observer",
+            "setup grants commit barrier on authoritative observer",
+            setup_grants_pre_barrier_height,
+            BLOCKING_CONFIRMATION_TIMEOUT,
+            BLOCKING_CONFIRMATION_TIMEOUT,
         )?;
-    }
+    };
     {
         let _phase = phase_timings.phase("setup grants: query/assert");
-        wait_for_account_permissions(
-            &bob,
-            &alice,
+        // Confirm the authoritative Bob-facing view exposed by the observed routed lane before
+        // proceeding to the swap path that depends on it.
+        wait_for_account_permissions_across_clients(
+            || {
+                lane_targeted_clients_for_lane(
+                    &network,
+                    &bob,
+                    &BOB_ID,
+                    BOB_KEYPAIR.private_key(),
+                    setup_grants_authoritative_lane_index,
+                )
+            },
             &BOB_ID,
             &[bob_transfer_ds1_permission.clone()],
-            "grant setup permissions visible on bob",
+            "grant setup permissions visible on authoritative bob observer",
         )?;
     }
 
     let seeded_balances = [
-        (&alice_ds1_asset, Numeric::from(100_u32)),
-        (&bob_ds1_asset, Numeric::from(0_u32)),
-        (&alice_ds2_asset, Numeric::from(0_u32)),
-        (&bob_ds2_asset, Numeric::from(200_u32)),
+        BalanceExpectation {
+            client: &alice_on_ds1,
+            asset_id: &alice_ds1_asset,
+            expected: Numeric::from(100_u32),
+        },
+        BalanceExpectation {
+            client: &bob_on_ds1,
+            asset_id: &bob_ds1_asset,
+            expected: Numeric::from(0_u32),
+        },
+        BalanceExpectation {
+            client: &alice_on_ds2,
+            asset_id: &alice_ds2_asset,
+            expected: Numeric::from(0_u32),
+        },
+        BalanceExpectation {
+            client: &bob_on_ds2,
+            asset_id: &bob_ds2_asset,
+            expected: Numeric::from(200_u32),
+        },
     ];
     let setup_register_mint_retries_used = 0usize;
     {
         let _phase = phase_timings.phase("setup register+mint: query/assert");
         wait_for_expected_balances_with_tick_timeout(
             &alice,
-            &alice,
             &seeded_balances,
             "seed balances from genesis setup",
             SETUP_REGISTER_MINT_QUERY_TIMEOUT,
         )?;
     }
-
-    let mut swap_outcome_fallbacks = 0usize;
+    let swap_outcome_fallbacks = 0usize;
     let mut swap_nonconverged_fallbacks = 0usize;
+    let current_nexus_clients = || {
+        (
+            leader_targeted_client_for_lane(
+                &network,
+                &alice,
+                &ALICE_ID,
+                ALICE_KEYPAIR.private_key(),
+                NEXUS_LANE_INDEX,
+            ),
+            leader_targeted_client_for_lane(
+                &network,
+                &alice,
+                &BOB_ID,
+                BOB_KEYPAIR.private_key(),
+                NEXUS_LANE_INDEX,
+            ),
+        )
+    };
 
     {
         let successful_swap = DvpIsi::new(
@@ -1508,16 +2263,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 SettlementAtomicity::AllOrNothing,
             ),
         );
-        let mut submitter = leader_targeted_client_for_lane(
-            &network,
-            &alice,
-            &ALICE_ID,
-            ALICE_KEYPAIR.private_key(),
-            DS1_LANE_INDEX,
-        );
-        let (successful_swap_tx, successful_swap_entry_hash, successful_swap_pre_barrier_height) = {
+        let (submitter, _) = current_nexus_clients();
+        let mut successful_swap_synced_status = None;
+        let (successful_swap_entry_hash, successful_swap_pre_barrier_height) = {
             let _phase = phase_timings.phase("execute successful swap: tx submit enqueue");
-            let pre_barrier_height = alice
+            let pre_barrier_height = submitter
                 .get_sumeragi_status_wire()
                 .map_err(|err| eyre!(err))?
                 .commit_qc
@@ -1525,151 +2275,109 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             let successful_swap_tx = submitter
                 .build_transaction([InstructionBox::from(successful_swap)], Metadata::default());
             let successful_swap_entry_hash = successful_swap_tx.hash_as_entrypoint();
-            (
-                successful_swap_tx,
-                successful_swap_entry_hash,
-                pre_barrier_height,
-            )
+            let route_observation = rt.block_on(submit_transaction_with_route_observation(
+                &submitter,
+                &successful_swap_tx,
+                "successful swap route observation",
+            ))?;
+            eprintln!(
+                "[swap] successful swap observed lane={} dataspace={} approved_height={:?}",
+                route_observation.lane_id.as_u32(),
+                route_observation.dataspace_id.as_u64(),
+                route_observation.approved_height,
+            );
+            (successful_swap_entry_hash, pre_barrier_height)
         };
         {
             let _phase = phase_timings.phase("execute successful swap: barrier wait");
-            submitter.transaction_status_timeout = SWAP_BLOCKING_CONFIRMATION_TIMEOUT;
-            match submitter.submit_transaction_blocking(&successful_swap_tx) {
-                Ok(_) => {}
-                Err(err) => {
-                    let error_text = err.to_string();
-                    if !is_inconclusive_blocking_submit_error(&error_text) {
-                        return Err(err);
-                    }
-                    swap_outcome_fallbacks = swap_outcome_fallbacks.saturating_add(1);
-                    if let Err(fallback_err) = wait_for_committed_success_or_height_fallback(
+            match wait_for_committed_success_or_height_fallback_across_clients(
+                || {
+                    lane_targeted_clients_for_lane(
+                        &network,
                         &alice,
-                        &alice,
-                        successful_swap_entry_hash,
-                        "successful swap confirmation on alice",
-                        "successful swap barrier on alice (height fallback)",
-                        successful_swap_pre_barrier_height,
-                        SWAP_COMMITTED_OUTCOME_TIMEOUT,
-                        SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
-                    ) {
-                        swap_nonconverged_fallbacks = swap_nonconverged_fallbacks.saturating_add(1);
-                        eprintln!(
-                            "[swap] successful swap fallback did not converge before balance assertion: {fallback_err}"
-                        );
-                    }
+                        &ALICE_ID,
+                        ALICE_KEYPAIR.private_key(),
+                        NEXUS_LANE_INDEX,
+                    )
+                },
+                successful_swap_entry_hash,
+                "successful swap confirmation on Nexus authoritative observer",
+                "successful swap barrier on Nexus authoritative observer (height fallback)",
+                successful_swap_pre_barrier_height,
+                SWAP_COMMITTED_OUTCOME_TIMEOUT,
+                SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
+            ) {
+                Ok(status) => successful_swap_synced_status = Some(status),
+                Err(fallback_err) => {
+                    swap_nonconverged_fallbacks = swap_nonconverged_fallbacks.saturating_add(1);
+                    eprintln!(
+                        "[swap] successful swap fallback did not converge before balance assertion: {fallback_err}"
+                    );
                 }
             }
+        }
+        if let Some(status) = successful_swap_synced_status.as_ref() {
+            let (alice_on_nexus, _) = current_nexus_clients();
+            wait_for_lane_peers_commit_qc_at_least(
+                &network,
+                NEXUS_LANE_INDEX,
+                status,
+                &alice_on_nexus,
+                "successful swap Nexus authoritative sync",
+                STATUS_WAIT_TIMEOUT,
+                SETUP_BARRIER_TICK_EVERY_POLLS,
+            )?;
         }
         {
             let _phase = phase_timings.phase("execute successful swap: query/assert");
-            wait_for_expected_balances_with_tick(
-                &alice,
-                &alice,
-                &[
-                    (&alice_ds1_asset, Numeric::from(70_u32)),
-                    (&bob_ds1_asset, Numeric::from(30_u32)),
-                    (&alice_ds2_asset, Numeric::from(45_u32)),
-                    (&bob_ds2_asset, Numeric::from(155_u32)),
-                ],
-                "successful swap balances",
-            )?;
-        }
-    }
-
-    {
-        let reverse_successful_swap = DvpIsi::new(
-            "ds2ds1swapok".parse().expect("settlement id"),
-            SettlementLeg::new(
-                ds2_asset_def.clone(),
-                Numeric::from(20_u32),
-                BOB_ID.clone(),
-                ALICE_ID.clone(),
-            ),
-            SettlementLeg::new(
-                ds1_asset_def.clone(),
-                Numeric::from(10_u32),
-                ALICE_ID.clone(),
-                BOB_ID.clone(),
-            ),
-            SettlementPlan::new(
-                SettlementExecutionOrder::DeliveryThenPayment,
-                SettlementAtomicity::AllOrNothing,
-            ),
-        );
-        let mut submitter = leader_targeted_client_for_lane(
-            &network,
-            &bob,
-            &BOB_ID,
-            BOB_KEYPAIR.private_key(),
-            DS2_LANE_INDEX,
-        );
-        let (reverse_swap_tx, reverse_swap_entry_hash, reverse_swap_pre_barrier_height) = {
-            let _phase = phase_timings.phase("execute reverse swap: tx submit enqueue");
-            let pre_barrier_height = alice
-                .get_sumeragi_status_wire()
-                .map_err(|err| eyre!(err))?
-                .commit_qc
-                .height;
-            let reverse_swap_tx = submitter.build_transaction(
-                [InstructionBox::from(reverse_successful_swap)],
-                Metadata::default(),
-            );
-            let reverse_swap_entry_hash = reverse_swap_tx.hash_as_entrypoint();
-            (reverse_swap_tx, reverse_swap_entry_hash, pre_barrier_height)
-        };
-        {
-            let _phase = phase_timings.phase("execute reverse swap: barrier wait");
-            submitter.transaction_status_timeout = SWAP_BLOCKING_CONFIRMATION_TIMEOUT;
-            match submitter.submit_transaction_blocking(&reverse_swap_tx) {
-                Ok(_) => {}
-                Err(err) => {
-                    let error_text = err.to_string();
-                    if !is_inconclusive_blocking_submit_error(&error_text) {
-                        return Err(err);
+            let mut balance_wait_result = Ok(());
+            for attempt in 0..4 {
+                let (alice_on_nexus, bob_on_nexus) = current_nexus_clients();
+                let successful_swap_expectations = [
+                    BalanceExpectation {
+                        client: &alice_on_nexus,
+                        asset_id: &alice_ds1_asset,
+                        expected: Numeric::from(70_u32),
+                    },
+                    BalanceExpectation {
+                        client: &bob_on_nexus,
+                        asset_id: &bob_ds1_asset,
+                        expected: Numeric::from(30_u32),
+                    },
+                    BalanceExpectation {
+                        client: &alice_on_nexus,
+                        asset_id: &alice_ds2_asset,
+                        expected: Numeric::from(45_u32),
+                    },
+                    BalanceExpectation {
+                        client: &bob_on_nexus,
+                        asset_id: &bob_ds2_asset,
+                        expected: Numeric::from(155_u32),
+                    },
+                ];
+                match wait_for_expected_balances_with_tick_timeout(
+                    &alice_on_nexus,
+                    &successful_swap_expectations,
+                    "successful swap balances",
+                    Duration::from_secs(12),
+                ) {
+                    Ok(()) => {
+                        balance_wait_result = Ok(());
+                        break;
                     }
-                    swap_outcome_fallbacks = swap_outcome_fallbacks.saturating_add(1);
-                    if let Err(fallback_err) = wait_for_committed_success_or_height_fallback(
-                        &alice,
-                        &alice,
-                        reverse_swap_entry_hash,
-                        "reverse swap confirmation on alice",
-                        "reverse swap barrier on alice (height fallback)",
-                        reverse_swap_pre_barrier_height,
-                        SWAP_COMMITTED_OUTCOME_TIMEOUT,
-                        SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
-                    ) {
-                        swap_nonconverged_fallbacks = swap_nonconverged_fallbacks.saturating_add(1);
+                    Err(err) => {
                         eprintln!(
-                            "[swap] reverse swap fallback did not converge before balance assertion: {fallback_err}"
+                            "[swap] successful swap balances not visible after Nexus tick window {}: {err}",
+                            attempt + 1
                         );
+                        balance_wait_result = Err(err);
                     }
                 }
             }
-        }
-        {
-            let _phase = phase_timings.phase("execute reverse swap: query/assert");
-            wait_for_expected_balances_with_tick(
-                &alice,
-                &alice,
-                &[
-                    (&alice_ds1_asset, Numeric::from(60_u32)),
-                    (&bob_ds1_asset, Numeric::from(40_u32)),
-                    (&alice_ds2_asset, Numeric::from(65_u32)),
-                    (&bob_ds2_asset, Numeric::from(135_u32)),
-                ],
-                "reverse swap balances",
-            )?;
+            balance_wait_result?;
         }
     }
-
     let soak_iterations = soak_iterations();
-    let soak_baseline = [
-        (&alice_ds1_asset, Numeric::from(60_u32)),
-        (&bob_ds1_asset, Numeric::from(40_u32)),
-        (&alice_ds2_asset, Numeric::from(65_u32)),
-        (&bob_ds2_asset, Numeric::from(135_u32)),
-    ];
-    let mut last_soak_synced_height: Option<u64> = None;
     let mut soak_passes = 0usize;
     let mut soak_iteration_durations = Vec::with_capacity(soak_iterations);
     let mut soak_target_durations = Vec::with_capacity(soak_iterations);
@@ -1683,26 +2391,13 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         let _phase = phase_timings.phase(format!(
             "soak {soak_iterations} iterations: paired swap throughput"
         ));
-        let mut soak_submitter = leader_targeted_client_for_lane(
-            &network,
-            &alice,
-            &ALICE_ID,
-            ALICE_KEYPAIR.private_key(),
-            DS1_LANE_INDEX,
-        );
         for iteration in 0..soak_iterations {
             let iteration_started = Instant::now();
             let mut run_result = Err(eyre!("iteration {} exceeded retry budget", iteration + 1));
             for attempt in 0..SOAK_ITERATION_ATTEMPTS {
                 let attempt_result = (|| -> Result<(Duration, Duration, Duration, Duration)> {
                     let retarget_started = Instant::now();
-                    soak_submitter = leader_targeted_client_for_lane(
-                        &network,
-                        &alice,
-                        &ALICE_ID,
-                        ALICE_KEYPAIR.private_key(),
-                        DS1_LANE_INDEX,
-                    );
+                    let (soak_submitter, soak_bob_observer) = current_nexus_clients();
                     let target_elapsed = retarget_started.elapsed();
                     let forward_swap = DvpIsi::new(
                         format!("soakfwd{iteration}a{attempt}")
@@ -1755,27 +2450,44 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                         Metadata::default(),
                     );
                     let soak_swap_entry_hash = soak_swap_tx.hash_as_entrypoint();
-                    let pre_barrier_height = alice
+                    let pre_barrier_height = soak_submitter
                         .get_sumeragi_status_wire()
                         .map_err(|err| eyre!(err))?
                         .commit_qc
-                        .height
-                        .max(
-                            bob.get_sumeragi_status_wire()
-                                .map_err(|err| eyre!(err))?
-                                .commit_qc
-                                .height,
-                        );
-                    soak_submitter.submit_transaction(&soak_swap_tx)?;
+                        .height;
+                    submit_transaction_across_clients(
+                        || {
+                            lane_targeted_clients_for_lane(
+                                &network,
+                                &alice,
+                                &ALICE_ID,
+                                ALICE_KEYPAIR.private_key(),
+                                NEXUS_LANE_INDEX,
+                            )
+                        },
+                        &soak_swap_tx,
+                        "soak paired swaps enqueue on Nexus authoritative observers",
+                        SUBMIT_ENQUEUE_REQUEST_TIMEOUT,
+                    )?;
                     let submit_elapsed = submit_started.elapsed();
                     let barrier_started = Instant::now();
-                    let synced_after_paired_swaps = match wait_for_committed_success(
-                        &alice,
+                    let _synced_after_paired_swaps = match wait_for_committed_success_across_clients(
+                        || {
+                            lane_targeted_clients_for_lane(
+                                &network,
+                                &alice,
+                                &ALICE_ID,
+                                ALICE_KEYPAIR.private_key(),
+                                NEXUS_LANE_INDEX,
+                            )
+                        },
                         soak_swap_entry_hash.clone(),
-                        "soak paired swaps confirmation on alice",
+                        "soak paired swaps confirmation on Nexus authoritative observer",
                         SOAK_COMMITTED_OUTCOME_TIMEOUT,
                     ) {
-                        Ok(()) => alice.get_sumeragi_status_wire().map_err(|err| eyre!(err))?,
+                        Ok(()) => soak_submitter
+                            .get_sumeragi_status_wire()
+                            .map_err(|err| eyre!(err))?,
                         Err(err) => {
                             let error_text = err.to_string();
                             if !is_inconclusive_committed_outcome_error(&error_text) {
@@ -1787,22 +2499,37 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                                     "[soak] committed outcome inconclusive; falling back to height barrier"
                                 );
                             }
-                            match wait_for_height_with_tick_timeout(
-                                &alice,
-                                &alice,
+                            match wait_for_height_with_tick_timeout_across_clients(
+                                || {
+                                    lane_targeted_clients_for_lane(
+                                        &network,
+                                        &alice,
+                                        &ALICE_ID,
+                                        ALICE_KEYPAIR.private_key(),
+                                        NEXUS_LANE_INDEX,
+                                    )
+                                },
                                 pre_barrier_height.saturating_add(1),
-                                "soak paired swaps barrier on alice (height fallback)",
+                                "soak paired swaps barrier on Nexus authoritative observer (height fallback)",
                                 SOAK_PHASE_WAIT_TIMEOUT,
                                 SOAK_BARRIER_TICK_EVERY_POLLS,
                             ) {
                                 Ok(status) => status,
-                                Err(height_err) => match wait_for_committed_success(
-                                    &alice,
+                                Err(height_err) => match wait_for_committed_success_across_clients(
+                                    || {
+                                        lane_targeted_clients_for_lane(
+                                            &network,
+                                            &alice,
+                                            &ALICE_ID,
+                                            ALICE_KEYPAIR.private_key(),
+                                            NEXUS_LANE_INDEX,
+                                        )
+                                    },
                                     soak_swap_entry_hash.clone(),
-                                    "soak paired swaps confirmation on alice (post-barrier-timeout)",
+                                    "soak paired swaps confirmation on Nexus authoritative observer (post-barrier-timeout)",
                                     SOAK_PHASE_WAIT_TIMEOUT,
                                 ) {
-                                    Ok(()) => alice
+                                    Ok(()) => soak_submitter
                                         .get_sumeragi_status_wire()
                                         .map_err(|err| eyre!(err))?,
                                     Err(outcome_err) => {
@@ -1817,10 +2544,30 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                         }
                     };
                     let barrier_elapsed = barrier_started.elapsed();
-                    last_soak_synced_height = Some(synced_after_paired_swaps.commit_qc.height);
                     let query_started = Instant::now();
+                    let soak_baseline = [
+                        BalanceExpectation {
+                            client: &soak_submitter,
+                            asset_id: &alice_ds1_asset,
+                            expected: Numeric::from(70_u32),
+                        },
+                        BalanceExpectation {
+                            client: &soak_bob_observer,
+                            asset_id: &bob_ds1_asset,
+                            expected: Numeric::from(30_u32),
+                        },
+                        BalanceExpectation {
+                            client: &soak_submitter,
+                            asset_id: &alice_ds2_asset,
+                            expected: Numeric::from(45_u32),
+                        },
+                        BalanceExpectation {
+                            client: &soak_bob_observer,
+                            asset_id: &bob_ds2_asset,
+                            expected: Numeric::from(155_u32),
+                        },
+                    ];
                     wait_for_expected_balances_with_timeout(
-                        &alice,
                         &soak_baseline,
                         "soak iteration net-zero balances",
                         SOAK_PHASE_WAIT_TIMEOUT,
@@ -1933,11 +2680,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             soak_failures.len()
         );
     }
-    if let Some(height) = last_soak_synced_height {
-        let _phase = phase_timings.phase("soak final bob sync barrier");
-        let _soak_synced_bob = wait_for_height(&bob, height, "soak final propagation to bob")?;
-    }
-
     {
         let _phase = phase_timings.phase("execute failing swap + rollback verification");
         let mut failure_text = None;
@@ -1967,25 +2709,56 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     SettlementAtomicity::AllOrNothing,
                 ),
             );
-            let submitter = leader_targeted_client_for_lane(
-                &network,
-                &alice,
-                &ALICE_ID,
-                ALICE_KEYPAIR.private_key(),
-                DS1_LANE_INDEX,
-            );
-            let mut submitter = submitter;
+            let (submitter, _) = current_nexus_clients();
             let failing_swap_tx = submitter
                 .build_transaction([InstructionBox::from(failing_swap)], Metadata::default());
             let entry_hash = failing_swap_tx.hash_as_entrypoint();
             last_attempt_entry_hash = Some(entry_hash.clone());
-            submitter.transaction_status_timeout = BLOCKING_CONFIRMATION_TIMEOUT;
-            match submitter.submit_transaction_blocking(&failing_swap_tx) {
-                Ok(_) => {
-                    return Err(eyre!(
-                        "underfunded counter-leg unexpectedly approved on rollback attempt {}",
+            if let Err(err) = submit_transaction_across_clients(
+                || {
+                    lane_targeted_clients_for_lane(
+                        &network,
+                        &alice,
+                        &ALICE_ID,
+                        ALICE_KEYPAIR.private_key(),
+                        NEXUS_LANE_INDEX,
+                    )
+                },
+                &failing_swap_tx,
+                "rollback failing swap enqueue on Nexus authoritative observers",
+                SUBMIT_ENQUEUE_REQUEST_TIMEOUT,
+            ) {
+                let error_text = err.to_string();
+                if is_inconclusive_blocking_submit_error(&error_text)
+                    && attempt + 1 < ROLLBACK_CAPPED_ATTEMPTS
+                {
+                    eprintln!(
+                        "[rollback] inconclusive enqueue on attempt {}; retrying with fresh leader target",
                         attempt + 1
-                    ));
+                    );
+                    continue;
+                }
+                failure_text = Some(error_text);
+                break;
+            }
+
+            match wait_for_committed_rejection_reason_across_clients(
+                || {
+                    lane_targeted_clients_for_lane(
+                        &network,
+                        &alice,
+                        &ALICE_ID,
+                        ALICE_KEYPAIR.private_key(),
+                        NEXUS_LANE_INDEX,
+                    )
+                },
+                entry_hash.clone(),
+                "rollback rejection reason from Nexus authoritative history",
+                ROLLBACK_HISTORY_RETRY_TIMEOUT,
+            ) {
+                Ok(committed_reason) => {
+                    failure_text = Some(committed_reason);
+                    break;
                 }
                 Err(err) => {
                     let error_text = err.to_string();
@@ -1995,20 +2768,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                         failure_text = Some(error_text);
                         break;
                     }
-                    if is_inconclusive_blocking_submit_error(&error_text)
+                    if is_inconclusive_committed_outcome_error(&error_text)
                         && attempt + 1 < ROLLBACK_CAPPED_ATTEMPTS
                     {
-                        if let Ok(committed_reason) = wait_for_committed_rejection_reason(
-                            &alice,
-                            entry_hash.clone(),
-                            "rollback rejection reason from committed history",
-                            ROLLBACK_HISTORY_RETRY_TIMEOUT,
-                        ) {
-                            failure_text = Some(committed_reason);
-                            break;
-                        }
                         eprintln!(
-                            "[rollback] inconclusive submit on attempt {}; retrying with fresh leader target",
+                            "[rollback] inconclusive rejection lookup on attempt {}; retrying with fresh leader target",
                             attempt + 1
                         );
                         continue;
@@ -2020,14 +2784,24 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         }
         let mut failure_text = failure_text
             .ok_or_else(|| eyre!("rollback rejection attempt did not produce an error"))?;
-        if is_inconclusive_blocking_submit_error(&failure_text) {
+        if is_inconclusive_blocking_submit_error(&failure_text)
+            || is_inconclusive_committed_outcome_error(&failure_text)
+        {
             let entry_hash = last_attempt_entry_hash
                 .ok_or_else(|| eyre!("missing transaction entry hash for rollback fallback"))?;
             eprintln!("[rollback] falling back to committed history lookup for rejection reason");
-            match wait_for_committed_rejection_reason(
-                &alice,
+            match wait_for_committed_rejection_reason_across_clients(
+                || {
+                    lane_targeted_clients_for_lane(
+                        &network,
+                        &alice,
+                        &ALICE_ID,
+                        ALICE_KEYPAIR.private_key(),
+                        NEXUS_LANE_INDEX,
+                    )
+                },
                 entry_hash,
-                "rollback rejection reason from committed history fallback",
+                "rollback rejection reason from Nexus authoritative history fallback",
                 ROLLBACK_HISTORY_FALLBACK_TIMEOUT,
             ) {
                 Ok(reason) => {
@@ -2060,13 +2834,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                             SettlementAtomicity::AllOrNothing,
                         ),
                     );
-                    let submitter = leader_targeted_client_for_lane(
-                        &network,
-                        &alice,
-                        &ALICE_ID,
-                        ALICE_KEYPAIR.private_key(),
-                        DS1_LANE_INDEX,
-                    );
+                    let (submitter, _) = current_nexus_clients();
                     let fallback_error = submitter
                         .submit_blocking(InstructionBox::from(final_fallback_swap))
                         .expect_err(
@@ -2081,11 +2849,30 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 || failure_text.contains("requires 10000"),
             "unexpected failure message: {failure_text}"
         );
-        wait_for_expected_balances(
-            &alice,
-            &soak_baseline,
-            "rollback balances after failing swap",
-        )?;
+        let (rollback_alice_on_nexus, rollback_bob_on_nexus) = current_nexus_clients();
+        let rollback_baseline = [
+            BalanceExpectation {
+                client: &rollback_alice_on_nexus,
+                asset_id: &alice_ds1_asset,
+                expected: Numeric::from(70_u32),
+            },
+            BalanceExpectation {
+                client: &rollback_bob_on_nexus,
+                asset_id: &bob_ds1_asset,
+                expected: Numeric::from(30_u32),
+            },
+            BalanceExpectation {
+                client: &rollback_alice_on_nexus,
+                asset_id: &alice_ds2_asset,
+                expected: Numeric::from(45_u32),
+            },
+            BalanceExpectation {
+                client: &rollback_bob_on_nexus,
+                asset_id: &bob_ds2_asset,
+                expected: Numeric::from(155_u32),
+            },
+        ];
+        wait_for_expected_balances(&rollback_baseline, "rollback balances after failing swap")?;
     }
 
     ensure!(
@@ -2120,7 +2907,42 @@ fn cross_dataspace_localnet_genesis_preexecution_smoke() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_positive_usize_override;
+    use super::{
+        ALICE_ID, Algorithm, DS1_ID_U64, DS1_LANE_INDEX, DS2_ID_U64, DS2_LANE_INDEX,
+        ExpectedLaneValidatorBinding, KeyPair, NEXUS_ID_U64, NEXUS_LANE_INDEX,
+        OBSERVER_QUERY_TIMEOUT_CAP, PeerId, RoutedJsonGetResponse, TOTAL_PEERS,
+        VALIDATORS_PER_LANE, bounded_observer_request_timeout, cross_dataspace_gas_account_id,
+        duration_min_avg_max_secs, expect_local_or_proxy_fanout_headers,
+        expected_lane_binding_for_peer, is_inconclusive_blocking_submit_error,
+        is_inconclusive_committed_outcome_error, lane_validator_snapshot,
+        multilane_da_proof_policy_bundle, nexus_fee_asset_definition_id,
+        npos_multilane_genesis_post_topology_transactions, parse_positive_usize_override,
+        render_error_with_debug, render_rejection_reason, routed_header_string, should_submit_tick,
+        stake_asset_definition_id, stake_asset_id_literal, validator_authority_account_for_peer,
+    };
+    use iroha::data_model::{
+        da::commitment::{DaProofPolicyBundle, DaProofScheme},
+        transaction::error::{TransactionLimitError, TransactionRejectionReason},
+    };
+    use norito::json::Value as JsonValue;
+    use reqwest::header::{HeaderMap, HeaderValue};
+    use std::{
+        fmt::{Debug, Display, Formatter, Result as FmtResult},
+        panic,
+        time::{Duration, Instant},
+    };
+
+    fn deterministic_topology(peer_count: usize) -> Vec<PeerId> {
+        (0..peer_count)
+            .map(|index| {
+                let mut seed = vec![0_u8; 32];
+                seed[0] = 0xD1;
+                seed[1..9].copy_from_slice(&u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes());
+                let key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+                PeerId::new(key_pair.public_key().clone())
+            })
+            .collect()
+    }
 
     #[test]
     fn parse_positive_usize_override_uses_positive_input() {
@@ -2132,7 +2954,482 @@ mod tests {
     fn parse_positive_usize_override_falls_back_on_invalid_input() {
         assert_eq!(parse_positive_usize_override(None, 10), 10);
         assert_eq!(parse_positive_usize_override(Some("0"), 10), 10);
+        assert_eq!(parse_positive_usize_override(Some("-1"), 10), 10);
+        assert_eq!(parse_positive_usize_override(Some("1.5"), 10), 10);
         assert_eq!(parse_positive_usize_override(Some("not-a-number"), 10), 10);
         assert_eq!(parse_positive_usize_override(Some(""), 10), 10);
+    }
+
+    #[test]
+    fn asset_definition_helpers_keep_stake_and_fee_domains_distinct() {
+        let stake_definition_id = stake_asset_definition_id();
+        let fee_definition_id = nexus_fee_asset_definition_id();
+
+        assert_eq!(stake_asset_id_literal(), stake_definition_id.to_string());
+        assert_ne!(
+            stake_definition_id.to_string(),
+            fee_definition_id.to_string(),
+            "stake and fee helpers should not collapse cross-dataspace asset domains"
+        );
+    }
+
+    #[test]
+    fn multilane_da_policy_bundle_preserves_lane_dataspace_order() {
+        let bundle = multilane_da_proof_policy_bundle();
+        let expected_hash = DaProofPolicyBundle::new(bundle.policies.clone()).policy_hash;
+
+        assert_eq!(bundle.version, DaProofPolicyBundle::VERSION_V1);
+        assert_eq!(bundle.policy_hash, expected_hash);
+        assert_eq!(bundle.policies.len(), 3);
+        assert_eq!(bundle.policies[0].lane_id.as_u32(), NEXUS_LANE_INDEX);
+        assert_eq!(bundle.policies[0].dataspace_id.as_u64(), NEXUS_ID_U64);
+        assert_eq!(bundle.policies[0].alias, "lane-nexus");
+        assert_eq!(bundle.policies[0].proof_scheme, DaProofScheme::MerkleSha256);
+        assert_eq!(bundle.policies[1].lane_id.as_u32(), DS1_LANE_INDEX);
+        assert_eq!(bundle.policies[1].dataspace_id.as_u64(), DS1_ID_U64);
+        assert_eq!(bundle.policies[1].alias, "lane-ds1");
+        assert_eq!(bundle.policies[2].lane_id.as_u32(), DS2_LANE_INDEX);
+        assert_eq!(bundle.policies[2].dataspace_id.as_u64(), DS2_ID_U64);
+        assert_eq!(bundle.policies[2].alias, "lane-ds2");
+    }
+
+    #[test]
+    fn multilane_da_policy_bundle_hash_is_deterministic_and_order_sensitive() {
+        let bundle = multilane_da_proof_policy_bundle();
+        let repeated = multilane_da_proof_policy_bundle();
+        let mut reversed_policies = bundle.policies.clone();
+        reversed_policies.reverse();
+        let reversed_hash = DaProofPolicyBundle::new(reversed_policies).policy_hash;
+
+        assert_eq!(bundle, repeated);
+        assert_ne!(bundle.policy_hash, reversed_hash);
+    }
+
+    #[test]
+    fn genesis_post_topology_builder_covers_all_lane_buckets() {
+        let topology = deterministic_topology(TOTAL_PEERS);
+        let transactions = npos_multilane_genesis_post_topology_transactions(&topology);
+
+        assert_eq!(transactions.len(), 1);
+        assert_eq!(transactions[0].len(), 12 + TOTAL_PEERS * 5);
+        assert_eq!(
+            expected_lane_binding_for_peer(0, &topology[0]).peer_id,
+            topology[0].to_string()
+        );
+        assert_eq!(
+            expected_lane_binding_for_peer(VALIDATORS_PER_LANE, &topology[VALIDATORS_PER_LANE])
+                .peer_id,
+            topology[VALIDATORS_PER_LANE].to_string()
+        );
+        assert_eq!(
+            expected_lane_binding_for_peer(
+                VALIDATORS_PER_LANE * 2,
+                &topology[VALIDATORS_PER_LANE * 2],
+            )
+            .peer_id,
+            topology[VALIDATORS_PER_LANE * 2].to_string()
+        );
+    }
+
+    #[test]
+    fn genesis_post_topology_builder_is_deterministic_for_same_roster() {
+        let topology = deterministic_topology(TOTAL_PEERS);
+        let first = npos_multilane_genesis_post_topology_transactions(&topology);
+        let second = npos_multilane_genesis_post_topology_transactions(&topology);
+
+        assert_eq!(format!("{first:?}"), format!("{second:?}"));
+    }
+
+    #[test]
+    fn genesis_post_topology_builder_rejects_wrong_peer_count() {
+        let topology = deterministic_topology(TOTAL_PEERS - 1);
+
+        let result =
+            panic::catch_unwind(|| npos_multilane_genesis_post_topology_transactions(&topology));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn cross_dataspace_gas_account_uses_alice_canonical_subject() {
+        let gas_account = cross_dataspace_gas_account_id();
+
+        assert_eq!(gas_account, ALICE_ID.clone());
+        assert_eq!(
+            gas_account.canonical_i105().expect("gas account i105"),
+            ALICE_ID.canonical_i105().expect("alice i105")
+        );
+    }
+
+    #[test]
+    fn validator_authority_account_for_peer_is_deterministic_and_indexed() {
+        let first = validator_authority_account_for_peer(2);
+        let repeated = validator_authority_account_for_peer(2);
+        let next = validator_authority_account_for_peer(3);
+
+        assert_eq!(first, repeated);
+        assert_ne!(first, next);
+        assert!(
+            !first
+                .canonical_i105()
+                .expect("validator account")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn expected_lane_binding_for_peer_pairs_validator_and_peer_id() {
+        let mut seed = vec![0_u8; 32];
+        seed[0] = 0xA5;
+        let peer_key_pair = KeyPair::from_seed(seed, Algorithm::Ed25519);
+        let peer_id = PeerId::new(peer_key_pair.public_key().clone());
+
+        let binding = expected_lane_binding_for_peer(4, &peer_id);
+
+        assert_eq!(binding.peer_id, peer_id.to_string());
+        assert_eq!(
+            binding.validator,
+            validator_authority_account_for_peer(4).to_string()
+        );
+    }
+
+    #[test]
+    fn lane_validator_snapshot_filters_active_bindings_and_preserves_total() {
+        let body = norito::json!({
+            "total": 3,
+            "items": [
+                {
+                    "validator": "validator-a",
+                    "peer_id": "peer-a",
+                    "status": { "type": "Active" },
+                },
+                {
+                    "validator": "validator-b",
+                    "peer_id": "peer-b",
+                    "status": { "type": "Pending" },
+                },
+                {
+                    "validator": "validator-c",
+                    "peer_id": "peer-c",
+                    "status": { "type": "Active" },
+                },
+            ],
+        });
+
+        let (total, active) =
+            lane_validator_snapshot(&body, "lane validators").expect("lane snapshot should parse");
+
+        assert_eq!(total, 3);
+        assert_eq!(active.len(), 2);
+        assert!(active.contains(&ExpectedLaneValidatorBinding {
+            validator: "validator-a".to_owned(),
+            peer_id: "peer-a".to_owned(),
+        }));
+        assert!(active.contains(&ExpectedLaneValidatorBinding {
+            validator: "validator-c".to_owned(),
+            peer_id: "peer-c".to_owned(),
+        }));
+    }
+
+    #[test]
+    fn lane_validator_snapshot_rejects_malformed_payloads() {
+        for (body, expected) in [
+            (JsonValue::Null, "lane validator response is not an object"),
+            (
+                norito::json!({ "items": [] }),
+                "lane validator response is missing total",
+            ),
+            (
+                norito::json!({ "total": 1 }),
+                "lane validator response is missing items",
+            ),
+            (
+                norito::json!({
+                    "total": 1,
+                    "items": [{ "status": { "type": "Active" }, "peer_id": "peer-a" }],
+                }),
+                "validator entry missing validator literal",
+            ),
+            (
+                norito::json!({
+                    "total": 1,
+                    "items": [{ "validator": "validator-a", "status": { "type": "Active" } }],
+                }),
+                "validator entry missing peer_id literal",
+            ),
+            (
+                norito::json!({
+                    "total": 1,
+                    "items": [{ "validator": "validator-a", "peer_id": "peer-a" }],
+                }),
+                "validator entry missing status.type",
+            ),
+            (
+                norito::json!({
+                    "total": 1,
+                    "items": ["not-an-entry"],
+                }),
+                "validator entry is not an object",
+            ),
+        ] {
+            let err = lane_validator_snapshot(&body, "lane validators")
+                .expect_err("malformed lane snapshot should fail");
+
+            assert!(
+                err.to_string().contains(expected),
+                "expected `{expected}` in `{err}`"
+            );
+        }
+    }
+
+    #[test]
+    fn duration_min_avg_max_secs_reports_expected_values() {
+        assert!(duration_min_avg_max_secs(&[]).is_none());
+
+        let (min, avg, max) = duration_min_avg_max_secs(&[
+            Duration::from_millis(500),
+            Duration::from_millis(1500),
+            Duration::from_secs(1),
+        ])
+        .expect("duration summary");
+
+        assert_eq!(min, 0.5);
+        assert_eq!(avg, 1.0);
+        assert_eq!(max, 1.5);
+    }
+
+    #[test]
+    fn duration_min_avg_max_secs_handles_single_sample() {
+        let (min, avg, max) =
+            duration_min_avg_max_secs(&[Duration::from_millis(250)]).expect("duration summary");
+
+        assert_eq!(min, 0.25);
+        assert_eq!(avg, 0.25);
+        assert_eq!(max, 0.25);
+    }
+
+    #[test]
+    fn bounded_observer_request_timeout_handles_exhausted_and_large_budgets() {
+        let exhausted = bounded_observer_request_timeout(
+            Instant::now() - Duration::from_secs(10),
+            Duration::from_secs(1),
+            4,
+        );
+        assert_eq!(exhausted, Duration::from_millis(1));
+
+        let large_single_client =
+            bounded_observer_request_timeout(Instant::now(), Duration::from_secs(90), 1);
+        assert!(
+            large_single_client <= OBSERVER_QUERY_TIMEOUT_CAP,
+            "large per-client slice should be capped"
+        );
+
+        let short_budget =
+            bounded_observer_request_timeout(Instant::now(), Duration::from_millis(500), 100);
+        assert!(
+            short_budget <= Duration::from_millis(500),
+            "short remaining budgets should not be inflated by the floor"
+        );
+    }
+
+    #[test]
+    fn bounded_observer_request_timeout_treats_zero_remaining_clients_as_one() {
+        let timeout =
+            bounded_observer_request_timeout(Instant::now(), OBSERVER_QUERY_TIMEOUT_CAP * 3, 0);
+
+        assert!(
+            timeout <= OBSERVER_QUERY_TIMEOUT_CAP,
+            "zero remaining clients should still apply the per-peer cap"
+        );
+    }
+
+    #[test]
+    fn bounded_observer_request_timeout_applies_floor_when_slice_is_small() {
+        let timeout = bounded_observer_request_timeout(Instant::now(), Duration::from_secs(9), 100);
+
+        assert_eq!(
+            timeout,
+            Duration::from_secs(2),
+            "small per-client slices should use the observer floor when the remaining budget allows it"
+        );
+    }
+
+    #[test]
+    fn bounded_observer_request_timeout_uses_divided_slice_between_floor_and_cap() {
+        let timeout = bounded_observer_request_timeout(Instant::now(), Duration::from_secs(9), 3);
+
+        assert!(
+            timeout > Duration::from_secs(2),
+            "divided slice should stay above the observer floor"
+        );
+        assert!(
+            timeout <= Duration::from_secs(3),
+            "divided slice should be close to the remaining budget divided by clients"
+        );
+    }
+
+    #[test]
+    fn should_submit_tick_fires_on_initial_and_interval_polls() {
+        assert!(should_submit_tick(0, 5));
+        assert!(!should_submit_tick(4, 5));
+        assert!(should_submit_tick(5, 5));
+        assert!(!should_submit_tick(0, 0));
+    }
+
+    #[test]
+    fn tx_fallback_error_classifiers_match_cross_dataspace_outcomes() {
+        for error_text in [
+            "transaction.status_timeout_ms elapsed",
+            "haven't got tx confirmation within 20s",
+            "transaction queued for too long",
+            "Transaction submitter thread exited with error: closed",
+            "Failed to send http POST request: connection reset",
+        ] {
+            assert!(
+                is_inconclusive_blocking_submit_error(error_text),
+                "{error_text} should be treated as inconclusive"
+            );
+        }
+        assert!(!is_inconclusive_blocking_submit_error(
+            "settlement leg requires 10000"
+        ));
+
+        assert!(is_inconclusive_committed_outcome_error(
+            "timed out waiting for committed transaction outcome"
+        ));
+        assert!(!is_inconclusive_committed_outcome_error(
+            "transaction rejected by validation"
+        ));
+    }
+
+    #[test]
+    fn tx_fallback_error_classifiers_ignore_unrelated_phrases() {
+        for error_text in [
+            "queued transaction was rejected by validation",
+            "failed to send http GET request",
+            "submitter thread completed normally",
+            "transaction status timeout was not configured",
+            "Failed to send http PATCH request",
+        ] {
+            assert!(
+                !is_inconclusive_blocking_submit_error(error_text),
+                "{error_text} should stay conclusive"
+            );
+        }
+
+        assert!(!is_inconclusive_committed_outcome_error(
+            "waiting for committed transaction outcome succeeded"
+        ));
+    }
+
+    #[test]
+    fn render_rejection_reason_includes_debug_details_when_display_is_generic() {
+        let reason = TransactionRejectionReason::LimitCheck(TransactionLimitError {
+            reason: "cross-dataspace route limit exceeded".to_owned(),
+        });
+
+        let rendered = render_rejection_reason(&reason);
+
+        assert!(rendered.contains("Failed to validate transaction limits"));
+        assert!(rendered.contains("details:"));
+        assert!(rendered.contains("cross-dataspace route limit exceeded"));
+    }
+
+    #[test]
+    fn fanout_header_helper_accepts_local_and_proxy_without_singular_route() {
+        for routed_by in ["local", "proxy"] {
+            let response = RoutedJsonGetResponse {
+                body: JsonValue::Null,
+                routed_by: Some(routed_by.to_owned()),
+                route_lane_id: None,
+                route_dataspace_id: None,
+            };
+
+            expect_local_or_proxy_fanout_headers(&response, "fanout")
+                .expect("local/proxy fanout response should pass");
+        }
+
+        let missing_route_source = RoutedJsonGetResponse {
+            body: JsonValue::Null,
+            routed_by: None,
+            route_lane_id: None,
+            route_dataspace_id: None,
+        };
+        let err = expect_local_or_proxy_fanout_headers(&missing_route_source, "fanout")
+            .expect_err("missing route source should fail");
+        assert!(err.to_string().contains("expected local or proxy fanout"));
+
+        let unknown_route_source = RoutedJsonGetResponse {
+            body: JsonValue::Null,
+            routed_by: Some("remote".to_owned()),
+            route_lane_id: None,
+            route_dataspace_id: None,
+        };
+        let err = expect_local_or_proxy_fanout_headers(&unknown_route_source, "fanout")
+            .expect_err("unknown route source should fail");
+        assert!(err.to_string().contains("expected local or proxy fanout"));
+
+        let singular_route = RoutedJsonGetResponse {
+            body: JsonValue::Null,
+            routed_by: Some("proxy".to_owned()),
+            route_lane_id: Some("1".to_owned()),
+            route_dataspace_id: None,
+        };
+        let err = expect_local_or_proxy_fanout_headers(&singular_route, "fanout")
+            .expect_err("singular fanout route should fail");
+        assert!(
+            err.to_string()
+                .contains("fanout response should not expose a singular route lane")
+        );
+
+        let singular_dataspace = RoutedJsonGetResponse {
+            body: JsonValue::Null,
+            routed_by: Some("proxy".to_owned()),
+            route_lane_id: None,
+            route_dataspace_id: Some("2".to_owned()),
+        };
+        let err = expect_local_or_proxy_fanout_headers(&singular_dataspace, "fanout")
+            .expect_err("singular fanout dataspace should fail");
+        assert!(
+            err.to_string()
+                .contains("fanout response should not expose a singular route dataspace")
+        );
+    }
+
+    #[test]
+    fn routed_header_string_reads_present_headers_and_ignores_absent_ones() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-iroha-routed-by", HeaderValue::from_static("proxy"));
+        headers.insert(
+            "x-iroha-invalid",
+            HeaderValue::from_bytes(&[0xFF]).expect("binary header value"),
+        );
+
+        assert_eq!(
+            routed_header_string(&headers, "x-iroha-routed-by"),
+            Some("proxy".to_owned())
+        );
+        assert_eq!(
+            routed_header_string(&headers, "x-iroha-route-lane-id"),
+            None
+        );
+        assert_eq!(routed_header_string(&headers, "x-iroha-invalid"), None);
+    }
+
+    #[derive(Debug)]
+    struct DisplayOnlyTxError;
+
+    impl Display for DisplayOnlyTxError {
+        fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
+            formatter.write_str("route probe failed")
+        }
+    }
+
+    #[test]
+    fn render_error_with_debug_keeps_display_and_debug_context() {
+        assert_eq!(
+            render_error_with_debug(&DisplayOnlyTxError),
+            "route probe failed (DisplayOnlyTxError)"
+        );
     }
 }

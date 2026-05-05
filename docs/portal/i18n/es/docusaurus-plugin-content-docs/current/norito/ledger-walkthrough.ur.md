@@ -26,8 +26,8 @@ babosa: /norito/ledger-walkthrough
 اس گائیڈ میں `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو ان ID de cuenta سے بدلیں جو آپ استعمال کرنا چاہتے ہیں۔ paquete predeterminado پہلے ہی claves de demostración سے اخذ کیے گئے دو cuentas شامل کرتا ہے:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 پہلے چند cuentas لسٹ کر کے ویلیوز کی تصدیق کریں:
@@ -44,7 +44,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # wonderland کے اندر accounts (ضرورت ہو تو --limit بڑھائیں)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # وہ asset definitions جو پہلے سے موجود ہیں
@@ -59,14 +59,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 Hash de transacción enviada por CLI (مثلاً `0x5f…`) پرنٹ کرتا ہے۔ اسے محفوظ کریں تاکہ بعد میں estado کو consulta کیا جا سکے۔
 
 ## 3. آپریٹر اکاؤنٹ میں unidades nuevas کریں
 
-cantidades de activos `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` Mیں `coffee#wonderland` کی 250 unidades nuevas کریں:
+cantidades de activos `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` Mیں `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` کی 250 unidades nuevas کریں:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

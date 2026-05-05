@@ -81,11 +81,18 @@ static DEFAULT_STACK_LIMIT: LazyLock<AtomicU64> =
 static STACK_BUDGET_LIMIT: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(u64::MAX));
 
 impl Memory {
+    /// Alignment enforced for the guest stack top and effective stack budgets.
+    pub const STACK_ALIGNMENT: u64 = 16;
     /// Define static addresses for memory regions
     pub const HEAP_START: u64 = 0x0010_0000;
-    pub const HEAP_SIZE: u64 = 0x0001_0000; // 64 KB heap
     /// Maximum heap size allowed (from HEAP_START up to INPUT_START).
     pub const HEAP_MAX_SIZE: u64 = Self::INPUT_START - Self::HEAP_START;
+    /// Default heap limit exposed to guest programs.
+    ///
+    /// Kotodama contracts currently do not auto-grow the heap, so starting at
+    /// the full pre-input window avoids spurious `OutOfMemory` traps for
+    /// larger but still bounded contracts such as SoraSwap DLMM.
+    pub const HEAP_SIZE: u64 = Self::HEAP_MAX_SIZE;
 
     pub const INPUT_START: u64 = 0x0020_0000;
     pub const INPUT_SIZE: u64 = 0x0001_0000; // 64 KB input
@@ -104,9 +111,16 @@ impl Memory {
         DEFAULT_STACK_LIMIT.load(Ordering::Relaxed)
     }
 
+    /// Align a stack byte count to the VM guest-stack boundary.
+    #[must_use]
+    pub fn align_stack_bytes(bytes: u64) -> u64 {
+        let bytes = bytes.max(Self::STACK_ALIGNMENT);
+        bytes - (bytes % Self::STACK_ALIGNMENT)
+    }
+
     /// Override the default stack limit (bytes) applied to new memory instances.
     pub fn set_default_stack_limit(bytes: u64) {
-        DEFAULT_STACK_LIMIT.store(bytes.max(1), Ordering::Relaxed);
+        DEFAULT_STACK_LIMIT.store(Self::align_stack_bytes(bytes), Ordering::Relaxed);
     }
 
     /// Global budget cap applied to stack limits for new memory instances.
@@ -116,7 +130,7 @@ impl Memory {
 
     /// Override the global budget cap applied to stack limits for new memory instances.
     pub fn set_stack_budget_limit(bytes: u64) {
-        STACK_BUDGET_LIMIT.store(bytes.max(1), Ordering::Relaxed);
+        STACK_BUDGET_LIMIT.store(Self::align_stack_bytes(bytes), Ordering::Relaxed);
     }
 
     /// Current stack limit (bytes) enforced for this memory instance.
@@ -272,9 +286,10 @@ impl Memory {
 
     /// Initialize memory with an explicit stack limit (bytes).
     pub fn new_with_stack_limit(code_size: u64, stack_limit: u64) -> Self {
-        let budget = STACK_BUDGET_LIMIT.load(Ordering::Relaxed);
-        let effective_stack = stack_limit.max(1).min(budget);
-        if effective_stack < stack_limit {
+        let requested_stack = Self::align_stack_bytes(stack_limit);
+        let budget = Self::align_stack_bytes(STACK_BUDGET_LIMIT.load(Ordering::Relaxed));
+        let effective_stack = requested_stack.min(budget);
+        if effective_stack < requested_stack {
             record_stack_budget_hit();
         }
         let total_size = Memory::STACK_START + effective_stack + Memory::STACK_SLOP;
@@ -393,6 +408,15 @@ impl Memory {
     /// Current heap limit in bytes.
     pub fn heap_limit(&self) -> u64 {
         self.heap_limit
+    }
+
+    /// Override the active heap limit, keeping the already-allocated region valid.
+    pub fn set_heap_limit(&mut self, limit: u64) -> Result<(), VMError> {
+        if limit < self.heap_alloc || limit > Memory::HEAP_MAX_SIZE {
+            return Err(VMError::OutOfMemory);
+        }
+        self.heap_limit = limit;
+        Ok(())
     }
 
     /// Update the code region length after loading a program.
@@ -869,6 +893,8 @@ mod tests {
         let mut base = Memory::new(0);
         base.preload_input(0, &[1, 2, 3, 4])
             .expect("preload template input");
+        base.set_heap_limit(Memory::HEAP_MAX_SIZE - 128)
+            .expect("lower template heap limit");
 
         let mut worker = base.clone();
         worker.alloc(32).expect("alloc");
@@ -919,6 +945,8 @@ mod tests {
     #[test]
     fn grow_heap_rejects_overflow() {
         let mut mem = Memory::new(0);
+        mem.set_heap_limit(Memory::HEAP_MAX_SIZE - 64)
+            .expect("lower heap limit before bounded grow");
         let original_limit = mem.heap_limit();
         assert!(matches!(mem.grow_heap(u64::MAX), Err(VMError::OutOfMemory)));
         assert_eq!(mem.heap_limit(), original_limit);
@@ -970,6 +998,23 @@ mod tests {
         ));
         Memory::set_default_stack_limit(Memory::STACK_SIZE);
         Memory::set_stack_budget_limit(u64::MAX);
+    }
+
+    #[test]
+    fn unaligned_stack_limits_are_normalized_before_stack_top_is_exposed() {
+        let prev_default = Memory::default_stack_limit();
+        let prev_budget = Memory::stack_budget_limit();
+        Memory::set_default_stack_limit(0x60a04);
+        Memory::set_stack_budget_limit(0x60a04);
+
+        let mut mem = Memory::new(0);
+        assert_eq!(mem.stack_limit() % Memory::STACK_ALIGNMENT, 0);
+        assert_eq!(mem.stack_top() % Memory::STACK_ALIGNMENT, 0);
+        mem.store_u64(mem.stack_top() - 8, 7)
+            .expect("aligned stack top must accept 64-bit stores");
+
+        Memory::set_default_stack_limit(prev_default);
+        Memory::set_stack_budget_limit(prev_budget);
     }
 
     #[test]

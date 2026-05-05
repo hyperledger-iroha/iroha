@@ -68,15 +68,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -164,84 +164,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Անցանց նպաստներ և դատավճիռների մետատվյալներ
+## Offline V2 readiness
 
-Անցանց արտոնությունների պատասխանները բացահայտում են մատյանների հարստացված մետատվյալները նախօրոք.
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex` և `remaining_amount` վերադարձվում են հումքի հետ միասին
-ձայնագրեք, որպեսզի վահանակները ստիպված չլինեն վերծանել ներկառուցված Norito օգտակար բեռները: Նորը
-հետհաշվարկի օգնականներ (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) ընդգծում է հաջորդ ավարտվող ժամկետը (թարմացնել → քաղաքականություն
-→ վկայագիր), այնպես որ UI կրծքանշանները կարող են նախազգուշացնել օպերատորներին, երբ որևէ արտոնություն կա
-Մնաց <24 ժամ։ SDK-ն
-արտացոլում է REST ֆիլտրերը, որոնք ենթարկվում են `/v1/offline/allowances`-ի կողմից.
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` և
-`requireVerdict` / `onlyMissingVerdict` բուլյաններ: Անվավեր համակցություններ (համար
-օրինակ `onlyMissingVerdict` + `verdictIdHex`) մերժվում են տեղայնորեն մինչև Torii
-կոչվում է.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## Անցանց լիցքավորումներ (թողարկում + գրանցում)
-
-Օգտագործեք լիցքավորման օգնականները, երբ ցանկանում եք վկայական տալ և անմիջապես
-գրանցել այն մատյանում: SDK-ն ստուգում է տրված և գրանցված վկայականը
-ID-ները համընկնում են վերադարձից առաջ, և պատասխանը ներառում է երկու ծանրաբեռնվածությունը: Կա
-ոչ հատուկ լիցքավորման վերջնակետ; օգնականը շղթայում է խնդիրը + գրանցել զանգերը: Եթե
-դուք արդեն ունեք ստորագրված վկայական, զանգահարեք `registerOfflineAllowance` (կամ
-`renewOfflineAllowance`) ուղղակիորեն:
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii հարցումներ և հոսք (WebSockets)
 
 Հարցման օգնականները բացահայտում են կարգավիճակը, Prometheus չափումները, հեռաչափության պատկերները և իրադարձությունները
@@ -276,7 +223,7 @@ Explorer հեռաչափությունը տրամադրում է տպագրված
 `/v1/explorer/accounts/{account_id}/qr` վերջնակետերը, որպեսզի վահանակները կարողանան վերարտադրել այն
 նույն նկարները, որոնք ապահովում են պորտալը: `getExplorerMetrics()`-ը նորմալացնում է
 օգտակար բեռ և վերադարձնում է `null`, երբ երթուղին անջատված է: Զուգակցել այն
-`getExplorerAccountQr()`, երբ ձեզ անհրաժեշտ է I105 (նախընտրելի)/սորա (երկրորդ լավագույն) բառացի գումարած ներդիր
+`getExplorerAccountQr()`, երբ ձեզ անհրաժեշտ է i105 (նախընտրելի)/սորա (երկրորդ լավագույն) բառացի գումարած ներդիր
 SVG՝ համօգտագործման կոճակների համար:
 
 ```ts
@@ -291,7 +238,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -299,8 +246,8 @@ console.log(
 );
 ```
 
-`I105` անցնելը արտացոլում է Explorer-ի լռելյայն սեղմվածը
-ընտրիչներ; բաց թողեք նախընտրելի I105 ելքի փոխարինումը կամ պահանջեք `i105_qr`
+`i105` անցնելը արտացոլում է Explorer-ի լռելյայն սեղմվածը
+ընտրիչներ; բաց թողեք նախընտրելի i105 ելքի փոխարինումը կամ պահանջեք `i105_qr`
 երբ ձեզ անհրաժեշտ է QR-անվտանգ տարբերակը: Սեղմված բառացիությունը երկրորդն է լավագույնը
 Միայն Sora տարբերակ UX-ի համար: Օգնականը միշտ վերադարձնում է կանոնական նույնացուցիչը,
 ընտրված բառացի և մետատվյալներ (ցանցային նախածանց, QR տարբերակ/մոդուլներ, սխալ
@@ -519,7 +466,7 @@ Space Directory API-ները ներկայացնում են Համընդհանո�
   ակտիվների խմբավորումն ըստ կանոնական հաշվի ID-ների. անցեք `assetId`՝ զտելու համար
   պորտֆելը մինչև մեկ ակտիվի օրինակ:
 - `getUaidBindings(uaid)`-ը թվարկում է տվյալների յուրաքանչյուր տարածք ↔ հաշիվ
-  պարտադիր (`I105`-ը վերադարձնում է `i105` բառացիները):
+  պարտադիր (`i105`-ը վերադարձնում է `i105` բառացիները):
 - `getUaidManifests(uaid, { dataspaceId })`-ը վերադարձնում է յուրաքանչյուր կարողության մանիֆեստ,
   կյանքի ցիկլի կարգավիճակը և աուդիտի համար պարտադիր հաշիվները:Օպերատորի ապացույցների փաթեթների համար՝ մանիֆեստի հրապարակման/չեղարկման հոսքերը և SDK-ի միգրացիան
 ուղեցույց, հետևեք Ունիվերսալ հաշվի ուղեցույցին (`docs/source/universal_accounts_guide.md`)
@@ -562,7 +509,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -572,7 +519,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

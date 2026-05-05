@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2c61035c0e4b0fd478f08beeef34d7ae41415f55b09dc93dfda9490efe94fb91
-source_last_modified: "2026-01-22T16:26:46.505734+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: a26e8de48d00066a9551f1909840165fc33e0ffc18b38b7ac4c6491b2c825f7b
+source_last_modified: "2026-04-03T17:43:03.931384+00:00"
+translation_last_reviewed: 2026-04-08
 title: Ledger Walkthrough
 description: Reproduce a deterministic register → mint → transfer flow with the `iroha` CLI and verify the resulting ledger state.
 slug: /norito/ledger-walkthrough
@@ -34,8 +34,8 @@ SDK 快速入門，以便您可以確認 CLI 和 SDK 行為之間的一致性。
 從演示密鑰派生：
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 通過列出前幾個帳戶來確認值：
@@ -54,7 +54,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts inside wonderland (replace --limit with a higher number if needed)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions that already exist
@@ -71,7 +71,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI 打印提交的交易哈希（例如，
@@ -80,7 +80,7 @@ CLI 打印提交的交易哈希（例如，
 ## 3. 將鑄幣單位存入運營商賬戶
 
 資產數量位於 `(asset definition, account)` 貨幣對下。薄荷 250
-將 `coffee#wonderland` 轉換為 `$ADMIN_ACCOUNT` 的單位：
+將 `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` 轉換為 `$ADMIN_ACCOUNT` 的單位：
 
 ```sh
 iroha --config defaults/client.toml asset mint \

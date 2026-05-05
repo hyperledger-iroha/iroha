@@ -251,7 +251,7 @@ belong to that slice. Downstream components use this ledger-backed view:
   reloading manifest JSON.
 - Torii now exposes `GET /v1/space-directory/uaids/{uaid}` for operators and
   SDKs that need to introspect bindings directly. Append
-  `canonical I105 output` if you need the I105 literals for QR
+  `canonical I105 output` if you need the i105 literals for QR
   payloads; I105 strings remain the default.【docs/source/torii/portfolio_api.md】
 
 ### 5.1 CLI manifest & binding inspectors
@@ -306,10 +306,11 @@ change state or new UAID accounts appear.
 > tweaks keep the behavior deterministic.【crates/iroha_core/src/state.rs:5990】【crates/iroha_core/src/state.rs:2555】
 
 **Admission enforcement.** Transactions signed by UAID-backed accounts are
-routed using global UAID lookup. If a Space Directory manifest exists for the
-target dataspace it must be active; missing target-dataspace manifests do not
-trigger a binding-specific rejection. Inactive manifests are rejected through
-the standard `LaneComplianceDenied` path with a deterministic reason string.
+routed through the UAID's active dataspace binding. The target dataspace must
+have an active binding for the signing account; missing bindings are rejected
+through `LaneComplianceDenied`. If a Space Directory manifest exists for the
+target dataspace it must be active. Missing target-dataspace manifests are only
+accepted when the derived binding exists.
 
 ### Manifest introspection API
 
@@ -340,7 +341,7 @@ canonical `AssetPermissionManifest` JSON:
         "expired_epoch": null,
         "revocation": null
       },
-      "accounts": ["i105..."],
+      "accounts": ["<i105-account-id>"],
       "manifest": {
         "version": 1,
         "uaid": "uaid:0f4d…ab11",
@@ -398,7 +399,7 @@ Sample request body:
 
 ```jsonc
 {
-  "authority": "i105...",
+  "authority": "<i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "manifest": {
     "version": 1,
@@ -455,7 +456,7 @@ Sample JSON body:
 
 ```jsonc
 {
-  "authority": "i105...",
+  "authority": "<i105-account-id>",
   "private_key": "ed25519:CiC7…",
   "uaid": "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
   "dataspace": 11,

@@ -1,23 +1,14 @@
 //! Functions and types to make queries to the Iroha peer.
 #![allow(clippy::result_large_err)]
 
-use std::{
-    collections::HashMap,
-    fmt::{Debug, Write as _},
-    num::NonZeroU64,
-    thread,
-    time::Duration,
-};
+use std::{collections::HashMap, fmt::Debug, num::NonZeroU64, thread, time::Duration};
 
 use eyre::{Report, Result, eyre};
 use http::{StatusCode, header::CONTENT_TYPE};
 use iroha_data_model::query::QueryOutputBatchBoxTuple;
 use iroha_torii_shared::uri as torii_uri;
 use iroha_version::codec::EncodeVersioned;
-use norito::{
-    codec::{DecodeAll, Error as NoritoDecodeError},
-    json,
-};
+use norito::{codec::Error as NoritoDecodeError, json};
 use reqwest::Error as ReqwestError;
 use url::Url;
 
@@ -101,14 +92,18 @@ fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryRes
                 .headers()
                 .get(CONTENT_TYPE)
                 .and_then(|h| h.to_str().ok())
-                .is_some_and(|ct| ct.starts_with("application/json"));
+                .is_some_and(|ct| {
+                    let media_type = ct.split(';').next().map(str::trim).unwrap_or_default();
+                    media_type.eq_ignore_ascii_case("application/json")
+                        || media_type.eq_ignore_ascii_case("text/json")
+                        || media_type.to_ascii_lowercase().ends_with("+json")
+                });
             if is_json {
-                return match json::from_slice::<QueryResponse>(body) {
-                    Ok(decoded) => Ok(decoded),
-                    Err(json_err) => decode_query_response_body(body, Some(&json_err)),
-                };
+                return json::from_slice::<QueryResponse>(body).map_err(|error| {
+                    eyre!("Failed to decode JSON query response: {error}").into()
+                });
             }
-            decode_query_response_body(body, None)
+            decode_query_response_body(body)
         }
         StatusCode::BAD_REQUEST
         | StatusCode::UNAUTHORIZED
@@ -144,34 +139,15 @@ fn decode_query_response(resp: &http::Response<Vec<u8>>) -> QueryResult<QueryRes
     }
 }
 
-/// Decode `QueryResponse` from a raw byte body, optionally noting a prior JSON decode failure.
-fn decode_query_response_body(
-    body: &[u8],
-    json_err: Option<&json::Error>,
-) -> QueryResult<QueryResponse> {
-    match norito::decode_from_bytes::<QueryResponse>(body) {
-        Ok(res) => Ok(res),
-        Err(frame_err) => {
-            let mut cursor = body;
-            match QueryResponse::decode_all(&mut cursor) {
-                Ok(res) => Ok(res),
-                Err(primary_err) => {
-                    let mut msg = String::from(
-                        "Failed to decode response from Iroha. \
-                         You are likely using a version of the client library \
-                         that is incompatible with the version of the peer software",
-                    );
-                    if let Some(json_err) = json_err {
-                        let _ = write!(msg, " (JSON decode error: {json_err})");
-                    }
-                    let report = Report::new(primary_err)
-                        .wrap_err(msg)
-                        .wrap_err(format!("framed Norito decode failed: {frame_err}"));
-                    Err(report.into())
-                }
-            }
-        }
-    }
+/// Decode `QueryResponse` from a canonical Norito byte body.
+fn decode_query_response_body(body: &[u8]) -> QueryResult<QueryResponse> {
+    norito::decode_from_bytes::<QueryResponse>(body).map_err(|error| {
+        Report::new(error)
+            .wrap_err(
+                "Failed to decode response from Iroha. You are likely using a version of the client library that is incompatible with the version of the peer software",
+            )
+            .into()
+    })
 }
 
 fn send_with_retry<F>(mut make_request: F) -> Result<http::Response<Vec<u8>>, QueryError>
@@ -341,6 +317,8 @@ impl QueryExecutor for Client {
         &self,
         query: SingularQueryBox,
     ) -> Result<SingularQueryOutputBox, Self::Error> {
+        self.ensure_data_model_compatibility()
+            .map_err(QueryError::from)?;
         let is_parameters_query = matches!(query, SingularQueryBox::FindParameters(_));
         let request_head = self.get_query_request_head();
 
@@ -360,6 +338,8 @@ impl QueryExecutor for Client {
         &self,
         query: QueryWithParams,
     ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
+        self.ensure_data_model_compatibility()
+            .map_err(QueryError::from)?;
         let requested_fetch_size = query
             .params
             .fetch_size
@@ -490,6 +470,8 @@ impl Client {
         &self,
         body: &[u8],
     ) -> Result<iroha_data_model::query::QueryResponse, QueryError> {
+        self.ensure_data_model_compatibility()
+            .map_err(QueryError::from)?;
         let make_request = || {
             Ok(DefaultRequestBuilder::new(
                 HttpMethod::POST,
@@ -559,6 +541,8 @@ impl Client {
         &self,
         cursor: ForwardCursor,
     ) -> Result<QueryResponse, QueryError> {
+        self.ensure_data_model_compatibility()
+            .map_err(QueryError::from)?;
         let request_head = self.get_query_request_head();
 
         let request = QueryRequest::Continue(cursor);
@@ -597,7 +581,7 @@ mod query_errors_handling {
 
     use super::*;
     use crate::{
-        client::{APPLICATION_NORITO, DataModelCompatibility},
+        client::{APPLICATION_NORITO, DataModelCompatibility, DataModelCompatibilityError},
         data_model::ValidationFail,
         http::StatusCode as HttpStatusCode,
         http_default::{RequestSnapshot, with_send_hook},
@@ -635,7 +619,7 @@ mod query_errors_handling {
     }
 
     #[test]
-    fn norito_body_decodes_when_content_type_is_json() -> Result<()> {
+    fn norito_body_with_json_content_type_errors_cleanly() -> Result<()> {
         let expected = QueryResponse::Iterable(QueryOutput {
             batch: QueryOutputBatchBoxTuple { tuple: Vec::new() },
             remaining_items: 0,
@@ -646,10 +630,10 @@ mod query_errors_handling {
             .header("content-type", "application/json")
             .body(norito::to_bytes(&expected)?)?;
 
-        let decoded = decode_query_response(&response)?;
-        assert_eq!(decoded, expected);
-
-        Ok(())
+        match decode_query_response(&response) {
+            Err(QueryError::Other(_)) => Ok(()),
+            other => Err(eyre!("expected strict JSON decode failure, got {other:?}")),
+        }
     }
 
     #[test]
@@ -683,7 +667,7 @@ mod query_errors_handling {
                 assert!(
                     messages
                         .iter()
-                        .any(|message| message.contains("JSON decode error")),
+                        .any(|message| message.contains("Failed to decode JSON query response")),
                     "error message should mention JSON decode failure: {messages:?}"
                 );
             }
@@ -828,7 +812,7 @@ mod query_errors_handling {
             alias_cache_policy: sample_alias_policy(),
             default_anonymity_policy: AnonymityPolicy::GuardPq,
             rollout_phase: SorafsRolloutPhase::Default,
-            data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
+            data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Compatible)),
         };
 
         let encoded_response = norito::to_bytes(&QueryResponse::Iterable(QueryOutput {
@@ -859,6 +843,70 @@ mod query_errors_handling {
         assert!(
             observed.load(Ordering::Relaxed),
             "send hook was not triggered"
+        );
+    }
+
+    #[test]
+    fn execute_signed_query_raw_rejects_incompatible_data_model_version_before_query_request() {
+        let (account_id, key_pair) = gen_account_in("wonderland");
+        let client = Client {
+            chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
+            torii_url: Url::parse("http://localhost:8081").expect("torii url"),
+            key_pair,
+            transaction_ttl: Some(Duration::from_secs(5)),
+            transaction_status_timeout: Duration::from_secs(5),
+            torii_request_timeout: crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            account: account_id,
+            headers: HashMap::new(),
+            operator_key_pair: None,
+            add_transaction_nonce: false,
+            alias_cache_policy: sample_alias_policy(),
+            default_anonymity_policy: AnonymityPolicy::GuardPq,
+            rollout_phase: SorafsRolloutPhase::Default,
+            data_model_compatibility: Arc::new(Mutex::new(DataModelCompatibility::Unchecked)),
+        };
+        let query_seen = Arc::new(AtomicBool::new(false));
+        let query_seen_clone = Arc::clone(&query_seen);
+        let mismatched_version = crate::data_model::DATA_MODEL_VERSION + 1;
+        let capabilities_body =
+            format!(r#"{{"data_model_version":{mismatched_version}}}"#).into_bytes();
+
+        with_mock_http(
+            move |snapshot| match snapshot.url.path() {
+                "/v1/node/capabilities" => Ok(Response::builder()
+                    .status(HttpStatusCode::OK)
+                    .header("content-type", "application/json")
+                    .body(capabilities_body.clone())
+                    .expect("capabilities response")),
+                "/query" => {
+                    query_seen_clone.store(true, Ordering::Relaxed);
+                    Ok(ok_empty_response())
+                }
+                path => Err(eyre!("unexpected request path: {path}")),
+            },
+            || {
+                let err = client
+                    .execute_signed_query_raw(&[])
+                    .expect_err("compatibility mismatch must fail");
+                let QueryError::Other(report) = err else {
+                    panic!("expected QueryError::Other");
+                };
+                let incompat = report
+                    .downcast_ref::<DataModelCompatibilityError>()
+                    .expect("compatibility error");
+                assert!(matches!(
+                    incompat,
+                    DataModelCompatibilityError::Mismatch {
+                        expected,
+                        actual,
+                    } if *expected == crate::data_model::DATA_MODEL_VERSION && *actual == mismatched_version
+                ));
+            },
+        );
+
+        assert!(
+            !query_seen.load(Ordering::Relaxed),
+            "query request must not be sent after compatibility mismatch"
         );
     }
 

@@ -83,10 +83,10 @@ Norito ინსტრუქციები, CLI/SDK დამხმარეე
 [settlement.repo]
 default_haircut_bps = 1500
 margin_frequency_secs = 86400
-eligible_collateral = ["bond#wonderland", "note#wonderland"]
+eligible_collateral = ["4fEiy2n5VMFVfi6BzDJge519zAzg", "7dk8Pj8Bqo6XUqch4K2sF8MCM1zd"]
 
 [settlement.repo.collateral_substitution_matrix]
-"bond#wonderland" = ["note#wonderland", "bill#wonderland"]
+"4fEiy2n5VMFVfi6BzDJge519zAzg" = ["7dk8Pj8Bqo6XUqch4K2sF8MCM1zd", "6zK1LDcJ3FvkpfoZQ8kHUaW6sA7F"]
 ```
 
 ოპერატიული საკონტროლო სია:
@@ -186,10 +186,10 @@ scripts/regen_repo_proof_fixture.sh
 [settlement.repo]
 default_haircut_bps = 1750
 margin_frequency_secs = 43200
-eligible_collateral = ["bond#wonderland", "note#wonderland"]
+eligible_collateral = ["4fEiy2n5VMFVfi6BzDJge519zAzg", "7dk8Pj8Bqo6XUqch4K2sF8MCM1zd"]
 
 [settlement.repo.collateral_substitution_matrix]
-"bond#wonderland" = ["note#wonderland", "bill#wonderland"]
+"4fEiy2n5VMFVfi6BzDJge519zAzg" = ["7dk8Pj8Bqo6XUqch4K2sF8MCM1zd", "6zK1LDcJ3FvkpfoZQ8kHUaW6sA7F"]
 ```
 
 **ცვლილებების მართვის საკონტროლო სია**1. შემოთავაზებული TOML სნიპეტის დადგმა (მატრიცის ჩანაცვლების დელტას ჩათვლით), ჰეში
@@ -573,7 +573,7 @@ artifacts/finance/repo/<agreement-id>/
 ```bash
 python3 scripts/repo_evidence_manifest.py \
   --root artifacts/finance/repo/wonderland-2026q1 \
-  --agreement-id repo#wonderland \
+  --agreement-id 7mxD1tKRyv32je4kZwcWa9wa33bX \
   --output artifacts/finance/repo/wonderland-2026q1/manifest.json \
   --exclude 'scratch/*'
 ```
@@ -588,7 +588,7 @@ stdout, რომელიც მოსახერხებელია სწ�
 
 ```json
 {
-  "agreement_id": "repo#wonderland",
+  "agreement_id": "7mxD1tKRyv32je4kZwcWa9wa33bX",
   "generated_at": "2026-04-30T11:58:43Z",
   "root": "/var/tmp/repo/wonderland-2026q1",
   "file_count": 5,
@@ -803,8 +803,8 @@ GAR-ის, რეფერენდუმის და საბურღი �
 
 1. **Snapshot-ის ნაშთები.** გამოიყენეთ `FindAssets` მოთხოვნა, რომელიც მოქმედებს
    `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) ან
-   `iroha_python` დამხმარე XOR ნაშთების ექსპორტისთვის `i105...`-ისთვის,
-   `i105...` და ყველა სამაგიდო ანგარიში ჩართული მიმოხილვაში. მაღაზია
+   `iroha_python` დამხმარე XOR ნაშთების ექსპორტისთვის `<i105-account-id>`-ისთვის,
+   `<i105-account-id>` და ყველა სამაგიდო ანგარიში ჩართული მიმოხილვაში. მაღაზია
    JSON ქვეშ
    `artifacts/finance/repo/<period>/treasury_assets.json` და ჩაწერეთ git
    commit/toolchain თანმხლებ `README.md`-ში.

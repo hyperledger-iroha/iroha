@@ -65,21 +65,24 @@ fn run_syscall(vm: &mut IVM, syscall: u32, regs: &[(u8, u64)]) {
         .unwrap_or_else(|err| panic!("run syscall 0x{syscall:02X}: {err:?}"));
 }
 
-fn setup_state(authority: &AccountId, asset_def: &AssetDefinitionId) -> State {
+fn setup_state(
+    authority: &AccountId,
+    asset_def: &AssetDefinitionId,
+    asset_domain: &DomainId,
+    asset_name: &Name,
+) -> State {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query_handle);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let domain_id = asset_def.domain().clone();
     {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         let executor = tx.world.executor().clone();
-        let reg_domain = Register::domain(Domain::new(domain_id.clone()));
-        let reg_account =
-            Register::account(NewAccount::new_in_domain(authority.clone(), domain_id));
+        let reg_domain = Register::domain(Domain::new(asset_domain.clone()));
+        let reg_account = Register::account(NewAccount::new(authority.clone()));
         let reg_asset = Register::asset_definition(
-            AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string()),
+            AssetDefinition::numeric(asset_def.clone()).with_name(asset_name.to_string()),
         );
         for instr in [
             InstructionBox::from(reg_domain),
@@ -110,18 +113,18 @@ fn data_event_debug(events: Vec<iroha_data_model::events::EventBox>) -> Vec<Stri
 #[test]
 fn ivm_host_shadow_execute_matches_native_execute() {
     let authority = ALICE_ID.clone();
-    let asset_def_seed: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
-        "coin".parse().unwrap(),
-    );
-    let asset_def = AssetDefinitionId::parse_aid_literal(&asset_def_seed.canonical_literal())
-        .expect("canonical aid literal");
+    let asset_domain = DomainId::try_new("wonderland", "universal").unwrap();
+    let asset_name: Name = "coin".parse().unwrap();
+    let asset_def_seed: AssetDefinitionId =
+        iroha_data_model::asset::AssetDefinitionId::new(asset_domain.clone(), asset_name.clone());
+    let asset_def = AssetDefinitionId::parse_address_literal(&asset_def_seed.canonical_address())
+        .expect("canonical asset definition literal");
     let key: Name = "parity_key".parse().unwrap();
     let value = iroha_primitives::json::Json::new("shadow");
     let amount = Numeric::from(100_u64);
 
-    let direct_state = setup_state(&authority, &asset_def);
-    let host_state = setup_state(&authority, &asset_def);
+    let direct_state = setup_state(&authority, &asset_def, &asset_domain, &asset_name);
+    let host_state = setup_state(&authority, &asset_def, &asset_domain, &asset_name);
 
     // Direct Execute path.
     let direct_events = {

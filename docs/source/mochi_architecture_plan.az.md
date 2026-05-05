@@ -30,7 +30,7 @@ MOCHI yeni `/mochi` kataloqunda yerləşdirilmiş iki əsas qutuya bölünür (b
 Quraşdırma və istifadə təlimatları üçün [MOCHI Quickstart](mochi/quickstart.md):
 
 1. `mochi-core`: konfiqurasiya şablonu, açar və genesis materialının yaradılması, uşaq proseslərə nəzarət, Torii müştərilərini idarə etmək və fayl sisteminin vəziyyətini idarə etmək üçün cavabdeh olan başsız kitabxana.
-2. `mochi-ui-egui`: `egui`/`eframe` üzərində qurulmuş iş masası proqramı, istifadəçi interfeysini təqdim edir və `mochi-core` API vasitəsilə bütün orkestrasiyanı həvalə edir.
+2. `mochi-ui`: `egui`/`eframe` üzərində qurulmuş iş masası proqramı, istifadəçi interfeysini təqdim edir və `mochi-core` API vasitəsilə bütün orkestrasiyanı həvalə edir.
 
 Əlavə ön uclar (məsələn, Tauri qabığı) daha sonra nəzarətçi məntiqini yenidən işləmədən `mochi-core`-ə qoşula bilər.
 
@@ -49,7 +49,7 @@ Quraşdırma və istifadə təlimatları üçün [MOCHI Quickstart](mochi/quicks
 - **Transaction Composer**: nanə/köçürmə təlimatı layihələrini səhnələşdirin, onları imzalanmış əməliyyatlara yığın, Norito faydalı yükünü nəzərdən keçirin, `/transaction` vasitəsilə təqdim edin və nəticədə baş verən hadisələrə nəzarət edin; tonoz imzalama qarmaqları gələcək iterasiya olaraq qalır.
 - **Snapshots və Re-Genesis**: Kura snapshot ixrac/idxalını təşkil edin, dükanları silin və tez sıfırlamalar üçün genezis materialını bərpa edin.
 
-## UI Layeri (`mochi-ui-egui`)
+## UI Layeri (`mochi-ui`)
 
 - Xarici iş vaxtları olmadan tək yerli icra olunan faylı göndərmək üçün `egui`/`eframe` istifadə edir.
 - Layout daxildir:

@@ -16,8 +16,12 @@ seiyaku IrohaSwap {
     if (a < b) { return a; } else { return b; }
   }
 
+  fn reserve_of(state Map<Name, int> reserves, pool: Name) -> int {
+    return reserves.ensure(pool, 0);
+  }
+
   fn ensure_pool(pool: Name) {
-    assert(contains(PoolAssetA, pool), "unknown pool");
+    assert(PoolAssetA.contains(pool), "unknown pool");
   }
 
   // Create a new pool with caller-chosen LP asset and pool account.
@@ -29,7 +33,7 @@ seiyaku IrohaSwap {
 	                       lp_asset: AssetDefinitionId) permission(Admin) {
     assert(asset_a != asset_b, "identical assets");
     // Refuse re-init.
-    assert(!contains(PoolAssetA, pool), "pool exists");
+    assert(!PoolAssetA.contains(pool), "pool exists");
     PoolAssetA[pool] = asset_a;
     PoolAssetB[pool] = asset_b;
     PoolAccount[pool] = pool_account;
@@ -55,9 +59,9 @@ seiyaku IrohaSwap {
     let pool_account = PoolAccount[pool];
     let lp_asset = PoolLpAsset[pool];
 
-    let reserve_a = get_or_insert_default(ReserveA, pool, 0);
-    let reserve_b = get_or_insert_default(ReserveB, pool, 0);
-    let total_lp = get_or_insert_default(LpSupply, pool, 0);
+    let reserve_a = reserve_of(ReserveA, pool);
+    let reserve_b = reserve_of(ReserveB, pool);
+    let total_lp = reserve_of(LpSupply, pool);
 
     let minted = (total_lp == 0) ? isqrt(amount_a * amount_b) : min((amount_a * total_lp) / reserve_a,
                                                                    (amount_b * total_lp) / reserve_b);
@@ -88,9 +92,9 @@ seiyaku IrohaSwap {
     let pool_account = PoolAccount[pool];
     let lp_asset = PoolLpAsset[pool];
 
-    let reserve_a = get_or_insert_default(ReserveA, pool, 0);
-    let reserve_b = get_or_insert_default(ReserveB, pool, 0);
-    let total_lp = get_or_insert_default(LpSupply, pool, 0);
+    let reserve_a = reserve_of(ReserveA, pool);
+    let reserve_b = reserve_of(ReserveB, pool);
+    let total_lp = reserve_of(LpSupply, pool);
     assert(total_lp > 0, "empty pool");
 
     let amount_a = (lp_amount * reserve_a) / total_lp;
@@ -121,8 +125,8 @@ seiyaku IrohaSwap {
     let asset_b = PoolAssetB[pool];
     let pool_account = PoolAccount[pool];
 
-    let reserve_a = get_or_insert_default(ReserveA, pool, 0);
-    let reserve_b = get_or_insert_default(ReserveB, pool, 0);
+    let reserve_a = reserve_of(ReserveA, pool);
+    let reserve_b = reserve_of(ReserveB, pool);
 
     let is_a_in = input_asset == asset_a;
     let is_b_in = input_asset == asset_b;

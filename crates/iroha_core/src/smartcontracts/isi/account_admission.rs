@@ -4,7 +4,7 @@
 //! when global policy allows receipt-like operations (asset mint/transfer, NFT transfer), the
 //! destination `Account` object may be created automatically if it does not exist yet.
 
-use std::{collections::BTreeSet, sync::LazyLock};
+use std::sync::LazyLock;
 
 use iroha_data_model::query::error::FindError;
 use iroha_data_model::{
@@ -24,7 +24,6 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_primitives::{json::Json, numeric::Numeric};
-use mv::storage::StorageReadOnly;
 
 use crate::{
     role::RoleIdWithOwner,
@@ -199,7 +198,7 @@ fn resolve_existing_account_for_subject(
 }
 
 fn create_implicit_account(
-    authority: &AccountId,
+    _authority: &AccountId,
     destination: &AccountId,
     default_role_on_create: Option<&RoleId>,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -212,27 +211,12 @@ fn create_implicit_account(
         label: None,
         uaid: None,
         opaque_ids: Vec::new(),
-        linked_domains: BTreeSet::new(),
     };
     let (account_id, account_value) = account.clone().into_key_value();
     state_transaction
         .world
-        .insert_account_with_links(account_id, account_value);
-    if let Some(linked_domain) = state_transaction
-        .world
-        .account_subject_domains
-        .get(authority)
-        .and_then(|domains| domains.iter().next().cloned())
-    {
-        state_transaction
-            .world
-            .link_account_subject_domain(&destination.to_account_id(linked_domain.clone()));
-        state_transaction
-            .world
-            .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
-                AccountCreated::new(account.clone(), linked_domain),
-            ))));
-    }
+        .accounts
+        .insert(account_id, account_value);
 
     let mut default_role_granted = None;
     if let Some(role) = default_role_on_create {
@@ -244,9 +228,7 @@ fn create_implicit_account(
             .is_some()
         {
             state_transaction.world.account_roles.remove(role_key);
-            state_transaction
-                .world
-                .remove_account_with_links(destination);
+            state_transaction.world.accounts.remove(destination.clone());
             return Err(AccountAdmissionError::DefaultRoleError(
                 AccountAdmissionDefaultRoleError {
                     role: role.clone(),
@@ -259,6 +241,12 @@ fn create_implicit_account(
         state_transaction.invalidate_permission_cache_for_account(destination);
     }
 
+    state_transaction
+        .world
+        .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
+            AccountCreated::new(account, implicit_account_event_domain()),
+        ))));
+
     if let Some(role) = default_role_granted {
         state_transaction
             .world
@@ -269,6 +257,14 @@ fn create_implicit_account(
     }
 
     Ok(())
+}
+
+fn implicit_account_event_domain() -> DomainId {
+    DomainId::try_new(
+        crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+        crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+    )
+    .expect("reserved universal dataspace alias should form a domain id")
 }
 
 /// Ensure `destination` account exists, creating it implicitly when allowed by policy.
@@ -409,10 +405,10 @@ mod tests {
 
     fn build_account_in_domain(
         account_id: AccountId,
-        domain_id: DomainId,
+        _domain_id: DomainId,
         authority: &AccountId,
     ) -> iroha_data_model::account::Account {
-        iroha_data_model::account::NewAccount::new_in_domain(account_id, domain_id).build(authority)
+        iroha_data_model::account::NewAccount::new(account_id.clone()).build(authority)
     }
 
     fn test_state(mut world: World) -> State {
@@ -448,7 +444,7 @@ mod tests {
 
     #[test]
     fn transfer_asset_creates_destination_account_in_open_domain() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = open_domain(
             domain_id.clone(),
             AccountAdmissionPolicy {
@@ -462,7 +458,7 @@ mod tests {
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_def = {
@@ -529,7 +525,7 @@ mod tests {
 
     #[test]
     fn transfer_asset_batch_creates_destination_account_in_open_domain() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = open_domain(
             domain_id.clone(),
             AccountAdmissionPolicy {
@@ -543,7 +539,7 @@ mod tests {
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_def = {
@@ -596,7 +592,7 @@ mod tests {
 
     #[test]
     fn mint_asset_creates_destination_account_in_open_domain() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = open_domain(
             domain_id.clone(),
             AccountAdmissionPolicy {
@@ -610,7 +606,7 @@ mod tests {
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_def = {
@@ -656,7 +652,7 @@ mod tests {
 
     #[test]
     fn transfer_nft_creates_destination_account_in_open_domain() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = open_domain(
             domain_id.clone(),
             AccountAdmissionPolicy {
@@ -669,7 +665,7 @@ mod tests {
             },
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
-        let nft_id: NftId = "n0$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "n0$wonderland.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&ALICE_ID);
 
         let world = World::with_assets([domain], [alice_account], [], [], [nft]);
@@ -710,7 +706,7 @@ mod tests {
 
     #[test]
     fn transfer_asset_rejects_missing_destination_in_explicit_domain() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = open_domain(
             domain_id.clone(),
             AccountAdmissionPolicy {
@@ -724,7 +720,7 @@ mod tests {
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_def = {
@@ -766,11 +762,11 @@ mod tests {
     fn chain_default_policy_disables_implicit_receive_without_domain_metadata() {
         use iroha_data_model::parameter::Parameters;
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_def = {
@@ -824,7 +820,7 @@ mod tests {
 
     #[test]
     fn implicit_creation_cap_is_enforced_per_transaction() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = open_domain(
             domain_id.clone(),
             AccountAdmissionPolicy {
@@ -838,7 +834,7 @@ mod tests {
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_def = {
@@ -883,7 +879,7 @@ mod tests {
 
     #[test]
     fn implicit_creation_cap_is_enforced_per_block_across_transactions() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = open_domain(
             domain_id.clone(),
             AccountAdmissionPolicy {
@@ -897,7 +893,7 @@ mod tests {
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_def = {
@@ -946,9 +942,9 @@ mod tests {
 
     #[test]
     fn implicit_creation_fee_is_enforced_and_charged() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let fee_sink = random_account_id();
@@ -1025,9 +1021,9 @@ mod tests {
 
     #[test]
     fn implicit_creation_fee_rejects_when_insufficient_balance() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let domain = open_domain(
@@ -1091,9 +1087,9 @@ mod tests {
 
     #[test]
     fn min_initial_amount_is_enforced() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let mut min_initial_amounts = BTreeMap::new();
@@ -1152,7 +1148,7 @@ mod tests {
 
     #[test]
     fn default_role_is_assigned_on_implicit_creation() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let role_id: RoleId = "baseline_user".parse().expect("role id");
         let domain = open_domain(
             domain_id.clone(),
@@ -1167,7 +1163,7 @@ mod tests {
         );
         let alice_account = build_account_in_domain(ALICE_ID.clone(), domain_id.clone(), &ALICE_ID);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_def = {
@@ -1233,7 +1229,7 @@ mod tests {
 
     #[test]
     fn default_role_missing_rejects_implicit_creation() {
-        let domain_id: DomainId = "missing-role.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("missing-role", "world").expect("domain id");
         let role_id: RoleId = "starter".parse().expect("role id");
         let domain = open_domain(
             domain_id.clone(),

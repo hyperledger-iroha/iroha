@@ -18,8 +18,7 @@ use iroha_data_model::{
     ChainId,
     account::{
         ACCOUNT_ADMISSION_POLICY_METADATA_KEY, Account, AccountAdmissionMode,
-        AccountAdmissionPolicy, AccountId, ScopedAccountId,
-        admission::ImplicitAccountFeeDestination,
+        AccountAdmissionPolicy, AccountId, admission::ImplicitAccountFeeDestination,
     },
     asset::{
         definition::{AssetDefinition, Mintable, NewAssetDefinition},
@@ -508,6 +507,10 @@ impl TransactionPreview {
         let authority = account_literal(signed.authority());
         let instructions = match signed.instructions() {
             Executable::Instructions(list) => list.iter().map(|instr| format!("{instr}")).collect(),
+            Executable::ContractCall(call) => vec![format!(
+                "Contract call {}::{}",
+                call.contract_address, call.entrypoint
+            )],
             Executable::IvmProved(proved) => proved
                 .overlay
                 .iter()
@@ -645,7 +648,7 @@ pub enum InstructionDraft {
     /// Register a new account.
     RegisterAccount {
         /// Identifier of the account to register.
-        account: ScopedAccountId,
+        account: AccountId,
     },
     /// Register a numeric asset definition.
     RegisterAssetDefinition {
@@ -755,7 +758,7 @@ impl InstructionDraft {
     ///
     /// Returns a [`ComposeError`] if the account identifier fails to parse.
     pub fn register_account_from_input(account: &str) -> Result<Self, ComposeError> {
-        let account = parse_scoped_account_id(account)?;
+        let account = parse_account_id(account)?;
         Ok(Self::RegisterAccount { account })
     }
 
@@ -1360,13 +1363,6 @@ fn parse_account_id(value: &str) -> Result<AccountId, ComposeError> {
         })
 }
 
-fn parse_scoped_account_id(value: &str) -> Result<ScopedAccountId, ComposeError> {
-    ScopedAccountId::from_str(value).map_err(|err| ComposeError::InvalidAccountId {
-        account: value.to_owned(),
-        reason: err.to_string(),
-    })
-}
-
 fn parse_quantity(value: &str) -> Result<Numeric, ComposeError> {
     Numeric::from_str(value).map_err(|err: NumericError| ComposeError::InvalidQuantity {
         quantity: value.to_owned(),
@@ -1375,7 +1371,7 @@ fn parse_quantity(value: &str) -> Result<Numeric, ComposeError> {
 }
 
 fn parse_domain_id(value: &str) -> Result<DomainId, ComposeError> {
-    DomainId::from_str(value).map_err(|err| ComposeError::InvalidDomainId {
+    DomainId::parse_fully_qualified(value).map_err(|err| ComposeError::InvalidDomainId {
         domain: value.to_owned(),
         reason: err.to_string(),
     })
@@ -1590,7 +1586,9 @@ mod tests {
     #[test]
     fn mint_preview_produces_summary() {
         let account = account_literal(&ALICE_ID);
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
         let asset_id = format!("{asset_def}#{account}");
 
         let preview = mint_numeric_preview("mochi-local", &asset_id, 5_u32).expect("preview");
@@ -1622,7 +1620,10 @@ mod tests {
 
     #[test]
     fn transfer_draft_parses_inputs() {
-        let asset_id = AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone());
+        let asset_id = AssetId::new(
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap(),
+            ALICE_ID.clone(),
+        );
         let asset_str = asset_literal(&asset_id);
         let destination = account_literal(&BOB_ID);
         let draft =
@@ -1637,7 +1638,10 @@ mod tests {
 
     #[test]
     fn burn_draft_parses_inputs() {
-        let asset_id = AssetId::new("rose#wonderland".parse().unwrap(), ALICE_ID.clone());
+        let asset_id = AssetId::new(
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".parse().unwrap(),
+            ALICE_ID.clone(),
+        );
         let asset_str = asset_literal(&asset_id);
         let draft =
             InstructionDraft::burn_from_input(&asset_str, "3").expect("burn draft should parse");
@@ -1656,7 +1660,9 @@ mod tests {
 
     #[test]
     fn compose_preview_accepts_multiple_instructions() {
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
         let asset_id = AssetId::new(asset_def, ALICE_ID.clone());
         let mint = InstructionDraft::MintAsset {
             asset: asset_id.clone(),
@@ -1705,21 +1711,24 @@ mod tests {
 
     #[test]
     fn drafts_json_roundtrip_covers_all_variants() {
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
         let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
         let asset_id_str = asset_literal(&asset_id);
         let account = account_literal(&ALICE_ID);
+        let domain = "wonderland.universal";
 
         let mint = InstructionDraft::mint_from_input(&asset_id_str, "10").expect("mint draft");
         let burn = InstructionDraft::burn_from_input(&asset_id_str, "1").expect("burn draft");
         let transfer = InstructionDraft::transfer_from_input(&asset_id_str, "5", &account)
             .expect("transfer draft");
         let register_domain =
-            InstructionDraft::register_domain_from_input("wonderland").expect("domain draft");
+            InstructionDraft::register_domain_from_input(domain).expect("domain draft");
         let register_account =
             InstructionDraft::register_account_from_input(&account).expect("account draft");
         let register_definition = InstructionDraft::register_asset_definition_from_input(
-            "rose#wonderland",
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
             Mintable::Once,
         )
         .expect("definition draft");
@@ -1733,7 +1742,7 @@ mod tests {
             min_initial_amounts: BTreeMap::new(),
             default_role_on_create: None,
         };
-        let admission = InstructionDraft::account_admission_policy_from_input("wonderland", policy)
+        let admission = InstructionDraft::account_admission_policy_from_input(domain, policy)
             .expect("policy draft");
 
         let grant_role =
@@ -1768,6 +1777,34 @@ mod tests {
         for (expected, actual) in drafts.iter().zip(parsed.iter()) {
             assert_eq!(expected.summary(), actual.summary());
         }
+    }
+
+    #[test]
+    fn register_account_instruction_uses_canonical_account_id() {
+        let account = account_literal(&ALICE_ID);
+        let draft = InstructionDraft::register_account_from_input(&account).expect("account draft");
+
+        let instruction = draft.instruction();
+        let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*instruction;
+        let Some(register_box) = instruction_ref
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+        else {
+            panic!("expected RegisterBox instruction");
+        };
+        let iroha_data_model::isi::RegisterBox::Account(register) = register_box else {
+            panic!("expected Register<Account> instruction");
+        };
+
+        assert_eq!(register.object.id, ALICE_ID.clone());
+    }
+
+    #[test]
+    fn register_account_instruction_rejects_domain_suffix_literal() {
+        let domain_suffixed_account = format!("{}@wonderland", account_literal(&ALICE_ID));
+        let err = InstructionDraft::register_account_from_input(&domain_suffixed_account)
+            .expect_err("domain-suffixed account literal must be rejected");
+        assert!(matches!(err, ComposeError::InvalidAccountId { .. }));
     }
 
     #[test]
@@ -1833,10 +1870,11 @@ mod tests {
     #[test]
     fn account_admission_policy_draft_parses_domain() {
         let policy = AccountAdmissionPolicy::default();
-        let draft = InstructionDraft::account_admission_policy_from_input("wonderland", policy)
-            .expect("policy draft");
+        let draft =
+            InstructionDraft::account_admission_policy_from_input("wonderland.universal", policy)
+                .expect("policy draft");
         assert!(
-            draft.summary().contains("wonderland"),
+            draft.summary().contains("wonderland.universal"),
             "summary should mention domain"
         );
     }
@@ -1933,7 +1971,9 @@ mod tests {
             max_implicit_creations_per_tx: Some(3),
             max_implicit_creations_per_block: Some(10),
             implicit_creation_fee: Some(ImplicitAccountCreationFee {
-                asset_definition_id: "rose#wonderland".parse().expect("asset definition"),
+                asset_definition_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+                    .parse()
+                    .expect("asset definition"),
                 amount: Numeric::from(1_u32),
                 destination: ImplicitAccountFeeDestination::Burn,
             }),
@@ -1941,13 +1981,13 @@ mod tests {
             default_role_on_create: Some("basic_user".parse().expect("role id")),
         };
         let draft = InstructionDraft::SetAccountAdmissionPolicy {
-            domain: "wonderland".parse().expect("domain"),
+            domain: DomainId::try_new("wonderland", "universal").expect("domain"),
             policy,
         };
         let summary = draft.summary();
         assert!(summary.contains("tx cap 3"));
         assert!(summary.contains("block cap 10"));
-        assert!(summary.contains("fee 1 rose#wonderland"));
+        assert!(summary.contains("fee 1 62Fk4FPcMuLvW5QjDGNF2a4jAmjM"));
         assert!(summary.contains("default role basic_user"));
     }
 
@@ -1959,8 +1999,8 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
 
-        let draft =
-            InstructionDraft::register_domain_from_input("side_garden").expect("domain draft");
+        let draft = InstructionDraft::register_domain_from_input("side_garden.universal")
+            .expect("domain draft");
         let err = compose_preview_with_authority("chain", &[draft], bob)
             .expect_err("Bob should not be allowed to register domains");
 
@@ -1980,7 +2020,9 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
 
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
         let asset_id = AssetId::new(asset_def, ALICE_ID.clone());
         let asset_id_str = asset_literal(&asset_id);
         let mint = InstructionDraft::mint_from_input(&asset_id_str, "1").expect("mint draft");
@@ -2124,7 +2166,9 @@ mod tests {
             .find(|auth| auth.allows_permission(InstructionPermission::MintAsset))
             .expect("signer with mint permission present");
         let account = account_literal(signer.account_id());
-        let asset_def: AssetDefinitionId = "rose#wonderland".parse().expect("definition id");
+        let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+            .parse()
+            .expect("definition id");
         let asset_id = format!("{asset_def}#{account}");
         let draft = InstructionDraft::mint_from_input(&asset_id, "5").expect("mint draft");
 

@@ -13,7 +13,7 @@ use std::{
 
 use axum::{
     body::Body,
-    extract::State,
+    extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -447,6 +447,7 @@ impl LockoutTracker {
 pub struct OperatorAuth {
     enabled: bool,
     require_mtls: bool,
+    mtls_trusted_proxy_nets: Vec<limits::IpNet>,
     token_fallback: OperatorTokenFallback,
     token_source: OperatorTokenSource,
     operator_tokens: HashSet<String>,
@@ -462,7 +463,8 @@ pub struct OperatorAuth {
 }
 
 fn rate_per_minute_to_per_sec(rate: NonZeroU32) -> u32 {
-    rate.div_ceil(NonZeroU32::new(60).expect("non-zero")).get()
+    let rate = rate.get();
+    rate.saturating_add(59) / 60
 }
 
 impl OperatorAuth {
@@ -498,6 +500,7 @@ impl OperatorAuth {
         Ok(Self {
             enabled: config.enabled,
             require_mtls: config.require_mtls,
+            mtls_trusted_proxy_nets: limits::parse_cidrs(&config.mtls_trusted_proxy_cidrs),
             token_fallback: config.token_fallback,
             token_source: config.token_source,
             operator_tokens,
@@ -562,14 +565,15 @@ impl OperatorAuth {
     async fn check_common(
         &self,
         headers: &HeaderMap,
+        remote_ip: Option<IpAddr>,
         action: &'static str,
     ) -> Result<AuthContext, OperatorAuthError> {
-        if self.require_mtls && !mtls_present(headers) {
+        if self.require_mtls && !mtls_present(headers, remote_ip, &self.mtls_trusted_proxy_nets) {
             let err = OperatorAuthError::missing_mtls();
             self.record_event(action, "denied", err.metric_label());
             return Err(err);
         }
-        let key = auth_key(headers);
+        let key = auth_key(headers, remote_ip);
         if !self.limiter.allow(&key).await {
             let err = OperatorAuthError::rate_limited();
             self.record_event(action, "rate_limited", err.metric_label());
@@ -586,11 +590,12 @@ impl OperatorAuth {
     pub(crate) async fn authorize_operator_endpoint(
         &self,
         headers: &HeaderMap,
+        remote_ip: Option<IpAddr>,
     ) -> Result<(), OperatorAuthError> {
         if !self.enabled {
             return Ok(());
         }
-        let ctx = self.check_common(headers, ACTION_GATE).await?;
+        let ctx = self.check_common(headers, remote_ip, ACTION_GATE).await?;
         if let Some(session) = session_from_headers(headers) {
             if self.session_valid(session) {
                 self.record_success(&ctx, ACTION_GATE, "session");
@@ -630,6 +635,7 @@ impl OperatorAuth {
     pub(crate) async fn authorize_bootstrap(
         &self,
         headers: &HeaderMap,
+        remote_ip: Option<IpAddr>,
         action: &'static str,
     ) -> Result<AuthContext, OperatorAuthError> {
         if !self.enabled {
@@ -637,7 +643,7 @@ impl OperatorAuth {
             self.record_event(action, "denied", err.metric_label());
             return Err(err);
         }
-        let ctx = self.check_common(headers, action).await?;
+        let ctx = self.check_common(headers, remote_ip, action).await?;
         if let Some(session) = session_from_headers(headers) {
             if self.session_valid(session) {
                 return Ok(ctx);
@@ -672,6 +678,7 @@ impl OperatorAuth {
     pub(crate) async fn authorize_login(
         &self,
         headers: &HeaderMap,
+        remote_ip: Option<IpAddr>,
         action: &'static str,
     ) -> Result<AuthContext, OperatorAuthError> {
         if !self.enabled {
@@ -679,7 +686,7 @@ impl OperatorAuth {
             self.record_event(action, "denied", err.metric_label());
             return Err(err);
         }
-        self.check_common(headers, action).await
+        self.check_common(headers, remote_ip, action).await
     }
 
     pub(crate) fn webauthn_registration_options(
@@ -1200,20 +1207,18 @@ fn decode_b64url(label: &'static str, value: &str) -> Result<Vec<u8>, OperatorAu
         .map_err(|_| OperatorAuthError::invalid_payload(format!("{label} must be base64url")))
 }
 
-fn auth_key(headers: &HeaderMap) -> String {
-    headers
-        .get(limits::REMOTE_ADDR_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<IpAddr>().ok())
+fn auth_key(headers: &HeaderMap, remote: Option<IpAddr>) -> String {
+    limits::effective_remote_ip(headers, remote)
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "anon".to_string())
 }
 
-fn mtls_present(headers: &HeaderMap) -> bool {
-    headers
-        .get(HEADER_MTLS_FORWARD)
-        .and_then(|value| value.to_str().ok())
-        .map_or(false, |value| !value.trim().is_empty())
+fn mtls_present(
+    headers: &HeaderMap,
+    remote: Option<IpAddr>,
+    trusted_proxies: &[limits::IpNet],
+) -> bool {
+    limits::has_trusted_forwarded_header(headers, remote, trusted_proxies, HEADER_MTLS_FORWARD)
 }
 
 fn session_from_headers(headers: &HeaderMap) -> Option<&str> {
@@ -1684,9 +1689,13 @@ pub async fn enforce_operator_auth(
     req: axum::http::Request<Body>,
     next: Next,
 ) -> Result<Response, std::convert::Infallible> {
+    let remote_ip = req
+        .extensions()
+        .get::<ConnectInfo<std::net::SocketAddr>>()
+        .map(|connect_info| connect_info.0.ip());
     if let Err(err) = app
         .operator_auth
-        .authorize_operator_endpoint(req.headers())
+        .authorize_operator_endpoint(req.headers(), remote_ip)
         .await
     {
         return Ok(err.into_response());
@@ -1696,11 +1705,12 @@ pub async fn enforce_operator_auth(
 
 pub async fn handle_operator_register_options(
     State(app): State<SharedAppState>,
+    ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, OperatorAuthError> {
     let ctx = app
         .operator_auth
-        .authorize_bootstrap(&headers, ACTION_REGISTER_OPTIONS)
+        .authorize_bootstrap(&headers, Some(remote.ip()), ACTION_REGISTER_OPTIONS)
         .await?;
     let payload = app.operator_auth.webauthn_registration_options(&ctx)?;
     Ok(JsonBody(payload))
@@ -1708,12 +1718,13 @@ pub async fn handle_operator_register_options(
 
 pub async fn handle_operator_register_verify(
     State(app): State<SharedAppState>,
+    ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     JsonOnly(payload): JsonOnly<norito::json::Value>,
 ) -> Result<impl IntoResponse, OperatorAuthError> {
     let ctx = app
         .operator_auth
-        .authorize_bootstrap(&headers, ACTION_REGISTER_VERIFY)
+        .authorize_bootstrap(&headers, Some(remote.ip()), ACTION_REGISTER_VERIFY)
         .await?;
     let outcome = app
         .operator_auth
@@ -1728,11 +1739,12 @@ pub async fn handle_operator_register_verify(
 
 pub async fn handle_operator_login_options(
     State(app): State<SharedAppState>,
+    ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, OperatorAuthError> {
     let ctx = app
         .operator_auth
-        .authorize_login(&headers, ACTION_LOGIN_OPTIONS)
+        .authorize_login(&headers, Some(remote.ip()), ACTION_LOGIN_OPTIONS)
         .await?;
     let payload = app.operator_auth.webauthn_authentication_options(&ctx)?;
     Ok(JsonBody(payload))
@@ -1740,12 +1752,13 @@ pub async fn handle_operator_login_options(
 
 pub async fn handle_operator_login_verify(
     State(app): State<SharedAppState>,
+    ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     JsonOnly(payload): JsonOnly<norito::json::Value>,
 ) -> Result<impl IntoResponse, OperatorAuthError> {
     let ctx = app
         .operator_auth
-        .authorize_login(&headers, ACTION_LOGIN_VERIFY)
+        .authorize_login(&headers, Some(remote.ip()), ACTION_LOGIN_VERIFY)
         .await?;
     let outcome = app
         .operator_auth
@@ -1798,6 +1811,8 @@ mod tests {
         ToriiOperatorAuth {
             enabled: true,
             require_mtls: false,
+            mtls_trusted_proxy_cidrs:
+                iroha_config::parameters::defaults::torii::operator_auth::mtls_trusted_proxy_cidrs(),
             token_fallback,
             token_source,
             tokens,
@@ -1829,6 +1844,14 @@ mod tests {
             HeaderValue::from_static("127.0.0.1"),
         );
         headers
+    }
+
+    fn loopback_ip() -> Option<IpAddr> {
+        Some("127.0.0.1".parse().expect("loopback ip"))
+    }
+
+    fn loopback_connect_info() -> ConnectInfo<std::net::SocketAddr> {
+        ConnectInfo("127.0.0.1:8080".parse().expect("loopback socket"))
     }
 
     #[test]
@@ -2040,7 +2063,7 @@ mod tests {
 
         let headers = headers_with_operator_token("bootstrap");
         let ctx = auth
-            .authorize_bootstrap(&headers, ACTION_REGISTER_OPTIONS)
+            .authorize_bootstrap(&headers, loopback_ip(), ACTION_REGISTER_OPTIONS)
             .await
             .expect("bootstrap allowed");
         let options = auth.webauthn_registration_options(&ctx).expect("options");
@@ -2062,13 +2085,13 @@ mod tests {
         assert_eq!(outcome.credentials_total, 1);
 
         let err = auth
-            .authorize_bootstrap(&headers, ACTION_REGISTER_OPTIONS)
+            .authorize_bootstrap(&headers, loopback_ip(), ACTION_REGISTER_OPTIONS)
             .await
             .expect_err("token bootstrap denied after enrollment");
         assert_eq!(err.code, "operator_session_missing");
 
         let login_ctx = auth
-            .authorize_login(&base_headers(), ACTION_LOGIN_OPTIONS)
+            .authorize_login(&base_headers(), loopback_ip(), ACTION_LOGIN_OPTIONS)
             .await
             .expect("login allowed");
         let login_options = auth
@@ -2100,12 +2123,12 @@ mod tests {
             HEADER_OPERATOR_SESSION,
             HeaderValue::from_str(&session.session_token).expect("session token"),
         );
-        auth.authorize_operator_endpoint(&session_headers)
+        auth.authorize_operator_endpoint(&session_headers, loopback_ip())
             .await
             .expect("session accepted");
 
         let ctx = auth
-            .authorize_bootstrap(&session_headers, ACTION_REGISTER_OPTIONS)
+            .authorize_bootstrap(&session_headers, loopback_ip(), ACTION_REGISTER_OPTIONS)
             .await
             .expect("session bootstrap");
         let options = auth.webauthn_registration_options(&ctx).expect("options");
@@ -2138,7 +2161,7 @@ mod tests {
         let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
 
         let headers = headers_with_operator_token("operator-token");
-        auth.authorize_operator_endpoint(&headers)
+        auth.authorize_operator_endpoint(&headers, loopback_ip())
             .await
             .expect("operator token allowed");
     }
@@ -2158,7 +2181,7 @@ mod tests {
         let auth = build_operator_auth(config, api_tokens, tempdir.path());
 
         let headers = headers_with_api_token("api-token");
-        auth.authorize_operator_endpoint(&headers)
+        auth.authorize_operator_endpoint(&headers, loopback_ip())
             .await
             .expect("api token allowed");
     }
@@ -2181,7 +2204,7 @@ mod tests {
         let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
 
         let err = auth
-            .authorize_login(&base_headers(), ACTION_LOGIN_OPTIONS)
+            .authorize_login(&base_headers(), None, ACTION_LOGIN_OPTIONS)
             .await
             .expect_err("missing mTLS");
         assert_eq!(err.code, "operator_mtls_required");
@@ -2191,13 +2214,96 @@ mod tests {
             HEADER_MTLS_FORWARD,
             HeaderValue::from_static("cert=present"),
         );
-        let _ = auth.authorize_operator_endpoint(&headers).await;
-        let _ = auth.authorize_operator_endpoint(&headers).await;
+        let _ = auth
+            .authorize_operator_endpoint(&headers, loopback_ip())
+            .await;
+        let _ = auth
+            .authorize_operator_endpoint(&headers, loopback_ip())
+            .await;
         let err = auth
-            .authorize_operator_endpoint(&headers)
+            .authorize_operator_endpoint(&headers, loopback_ip())
             .await
             .expect_err("locked out");
         assert_eq!(err.code, "operator_auth_locked");
+    }
+
+    #[tokio::test]
+    async fn operator_auth_rejects_forwarded_mtls_from_untrusted_proxy() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let mut config = base_operator_auth_config(
+            OperatorTokenFallback::Always,
+            OperatorTokenSource::OperatorTokens,
+            vec!["valid".to_owned()],
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        config.require_mtls = true;
+        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+
+        let mut headers = base_headers();
+        headers.insert(
+            HEADER_MTLS_FORWARD,
+            HeaderValue::from_static("cert=present"),
+        );
+        let err = auth
+            .authorize_login(
+                &headers,
+                Some("198.51.100.10".parse().expect("untrusted proxy")),
+                ACTION_LOGIN_OPTIONS,
+            )
+            .await
+            .expect_err("untrusted proxy must not satisfy mTLS");
+        assert_eq!(err.code, "operator_mtls_required");
+    }
+
+    #[tokio::test]
+    async fn operator_auth_key_uses_remote_ip_when_internal_header_missing() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            OperatorTokenFallback::Always,
+            OperatorTokenSource::OperatorTokens,
+            vec!["valid".to_owned()],
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+
+        let remote_ip: IpAddr = "198.51.100.33".parse().expect("remote ip");
+        let ctx = auth
+            .authorize_login(&HeaderMap::new(), Some(remote_ip), ACTION_LOGIN_OPTIONS)
+            .await
+            .expect("login key derivation should succeed");
+
+        assert_eq!(ctx.key, remote_ip.to_string());
+    }
+
+    #[tokio::test]
+    async fn operator_auth_key_prefers_injected_header_over_transport_remote_ip() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let config = base_operator_auth_config(
+            OperatorTokenFallback::Always,
+            OperatorTokenSource::OperatorTokens,
+            vec!["valid".to_owned()],
+            OperatorAuthLockout::default(),
+            vec![OperatorWebAuthnAlgorithm::Es256],
+        );
+        let auth = build_operator_auth(config, HashSet::new(), tempdir.path());
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            limits::REMOTE_ADDR_HEADER,
+            HeaderValue::from_static("203.0.113.77"),
+        );
+        let ctx = auth
+            .authorize_login(
+                &headers,
+                Some("198.51.100.33".parse().expect("transport remote ip")),
+                ACTION_LOGIN_OPTIONS,
+            )
+            .await
+            .expect("login key derivation should succeed");
+
+        assert_eq!(ctx.key, "203.0.113.77");
     }
 
     #[test]
@@ -2241,16 +2347,24 @@ mod tests {
     async fn operator_auth_handlers_reject_when_disabled() {
         let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
         let headers = HeaderMap::new();
-        let err = handle_operator_register_options(State(app.clone()), headers.clone())
-            .await
-            .err()
-            .expect("register options disabled");
+        let err = handle_operator_register_options(
+            State(app.clone()),
+            loopback_connect_info(),
+            headers.clone(),
+        )
+        .await
+        .err()
+        .expect("register options disabled");
         assert_eq!(err.code, "operator_auth_disabled");
 
-        let err = handle_operator_login_options(State(app.clone()), headers.clone())
-            .await
-            .err()
-            .expect("login options disabled");
+        let err = handle_operator_login_options(
+            State(app.clone()),
+            loopback_connect_info(),
+            headers.clone(),
+        )
+        .await
+        .err()
+        .expect("login options disabled");
         assert_eq!(err.code, "operator_auth_disabled");
     }
 

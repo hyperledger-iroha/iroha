@@ -4,7 +4,6 @@
 package org.hyperledger.iroha.android.model.instructions;
 
 import org.hyperledger.iroha.android.address.AccountAddress;
-import org.hyperledger.iroha.android.address.AssetIdDecoder;
 import org.hyperledger.iroha.android.address.AssetDefinitionIdEncoder;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.model.InstructionBox;
@@ -23,6 +22,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+
+import org.hyperledger.iroha.android.address.AccountIdLiteral;
 
 /**
  * Encodes asset transfer instructions in wire-framed Norito format.
@@ -65,9 +66,12 @@ public final class TransferWirePayloadEncoder {
   /**
    * Encodes an asset transfer instruction as a wire-framed InstructionBox.
    *
-   * @param assetId The full asset ID (e.g., "rose#wonderland##alice@wonderland")
+   * @param assetId The internal asset balance-bucket literal as
+   *     {@code <base58-asset-definition-id>#<i105-account-id>} with an optional
+   *     {@code #dataspace:<id>} suffix. Public asset ids remain bare Base58
+   *     asset-definition ids.
    * @param amount The amount to transfer as a string (e.g., "10" or "10.50")
-   * @param destinationAccountId The recipient's account ID
+   * @param destinationAccountId The recipient's canonical I105 account ID
    * @return InstructionBox with wire payload ready for Norito encoding
    */
   public static InstructionBox encodeAssetTransfer(
@@ -78,6 +82,18 @@ public final class TransferWirePayloadEncoder {
 
     byte[] wirePayload = encodeTransferBox(assetId, amount, destinationAccountId);
     return InstructionBox.fromWirePayload(WIRE_NAME, wirePayload);
+  }
+
+  /**
+   * Encodes an {@code AccountId} bare payload using the same layout expected by transaction
+   * instruction fields.
+   */
+  public static byte[] encodeAccountIdPayload(String accountId) {
+    Objects.requireNonNull(accountId, "accountId");
+    final AccountId parsed = AccountId.parse(accountId);
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
+    new AccountIdAdapter().encode(encoder, parsed);
+    return encoder.toByteArray();
   }
 
   /**
@@ -167,52 +183,29 @@ public final class TransferWirePayloadEncoder {
   }
 
   /**
-   * Rust: AssetDefinitionId is now a raw {@code [u8; 16]} — the blake3-derived aid_bytes.
-   * Constructed from an {@code aid:<hex>} string or from {@code name#domain} via blake3.
+   * Rust: AssetDefinitionId is now a raw {@code [u8; 16]} payload wrapped by a canonical Base58
+   * address on public surfaces.
    */
   private static final class AssetDefinitionId {
-    private final byte[] aidBytes;
+    private final byte[] definitionBytes;
 
-    AssetDefinitionId(byte[] aidBytes) {
-      if (aidBytes.length != 16) {
-        throw new IllegalArgumentException("aidBytes must be 16 bytes, got " + aidBytes.length);
-      }
-      this.aidBytes = aidBytes.clone();
-    }
-
-    byte[] aidBytes() {
-      return aidBytes.clone();
-    }
-
-    /**
-     * Create from {@code aid:<32-hex>} string.
-     */
-    static AssetDefinitionId fromAid(String aidString) {
-      return new AssetDefinitionId(AssetDefinitionIdEncoder.parseAidBytes(aidString));
-    }
-
-    /**
-     * Create from legacy {@code name#domain} format by computing blake3 hash.
-     */
-    static AssetDefinitionId fromNameDomain(String name, String domain) {
-      return new AssetDefinitionId(AssetDefinitionIdEncoder.computeAidBytes(name, domain));
-    }
-
-    /**
-     * Parse from {@code name#domain} format (legacy) or {@code aid:<hex>} format.
-     */
-    static AssetDefinitionId parse(String assetDefinitionId) {
-      if (AssetDefinitionIdEncoder.isAidEncoded(assetDefinitionId)) {
-        return fromAid(assetDefinitionId);
-      }
-      int hashIndex = assetDefinitionId.indexOf('#');
-      if (hashIndex < 0) {
+    AssetDefinitionId(byte[] definitionBytes) {
+      if (definitionBytes.length != 16) {
         throw new IllegalArgumentException(
-            "Invalid AssetDefinitionId format: " + assetDefinitionId);
+            "definitionBytes must be 16 bytes, got " + definitionBytes.length);
       }
-      String name = assetDefinitionId.substring(0, hashIndex);
-      String domainName = assetDefinitionId.substring(hashIndex + 1);
-      return fromNameDomain(name, domainName);
+      this.definitionBytes = definitionBytes.clone();
+    }
+
+    byte[] definitionBytes() {
+      return definitionBytes.clone();
+    }
+
+    /**
+     * Create from a canonical unprefixed Base58 asset-definition address.
+     */
+    static AssetDefinitionId fromAddress(String address) {
+      return new AssetDefinitionId(AssetDefinitionIdEncoder.parseAddressBytes(address));
     }
   }
 
@@ -266,32 +259,15 @@ public final class TransferWirePayloadEncoder {
       return controller;
     }
 
-    /**
-     * Parse from "signatory@domain" format, extracting just the controller.
-     *
-     * <p>The signatory can be either:
-     * <ul>
-     *   <li>I105 address (single-key or multisig) — decoded via {@link AccountAddress}
-     *   <li>Multihash hex string (e.g., "ed0120abc...") — decoded via {@link PublicKeyCodec}
-     * </ul>
-     */
     static AccountId parse(String accountIdStr) {
-      int atIndex = accountIdStr.lastIndexOf('@');
-      String signatory = atIndex >= 0 ? accountIdStr.substring(0, atIndex) : accountIdStr;
-
-      // Try as multihash hex (ed25519, ml-dsa, gost, sm2, etc.)
-      PublicKeyCodec.PublicKeyPayload pk = PublicKeyCodec.decodePublicKeyLiteral(signatory);
-      if (pk != null) {
-        String multihash = PublicKeyCodec.encodePublicKeyMultihash(pk.curveId(), pk.keyBytes());
-        return new AccountId(AccountController.single(multihash));
-      }
-
-      // Parse as I105 address (supports both single-key and multisig)
-      AccountAddress address;
+      final String canonicalAccountId =
+          AccountIdLiteral.requireCanonicalI105Address(accountIdStr, "accountId");
+      final AccountAddress address;
       try {
-        address = AccountAddress.parseEncodedIgnoringCurveSupport(signatory, null).address;
+        address = AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAccountId, null).address;
       } catch (AccountAddress.AccountAddressException e) {
-        throw new IllegalArgumentException("Failed to parse account identifier: " + signatory, e);
+        throw new IllegalArgumentException(
+            "Failed to parse canonical I105 account identifier: " + canonicalAccountId, e);
       }
 
       try {
@@ -311,7 +287,7 @@ public final class TransferWirePayloadEncoder {
         }
       } catch (AccountAddress.AccountAddressException e) {
         throw new IllegalArgumentException(
-            "Failed to extract controller from I105 address", e);
+            "Failed to extract controller from canonical I105 account id", e);
       }
 
       throw new IllegalArgumentException(
@@ -360,103 +336,51 @@ public final class TransferWirePayloadEncoder {
     }
 
     /**
-     * Parse from "asset#domain#account@domain" or "asset##account@domain" format.
-     * If domain after asset name is empty (##), it means same domain as account.
+     * Parse from {@code <base58-asset-definition-id>#<i105-account-id>} with an optional
+     * {@code #dataspace:<id>} suffix.
      */
     static AssetId parse(String assetIdStr) {
-      if (AssetIdDecoder.isNoritoEncoded(assetIdStr)) {
-        return parseNoritoEncoded(assetIdStr);
-      }
-
-      // Find the last # followed by account@domain
-      int lastHashIndex = assetIdStr.lastIndexOf('#');
-      if (lastHashIndex < 0) {
-        throw new IllegalArgumentException("Invalid AssetId format: " + assetIdStr);
-      }
-
-      String accountIdPart = assetIdStr.substring(lastHashIndex + 1);
-      String assetDefPart = assetIdStr.substring(0, lastHashIndex);
-
-      AccountId accountId = AccountId.parse(accountIdPart);
-
-      // Extract domain from account part for fallback
-      int atIndex = accountIdPart.lastIndexOf('@');
-      String accountDomain = atIndex >= 0 ? accountIdPart.substring(atIndex + 1) : "";
-
-      AssetDefinitionId assetDef;
-      if (AssetDefinitionIdEncoder.isAidEncoded(assetDefPart)) {
-        assetDef = AssetDefinitionId.fromAid(assetDefPart);
-      } else if (assetDefPart.endsWith("#")) {
-        // Same domain as account: "asset#" -> use account's domain
-        String assetName = assetDefPart.substring(0, assetDefPart.length() - 1);
-        assetDef = AssetDefinitionId.fromNameDomain(assetName, accountDomain);
-      } else {
-        // Different domain: "asset#domain"
-        int hashIndex = assetDefPart.indexOf('#');
-        if (hashIndex < 0) {
-          throw new IllegalArgumentException("Invalid AssetId format: " + assetIdStr);
-        }
-        String assetName = assetDefPart.substring(0, hashIndex);
-        String assetDomain = assetDefPart.substring(hashIndex + 1);
-        assetDef = AssetDefinitionId.fromNameDomain(assetName, assetDomain);
-      }
-
-      return new AssetId(accountId, assetDef, null, globalScopePayload());
-    }
-
-    private static AssetId parseNoritoEncoded(String noritoAssetId) {
-      byte[] raw = extractNoritoBytes(noritoAssetId);
-      NoritoHeader.DecodeResult decoded =
-          NoritoHeader.decode(
-              raw, SchemaHash.hash16("iroha_data_model::asset::id::model::AssetId"));
-      NoritoHeader header = decoded.header();
-      byte[] payload = decoded.payload();
-      header.validateChecksum(payload);
-      final int sourceFlags = header.flags();
-      final int unsupportedFlags = sourceFlags & ~NoritoHeader.COMPACT_LEN;
-      if (unsupportedFlags != 0) {
+      final String trimmed = assetIdStr.trim();
+      final String[] parts = trimmed.split("#", -1);
+      if (parts.length < 2 || parts.length > 3) {
         throw new IllegalArgumentException(
-            String.format(
-                "Unsupported norito AssetId layout flags for transfer encoding: 0x%02x",
-                unsupportedFlags));
+            "Invalid AssetId format: expected <base58-asset-definition-id>#<i105-account-id> with optional #dataspace:<id>");
+      }
+      final String assetDefPart = parts[0];
+      final String accountIdPart = parts[1];
+      final AccountId accountId = AccountId.parse(accountIdPart);
+
+      if (!AssetDefinitionIdEncoder.isCanonicalAddress(assetDefPart)) {
+        throw new IllegalArgumentException(
+            "Invalid AssetId format: expected canonical <base58-asset-definition-id>#<i105-account-id>");
+      }
+      final AssetDefinitionId assetDef = AssetDefinitionId.fromAddress(assetDefPart);
+      final byte[] scopePayload;
+      if (parts.length == 2) {
+        scopePayload = globalScopePayload();
+      } else {
+        final String scopePart = parts[2];
+        if (!scopePart.startsWith("dataspace:")) {
+          throw new IllegalArgumentException(
+              "Invalid AssetId format: scope must use dataspace:<id> when present");
+        }
+        final String rawDataspace = scopePart.substring("dataspace:".length());
+        final long dataspaceId;
+        try {
+          dataspaceId = Long.parseLong(rawDataspace);
+        } catch (NumberFormatException ex) {
+          throw new IllegalArgumentException(
+              "Invalid AssetId format: dataspace scope must be an unsigned integer", ex);
+        }
+        if (dataspaceId < 0) {
+          throw new IllegalArgumentException(
+              "Invalid AssetId format: dataspace scope must be non-negative");
+        }
+        final AssetBalanceScopePayload scope = AssetBalanceScopePayload.dataspace(dataspaceId);
+        scopePayload = encodeAssetBalanceScopePayload(scope);
       }
 
-      boolean compactLen = (sourceFlags & NoritoHeader.COMPACT_LEN) != 0;
-      NoritoDecoder decoder = new NoritoDecoder(payload, sourceFlags, header.minor());
-
-      byte[] encodedAccountPayload = readSizedField(decoder, compactLen, "AssetId.account");
-      final AccountId account;
-      try {
-        account = decodeEncodedAccountPayload(encodedAccountPayload, sourceFlags, header.minor());
-      } catch (IllegalArgumentException ex) {
-        throw new IllegalArgumentException("Invalid AssetId.account payload", ex);
-      }
-      byte[] definitionPayload = readSizedField(decoder, compactLen, "AssetId.definition");
-      byte[] aidBytes = decodeFixedByteArray(definitionPayload, 16, sourceFlags, header.minor());
-      byte[] scopePayload = readSizedField(decoder, compactLen, "AssetId.scope");
-      final AssetBalanceScopePayload scope;
-      try {
-        scope = decodeAssetBalanceScopePayload(scopePayload, sourceFlags, header.minor());
-      } catch (IllegalArgumentException ex) {
-        throw new IllegalArgumentException("Invalid AssetId.scope payload", ex);
-      }
-      if (decoder.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after AssetId payload");
-      }
-
-      if (sourceFlags != 0) {
-        return new AssetId(
-            account,
-            new AssetDefinitionId(aidBytes),
-            null,
-            encodeAssetBalanceScopePayload(scope));
-      }
-
-      return new AssetId(
-          null,
-          new AssetDefinitionId(aidBytes),
-          encodedAccountPayload,
-          scopePayload);
+      return new AssetId(accountId, assetDef, null, scopePayload);
     }
   }
 
@@ -472,24 +396,24 @@ public final class TransferWirePayloadEncoder {
       // TransferBox enum tag (Asset = 2)
       UINT32_ADAPTER.encode(encoder, (long) TRANSFER_BOX_ASSET_DISCRIMINANT);
 
-      // Norito enum variants have a u64 length prefix for the variant payload.
+      // Norito enum variants have a layout-flagged length prefix for the variant payload.
       // Encode the Transfer struct to a child buffer first to compute length.
       NoritoEncoder child = encoder.childEncoder();
       encodeTransferStruct(child, value);
       byte[] variantPayload = child.toByteArray();
 
-      // Write u64 length prefix (little-endian, not compact)
-      encoder.writeUInt(variantPayload.length, 64);
+      // Write the canonical payload length.
+      writePayloadLength(encoder, variantPayload.length);
       encoder.writeBytes(variantPayload);
     }
 
     /**
-     * Encode Transfer<Asset, Numeric, Account> struct fields with u64 length prefixes.
+     * Encode Transfer<Asset, Numeric, Account> struct fields with canonical length prefixes.
      *
      * <p>In norito non-packed mode, each struct field is prefixed with a u64 (little-endian) length.
      */
     private void encodeTransferStruct(NoritoEncoder encoder, TransferAssetPayload value) {
-      // Transfer struct fields in order with u64 length prefixes:
+      // Transfer struct fields in order with canonical length prefixes:
       // - source: AssetId (struct)
       // - object: Numeric
       // - destination: AccountId (struct)
@@ -505,8 +429,7 @@ public final class TransferWirePayloadEncoder {
       NoritoEncoder child = encoder.childEncoder();
       adapter.encode(child, value);
       byte[] payload = child.toByteArray();
-      // u64 little-endian length prefix (NOT compact/varint)
-      encoder.writeUInt(payload.length, 64);
+      writePayloadLength(encoder, payload.length);
       encoder.writeBytes(payload);
     }
 
@@ -519,15 +442,13 @@ public final class TransferWirePayloadEncoder {
   /**
    * Adapter for encoding AssetDefinitionId as {@code [u8; 16]}.
    *
-   * <p>With {@code flags=0} (no COMPACT_LEN), Rust serializes each array element with a u64 length
-   * prefix: 16 × (u64_le(1) + byte) = 144 bytes. With COMPACT_LEN, Rust uses varint lengths
-   * instead. The current signing path always uses {@code flags=0}.
+   * <p>Canonical SDK encoders use {@code COMPACT_LEN}, so each element length is a compact varint.
    */
   private static final class AssetDefinitionIdAdapter implements TypeAdapter<AssetDefinitionId> {
 
     @Override
     public void encode(NoritoEncoder encoder, AssetDefinitionId value) {
-      encodeFixedByteArray(encoder, value.aidBytes());
+      encodeFixedByteArray(encoder, value.definitionBytes());
     }
 
     @Override
@@ -546,7 +467,7 @@ public final class TransferWirePayloadEncoder {
    *   }
    * </pre>
    *
-   * Each field has a u64 length prefix in norito non-packed mode.
+   * Each field has a layout-flagged length prefix in non-packed mode.
    */
   private static final class AccountIdAdapter implements TypeAdapter<AccountId> {
     private static final TypeAdapter<AccountController> CONTROLLER_ADAPTER =
@@ -577,7 +498,7 @@ public final class TransferWirePayloadEncoder {
    *   }
    * </pre>
    *
-   * Standard enum format: u32 discriminant + u64 length prefix + variant payload.
+   * Standard enum format: u32 discriminant + canonical length prefix + variant payload.
    */
   private static final class AccountControllerAdapter implements TypeAdapter<AccountController> {
     private static final int SINGLE_DISCRIMINANT = 0;
@@ -599,7 +520,7 @@ public final class TransferWirePayloadEncoder {
       NoritoEncoder child = encoder.childEncoder();
       STRING_ADAPTER.encode(child, publicKeyMultihash);
       byte[] payload = child.toByteArray();
-      encoder.writeUInt(payload.length, 64);
+      writePayloadLength(encoder, payload.length);
       encoder.writeBytes(payload);
     }
 
@@ -614,7 +535,7 @@ public final class TransferWirePayloadEncoder {
       encodeMultisigMembers(policyEncoder, policy.members());
 
       byte[] policyPayload = policyEncoder.toByteArray();
-      encoder.writeUInt(policyPayload.length, 64);
+      writePayloadLength(encoder, policyPayload.length);
       encoder.writeBytes(policyPayload);
     }
 
@@ -641,11 +562,11 @@ public final class TransferWirePayloadEncoder {
         encodeSizedField(memberEncoder, STRING_ADAPTER, memberMultihash);
         encodeSizedField(memberEncoder, UINT16_ADAPTER, (long) member.weight());
         byte[] memberPayload = memberEncoder.toByteArray();
-        vecEncoder.writeUInt(memberPayload.length, 64);
+        writePayloadLength(vecEncoder, memberPayload.length);
         vecEncoder.writeBytes(memberPayload);
       }
       byte[] vecPayload = vecEncoder.toByteArray();
-      encoder.writeUInt(vecPayload.length, 64);
+      writePayloadLength(encoder, vecPayload.length);
       encoder.writeBytes(vecPayload);
     }
 
@@ -654,7 +575,7 @@ public final class TransferWirePayloadEncoder {
       NoritoEncoder child = encoder.childEncoder();
       adapter.encode(child, value);
       byte[] payload = child.toByteArray();
-      encoder.writeUInt(payload.length, 64);
+      writePayloadLength(encoder, payload.length);
       encoder.writeBytes(payload);
     }
 
@@ -667,8 +588,9 @@ public final class TransferWirePayloadEncoder {
   /**
    * Adapter for encoding AssetId: { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }
    *
-   * <p>Legacy text input defaults to {@code AssetBalanceScope::Global}. Canonical Norito asset
-   * identifiers preserve the account and scope payload bytes exactly as provided.
+   * <p>Canonical text input uses {@code AssetBalanceScope::Global} when no dataspace suffix is
+   * present. Canonical Norito asset identifiers preserve the account and scope payload bytes
+   * exactly as provided.
    */
   private static final class AssetIdAdapter implements TypeAdapter<AssetId> {
     private static final TypeAdapter<AccountId> ACCOUNT_ID_ADAPTER = new AccountIdAdapter();
@@ -677,20 +599,20 @@ public final class TransferWirePayloadEncoder {
 
     @Override
     public void encode(NoritoEncoder encoder, AssetId value) {
-      // AssetId struct fields in order with u64 length prefixes:
+      // AssetId struct fields in order with canonical length prefixes:
       // 1. account: AccountId
       // 2. definition: AssetDefinitionId
       // 3. scope: AssetBalanceScope
       byte[] encodedAccountPayload = value.encodedAccountPayload();
       if (encodedAccountPayload != null) {
-        encoder.writeUInt(encodedAccountPayload.length, 64);
+        writePayloadLength(encoder, encodedAccountPayload.length);
         encoder.writeBytes(encodedAccountPayload);
       } else {
         encodeFieldWithLength(encoder, ACCOUNT_ID_ADAPTER, value.account());
       }
       encodeFieldWithLength(encoder, ASSET_DEF_ID_ADAPTER, value.definition());
       byte[] scopePayload = value.scopePayload();
-      encoder.writeUInt(scopePayload.length, 64);
+      writePayloadLength(encoder, scopePayload.length);
       encoder.writeBytes(scopePayload);
     }
 
@@ -703,7 +625,7 @@ public final class TransferWirePayloadEncoder {
       NoritoEncoder child = encoder.childEncoder();
       adapter.encode(child, value);
       byte[] payload = child.toByteArray();
-      encoder.writeUInt(payload.length, 64);
+      writePayloadLength(encoder, payload.length);
       encoder.writeBytes(payload);
     }
   }
@@ -711,7 +633,7 @@ public final class TransferWirePayloadEncoder {
   /**
    * Adapter for encoding Numeric values (mantissa + scale).
    *
-   * <p>Numeric is a struct with two fields that need u64 length prefixes:
+   * <p>Numeric is a struct with two fields that need canonical length prefixes:
    * - mantissa: BigInt
    * - scale: u32
    */
@@ -719,7 +641,7 @@ public final class TransferWirePayloadEncoder {
 
     @Override
     public void encode(NoritoEncoder encoder, NumericValue value) {
-      // Numeric struct fields with u64 length prefixes:
+      // Numeric struct fields with canonical length prefixes:
       // 1. mantissa: BigInt
       // 2. scale: u32
       encodeFieldBigInt(encoder, value.mantissa());
@@ -732,22 +654,22 @@ public final class TransferWirePayloadEncoder {
     }
 
     /**
-     * Encode BigInt field with u64 length prefix.
+     * Encode BigInt field with a canonical length prefix.
      */
     private void encodeFieldBigInt(NoritoEncoder encoder, BigInteger value) {
       NoritoEncoder child = encoder.childEncoder();
       encodeBigInt(child, value);
       byte[] payload = child.toByteArray();
-      encoder.writeUInt(payload.length, 64);
+      writePayloadLength(encoder, payload.length);
       encoder.writeBytes(payload);
     }
 
     /**
-     * Encode u32 field with u64 length prefix.
+     * Encode u32 field with a canonical length prefix.
      */
     private void encodeFieldU32(NoritoEncoder encoder, int value) {
       // u32 is always 4 bytes
-      encoder.writeUInt(4, 64);  // length prefix
+      writePayloadLength(encoder, 4);
       UINT32_ADAPTER.encode(encoder, (long) value);
     }
 
@@ -807,11 +729,7 @@ public final class TransferWirePayloadEncoder {
 
   /**
    * Encodes a fixed-size byte array as per-element length-prefixed bytes for {@code [u8; N]}.
-   * Each element is written as {@code u64_le(1) + byte}, producing 9 bytes per element.
-   *
-   * <p>This matches Rust's {@code [T; N]::NoritoSerialize} only when {@code COMPACT_LEN} is off
-   * ({@code flags=0}). With {@code COMPACT_LEN} active, Rust uses varint lengths instead of
-   * fixed u64. The current signing path always uses {@code flags=0}.
+   * Canonical SDK encoders use {@code COMPACT_LEN}, so each element length is a compact varint.
    */
   public static void encodeFixedByteArray(NoritoEncoder encoder, byte[] bytes) {
     boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
@@ -825,150 +743,6 @@ public final class TransferWirePayloadEncoder {
     NoritoEncoder encoder = new NoritoEncoder(0);
     UINT32_ADAPTER.encode(encoder, 0L);
     return encoder.toByteArray();
-  }
-
-  private static byte[] extractNoritoBytes(String noritoString) {
-    String prefix = "norito:";
-    if (!noritoString.regionMatches(true, 0, prefix, 0, prefix.length())) {
-      throw new IllegalArgumentException("Value must start with norito: prefix");
-    }
-    String hex = noritoString.substring(prefix.length());
-    if ((hex.length() & 1) != 0) {
-      throw new IllegalArgumentException("Hex string must have even length");
-    }
-    byte[] bytes = new byte[hex.length() / 2];
-    for (int i = 0; i < bytes.length; i++) {
-      int hi = Character.digit(hex.charAt(i * 2), 16);
-      int lo = Character.digit(hex.charAt(i * 2 + 1), 16);
-      if (hi < 0 || lo < 0) {
-        throw new IllegalArgumentException("Invalid hex character at position " + (i * 2));
-      }
-      bytes[i] = (byte) ((hi << 4) | lo);
-    }
-    return bytes;
-  }
-
-  private static byte[] readSizedField(
-      NoritoDecoder decoder, boolean compactLen, String fieldName) {
-    int fieldLength = checkedLength(decoder.readLength(compactLen), fieldName + " field");
-    return decoder.readBytes(fieldLength);
-  }
-
-  private static byte[] decodeFixedByteArray(
-      byte[] payload, int expectedLen, int flags, int flagsHint) {
-    if (payload.length == expectedLen) {
-      return payload.clone();
-    }
-
-    NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
-    boolean compactLen = (flags & NoritoHeader.COMPACT_LEN) != 0;
-    byte[] result = new byte[expectedLen];
-    for (int i = 0; i < expectedLen; i++) {
-      long elementLen = decoder.readLength(compactLen);
-      if (elementLen != 1) {
-        throw new IllegalArgumentException("Expected 1-byte element, got " + elementLen);
-      }
-      result[i] = (byte) decoder.readByte();
-    }
-    if (decoder.remaining() != 0) {
-      throw new IllegalArgumentException("Trailing bytes after fixed byte array");
-    }
-    return result;
-  }
-
-  private static AccountId decodeEncodedAccountPayload(
-      byte[] payload, int flags, int flagsHint) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
-    final boolean compactLen = (flags & NoritoHeader.COMPACT_LEN) != 0;
-    final long controllerTag = UINT32_ADAPTER.decode(decoder);
-    final int variantLength =
-        checkedLength(decoder.readLength(compactLen), "AccountController variant payload");
-    final byte[] variantPayload = decoder.readBytes(variantLength);
-    if (decoder.remaining() != 0) {
-      throw new IllegalArgumentException("Trailing bytes after AssetId.account payload");
-    }
-
-    if (controllerTag == 0L) {
-      final String canonicalMultihash =
-          decodeSingleControllerVariant(variantPayload, flags, flagsHint);
-      return new AccountId(AccountController.single(canonicalMultihash));
-    }
-    if (controllerTag == 1L) {
-      final AccountAddress.MultisigPolicyPayload multisigPolicy =
-          decodeMultisigControllerVariant(variantPayload, flags, flagsHint);
-      return new AccountId(AccountController.multisig(multisigPolicy));
-    }
-    throw new IllegalArgumentException(
-        "Unknown AccountController discriminant in AssetId.account: " + controllerTag);
-  }
-
-  private static String decodeSingleControllerVariant(byte[] payload, int flags, int flagsHint) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
-    final String multihash = STRING_ADAPTER.decode(decoder);
-    if (decoder.remaining() != 0) {
-      throw new IllegalArgumentException("Trailing bytes after AssetId.account single controller");
-    }
-    final PublicKeyCodec.PublicKeyPayload publicKey =
-        PublicKeyCodec.decodePublicKeyLiteral(multihash);
-    if (publicKey == null) {
-      throw new IllegalArgumentException("Invalid public key multihash in AssetId.account");
-    }
-    return PublicKeyCodec.encodePublicKeyMultihash(publicKey.curveId(), publicKey.keyBytes());
-  }
-
-  private static AccountAddress.MultisigPolicyPayload decodeMultisigControllerVariant(
-      byte[] payload, int flags, int flagsHint) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
-    final int version =
-        Math.toIntExact(
-            decodeSizedTypedField(decoder, UINT8_ADAPTER, "MultisigPolicy.version"));
-    final int threshold =
-        Math.toIntExact(
-            decodeSizedTypedField(decoder, UINT16_ADAPTER, "MultisigPolicy.threshold"));
-    final int membersPayloadLen =
-        checkedLength(
-            decoder.readLength((flags & NoritoHeader.COMPACT_LEN) != 0),
-            "MultisigPolicy.members payload");
-    final byte[] membersPayload = decoder.readBytes(membersPayloadLen);
-    if (decoder.remaining() != 0) {
-      throw new IllegalArgumentException("Trailing bytes after AssetId.account multisig policy");
-    }
-
-    final NoritoDecoder membersDecoder = new NoritoDecoder(membersPayload, flags, flagsHint);
-    final int membersCount = checkedLength(membersDecoder.readLength(false), "Multisig members count");
-    final List<AccountAddress.MultisigMemberPayload> members = new ArrayList<>(membersCount);
-    for (int i = 0; i < membersCount; i++) {
-      final int memberLen =
-          checkedLength(
-              membersDecoder.readLength((flags & NoritoHeader.COMPACT_LEN) != 0),
-              "Multisig member payload");
-      final byte[] memberPayload = membersDecoder.readBytes(memberLen);
-      final NoritoDecoder memberDecoder = new NoritoDecoder(memberPayload, flags, flagsHint);
-
-      final String memberMultihash =
-          decodeSizedTypedField(memberDecoder, STRING_ADAPTER, "Multisig member public key");
-      final int weight =
-          Math.toIntExact(
-              decodeSizedTypedField(memberDecoder, UINT16_ADAPTER, "Multisig member weight"));
-      if (memberDecoder.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after multisig member payload");
-      }
-
-      final PublicKeyCodec.PublicKeyPayload keyPayload =
-          PublicKeyCodec.decodePublicKeyLiteral(memberMultihash);
-      if (keyPayload == null) {
-        throw new IllegalArgumentException("Invalid multisig member public key");
-      }
-      members.add(
-          AccountAddress.MultisigMemberPayload.of(
-              keyPayload.curveId(), weight, keyPayload.keyBytes()));
-    }
-    if (membersDecoder.remaining() != 0) {
-      throw new IllegalArgumentException("Trailing bytes after multisig member vector payload");
-    }
-
-    validateMultisigPolicySemantics(version, threshold, members);
-    return AccountAddress.MultisigPolicyPayload.of(version, threshold, members);
   }
 
   private static void validateMultisigPolicySemantics(
@@ -1031,45 +805,19 @@ public final class TransferWirePayloadEncoder {
     return Integer.compare(a.length, b.length);
   }
 
-  private static AssetBalanceScopePayload decodeAssetBalanceScopePayload(
-      byte[] payload, int flags, int flagsHint) {
-    final NoritoDecoder decoder = new NoritoDecoder(payload, flags, flagsHint);
-    final long scopeTag = UINT32_ADAPTER.decode(decoder);
-    if (scopeTag == 0L) {
-      if (decoder.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after AssetBalanceScope::Global");
-      }
-      return AssetBalanceScopePayload.global();
-    }
-    if (scopeTag == 1L) {
-      final boolean compactLen = (flags & NoritoHeader.COMPACT_LEN) != 0;
-      final int variantLen =
-          checkedLength(decoder.readLength(compactLen), "AssetBalanceScope::Dataspace payload");
-      final byte[] variantPayload = decoder.readBytes(variantLen);
-      if (decoder.remaining() != 0) {
-        throw new IllegalArgumentException("Trailing bytes after AssetBalanceScope payload");
-      }
-      final NoritoDecoder variantDecoder = new NoritoDecoder(variantPayload, flags, flagsHint);
-      final long dataspaceId = variantDecoder.readUInt(64);
-      if (variantDecoder.remaining() != 0) {
-        throw new IllegalArgumentException(
-            "Trailing bytes after AssetBalanceScope::Dataspace value");
-      }
-      return AssetBalanceScopePayload.dataspace(dataspaceId);
-    }
-    throw new IllegalArgumentException(
-        "Unknown AssetBalanceScope discriminant in AssetId.scope: " + scopeTag);
-  }
-
   private static byte[] encodeAssetBalanceScopePayload(AssetBalanceScopePayload scope) {
     if (scope.isGlobal()) {
       return globalScopePayload();
     }
-    final NoritoEncoder encoder = new NoritoEncoder(0);
+    final NoritoEncoder encoder = new NoritoEncoder(NoritoCodec.DEFAULT_FLAGS);
     UINT32_ADAPTER.encode(encoder, 1L);
-    encoder.writeUInt(8, 64);
+    writePayloadLength(encoder, 8);
     encoder.writeUInt(scope.dataspaceId(), 64);
     return encoder.toByteArray();
+  }
+
+  private static void writePayloadLength(NoritoEncoder encoder, int size) {
+    encoder.writeLength(size, (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0);
   }
 
   private static <T> T decodeSizedTypedField(

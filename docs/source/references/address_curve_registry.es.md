@@ -101,7 +101,7 @@ de validación:
    eliminar entradas malformadas temprano.
 3. **Ejecutar la decodificación específica del algoritmo:** Use los mismos
    decodificadores canónicos que `iroha_crypto` (`ed25519_dalek`,
-   `pqcrypto_dilithium`, `w3f_bls`/`blstrs`, `sm2`, los helpers TC26, etc.) para
+   `pqcrypto_mldsa`, `w3f_bls`/`blstrs`, `sm2`, los helpers TC26, etc.) para
    que todas las implementaciones compartan el mismo comportamiento de
    validación de subgrupos/puntos.
 4. **Verificar tamaños de firma:** La admisión y los SDKs deben imponer las
@@ -111,7 +111,7 @@ de validación:
 | Algoritmo | `curve_id` | Bytes de clave pública | Bytes de firma | Comprobaciones críticas |
 |-----------|------------|------------------------|---------------|-------------------------|
 | `ed25519` | `0x01` | 32 | 64 | Rechazar puntos comprimidos no canónicos, forzar limpieza de cofactor (sin puntos de orden pequeño) y asegurar `s < L` al validar firmas. |
-| `ml-dsa` (Dilithium3) | `0x02` | 1952 | 3309 | Rechazar payloads que no tengan exactamente 1952 bytes antes de decodificar; parsear la clave pública Dilithium3 y verificar firmas usando pqcrypto-dilithium con longitudes canónicas. |
+| `ml-dsa` (Dilithium3) | `0x02` | 1952 | 3309 | Rechazar payloads que no tengan exactamente 1952 bytes antes de decodificar; parsear la clave pública Dilithium3 y verificar firmas usando pqcrypto-mldsa con longitudes canónicas. |
 | `bls_normal` | `0x03` | 48 | 96 | Aceptar solo claves públicas G1 comprimidas canónicas y firmas G2 comprimidas; rechazar puntos identidad y codificaciones no canónicas. |
 | `secp256k1` | `0x04` | 33 | 64 | Aceptar solo puntos SEC1 comprimidos; descomprimir y rechazar puntos no canónicos/invalidos, y verificar firmas usando la codificación canónica de 64 bytes `r∥s` (normalización low-`s` aplicada por el firmante). |
 | `bls_small` | `0x05` | 96 | 48 | Aceptar solo claves públicas G2 comprimidas canónicas y firmas G1 comprimidas; rechazar puntos identidad y codificaciones no canónicas. |

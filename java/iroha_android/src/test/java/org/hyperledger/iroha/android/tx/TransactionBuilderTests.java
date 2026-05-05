@@ -24,6 +24,7 @@ import org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProvider;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
 import org.hyperledger.iroha.android.tx.offline.OfflineEnvelopeOptions;
@@ -48,7 +49,7 @@ public final class TransactionBuilderTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000002")
-            .setAuthority("bob@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x28))
             .setCreationTimeMs(1_735_000_001_234L)
             .setExecutable(Executable.ivm("payload-bytes".getBytes()))
             .setTimeToLiveMs(10_000L)
@@ -59,7 +60,7 @@ public final class TransactionBuilderTests {
     final FakeSigner signer = new FakeSigner();
     final NoritoCodecAdapter codec = new NoritoJavaCodecAdapter();
     final TransactionBuilder builder =
-        new TransactionBuilder(codec, IrohaKeyManager.withSoftwareFallback());
+        new TransactionBuilder(codec, IrohaKeyManager.withSoftwareProvider());
 
     final SignedTransaction signed = builder.encodeAndSign(payload, signer);
     final byte[] expectedSignature = concat(signed.encodedPayload(), "-signature".getBytes());
@@ -84,14 +85,14 @@ public final class TransactionBuilderTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000003")
-            .setAuthority("carol@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x29))
             .setCreationTimeMs(1_735_000_111_000L)
             .setExecutable(Executable.ivm("alias-sign".getBytes()))
             .setTimeToLiveMs(null)
             .setNonce(null)
             .build();
 
-    final IrohaKeyManager keyManager = IrohaKeyManager.withSoftwareFallback();
+    final IrohaKeyManager keyManager = IrohaKeyManager.withSoftwareProvider();
     final TransactionBuilder builder =
         new TransactionBuilder(new NoritoJavaCodecAdapter(), keyManager);
 
@@ -133,7 +134,7 @@ public final class TransactionBuilderTests {
                         InstructionBox.fromWirePayload("iroha.register.account", wirePayloadB))))
             .build();
     final TransactionBuilder builder =
-        new TransactionBuilder(new NoritoJavaCodecAdapter(), IrohaKeyManager.withSoftwareFallback());
+        new TransactionBuilder(new NoritoJavaCodecAdapter(), IrohaKeyManager.withSoftwareProvider());
     final SignedTransaction signed = builder.encodeAndSign(payload, new FakeSigner());
     final TransactionPayload decoded = new NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload());
     assert decoded.executable().isInstructions() : "Executable variant must remain instructions";
@@ -153,7 +154,7 @@ public final class TransactionBuilderTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000004")
-            .setAuthority("dave@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x2A))
             .setExecutable(Executable.ivm("attested".getBytes()))
             .build();
 
@@ -173,12 +174,12 @@ public final class TransactionBuilderTests {
   }
 
   private static void encodeAndSignEnvelopeWithAttestationWithoutHardware() throws Exception {
-    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareFallback();
+    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareProvider();
     final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(), manager);
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId("00000005")
-            .setAuthority("erin@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x2B))
             .setExecutable(Executable.ivm("software".getBytes()))
             .build();
 

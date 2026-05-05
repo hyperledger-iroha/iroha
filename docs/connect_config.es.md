@@ -37,7 +37,7 @@ Overrides de entorno (config usuario → config efectiva):
 - `CONNECT_DEDUPE_CAP` (`usize`; por defecto: `8192`)
 - `CONNECT_RELAY_ENABLED` (bool; por defecto: `true`)
 - `CONNECT_RELAY_STRATEGY` (string; por defecto: `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (`u8`; por defecto: `0`)
+- `CONNECT_P2P_TTL_HOPS` (`u8`; por defecto: `8`)
 
 Notas:
 

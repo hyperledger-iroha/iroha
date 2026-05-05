@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -165,82 +165,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## קצבאות לא מקוונות ומטא נתונים של פסק דין
+## Offline V2 readiness
 
-תגובות קצבאות לא מקוונות חושפות את המטא-נתונים של ספר החשבונות המועשר מראש -
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex` ו-`remaining_amount` מוחזרים לצד הגולמי
-להקליט כך שמרכזי המחוונים לא יצטרכו לפענח את מטעני Norito המוטבעים. החדש
-עוזרי ספירה לאחור (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) מדגישים את המועד האחרון שפג תוקף (רענן → מדיניות
-→ אישור) כך שתגי ממשק משתמש יכולים להזהיר מפעילים בכל פעם שיש קצבה
-נותרו פחות מ-24 שעות. ה-SDK
-משקף את מסנני REST שנחשפו על ידי `/v1/offline/allowances`:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs`, וה-
-`requireVerdict` / `onlyMissingVerdict` בוליאני. שילובים לא חוקיים (עבור
-דוגמה `onlyMissingVerdict` + `verdictIdHex`) נדחו באופן מקומי לפני Torii
-נקרא.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## העלאות לא מקוונות (בעיה + הרשמה)השתמש בעוזרי הטעינה כאשר אתה רוצה להנפיק תעודה ומיד
-לרשום אותו בפנקס החשבונות. ה-SDK מאמת את התעודה שהונפק והרשומה
-המזהים תואמים לפני החזרה, והתגובה כוללת את שני המטענים. יש
-אין נקודת קצה ייעודית להעלאה; העוזר משרשר את הנושא + רישום שיחות. אם
-כבר יש לך תעודה חתומה, התקשר ל-`registerOfflineAllowance` (או
-`renewOfflineAllowance`) ישירות.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii שאילתות וסטרימינג (WebSockets)
 
 עוזרי שאילתות חושפים סטטוס, מדדי Prometheus, צילומי מצב של טלמטריה ואירוע
@@ -275,7 +224,7 @@ abort.abort(); // closes the underlying WebSocket cleanly
 `/v1/explorer/accounts/{account_id}/qr` נקודות קצה כך שמרכזי המחוונים יכולים להפעיל מחדש את
 אותן צילומי מצב שמניעים את הפורטל. `getExplorerMetrics()` מנרמל את
 עומס ומחזיר `null` כאשר המסלול מושבת. חבר אותו עם
-`getExplorerAccountQr()` בכל פעם שתזדקק ל-I105 (מועדף)/סורה (השני בטובו) ליטרלים בתוספת מובנה
+`getExplorerAccountQr()` בכל פעם שתזדקק ל-i105 (מועדף)/סורה (השני בטובו) ליטרלים בתוספת מובנה
 SVG עבור כפתורי שיתוף.
 
 ```ts
@@ -290,7 +239,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -298,8 +247,8 @@ console.log(
 );
 ```
 
-מעבר `I105` משקף את ברירת המחדל של Explorer דחוסה
-בוררים; השמט את העקיפה עבור פלט I105 המועדף או בקש `i105_qr`
+מעבר `i105` משקף את ברירת המחדל של Explorer דחוסה
+בוררים; השמט את העקיפה עבור פלט i105 המועדף או בקש `i105_qr`
 כאשר אתה צריך את הגרסה בטוחה ל-QR. הליטרלי הדחוס הוא השני הטוב ביותר
 אפשרות לסורה בלבד עבור UX. המסייע תמיד מחזיר את המזהה הקנוני,
 המילולי שנבחר, והמטא נתונים (קידומת רשת, גרסת QR/מודולים, שגיאה
@@ -514,7 +463,7 @@ for await (const event of torii.streamEvents({
   קיבוץ החזקות נכסים לפי מזהי חשבון קנוני; העבר את `assetId` כדי לסנן את
   תיק עד למקרה של נכס בודד.
 - `getUaidBindings(uaid)` מונה כל חשבון מרחב נתונים ↔
-  מחייב (`I105` מחזירה את ה-`i105` המילולי).
+  מחייב (`i105` מחזירה את ה-`i105` המילולי).
 - `getUaidManifests(uaid, { dataspaceId })` מחזיר כל מניפסט יכולת,
   מצב מחזור החיים, וחשבונות קשורים לביקורת.
 
@@ -559,7 +508,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -569,7 +518,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

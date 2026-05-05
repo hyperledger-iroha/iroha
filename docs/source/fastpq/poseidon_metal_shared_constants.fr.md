@@ -25,9 +25,9 @@ génération de code.
 
 | Chemin | Objectif | SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | Instantané canonique généré à partir de `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` ; source de vérité pour les builds GPU. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Reflète l'instantané canonique afin que les tests unitaires Swift et le faisceau de fumée XCFramework chargent les mêmes constantes attendues par les noyaux Metal. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Les appareils Android/Kotlin partagent le même manifeste pour les tests de parité et de sérialisation. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Instantané canonique généré à partir de `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` ; source de vérité pour les builds GPU. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Reflète l'instantané canonique afin que les tests unitaires Swift et le faisceau de fumée XCFramework chargent les mêmes constantes attendues par les noyaux Metal. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Les appareils Android/Kotlin partagent le même manifeste pour les tests de parité et de sérialisation. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 Chaque consommateur doit vérifier le hachage avant de câbler les constantes dans un GPU
 canalisation. Lorsque le manifeste change (nouveau jeu de paramètres ou profil), le SHA et
@@ -39,7 +39,7 @@ Le manifeste est généré à partir des sources Rust en exécutant le `xtask`
 aide. La commande écrit à la fois le fichier canonique et les miroirs du SDK :
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 Utilisez `--constants <path>`/`--vectors <path>` pour remplacer les destinations ou

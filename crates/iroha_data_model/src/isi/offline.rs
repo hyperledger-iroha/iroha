@@ -1,56 +1,54 @@
 use super::*;
-use crate::offline::{OfflineToOnlineTransfer, OfflineVerdictRevocation, OfflineWalletCertificate};
-use iroha_crypto::Hash;
+use crate::offline::{OfflineNoteAuditBundleV2, OfflineNoteIssueV2, OfflineNoteRedeemV2};
 
 isi! {
-    /// Register an operator-issued offline allowance certificate on-ledger.
-    pub struct RegisterOfflineAllowance {
-        /// Certificate describing the allowance commitment and policy.
-        pub certificate: OfflineWalletCertificate,
+    /// Issue a production Offline V2 bearer note.
+    pub struct IssueOfflineNoteV2 {
+        /// Compact note issuance record.
+        pub issue: OfflineNoteIssueV2,
     }
 }
 
 isi! {
-    /// Submit a bundled offline-to-online transfer proof for settlement.
-    pub struct SubmitOfflineToOnlineTransfer {
-        /// Aggregated receipts, platform proofs, and balance commitment deltas to reconcile.
-        pub transfer: OfflineToOnlineTransfer,
+    /// Redeem a production Offline V2 bearer note token.
+    pub struct RedeemOfflineNoteV2 {
+        /// Compact recursive proof and consumed nullifiers.
+        pub redemption: OfflineNoteRedeemV2,
     }
 }
 
 isi! {
-    /// Register a revoked attestation verdict so POS clients can sync deny lists.
-    pub struct RegisterOfflineVerdictRevocation {
-        /// Revocation payload describing the verdict id and metadata.
-        pub revocation: OfflineVerdictRevocation,
+    /// Submit an optional Offline V2 audit bundle without requiring online settlement for finality.
+    pub struct AuditOfflineNoteV2 {
+        /// Compact audit payload.
+        pub audit: OfflineNoteAuditBundleV2,
     }
 }
 
-isi! {
-    /// Reclaim remaining allowance from an expired offline certificate back to the controller.
-    pub struct ReclaimExpiredOfflineAllowance {
-        /// Deterministic identifier of the allowance certificate to reclaim.
-        pub certificate_id: Hash,
-    }
-}
+impl crate::seal::Instruction for IssueOfflineNoteV2 {}
+impl crate::seal::Instruction for RedeemOfflineNoteV2 {}
+impl crate::seal::Instruction for AuditOfflineNoteV2 {}
 
-impl crate::seal::Instruction for RegisterOfflineAllowance {}
-impl crate::seal::Instruction for SubmitOfflineToOnlineTransfer {}
-impl crate::seal::Instruction for RegisterOfflineVerdictRevocation {}
-impl crate::seal::Instruction for ReclaimExpiredOfflineAllowance {}
-
-impl SubmitOfflineToOnlineTransfer {
-    /// Construct a submission instruction from a prepared transfer bundle.
+impl IssueOfflineNoteV2 {
+    /// Construct an Offline V2 note issuance instruction.
     #[must_use]
-    pub fn new(transfer: OfflineToOnlineTransfer) -> Self {
-        Self { transfer }
+    pub fn new(issue: OfflineNoteIssueV2) -> Self {
+        Self { issue }
     }
 }
 
-impl ReclaimExpiredOfflineAllowance {
-    /// Construct a reclaim instruction for the supplied certificate identifier.
+impl RedeemOfflineNoteV2 {
+    /// Construct an Offline V2 note redemption instruction.
     #[must_use]
-    pub fn new(certificate_id: Hash) -> Self {
-        Self { certificate_id }
+    pub fn new(redemption: OfflineNoteRedeemV2) -> Self {
+        Self { redemption }
+    }
+}
+
+impl AuditOfflineNoteV2 {
+    /// Construct an Offline V2 optional audit instruction.
+    #[must_use]
+    pub fn new(audit: OfflineNoteAuditBundleV2) -> Self {
+        Self { audit }
     }
 }

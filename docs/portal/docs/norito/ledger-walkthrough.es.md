@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2ea0c0b2f750131568e801b5fe583ae46ebddda3ce4f9fb52387725c2e227520
-source_last_modified: "2025-11-07T12:25:39.145308+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: a26e8de48d00066a9551f1909840165fc33e0ffc18b38b7ac4c6491b2c825f7b
+source_last_modified: "2026-04-03T17:43:03.931384+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -31,8 +31,8 @@ IDs de cuenta que planeas usar. El bundle por defecto ya incluye dos cuentas
 Derivadas de las claves demo:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Confirma los valores listando las primeras cuentas:
@@ -51,7 +51,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dentro de wonderland (reemplaza --limit por un numero mayor si hace falta)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions que ya existen
@@ -67,7 +67,7 @@ Crea un nuevo activo infinitamente acunable llamado `coffee` dentro del dominio
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 El CLI imprime el hash de la transaccion enviada (por ejemplo, `0x5f...`). Guardalo para consultar el estado mas tarde.
@@ -75,7 +75,7 @@ El CLI imprime el hash de la transaccion enviada (por ejemplo, `0x5f...`). Guard
 ## 3. Acuna unidades en la cuenta del operador
 
 Las cantidades de activos viven bajo el par `(asset definition, account)`. Acuna
-250 unidades de `coffee#wonderland` en `$ADMIN_ACCOUNT`:
+250 unidades de `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` en `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

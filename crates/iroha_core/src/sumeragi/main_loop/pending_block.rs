@@ -20,6 +20,24 @@ pub(super) enum ValidationStatus {
     Invalid,
 }
 
+/// Monotone local commit progression for a pending block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PendingCommitStage {
+    AwaitingLocalVote,
+    LocalVoteEmitted,
+    CommitQcObserved,
+}
+
+/// Validation artifact reused across commit retries without re-deriving state roots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ValidatedCommitArtifact {
+    pub(super) block_hash: HashOf<BlockHeader>,
+    pub(super) height: u64,
+    pub(super) view: u64,
+    pub(super) parent_state_root: Hash,
+    pub(super) post_state_root: Hash,
+}
+
 #[derive(Debug)]
 pub(super) enum ValidationGateOutcome {
     Valid,
@@ -42,7 +60,7 @@ pub(super) struct GateComputation {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct BlockSyncUpdateState {
+struct CommitEvidenceReplayState {
     view: u64,
     commit_votes: usize,
     has_commit_qc: bool,
@@ -63,18 +81,20 @@ pub(super) struct PendingBlock {
     pub(super) last_gate: Option<da::GateReason>,
     pub(super) last_gate_satisfied: Option<da::GateSatisfaction>,
     pub(super) inserted_at: Instant,
-    pub(super) precommit_vote_sent: bool,
-    pub(super) commit_qc_seen: bool,
+    pub(super) commit_stage: PendingCommitStage,
     pub(super) commit_qc_epoch: Option<u64>,
     pub(super) validation_status: ValidationStatus,
+    pub(super) validated_commit_artifact: Option<ValidatedCommitArtifact>,
     pub(super) kura_retry_attempts: u32,
     pub(super) next_kura_retry: Option<Instant>,
     pub(super) kura_aborted: bool,
     pub(super) kura_persisted: bool,
     pub(super) aborted: bool,
+    pub(super) retired_same_height: bool,
     pub(super) last_quorum_reschedule: Option<Instant>,
+    last_quorum_reschedule_vote_count: usize,
     pub(super) last_precommit_rebroadcast: Option<Instant>,
-    last_block_sync_update: Option<BlockSyncUpdateState>,
+    last_commit_evidence_replay: Option<CommitEvidenceReplayState>,
     /// Timestamp of the latest availability/vote progress for quorum timeout gating.
     last_progress: Instant,
 }
@@ -93,18 +113,20 @@ impl PendingBlock {
             last_gate: None,
             last_gate_satisfied: None,
             inserted_at: now,
-            precommit_vote_sent: false,
-            commit_qc_seen: false,
+            commit_stage: PendingCommitStage::AwaitingLocalVote,
             commit_qc_epoch: None,
             validation_status: ValidationStatus::Pending,
+            validated_commit_artifact: None,
             kura_retry_attempts: 0,
             next_kura_retry: None,
             kura_aborted: false,
             kura_persisted: false,
             aborted: false,
+            retired_same_height: false,
             last_quorum_reschedule: None,
+            last_quorum_reschedule_vote_count: 0,
             last_precommit_rebroadcast: None,
-            last_block_sync_update: None,
+            last_commit_evidence_replay: None,
             last_progress: now,
         }
     }
@@ -143,20 +165,21 @@ impl PendingBlock {
         if !replacing_same_subject {
             self.inserted_at = Instant::now();
             self.last_progress = self.inserted_at;
-            self.precommit_vote_sent = false;
-            self.commit_qc_seen = false;
-            self.commit_qc_epoch = None;
+            self.reset_commit_stage();
             self.last_gate = None;
             self.last_gate_satisfied = None;
             self.reset_kura_retry();
             self.kura_persisted = false;
             self.validation_status = ValidationStatus::Pending;
+            self.validated_commit_artifact = None;
             self.last_precommit_rebroadcast = None;
             self.last_quorum_reschedule = None;
+            self.last_quorum_reschedule_vote_count = 0;
             self.aborted = false;
+            self.retired_same_height = false;
             self.parent_state_root = None;
             self.post_state_root = None;
-            self.last_block_sync_update = None;
+            self.last_commit_evidence_replay = None;
         }
     }
 
@@ -172,20 +195,21 @@ impl PendingBlock {
         self.height = height;
         self.view = view;
         self.aborted = false;
+        self.retired_same_height = false;
         self.inserted_at = Instant::now();
         self.last_progress = self.inserted_at;
         self.validation_status = ValidationStatus::Pending;
-        self.precommit_vote_sent = false;
-        self.commit_qc_seen = false;
-        self.commit_qc_epoch = None;
+        self.validated_commit_artifact = None;
+        self.reset_commit_stage();
         self.last_gate = None;
         self.last_gate_satisfied = None;
         self.reset_kura_retry();
         self.last_precommit_rebroadcast = None;
         self.last_quorum_reschedule = None;
+        self.last_quorum_reschedule_vote_count = 0;
         self.parent_state_root = None;
         self.post_state_root = None;
-        self.last_block_sync_update = None;
+        self.last_commit_evidence_replay = None;
     }
 
     pub(super) fn reschedule_due(&self, now: Instant, backoff: Duration) -> bool {
@@ -193,15 +217,26 @@ impl PendingBlock {
             .is_none_or(|last| now.saturating_duration_since(last) >= backoff)
     }
 
-    pub(super) fn vote_backed_reschedule_due(&self, now: Instant, backoff: Duration) -> bool {
+    pub(super) fn vote_backed_reschedule_due(
+        &self,
+        now: Instant,
+        backoff: Duration,
+        vote_count: usize,
+    ) -> bool {
         self.progress_age(now) >= backoff
             && self
                 .last_quorum_reschedule
-                .is_none_or(|last| self.last_progress > last)
+                .is_none_or(|_| vote_count > self.last_quorum_reschedule_vote_count)
     }
 
     pub(super) fn mark_quorum_reschedule(&mut self, now: Instant) {
         self.last_quorum_reschedule = Some(now);
+        self.last_quorum_reschedule_vote_count = 0;
+    }
+
+    pub(super) fn mark_vote_backed_quorum_reschedule(&mut self, now: Instant, vote_count: usize) {
+        self.last_quorum_reschedule = Some(now);
+        self.last_quorum_reschedule_vote_count = vote_count;
     }
 
     pub(super) fn recompute_gate(
@@ -239,42 +274,141 @@ impl PendingBlock {
         self.reset_kura_retry();
     }
 
-    pub(super) fn mark_aborted(&mut self) {
+    pub(super) fn note_validated_commit_artifact(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        parent_state_root: Hash,
+        post_state_root: Hash,
+    ) {
+        self.validated_commit_artifact = Some(ValidatedCommitArtifact {
+            block_hash,
+            height,
+            view,
+            parent_state_root,
+            post_state_root,
+        });
+    }
+
+    pub(super) fn local_commit_vote_emitted(&self) -> bool {
+        matches!(
+            self.commit_stage,
+            PendingCommitStage::LocalVoteEmitted | PendingCommitStage::CommitQcObserved
+        )
+    }
+
+    pub(super) fn commit_qc_observed(&self) -> bool {
+        matches!(self.commit_stage, PendingCommitStage::CommitQcObserved)
+    }
+
+    pub(super) fn reset_commit_stage(&mut self) {
+        self.commit_stage = PendingCommitStage::AwaitingLocalVote;
+        self.commit_qc_epoch = None;
+    }
+
+    pub(super) fn note_local_commit_vote_emitted(&mut self) {
+        if matches!(self.commit_stage, PendingCommitStage::AwaitingLocalVote) {
+            self.commit_stage = PendingCommitStage::LocalVoteEmitted;
+            self.touch_progress(Instant::now());
+        }
+    }
+
+    pub(super) fn note_commit_qc_observed(&mut self, epoch: u64) {
+        let progressed = !matches!(self.commit_stage, PendingCommitStage::CommitQcObserved)
+            || self.commit_qc_epoch != Some(epoch);
+        self.commit_stage = PendingCommitStage::CommitQcObserved;
+        self.commit_qc_epoch = Some(epoch);
+        if progressed {
+            self.touch_progress(Instant::now());
+        }
+    }
+
+    pub(super) fn retire_same_height(&mut self) {
         self.aborted = true;
+        self.retired_same_height = true;
         self.inserted_at = Instant::now();
         self.last_progress = self.inserted_at;
         self.reset_kura_retry();
         self.last_gate = None;
         self.last_gate_satisfied = None;
-        self.precommit_vote_sent = false;
-        self.commit_qc_seen = false;
-        self.commit_qc_epoch = None;
+        self.last_precommit_rebroadcast = None;
+        self.last_commit_evidence_replay = None;
+        self.last_quorum_reschedule = None;
+        self.last_quorum_reschedule_vote_count = 0;
+    }
+
+    pub(super) fn mark_aborted(&mut self) {
+        self.aborted = true;
+        self.retired_same_height = false;
+        self.inserted_at = Instant::now();
+        self.last_progress = self.inserted_at;
+        self.reset_kura_retry();
+        self.last_gate = None;
+        self.last_gate_satisfied = None;
+        self.reset_commit_stage();
         self.last_precommit_rebroadcast = None;
         self.parent_state_root = None;
         self.post_state_root = None;
-        self.last_block_sync_update = None;
+        self.validated_commit_artifact = None;
+        self.last_commit_evidence_replay = None;
     }
 
-    pub(super) fn should_broadcast_block_sync_update(
+    pub(super) fn refresh_retired_payload(
+        &mut self,
+        block: SignedBlock,
+        payload_hash: Hash,
+        height: u64,
+        view: u64,
+    ) {
+        self.block = block;
+        self.payload_hash = payload_hash;
+        self.height = height;
+        self.view = view;
+        self.retired_same_height = true;
+        self.aborted = true;
+        self.inserted_at = Instant::now();
+        self.last_progress = self.inserted_at;
+        self.last_gate = None;
+        self.last_gate_satisfied = None;
+        self.last_precommit_rebroadcast = None;
+        self.last_commit_evidence_replay = None;
+        self.last_quorum_reschedule = None;
+        self.last_quorum_reschedule_vote_count = 0;
+    }
+
+    pub(super) fn is_retry_aborted(&self) -> bool {
+        self.aborted && !self.retired_same_height
+    }
+
+    pub(super) fn is_retired_same_height(&self) -> bool {
+        self.retired_same_height
+    }
+
+    pub(super) fn is_consensus_inactive(&self) -> bool {
+        self.aborted
+    }
+
+    pub(super) fn should_replay_commit_evidence(
         &mut self,
         view: u64,
         commit_votes: usize,
         has_commit_qc: bool,
     ) -> bool {
-        let candidate = BlockSyncUpdateState {
+        let candidate = CommitEvidenceReplayState {
             view,
             commit_votes,
             has_commit_qc,
         };
-        let Some(previous) = self.last_block_sync_update else {
-            self.last_block_sync_update = Some(candidate);
+        let Some(previous) = self.last_commit_evidence_replay else {
+            self.last_commit_evidence_replay = Some(candidate);
             return true;
         };
         let progressed = commit_votes > previous.commit_votes
             || (has_commit_qc && !previous.has_commit_qc)
             || view != previous.view;
         if progressed {
-            self.last_block_sync_update = Some(candidate);
+            self.last_commit_evidence_replay = Some(candidate);
         }
         progressed
     }
@@ -342,6 +476,13 @@ impl PendingBlock {
 
     pub(super) fn touch_progress(&mut self, now: Instant) {
         self.last_progress = now;
+    }
+
+    pub(super) fn refresh_activation_window(&mut self, now: Instant) {
+        self.inserted_at = now;
+        self.last_progress = now;
+        self.last_quorum_reschedule = None;
+        self.last_quorum_reschedule_vote_count = 0;
     }
 
     pub(super) fn precommit_rebroadcast_due(&self, now: Instant, cooldown: Duration) -> bool {
@@ -440,6 +581,8 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            execution_context_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 0,
             view_change_index: 0,
             confidential_features: None,
@@ -455,16 +598,32 @@ mod tests {
             PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
         pending.parent_state_root = Some(Hash::prehashed([0x22; Hash::LENGTH]));
         pending.post_state_root = Some(Hash::prehashed([0x33; Hash::LENGTH]));
+        pending.note_validated_commit_artifact(
+            pending.block.hash(),
+            pending.height,
+            pending.view,
+            Hash::prehashed([0x22; Hash::LENGTH]),
+            Hash::prehashed([0x33; Hash::LENGTH]),
+        );
 
         pending.replace_block(sample_block(2), Hash::prehashed([0x44; Hash::LENGTH]), 2, 0);
         assert!(pending.parent_state_root.is_none());
         assert!(pending.post_state_root.is_none());
+        assert!(pending.validated_commit_artifact.is_none());
 
         pending.parent_state_root = Some(Hash::prehashed([0x55; Hash::LENGTH]));
         pending.post_state_root = Some(Hash::prehashed([0x66; Hash::LENGTH]));
+        pending.note_validated_commit_artifact(
+            pending.block.hash(),
+            pending.height,
+            pending.view,
+            Hash::prehashed([0x55; Hash::LENGTH]),
+            Hash::prehashed([0x66; Hash::LENGTH]),
+        );
         pending.mark_aborted();
         assert!(pending.parent_state_root.is_none());
         assert!(pending.post_state_root.is_none());
+        assert!(pending.validated_commit_artifact.is_none());
     }
 
     #[test]
@@ -473,6 +632,7 @@ mod tests {
             PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
         pending.validation_status = ValidationStatus::Valid;
         pending.kura_persisted = true;
+        pending.note_local_commit_vote_emitted();
         pending.last_quorum_reschedule = Some(Instant::now());
         pending.mark_aborted();
 
@@ -480,19 +640,105 @@ mod tests {
 
         assert!(!pending.aborted);
         assert_eq!(pending.validation_status, ValidationStatus::Pending);
+        assert!(pending.validated_commit_artifact.is_none());
         assert!(pending.kura_persisted);
         assert!(pending.last_quorum_reschedule.is_none());
+        assert_eq!(pending.commit_stage, PendingCommitStage::AwaitingLocalVote);
     }
 
     #[test]
-    fn block_sync_update_broadcasts_on_progress() {
+    fn validated_commit_artifact_tracks_roots_and_kura_persistence() {
         let mut pending =
             PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
-        assert!(pending.should_broadcast_block_sync_update(0, 1, false));
-        assert!(!pending.should_broadcast_block_sync_update(0, 1, false));
-        assert!(pending.should_broadcast_block_sync_update(0, 2, false));
-        assert!(pending.should_broadcast_block_sync_update(0, 2, true));
-        assert!(pending.should_broadcast_block_sync_update(1, 2, true));
+        let parent_state_root = Hash::prehashed([0x22; Hash::LENGTH]);
+        let post_state_root = Hash::prehashed([0x33; Hash::LENGTH]);
+        let block_hash = pending.block.hash();
+
+        pending.note_validated_commit_artifact(
+            block_hash,
+            pending.height,
+            pending.view,
+            parent_state_root,
+            post_state_root,
+        );
+        assert_eq!(
+            pending.validated_commit_artifact,
+            Some(ValidatedCommitArtifact {
+                block_hash,
+                height: 1,
+                view: 0,
+                parent_state_root,
+                post_state_root,
+            })
+        );
+        assert!(!pending.kura_persisted);
+
+        pending.mark_kura_persisted();
+        assert!(pending.kura_persisted);
+    }
+
+    #[test]
+    fn commit_evidence_replay_advances_on_progress() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        assert!(pending.should_replay_commit_evidence(0, 1, false));
+        assert!(!pending.should_replay_commit_evidence(0, 1, false));
+        assert!(pending.should_replay_commit_evidence(0, 2, false));
+        assert!(pending.should_replay_commit_evidence(0, 2, true));
+        assert!(pending.should_replay_commit_evidence(1, 2, true));
+    }
+
+    #[test]
+    fn pending_commit_stage_is_monotone() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        assert_eq!(pending.commit_stage, PendingCommitStage::AwaitingLocalVote);
+        assert!(!pending.local_commit_vote_emitted());
+        assert!(!pending.commit_qc_observed());
+
+        pending.note_local_commit_vote_emitted();
+        assert_eq!(pending.commit_stage, PendingCommitStage::LocalVoteEmitted);
+        assert!(pending.local_commit_vote_emitted());
+        assert!(!pending.commit_qc_observed());
+
+        pending.note_commit_qc_observed(7);
+        assert_eq!(pending.commit_stage, PendingCommitStage::CommitQcObserved);
+        assert!(pending.local_commit_vote_emitted());
+        assert!(pending.commit_qc_observed());
+        assert_eq!(pending.commit_qc_epoch, Some(7));
+
+        pending.note_local_commit_vote_emitted();
+        assert_eq!(pending.commit_stage, PendingCommitStage::CommitQcObserved);
+    }
+
+    #[test]
+    fn local_commit_vote_counts_as_pending_progress() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        let stale = Instant::now() - Duration::from_secs(5);
+        pending.touch_progress(stale);
+
+        let before = pending.progress_age(Instant::now());
+        pending.note_local_commit_vote_emitted();
+        let after = pending.progress_age(Instant::now());
+
+        assert!(after < before);
+        assert!(after < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn commit_qc_observation_counts_as_pending_progress() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        let stale = Instant::now() - Duration::from_secs(5);
+        pending.touch_progress(stale);
+
+        let before = pending.progress_age(Instant::now());
+        pending.note_commit_qc_observed(7);
+        let after = pending.progress_age(Instant::now());
+
+        assert!(after < before);
+        assert!(after < Duration::from_secs(1));
     }
 
     #[test]
@@ -509,36 +755,58 @@ mod tests {
     }
 
     #[test]
+    fn refresh_activation_window_resets_pending_timers() {
+        let mut pending =
+            PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
+        let now = Instant::now();
+        let stale_progress = now - Duration::from_secs(5);
+        pending.inserted_at = stale_progress;
+        pending.touch_progress(stale_progress);
+        pending.mark_quorum_reschedule(stale_progress);
+
+        pending.refresh_activation_window(now);
+
+        assert_eq!(pending.inserted_at, now);
+        assert_eq!(pending.progress_age(now), Duration::ZERO);
+        assert!(pending.last_quorum_reschedule.is_none());
+    }
+
+    #[test]
     fn vote_backed_reschedule_requires_progress_after_last_attempt() {
         let mut pending =
             PendingBlock::new(sample_block(1), Hash::prehashed([0x11; Hash::LENGTH]), 1, 0);
         let now = Instant::now();
         let backoff = Duration::from_millis(1);
+        let initial_vote_count = 1;
 
         pending.touch_progress(now);
         assert!(
-            !pending.vote_backed_reschedule_due(now, backoff),
+            !pending.vote_backed_reschedule_due(now, backoff, initial_vote_count),
             "vote-backed reschedule should wait for stale progress even on the first attempt"
         );
 
         let first_due = now + backoff + Duration::from_millis(1);
         assert!(
-            pending.vote_backed_reschedule_due(first_due, backoff),
+            pending.vote_backed_reschedule_due(first_due, backoff, initial_vote_count),
             "first vote-backed reschedule should be allowed"
         );
 
-        pending.mark_quorum_reschedule(first_due);
+        pending.mark_vote_backed_quorum_reschedule(first_due, initial_vote_count);
         let later = first_due + backoff + Duration::from_millis(1);
         assert!(
-            !pending.vote_backed_reschedule_due(later, backoff),
-            "duplicate vote-backed reschedule should wait for real progress"
+            !pending.vote_backed_reschedule_due(later, backoff, initial_vote_count),
+            "duplicate vote-backed reschedule should wait for higher vote count"
         );
 
         pending.touch_progress(later);
         let later_still = later + backoff + Duration::from_millis(1);
         assert!(
-            pending.vote_backed_reschedule_due(later_still, backoff),
-            "fresh progress should rearm vote-backed reschedule"
+            !pending.vote_backed_reschedule_due(later_still, backoff, initial_vote_count),
+            "non-vote progress should not rearm vote-backed reschedule"
+        );
+        assert!(
+            pending.vote_backed_reschedule_due(later_still, backoff, initial_vote_count + 1),
+            "higher vote count should rearm vote-backed reschedule"
         );
     }
 }

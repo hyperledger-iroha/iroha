@@ -24,7 +24,7 @@ translation_last_reviewed: 2026-01-21
 
 1. לכדו את שורש הנתונים שבו MOCHI משתמש. ברירת המחדל היא
    `$TMPDIR/mochi/<profile-slug>`; נתיבים מותאמים מופיעים בכותרת ה‑UI וגם דרך
-   `cargo run -p mochi-ui-egui -- --data-root ...`.
+   `cargo run -p mochi-ui -- --data-root ...`.
 2. הריצו `./ci/check_mochi.sh` משורש ה‑workspace. הדבר מאמת את הקרייטים core,
    UI ו‑integration לפני שמתחילים לשנות תצורות.
 3. רשמו את ה‑preset (`single-peer` או `four-peer-bft`). הטופולוגיה שנוצרה קובעת
@@ -65,7 +65,7 @@ translation_last_reviewed: 2026-01-21
 לבינאריים ידועים כתקינים:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -82,7 +82,7 @@ cargo run -p mochi-ui-egui -- \
 מאזין בטווח ברירת המחדל (8080/1337). הפעילו את MOCHI מחדש עם בסיסים מפורשים:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 ה‑builder מפזר פורטים עוקבים מהבסיסים, אז שמרו טווח בגודל ה‑preset שלכם
@@ -115,7 +115,7 @@ cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
    - אתחול peers מחדש עם דריסות CLI/סביבה שנשמרו.
 3. אם חייבים לעשות זאת ידנית:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # שימו לב לשורש בפלט, ואז:
    rm -rf /tmp/mochi/four-peer-bft
    ```

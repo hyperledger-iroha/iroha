@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 Если вы хотите использовать `$ADMIN_ACCOUNT` или `$RECEIVER_ACCOUNT`, вы можете указать идентификаторы учетных записей. چاہتے ہیں۔ Пакет настроек по умолчанию и демо-ключи, а также учетные записи и учетные записи:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Ниже приведены учетные записи, которые могут быть использованы для:
@@ -46,7 +46,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # wonderland کے اندر accounts (ضرورت ہو تو --limit بڑھائیں)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # وہ asset definitions جو پہلے سے موجود ہیں
@@ -61,14 +61,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI отправил хэш транзакции (مثلاً `0x5f…`). اسے محفوظ کریں تاکہ بعد میں status کو query کیا جا سکے۔
 
 ## 3. آپریٹر اکاؤنٹ میں unit mint کریں
 
-количества активов `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` в упаковке `coffee#wonderland` — 250 штук в мятом виде:
+количества активов `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` в упаковке `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` — 250 штук в мятом виде:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

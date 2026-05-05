@@ -66,7 +66,7 @@ public struct ConnectKeyStore {
 
     private let backing: HybridBacking
 
-    /// Create a keystore backed by a secure keychain first, with an authenticated file fallback.
+    /// Create a keystore backed by the selected storage provider.
     /// The default initializer stores records under the user's application support directory.
     public init(directory: URL? = nil, configuration: Configuration = .default) {
         let baseDirectory = directory ?? FileBacking.defaultBaseDirectory()
@@ -151,47 +151,25 @@ private struct HybridBacking: Backing {
 
     func load(label: String, rawLabel: String) throws -> ConnectKeyStore.StoredKey? {
         if let keychain {
-            do {
-                if let stored = try keychain.load(label: label, rawLabel: rawLabel) {
-                    return stored
-                }
-            } catch let error as ConnectKeyStoreError {
-                if !shouldFallback(status: error) {
-                    throw error
-                }
-            }
+            return try keychain.load(label: label, rawLabel: rawLabel)
         }
         return try file.load(label: label, rawLabel: rawLabel)
     }
 
     func save(label: String, rawLabel: String, stored: ConnectKeyStore.StoredKey) throws {
         if let keychain {
-            do {
-                try keychain.save(label: label, rawLabel: rawLabel, stored: stored)
-                return
-            } catch let error as ConnectKeyStoreError {
-                if !shouldFallback(status: error) {
-                    throw error
-                }
-            }
+            try keychain.save(label: label, rawLabel: rawLabel, stored: stored)
+            return
         }
         try file.save(label: label, rawLabel: rawLabel, stored: stored)
     }
 
     func delete(label: String, rawLabel: String) throws {
-        try keychain?.delete(label: label, rawLabel: rawLabel)
-        try file.delete(label: label, rawLabel: rawLabel)
-    }
-
-    private func shouldFallback(status: ConnectKeyStoreError) -> Bool {
-        guard case .keychainFailure(let code) = status else {
-            return false
+        if let keychain {
+            try keychain.delete(label: label, rawLabel: rawLabel)
+            return
         }
-        return code == errSecMissingEntitlement
-            || code == errSecNotAvailable
-            || code == errSecInteractionNotAllowed
-            || code == errSecUnimplemented
-            || code == errSecParam
+        try file.delete(label: label, rawLabel: rawLabel)
     }
 }
 
@@ -328,7 +306,7 @@ private struct IntegrityKeyProvider {
             return cached
         }
 
-        let keyData = try (useKeychain ? loadFromKeychain() : nil) ?? loadFromFile()
+        let keyData = try useKeychain ? loadFromKeychain() : loadFromFile()
         if let keyData {
             let key = SymmetricKey(data: keyData)
             Self.storeCached(key, for: cacheKey)
@@ -342,7 +320,9 @@ private struct IntegrityKeyProvider {
         }
         let data = Data(bytes)
 
-        if !(useKeychain && storeInKeychain(data: data)) {
+        if useKeychain {
+            try storeInKeychain(data: data)
+        } else {
             try storeInFile(data: data)
         }
 
@@ -391,14 +371,14 @@ private struct IntegrityKeyProvider {
                 throw ConnectKeyStoreError.corrupt("integrity key length invalid")
             }
             return data
-        case errSecItemNotFound, errSecMissingEntitlement, errSecNotAvailable, errSecInteractionNotAllowed, errSecUnimplemented, errSecParam:
+        case errSecItemNotFound:
             return nil
         default:
             throw ConnectKeyStoreError.keychainFailure(status)
         }
     }
 
-    private func storeInKeychain(data: Data) -> Bool {
+    private func storeInKeychain(data: Data) throws {
         let context = LAContext()
         context.interactionNotAllowed = true
         var attributes: [String: Any] = [
@@ -422,9 +402,14 @@ private struct IntegrityKeyProvider {
             ]
             let update: [String: Any] = [kSecValueData as String: data]
             let updateStatus = SecItemUpdate(query as CFDictionary, update as CFDictionary)
-            return updateStatus == errSecSuccess
+            guard updateStatus == errSecSuccess else {
+                throw ConnectKeyStoreError.keychainFailure(updateStatus)
+            }
+            return
         }
-        return status == errSecSuccess
+        guard status == errSecSuccess else {
+            throw ConnectKeyStoreError.keychainFailure(status)
+        }
     }
 
     private func loadFromFile() throws -> Data? {
@@ -459,21 +444,6 @@ private struct StoredEnvelope: Codable, Equatable {
     let version: Int
     let payload: ConnectKeyStore.StoredKey
     let hmac: String
-}
-
-private func permutations<T>(_ items: [T]) -> [[T]] {
-    guard items.count > 1 else {
-        return [items]
-    }
-    var result: [[T]] = []
-    for index in items.indices {
-        var remaining = items
-        let head = remaining.remove(at: index)
-        for tail in permutations(remaining) {
-            result.append([head] + tail)
-        }
-    }
-    return result
 }
 
 private struct FileBacking: Backing {
@@ -513,14 +483,10 @@ private struct FileBacking: Backing {
         }
     }
 
-    // HMACs use a canonical JSON key ordering to avoid encoder-dependent reordering; legacy orderings stay accepted.
+    // HMACs use a canonical JSON key ordering to avoid encoder-dependent reordering.
     private static let canonicalPayloadOrder: [PayloadKey] = [.attestation, .keyPair]
     private static let canonicalKeyPairOrder: [KeyPairKey] = [.privateKey, .publicKey]
     private static let canonicalAttestationOrder: [AttestationKey] = [.createdAt, .deviceLabel, .publicKeyDigest]
-
-    private static let legacyPayloadOrders = permutations([PayloadKey.attestation, .keyPair])
-    private static let legacyKeyPairOrders = permutations([KeyPairKey.publicKey, .privateKey])
-    private static let legacyAttestationOrders = permutations([AttestationKey.publicKeyDigest, .deviceLabel, .createdAt])
 
     init(baseDirectory: URL, integrity: IntegrityKeyProvider) {
         self.baseDirectory = baseDirectory
@@ -589,10 +555,6 @@ private struct FileBacking: Backing {
             try validateAttestation(for: envelope.payload)
             return
         }
-        if matchesLegacyHmac(decoded: decoded, label: label, key: key, values: values) {
-            try validateAttestation(for: envelope.payload)
-            return
-        }
         throw ConnectKeyStoreError.integrityMismatch
     }
 
@@ -622,27 +584,6 @@ private struct FileBacking: Backing {
 
     private func path(for label: String) -> URL {
         baseDirectory.appendingPathComponent("\(label).json", isDirectory: false)
-    }
-
-    private func matchesLegacyHmac(decoded: Data,
-                                   label: String,
-                                   key: SymmetricKey,
-                                   values: HmacPayloadValues) -> Bool {
-        for payloadOrder in Self.legacyPayloadOrders {
-            for keyPairOrder in Self.legacyKeyPairOrders {
-                for attestationOrder in Self.legacyAttestationOrders {
-                    let payload = payloadData(values: values,
-                                              payloadOrder: payloadOrder,
-                                              keyPairOrder: keyPairOrder,
-                                              attestationOrder: attestationOrder)
-                    let candidate = computeHmac(label: label, key: key, payload: payload)
-                    if candidate == decoded {
-                        return true
-                    }
-                }
-            }
-        }
-        return false
     }
 
     private func payloadData(values: HmacPayloadValues,

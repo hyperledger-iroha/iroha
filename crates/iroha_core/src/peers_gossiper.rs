@@ -313,6 +313,7 @@ pub struct PeersGossiper {
     gossip_backoff: Duration,
     gossip_next_deadline: std::time::Instant,
     gossip_pending: bool,
+    last_gossip_fingerprint: Option<Vec<u8>>,
     last_drop_count: u64,
     last_drop_at: Option<std::time::Instant>,
     trust: TrustBook,
@@ -384,9 +385,9 @@ impl PeersGossiper {
             );
             return;
         }
-        self.gossip_peers();
+        let sent_gossip = self.gossip_peers();
         self.network_update_peers_addresses();
-        let had_pending = self.gossip_pending;
+        let had_pending = self.gossip_pending && sent_gossip;
         self.gossip_pending = false;
         self.gossip_backoff = Self::next_gossip_backoff(
             self.gossip_backoff,
@@ -441,6 +442,7 @@ impl PeersGossiper {
             gossip_backoff: gossip_period,
             gossip_next_deadline: now,
             gossip_pending: true,
+            last_gossip_fingerprint: None,
             last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
             last_drop_at: None,
             trust: TrustBook::new(
@@ -547,8 +549,11 @@ impl PeersGossiper {
     }
 
     fn set_current_topology(&mut self, UpdateTopology(topology): UpdateTopology) -> bool {
+        let force_disconnect = topology.is_empty();
         let mut new_topology: BTreeSet<_> = topology.into_iter().collect();
-        new_topology.extend(self.static_trusted_peers.iter().cloned());
+        if !force_disconnect {
+            new_topology.extend(self.static_trusted_peers.iter().cloned());
+        }
 
         self.gossip_peers.retain(|peer, map| {
             if !new_topology.contains(peer) {
@@ -571,7 +576,14 @@ impl PeersGossiper {
         let unchanged = new_topology == self.current_topology;
 
         let mut trust_changed = false;
-        if !removed.is_empty() {
+        if force_disconnect {
+            trust_changed |= !self.trusted_peers.is_empty()
+                || !self.trust_candidates.is_empty()
+                || !self.trust.entries.is_empty();
+            self.trusted_peers.clear();
+            self.trust_candidates.clear();
+            self.trust.entries.clear();
+        } else {
             for peer in removed {
                 if self.static_trusted_peers.contains(&peer) {
                     continue;
@@ -580,13 +592,13 @@ impl PeersGossiper {
                 self.trust_candidates.remove(&peer);
                 self.trust.entries.remove(&peer);
             }
-        }
-        if !added.is_empty() {
-            let now = std::time::Instant::now();
-            self.trust.seed(added.iter().cloned(), now);
-            for peer in &added {
-                trust_changed |= self.trusted_peers.insert(peer.clone());
-                self.trust_candidates.insert(peer.clone());
+            if !added.is_empty() {
+                let now = std::time::Instant::now();
+                self.trust.seed(added.iter().cloned(), now);
+                for peer in &added {
+                    trust_changed |= self.trusted_peers.insert(peer.clone());
+                    self.trust_candidates.insert(peer.clone());
+                }
             }
         }
         if trust_changed {
@@ -619,13 +631,66 @@ impl PeersGossiper {
         !unchanged || capabilities_changed
     }
 
-    fn gossip_peers(&mut self) {
+    fn sorted_online_peers<I>(peers: I) -> UniqueVec<Peer>
+    where
+        I: IntoIterator<Item = Peer>,
+    {
+        let mut peers: Vec<_> = peers.into_iter().collect();
+        peers.sort();
+        UniqueVec::from_iter(peers)
+    }
+
+    fn gossip_fingerprint(
+        peers: &UniqueVec<Peer>,
+        peer_capabilities: &BTreeMap<PeerId, PeerTransportCapabilities>,
+        trust_infos: &[PeerTrustInfo],
+    ) -> Vec<u8> {
+        let mut fingerprint = Vec::from(b"iroha-peer-gossip-v1".as_slice());
+        fingerprint.extend_from_slice(
+            &u64::try_from(peers.iter().count())
+                .unwrap_or(u64::MAX)
+                .encode(),
+        );
+        for peer in peers {
+            fingerprint.extend_from_slice(&peer.encode());
+        }
+        fingerprint.extend_from_slice(
+            &u64::try_from(peer_capabilities.len())
+                .unwrap_or(u64::MAX)
+                .encode(),
+        );
+        for (peer_id, capabilities) in peer_capabilities {
+            fingerprint.extend_from_slice(&peer_id.encode());
+            fingerprint.extend_from_slice(&capabilities.encode());
+        }
+        fingerprint.extend_from_slice(
+            &u64::try_from(trust_infos.len())
+                .unwrap_or(u64::MAX)
+                .encode(),
+        );
+        for info in trust_infos {
+            fingerprint.extend_from_slice(&info.peer_id.encode());
+            fingerprint.extend_from_slice(&info.trusted.encode());
+            fingerprint.extend_from_slice(&info.score.encode());
+        }
+        fingerprint
+    }
+
+    fn gossip_peers(&mut self) -> bool {
         let online_peers = self.network.online_peers(Clone::clone);
         if self.refresh_online_peer_capabilities() {
             self.network_update_peer_capabilities();
         }
-        let online_peers = UniqueVec::from_iter(online_peers);
+        let online_peers = Self::sorted_online_peers(online_peers);
         let now = std::time::Instant::now();
+        let trust_infos = self.trust_infos(now);
+        let fingerprint =
+            Self::gossip_fingerprint(&online_peers, &self.peer_capabilities, &trust_infos);
+        if self.last_gossip_fingerprint.as_ref() == Some(&fingerprint) {
+            iroha_logger::trace!("peers gossiper skipping unchanged gossip payload");
+            return false;
+        }
+        self.last_gossip_fingerprint = Some(fingerprint);
         let peers_msg = NetworkMessage::PeersGossiper(Box::new(PeersGossip {
             peers: online_peers,
             peer_capabilities: self.peer_capabilities.clone(),
@@ -635,7 +700,7 @@ impl PeersGossiper {
             priority: iroha_p2p::Priority::Low,
         });
 
-        let trust = self.sign_trust_entries(now);
+        let trust = self.sign_trust_entries(&trust_infos);
         if !trust.is_empty() {
             let trust_msg = NetworkMessage::PeerTrustGossip(Box::new(PeerTrustGossip { trust }));
             self.network.broadcast(Broadcast {
@@ -643,6 +708,7 @@ impl PeersGossiper {
                 priority: iroha_p2p::Priority::Low,
             });
         }
+        true
     }
 
     fn trust_payload(info: &PeerTrustInfo) -> Vec<u8> {
@@ -653,7 +719,7 @@ impl PeersGossiper {
         payload
     }
 
-    fn sign_trust_entries(&mut self, now: std::time::Instant) -> Vec<SignedPeerTrust> {
+    fn trust_infos(&mut self, now: std::time::Instant) -> Vec<PeerTrustInfo> {
         self.trusted_peers
             .iter()
             .map(|peer_id| {
@@ -666,6 +732,13 @@ impl PeersGossiper {
                     score: clamped,
                 }
             })
+            .collect()
+    }
+
+    fn sign_trust_entries(&self, infos: &[PeerTrustInfo]) -> Vec<SignedPeerTrust> {
+        infos
+            .iter()
+            .cloned()
             .map(|info| {
                 let signature =
                     Signature::new(self.key_pair.private_key(), &Self::trust_payload(&info));
@@ -1185,6 +1258,66 @@ mod tests {
     }
 
     #[test]
+    fn gossip_fingerprint_is_stable_and_detects_changes() {
+        let kp1 = KeyPair::from_seed(vec![51, 52, 53, 54], Algorithm::Ed25519);
+        let kp2 = KeyPair::from_seed(vec![55, 56, 57, 58], Algorithm::Ed25519);
+        let peer1 = Peer::new(
+            "127.0.0.1:9400".parse().expect("addr"),
+            kp1.public_key().clone(),
+        );
+        let peer2 = Peer::new(
+            "127.0.0.1:9401".parse().expect("addr"),
+            kp2.public_key().clone(),
+        );
+
+        let ordered = PeersGossiper::sorted_online_peers(vec![peer1.clone(), peer2.clone()]);
+        let reversed = PeersGossiper::sorted_online_peers(vec![peer2.clone(), peer1.clone()]);
+        let capabilities = BTreeMap::from([(
+            peer1.id().clone(),
+            PeerTransportCapabilities {
+                scion_supported: true,
+            },
+        )]);
+        let trust = vec![PeerTrustInfo {
+            peer_id: peer1.id().clone(),
+            trusted: true,
+            score: 0,
+        }];
+
+        let ordered_fingerprint =
+            PeersGossiper::gossip_fingerprint(&ordered, &capabilities, &trust);
+        let reversed_fingerprint =
+            PeersGossiper::gossip_fingerprint(&reversed, &capabilities, &trust);
+        assert_eq!(
+            ordered_fingerprint, reversed_fingerprint,
+            "peer order should be canonicalized before fingerprinting"
+        );
+
+        let changed_trust = vec![PeerTrustInfo {
+            peer_id: peer1.id().clone(),
+            trusted: false,
+            score: -1,
+        }];
+        assert_ne!(
+            ordered_fingerprint,
+            PeersGossiper::gossip_fingerprint(&ordered, &capabilities, &changed_trust),
+            "trust changes should force a fresh gossip payload"
+        );
+
+        let changed_capabilities = BTreeMap::from([(
+            peer1.id().clone(),
+            PeerTransportCapabilities {
+                scion_supported: false,
+            },
+        )]);
+        assert_ne!(
+            ordered_fingerprint,
+            PeersGossiper::gossip_fingerprint(&ordered, &changed_capabilities, &trust),
+            "capability changes should force a fresh gossip payload"
+        );
+    }
+
+    #[test]
     fn gossiper_handle_drops_messages_when_receiver_closed() {
         let handle = PeersGossiperHandle::closed_for_tests();
         let kp = KeyPair::from_seed(vec![99, 98, 97, 96], Algorithm::Ed25519);
@@ -1239,6 +1372,8 @@ mod tests {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
             deferred_send_ttl: Duration::from_millis(
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_TTL_MS,
             ),
@@ -1378,6 +1513,7 @@ mod tests {
             gossip_backoff: network_cfg.peer_gossip_period,
             gossip_next_deadline: std::time::Instant::now(),
             gossip_pending: true,
+            last_gossip_fingerprint: None,
             last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
             last_drop_at: None,
             trust: TrustBook::new(
@@ -1404,7 +1540,9 @@ mod tests {
             },
         );
 
-        gossiper.set_current_topology(UpdateTopology(HashSet::new()));
+        let validator_kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let validator_peer_id = PeerId::from(validator_kp.public_key().clone());
+        gossiper.set_current_topology(UpdateTopology([validator_peer_id].into_iter().collect()));
 
         assert!(
             gossiper.trusted_peers.contains(observer_peer.id()),
@@ -1429,6 +1567,21 @@ mod tests {
         assert!(
             !gossiper.trust_candidates.contains(&dynamic_peer_id),
             "removed dynamic peer should not remain a trust candidate"
+        );
+
+        gossiper.set_current_topology(UpdateTopology(HashSet::new()));
+
+        assert!(
+            gossiper.current_topology.is_empty(),
+            "empty topology updates should force the local dial set to disconnect"
+        );
+        assert!(
+            gossiper.trusted_peers.is_empty(),
+            "empty topology updates should clear runtime trusted peers"
+        );
+        assert!(
+            gossiper.trust_candidates.is_empty(),
+            "empty topology updates should clear runtime trust candidates"
         );
     }
 
@@ -1468,6 +1621,7 @@ mod tests {
             gossip_backoff: std::time::Duration::from_secs(1),
             gossip_next_deadline: std::time::Instant::now(),
             gossip_pending: true,
+            last_gossip_fingerprint: None,
             last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
             last_drop_at: None,
             trust: TrustBook::new(

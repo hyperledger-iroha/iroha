@@ -28,7 +28,7 @@ translator: machine-google-reviewed
 ## 1. 注册资产 (CLI)
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. 准备凭证
@@ -36,8 +36,8 @@ iroha --config defaults/client.toml asset definition register --id coffee#wonder
 ```bash
 # raw 32-byte Ed25519 key in hex (use `iroha_cli tools crypto private-key export --raw` if needed)
 export ADMIN_PRIVATE_KEY_RAW="4f94...<64 hex chars>..."
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 ## 3. 将 IrohaSwift 添加到您的包中
@@ -81,7 +81,7 @@ struct LedgerFlow {
         let torii = ToriiClient(baseURL: URL(string: "http://127.0.0.1:8080")!)
         let sdk = IrohaSDK(toriiClient: torii)
 
-        let assetDefinition = "coffee#wonderland"
+        let assetDefinition = "7Sp2j6zDvJFnMoscAiMaWbWHRDBZ"
         let adminAssetId = TxBuilder.makeAssetId(assetDefinitionId: assetDefinition, accountId: adminAccount)
 
         // Mint 250 units into the admin account.

@@ -1207,7 +1207,7 @@ pub struct ReserveLedgerArgs {
     /// Reserve escrow account receiving the reserve top-up.
     #[arg(long = "reserve-account", value_name = "ACCOUNT_ID")]
     pub reserve_account: String,
-    /// Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`).
+    /// Asset definition identifier used for transfers (canonical unprefixed Base58 address).
     #[arg(long = "asset-definition", value_name = "AID")]
     pub asset_definition: String,
 }
@@ -1229,9 +1229,7 @@ impl ReserveLedgerArgs {
             .wrap_err("failed to resolve --treasury-account")?;
         let reserve = crate::resolve_account_id(context, &self.reserve_account)
             .wrap_err("failed to resolve --reserve-account")?;
-        let asset_definition: AssetDefinitionId = self
-            .asset_definition
-            .parse()
+        let asset_definition = AssetDefinitionId::parse_address_literal(&self.asset_definition)
             .wrap_err("failed to parse --asset-definition")?;
         let plan = build_reserve_ledger_plan(
             &self.quote_path,
@@ -5181,7 +5179,7 @@ impl TryFrom<RewardPolicyState> for RelayBondPolicyV1 {
     fn try_from(value: RewardPolicyState) -> Result<Self> {
         let minimum_exit_bond = Numeric::from_str(&value.minimum_exit_bond)
             .map_err(|err| eyre!("invalid minimum_exit_bond: {err}"))?;
-        let bond_asset_id = AssetDefinitionId::from_str(&value.bond_asset_id)
+        let bond_asset_id = AssetDefinitionId::parse_address_literal(&value.bond_asset_id)
             .map_err(|err| eyre!("invalid bond_asset_id: {err}"))?;
         Ok(Self {
             minimum_exit_bond,
@@ -10748,14 +10746,14 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-30T00:00:00Z"
             },
             {
                 "kind": "account_alias",
-                "account_alias": "hotline@hbl",
+                "account_alias": "hotline@banka",
                 "policy_tier": "emergency",
                 "issued_at": "2026-01-15T00:00:00Z",
                 "expires_at": "2026-01-20T00:00:00Z",
@@ -10782,7 +10780,7 @@ mod gateway_tests {
         assert_eq!(report.emergency_reviews.len(), 1);
         assert_eq!(
             report.emergency_reviews[0].descriptor.as_deref(),
-            Some("hotline@hbl")
+            Some("hotline@banka")
         );
     }
 
@@ -10792,7 +10790,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-15T00:00:00Z"
@@ -10828,7 +10826,7 @@ mod gateway_tests {
         assert_eq!(summary_entries[0].kind, "account_id");
         assert_eq!(
             summary_entries[0].descriptor,
-            "account_id:sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+            "account_id:sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
         assert_eq!(summary_entries[1].kind, "provider");
         assert_eq!(
@@ -10845,7 +10843,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-15T00:00:00Z"
@@ -10882,8 +10880,8 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "account_alias": "routing@sora",
+                "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+                "account_alias": "routing@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
                 "expires_at": "2025-02-01T00:00:00Z"
@@ -10923,8 +10921,8 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "account_alias": "routing@sora",
+                "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+                "account_alias": "routing@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
                 "expires_at": "2025-02-01T00:00:00Z"
@@ -10966,8 +10964,8 @@ mod gateway_tests {
         [
             {
                 "kind": "account_id",
-                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                "account_alias": "routing@sora",
+                "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+                "account_alias": "routing@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2025-01-01T00:00:00Z",
                 "expires_at": "2025-02-01T00:00:00Z"
@@ -11020,7 +11018,7 @@ mod gateway_tests {
         [
             {
                 "kind": "account_alias",
-                "account_alias": "alias@sora",
+                "account_alias": "alias@dataspace",
                 "policy_tier": "standard",
                 "issued_at": "2026-01-01T00:00:00Z",
                 "expires_at": "2026-06-01T00:00:00Z"
@@ -11052,7 +11050,7 @@ mod gateway_tests {
         let args = GatewayUpdateDenylistArgs {
             base_path: base_path.clone(),
             add_paths: vec![add_path],
-            remove_descriptors: vec!["account_alias:alias@sora".to_owned()],
+            remove_descriptors: vec!["account_alias:alias@dataspace".to_owned()],
             output_path: Some(output_path.clone()),
             snapshot_out: Some(snapshot_json.clone()),
             snapshot_norito_out: Some(snapshot_norito.clone()),
@@ -11496,8 +11494,8 @@ pub struct StoragePinArgs {
 
 impl Run for StoragePinArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, |client, manifest, payload| {
-            client.post_sorafs_storage_pin(manifest, payload)
+        self.run_with(context, |client, manifest, payload, files| {
+            client.post_sorafs_storage_pin(manifest, payload, files)
         })
     }
 }
@@ -11506,13 +11504,32 @@ impl StoragePinArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &[u8], &[u8]) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(
+            &Client,
+            &[u8],
+            &[u8],
+            Option<&[iroha::client::SorafsStorageFileEntry<'_>]>,
+        ) -> Result<Response<Vec<u8>>>,
     {
         let manifest_bytes = fs::read(&self.manifest).wrap_err("failed to read manifest file")?;
-        let payload_bytes = fs::read(&self.payload).wrap_err("failed to read payload file")?;
+        let (payload_bytes, files) = load_storage_pin_payload(&self.payload, &manifest_bytes)?;
+        let borrowed_files = files.as_ref().map(|entries| {
+            entries
+                .iter()
+                .map(|entry| iroha::client::SorafsStorageFileEntry {
+                    path: entry.path.as_slice(),
+                    size: entry.size,
+                })
+                .collect::<Vec<_>>()
+        });
 
         let client = context.client_from_config();
-        let response = submit(&client, &manifest_bytes, &payload_bytes)?;
+        let response = submit(
+            &client,
+            &manifest_bytes,
+            &payload_bytes,
+            borrowed_files.as_deref(),
+        )?;
         let status = response.status();
         let body = response.into_body();
         match status {
@@ -11520,6 +11537,57 @@ impl StoragePinArgs {
             status => Err(make_http_error(status, &body)),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct OwnedStorageFileEntry {
+    path: Vec<String>,
+    size: u64,
+}
+
+fn load_storage_pin_payload(
+    input: &Path,
+    manifest_bytes: &[u8],
+) -> Result<(Vec<u8>, Option<Vec<OwnedStorageFileEntry>>)> {
+    let metadata = fs::metadata(input)
+        .wrap_err_with(|| format!("failed to access payload `{}`", input.display()))?;
+
+    if metadata.is_dir() {
+        let manifest: ManifestV1 = norito::decode_from_bytes(manifest_bytes)
+            .wrap_err("failed to decode manifest payload")?;
+        let profile = chunk_profile_from_manifest(&manifest)?;
+        let (plan, payload) = CarBuildPlan::from_directory_with_profile(input, profile)
+            .map_err(|err| eyre!("failed to build directory payload plan: {err}"))?;
+        let files = plan
+            .files
+            .iter()
+            .map(|file| OwnedStorageFileEntry {
+                path: file.path.clone(),
+                size: file.size,
+            })
+            .collect();
+        return Ok((payload, Some(files)));
+    }
+
+    if metadata.is_file() {
+        let payload = fs::read(input)
+            .wrap_err_with(|| format!("failed to read payload file `{}`", input.display()))?;
+        return Ok((payload, None));
+    }
+
+    Err(eyre!("payload input must be a file or directory"))
+}
+
+fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile> {
+    Ok(ChunkProfile {
+        min_size: usize::try_from(manifest.chunking.min_size)
+            .wrap_err("manifest chunking.min_size exceeds host limits")?,
+        target_size: usize::try_from(manifest.chunking.target_size)
+            .wrap_err("manifest chunking.target_size exceeds host limits")?,
+        max_size: usize::try_from(manifest.chunking.max_size)
+            .wrap_err("manifest chunking.max_size exceeds host limits")?,
+        break_mask: u64::from(manifest.chunking.break_mask),
+    })
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -12063,7 +12131,7 @@ mod tests {
     };
     use sorafs_orchestrator::soranet::EndpointTag;
     use sorafs_orchestrator::{incentives::RewardConfig, treasury::ExpectedLedgerTransfer};
-    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use std::{
         fmt::Display,
         fs,
@@ -12088,7 +12156,7 @@ mod tests {
             .expect("i105 encode");
         let non_canonical_i105 = address
             .to_i105_for_discriminant(address::chain_discriminant().wrapping_add(1))
-            .expect("non-canonical i105 encode");
+            .expect("non-canonical I105 encode");
         (canonical, i105, non_canonical_i105)
     }
 
@@ -12316,6 +12384,8 @@ mod tests {
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
                 account,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair: kp,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://localhost/").unwrap(),
@@ -12327,6 +12397,7 @@ mod tests {
                 transaction_status_timeout: config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: config::DEFAULT_TRANSACTION_NONCE,
                 connect_queue_root: config::default_connect_queue_root(),
+                soracloud_http_witness_file: None,
                 sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
                 sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
                 sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),
@@ -12482,7 +12553,7 @@ mod tests {
         );
         policy.insert(
             "bond_asset_id".to_string(),
-            norito::json::Value::String("xor#sora".to_string()),
+            norito::json::Value::String(xor_asset_id().to_string()),
         );
         policy.insert(
             "uptime_floor_per_mille".to_string(),
@@ -12674,7 +12745,10 @@ mod tests {
     }
 
     fn xor_asset_id() -> AssetDefinitionId {
-        AssetDefinitionId::new("sora".parse().unwrap(), "xor".parse().unwrap())
+        AssetDefinitionId::new(
+            iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        )
     }
 
     fn sample_budget_id_hex() -> String {
@@ -13762,9 +13836,13 @@ mod tests {
         };
         let mut ctx = TestContext::new();
 
-        args.run_with(&mut ctx, |_client, manifest_bytes, payload_bytes| {
+        args.run_with(&mut ctx, |_client, manifest_bytes, payload_bytes, files| {
             assert_eq!(manifest_bytes, b"manifest-bytes");
             assert_eq!(payload_bytes, b"payload-bytes");
+            assert!(
+                files.is_none(),
+                "single-file payload should not include file table"
+            );
             Ok(Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "application/json")
@@ -13772,6 +13850,65 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("\"ok\":true"));
+    }
+
+    #[test]
+    fn storage_pin_with_directory_payload_emits_file_table() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let manifest = NamedTempFile::new().expect("temp manifest");
+        let payload_dir = temp_dir.path().join("site");
+        fs::create_dir_all(payload_dir.join("assets")).expect("create assets directory");
+        fs::write(payload_dir.join("index.html"), b"<html>SoraFS</html>").expect("write index");
+        fs::write(
+            payload_dir.join("assets").join("app.js"),
+            b"console.log('ok');",
+        )
+        .expect("write asset");
+
+        let manifest_value = ManifestBuilder::new()
+            .root_cid(vec![0xAA; 16])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+            .content_length(0)
+            .car_digest([0x11; 32])
+            .car_size(0)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("build manifest");
+        fs::write(
+            manifest.path(),
+            to_bytes(&manifest_value).expect("encode manifest"),
+        )
+        .expect("write manifest");
+
+        let args = StoragePinArgs {
+            manifest: manifest.path().to_path_buf(),
+            payload: payload_dir.clone(),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(
+            &mut ctx,
+            |_client, _manifest_bytes, payload_bytes, files| {
+                let files = files.expect("directory payload must include file table");
+                assert_eq!(files.len(), 2);
+                assert_eq!(files[0].path, ["assets".to_owned(), "app.js".to_owned()]);
+                assert_eq!(files[1].path, ["index.html".to_owned()]);
+                assert_eq!(
+                    payload_bytes, b"console.log('ok');<html>SoraFS</html>",
+                    "payload must follow the deterministic sorted file order"
+                );
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
+                    .unwrap())
+            },
+        )
+        .expect("directory run should succeed");
 
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"ok\":true"));
@@ -14732,7 +14869,10 @@ mod tests {
         assert_eq!(state.treasury_account, sample_account_id("treasury"));
         assert!(state.payouts.is_empty());
         assert!(state.disputes.is_empty());
-        assert_eq!(state.reward_config.policy.bond_asset_id, "xor#sora");
+        assert_eq!(
+            state.reward_config.policy.bond_asset_id,
+            xor_asset_id().to_string()
+        );
     }
 
     #[test]

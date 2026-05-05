@@ -241,6 +241,8 @@ mod tests {
                 chain: ChainId::from_str("00000000-0000-0000-0000-000000000000")
                     .expect("valid chain id"),
                 account: account_id,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
@@ -252,6 +254,7 @@ mod tests {
                 transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
                 connect_queue_root: iroha::config::default_connect_queue_root(),
+                soracloud_http_witness_file: None,
                 sorafs_alias_cache: default_alias_cache_policy(),
                 sorafs_anonymity_policy: default_anonymity_policy(),
                 sorafs_rollout_phase: default_rollout_phase(),

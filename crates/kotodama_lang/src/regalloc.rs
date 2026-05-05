@@ -18,8 +18,8 @@ pub struct Allocation {
 pub const ARG_REGS: [usize; 13] = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
 /// r10 also holds the first return value.
 pub const RET_REG: usize = 10;
-/// ABI limit for multi-value returns carried in r10..r17.
-pub const MAX_RETURN_VALUES: usize = 8;
+/// ABI limit for multi-value returns carried in r10..r22.
+pub const MAX_RETURN_VALUES: usize = ARG_REGS.len();
 /// r31 acts as the stack pointer.
 pub const SP_REG: usize = 31;
 /// r30 may be used as a frame pointer.
@@ -361,11 +361,13 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | StringConst { .. }
         | LoadVar { .. }
         | MapNew { .. }
+        | JsonObject { .. }
         | CreateNftsForAllUsers
         | SubscriptionBill
         | SubscriptionRecordUsage
         | DataRef { .. }
         | GetAuthority { .. }
+        | CurrentTimeMs { .. }
         | GetTriggerEvent { .. }
         | TransferBatchBegin
         | TransferBatchEnd => {}
@@ -387,6 +389,37 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*num);
             f(*denom);
         }
+        CallContract {
+            contract,
+            entrypoint,
+            payload,
+            ..
+        } => {
+            f(*contract);
+            f(*entrypoint);
+            f(*payload);
+        }
+        InvokeEntrypointAs {
+            actor,
+            entrypoint,
+            payload,
+            ..
+        }
+        | ExpectRejectAs {
+            actor,
+            entrypoint,
+            payload,
+        } => {
+            f(*actor);
+            f(*entrypoint);
+            f(*payload);
+        }
+        ActorAccount { actor, .. } | ActorPublicKey { actor, .. } => f(*actor),
+        ActorSign { actor, message, .. } => {
+            f(*actor);
+            f(*message);
+        }
+        ResolveAccountAlias { alias, .. } => f(*alias),
         Abs { src, .. } => f(*src),
         Isqrt { src, .. } => f(*src),
         Poseidon2 { a, b, .. } => {
@@ -404,24 +437,24 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*blind);
         }
         RegisterAsset {
-            name,
+            asset,
             symbol,
             quantity,
             mintable,
         } => {
-            f(*name);
+            f(*asset);
             f(*symbol);
             f(*quantity);
             f(*mintable);
         }
         CreateNewAsset {
-            name,
+            asset,
             symbol,
             quantity,
             account,
             mintable,
         } => {
-            f(*name);
+            f(*asset);
             f(*symbol);
             f(*quantity);
             f(*account);
@@ -437,6 +470,45 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*to);
             f(*asset);
             f(*amount);
+        }
+        EscrowOpenOffer {
+            escrow,
+            asset,
+            amount,
+            evidence_hashes,
+        } => {
+            f(*escrow);
+            f(*asset);
+            f(*amount);
+            if let Some(evidence_hashes) = evidence_hashes {
+                f(*evidence_hashes);
+            }
+        }
+        EscrowResolveDispute {
+            escrow,
+            buyer_amount,
+            seller_amount,
+            evidence_hashes,
+        } => {
+            f(*escrow);
+            f(*buyer_amount);
+            f(*seller_amount);
+            if let Some(evidence_hashes) = evidence_hashes {
+                f(*evidence_hashes);
+            }
+        }
+        EscrowAccept { escrow }
+        | EscrowMarkPaymentSent { escrow }
+        | EscrowRelease { escrow }
+        | EscrowCancel { escrow } => f(*escrow),
+        EscrowOpenDispute {
+            escrow,
+            evidence_hashes,
+        } => {
+            f(*escrow);
+            if let Some(evidence_hashes) = evidence_hashes {
+                f(*evidence_hashes);
+            }
         }
         MintAsset {
             account,
@@ -629,10 +701,22 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         StateDel { path } => f(*path),
         DecodeInt { blob, .. } | JsonDecode { blob, .. } | NameDecode { blob, .. } => f(*blob),
         TlvLen { value, .. } => f(*value),
+        JsonSetInt {
+            json, key, value, ..
+        }
+        | JsonSetAccountId {
+            json, key, value, ..
+        } => {
+            f(*json);
+            f(*key);
+            f(*value);
+        }
         JsonGetInt { json, key, .. }
+        | JsonGetNumeric { json, key, .. }
         | JsonGetJson { json, key, .. }
         | JsonGetName { json, key, .. }
         | JsonGetAccountId { json, key, .. }
+        | JsonGetAssetDefinitionId { json, key, .. }
         | JsonGetNftId { json, key, .. }
         | JsonGetBlobHex { json, key, .. } => {
             f(*json);
@@ -776,7 +860,13 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::Valcom { dest, .. }
         | Instr::MapNew { dest }
         | Instr::GetAuthority { dest }
+        | Instr::CurrentTimeMs { dest }
+        | Instr::CallContract { dest, .. }
+        | Instr::ResolveAccountAlias { dest, .. }
         | Instr::GetTriggerEvent { dest }
+        | Instr::ActorAccount { dest, .. }
+        | Instr::ActorPublicKey { dest, .. }
+        | Instr::ActorSign { dest, .. }
         | Instr::Copy { dest, .. }
         | Instr::PointerFromString { dest, .. }
         | Instr::PointerToNorito { dest, .. }
@@ -803,14 +893,19 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::DecodeInt { dest, .. } => Some(*dest),
         Instr::TlvLen { dest, .. } => Some(*dest),
         Instr::EncodeInt { dest, .. } => Some(*dest),
+        Instr::JsonObject { dest, .. } => Some(*dest),
+        Instr::JsonSetInt { dest, .. } => Some(*dest),
+        Instr::JsonSetAccountId { dest, .. } => Some(*dest),
         Instr::PathMapKey { dest, .. } => Some(*dest),
         Instr::PathMapKeyNorito { dest, .. } => Some(*dest),
         Instr::JsonEncode { dest, .. } => Some(*dest),
         Instr::JsonDecode { dest, .. } => Some(*dest),
         Instr::JsonGetInt { dest, .. }
+        | Instr::JsonGetNumeric { dest, .. }
         | Instr::JsonGetJson { dest, .. }
         | Instr::JsonGetName { dest, .. }
         | Instr::JsonGetAccountId { dest, .. }
+        | Instr::JsonGetAssetDefinitionId { dest, .. }
         | Instr::JsonGetNftId { dest, .. }
         | Instr::JsonGetBlobHex { dest, .. } => Some(*dest),
         Instr::NameDecode { dest, .. } => Some(*dest),
@@ -821,12 +916,19 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::BuildSubmitBallotInline { dest, .. } => Some(*dest),
         Instr::BuildUnshieldInline { dest, .. } => Some(*dest),
         Instr::VendorExecuteQuery { dest, .. } => Some(*dest),
-        Instr::Call { dest, .. } => dest.as_ref().copied(),
+        Instr::Call { dest, .. } | Instr::InvokeEntrypointAs { dest, .. } => dest.as_ref().copied(),
         Instr::GrantPermission { .. }
         | Instr::RevokePermission { .. }
         | Instr::RegisterAsset { .. }
         | Instr::CreateNewAsset { .. }
         | Instr::TransferAsset { .. }
+        | Instr::EscrowOpenOffer { .. }
+        | Instr::EscrowAccept { .. }
+        | Instr::EscrowMarkPaymentSent { .. }
+        | Instr::EscrowRelease { .. }
+        | Instr::EscrowCancel { .. }
+        | Instr::EscrowOpenDispute { .. }
+        | Instr::EscrowResolveDispute { .. }
         | Instr::MintAsset { .. }
         | Instr::BurnAsset { .. }
         | Instr::CreateNft { .. }
@@ -869,7 +971,8 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::UseAssetHandle { .. }
         | Instr::AxtCommit
         | Instr::TransferBatchBegin
-        | Instr::TransferBatchEnd => None,
+        | Instr::TransferBatchEnd
+        | Instr::ExpectRejectAs { .. } => None,
         Instr::CallMulti { .. } | Instr::MapLoadPair { .. } => None,
     }
 }
@@ -899,6 +1002,7 @@ mod tests {
             params: vec![],
             blocks,
             entry: ir::Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
         let alloc = allocate(&func);
         assert!(alloc.stack.is_empty());
@@ -933,6 +1037,7 @@ mod tests {
             params: vec![],
             blocks,
             entry: ir::Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
         let alloc = allocate(&func);
         assert!(
@@ -962,6 +1067,7 @@ mod tests {
             params: vec![],
             blocks: vec![block],
             entry: ir::Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
         let alloc = allocate(&func);
         let expected_first = *ALLOC_POOL.last().expect("alloc pool");

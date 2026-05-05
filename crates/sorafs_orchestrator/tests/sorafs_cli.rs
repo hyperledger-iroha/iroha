@@ -359,7 +359,7 @@ fn por_trigger_posts_manual_challenge() {
     let token = TestChallengeAuthTokenV1 {
         version: 1,
         token_id: "token-1".to_string(),
-        operator_account: "council@sora".to_string(),
+        operator_account: "council@governance.dataspace".to_string(),
         expires_at,
         scopes: vec![TestChallengeAuthScopeV1 {
             manifest_digest,
@@ -971,6 +971,171 @@ fn manifest_submit_posts_payload() {
 }
 
 #[test]
+fn storage_pin_posts_directory_payload_and_writes_summary() {
+    let tempdir = tempdir().expect("tempdir");
+    let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
+    let payload_dir = tempdir.path().join("site");
+    fs::create_dir_all(payload_dir.join("assets")).expect("create payload dir");
+    fs::write(payload_dir.join("index.html"), "<html>hayahi</html>").expect("write index");
+    fs::write(
+        payload_dir.join("assets").join("app.js"),
+        "console.log('hayahi');",
+    )
+    .expect("write script");
+
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/storage/pin");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"manifest_id_hex":"deadbeef"}"#);
+    });
+
+    let summary_path = tempdir.path().join("storage_pin.summary.json");
+    let response_path = tempdir.path().join("storage_pin.response.json");
+
+    let assert = sorafs_cli_cmd()
+        .arg("storage")
+        .arg("pin")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--payload={}", payload_dir.display()))
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg(format!("--summary-out={}", summary_path.display()))
+        .arg(format!("--response-out={}", response_path.display()))
+        .assert()
+        .success();
+
+    mock.assert_calls(1);
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("storage summary");
+    let summary_file: Value =
+        from_slice(&fs::read(&summary_path).expect("read summary file")).expect("summary json");
+    assert_eq!(summary_stdout, summary_file);
+    assert_eq!(
+        summary_stdout.get("payload_kind").and_then(Value::as_str),
+        Some("directory")
+    );
+    assert_eq!(
+        summary_stdout
+            .get("payload_file_count")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+    assert_eq!(
+        summary_stdout.get("status").and_then(Value::as_u64),
+        Some(200)
+    );
+    assert_eq!(
+        summary_stdout
+            .get("already_stored")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+
+    let response_bytes = fs::read(&response_path).expect("read response body");
+    assert_eq!(response_bytes, br#"{"manifest_id_hex":"deadbeef"}"#);
+}
+
+#[test]
+fn storage_prepare_writes_canonical_payload_and_files_manifest() {
+    let tempdir = tempdir().expect("tempdir");
+    let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
+    let payload_dir = tempdir.path().join("site");
+    fs::create_dir_all(payload_dir.join("assets")).expect("create payload dir");
+    fs::write(payload_dir.join("index.html"), "<html>hayahi</html>").expect("write index");
+    fs::write(
+        payload_dir.join("assets").join("app.js"),
+        "console.log('hayahi');",
+    )
+    .expect("write script");
+
+    let payload_out = tempdir.path().join("storage.payload.bin");
+    let files_out = tempdir.path().join("storage.files.json");
+    let summary_out = tempdir.path().join("storage.prepare.summary.json");
+
+    let assert = sorafs_cli_cmd()
+        .arg("storage")
+        .arg("prepare")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--payload={}", payload_dir.display()))
+        .arg(format!("--payload-out={}", payload_out.display()))
+        .arg(format!("--files-out={}", files_out.display()))
+        .arg(format!("--summary-out={}", summary_out.display()))
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let summary_stdout: Value =
+        norito::json::from_str(stdout.trim()).expect("storage prepare summary");
+    let summary_file: Value =
+        from_slice(&fs::read(&summary_out).expect("read summary")).expect("summary json");
+    assert_eq!(summary_stdout, summary_file);
+    assert_eq!(
+        summary_stdout.get("payload_kind").and_then(Value::as_str),
+        Some("directory")
+    );
+    assert_eq!(
+        summary_stdout
+            .get("payload_file_count")
+            .and_then(Value::as_u64),
+        Some(2)
+    );
+
+    let payload_bytes = fs::read(&payload_out).expect("read payload bytes");
+    assert!(
+        !payload_bytes.is_empty(),
+        "prepared payload should not be empty"
+    );
+
+    let files_value: Value =
+        from_slice(&fs::read(&files_out).expect("read files json")).expect("files json");
+    let files = files_value
+        .as_array()
+        .expect("directory payload files should be an array");
+    assert_eq!(files.len(), 2);
+}
+
+#[test]
+fn storage_pin_treats_already_stored_conflict_as_success() {
+    let tempdir = tempdir().expect("tempdir");
+    let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
+    let payload_path = tempdir.path().join("payload.bin");
+    fs::write(&payload_path, b"hayahi-live").expect("write payload");
+
+    let server = MockServer::start();
+    let mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/storage/pin");
+        then.status(409)
+            .header("Content-Type", "application/json")
+            .body(r#"{"error":"bundle already stored"}"#);
+    });
+
+    let output = sorafs_cli_cmd()
+        .arg("storage")
+        .arg("pin")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--payload={}", payload_path.display()))
+        .arg(format!("--torii-url={}", server.base_url()))
+        .output()
+        .expect("command executes");
+
+    assert!(
+        output.status.success(),
+        "CLI must succeed for already-stored conflicts"
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let summary: Value = norito::json::from_str(stdout.trim()).expect("storage summary");
+    assert_eq!(summary.get("status").and_then(Value::as_u64), Some(409));
+    assert_eq!(
+        summary.get("already_stored").and_then(Value::as_bool),
+        Some(true)
+    );
+    mock.assert_calls(1);
+}
+
+#[test]
 fn manifest_submit_rejects_chunk_digest_mismatch() {
     let tempdir = tempdir().expect("tempdir");
     let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
@@ -1006,6 +1171,326 @@ fn manifest_submit_rejects_chunk_digest_mismatch() {
         "stderr should mention digest mismatch, got: {stderr}"
     );
     mock.assert_calls(0);
+}
+
+#[test]
+fn manifest_submit_resolves_submitted_epoch_from_status_endpoint() {
+    let tempdir = tempdir().expect("tempdir");
+    let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
+    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
+
+    let server = MockServer::start();
+    let status_mock = server.mock(|when, then| {
+        when.method(GET).path("/status");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"blocks": 14401, "sumeragi": {"epoch": {"height": 77}, "epoch_length_blocks": 3600}}"#);
+    });
+    let submit_mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/pin/register");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body("{\"status\":\"ok\"}");
+    });
+
+    let submit_summary_path = tempdir.path().join("submit_summary.auto_epoch.json");
+
+    let assert = sorafs_cli_cmd()
+        .arg("manifest")
+        .arg("submit")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--chunk-plan={}", plan_path.display()))
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg("--resolve-submitted-epoch=true")
+        .arg(format!("--authority={authority}"))
+        .arg(format!("--private-key={private_key}"))
+        .arg(format!("--summary-out={}", submit_summary_path.display()))
+        .assert()
+        .success();
+
+    status_mock.assert_calls(1);
+    submit_mock.assert_calls(1);
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("submit summary json");
+    assert_eq!(
+        summary_stdout
+            .get("submitted_epoch")
+            .and_then(Value::as_u64),
+        Some(77)
+    );
+}
+
+#[test]
+fn manifest_submit_falls_back_to_blocks_over_epoch_length() {
+    let tempdir = tempdir().expect("tempdir");
+    let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
+    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
+
+    let server = MockServer::start();
+    let status_mock = server.mock(|when, then| {
+        when.method(GET).path("/status");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"blocks": 10801, "sumeragi": {"epoch_length_blocks": 3600}}"#);
+    });
+    let submit_mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/pin/register");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body("{\"status\":\"ok\"}");
+    });
+
+    let output = sorafs_cli_cmd()
+        .arg("manifest")
+        .arg("submit")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--chunk-plan={}", plan_path.display()))
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg("--resolve-submitted-epoch=true")
+        .arg(format!("--authority={authority}"))
+        .arg(format!("--private-key={private_key}"))
+        .output()
+        .expect("command executes");
+
+    assert!(
+        output.status.success(),
+        "CLI must succeed with fallback epoch resolution"
+    );
+    let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
+    let summary: Value = norito::json::from_str(stdout.trim()).expect("submit summary json");
+    assert_eq!(
+        summary.get("submitted_epoch").and_then(Value::as_u64),
+        Some(3)
+    );
+    status_mock.assert_calls(1);
+    submit_mock.assert_calls(1);
+}
+
+#[test]
+fn manifest_submit_errors_when_status_lacks_epoch_inputs() {
+    let tempdir = tempdir().expect("tempdir");
+    let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
+    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
+
+    let server = MockServer::start();
+    let status_mock = server.mock(|when, then| {
+        when.method(GET).path("/status");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"sumeragi": {}}"#);
+    });
+    let submit_mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/pin/register");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body("{\"status\":\"ok\"}");
+    });
+
+    let output = sorafs_cli_cmd()
+        .arg("manifest")
+        .arg("submit")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--chunk-plan={}", plan_path.display()))
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg("--resolve-submitted-epoch=true")
+        .arg(format!("--authority={authority}"))
+        .arg(format!("--private-key={private_key}"))
+        .output()
+        .expect("command executes");
+
+    assert!(
+        !output.status.success(),
+        "CLI must fail when status JSON cannot resolve an epoch"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("failed to resolve submitted epoch"),
+        "stderr should mention epoch resolution failure, got: {stderr}"
+    );
+    status_mock.assert_calls(1);
+    submit_mock.assert_calls(0);
+}
+
+#[test]
+fn manifest_submit_transaction_fallback_waits_for_commit() {
+    let tempdir = tempdir().expect("tempdir");
+    let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
+    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
+
+    let server = MockServer::start();
+    let register_mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/pin/register");
+        then.status(405).body("method not allowed");
+    });
+    let registry_mock = server.mock(|when, then| {
+        when.method(GET).path("/v1/sorafs/pin");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"attestation":{"chain_id":"809574f5-fee7-5e69-bfcf-52451e42d50f"}}"#);
+    });
+    let tx_mock = server.mock(|when, then| {
+        when.method(POST).path("/transaction");
+        then.status(202).body("");
+    });
+    let status_mock = server.mock(|when, then| {
+        when.method(GET).path("/v1/pipeline/transactions/status");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"content":{"status":{"kind":"Committed","block_height":16}}}"#);
+    });
+
+    let submit_summary_path = tempdir.path().join("submit_summary.fallback.json");
+    let response_path = tempdir.path().join("torii_response.fallback.json");
+
+    let assert = sorafs_cli_cmd()
+        .arg("manifest")
+        .arg("submit")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--chunk-plan={}", plan_path.display()))
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg("--submitted-epoch=7")
+        .arg(format!("--authority={authority}"))
+        .arg(format!("--private-key={private_key}"))
+        .arg(format!("--summary-out={}", submit_summary_path.display()))
+        .arg(format!("--response-out={}", response_path.display()))
+        .assert()
+        .success();
+
+    register_mock.assert_calls(1);
+    registry_mock.assert_calls(1);
+    tx_mock.assert_calls(1);
+    status_mock.assert_calls(1);
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("submit summary json");
+    assert_eq!(
+        summary_stdout
+            .get("submission_mode")
+            .and_then(Value::as_str),
+        Some("transaction_fallback")
+    );
+    assert_eq!(
+        summary_stdout
+            .get("torii_response")
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str),
+        Some("COMMITTED")
+    );
+    assert_eq!(
+        summary_stdout
+            .get("torii_response")
+            .and_then(|value| value.get("block_height"))
+            .and_then(Value::as_u64),
+        Some(16)
+    );
+
+    let response_bytes = fs::read(&response_path).expect("read fallback response body");
+    let response_value: Value = from_slice(&response_bytes).expect("fallback response json");
+    assert_eq!(
+        response_value.get("status").and_then(Value::as_str),
+        Some("COMMITTED")
+    );
+}
+
+#[test]
+fn manifest_submit_transaction_fallback_surfaces_rejection() {
+    let tempdir = tempdir().expect("tempdir");
+    let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
+    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
+
+    let server = MockServer::start();
+    let register_mock = server.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/pin/register");
+        then.status(405).body("method not allowed");
+    });
+    let registry_mock = server.mock(|when, then| {
+        when.method(GET).path("/v1/sorafs/pin");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(r#"{"attestation":{"chain_id":"809574f5-fee7-5e69-bfcf-52451e42d50f"}}"#);
+    });
+    let tx_mock = server.mock(|when, then| {
+        when.method(POST).path("/transaction");
+        then.status(202).body("");
+    });
+    let status_mock = server.mock(|when, then| {
+        when.method(GET).path("/v1/pipeline/transactions/status");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(
+                r#"{"content":{"status":{"kind":"Rejected","block_height":16,"content":"TlJUMAAAFbOLmVWS1wsVs4uZVZLXCwB1AAAAAAAAANOVv28cFhPAAAIAAABpAAAAAAAAAAIAAABdAAAAAAAAAAcAAABRAAAAAAAAAAAAAABFAAAAAAAAAD0AAAAAAAAAcGVybWlzc2lvbiBDYW5SZWdpc3RlclNvcmFmc1BpbiByZXF1aXJlZCBmb3IgU29yYUZTIG9wZXJhdGlvbg=="}}}"#,
+            );
+    });
+    let explorer_mock = server.mock(|when, then| {
+        when.method(GET).path_matches(r"/v1/explorer/transactions/.*");
+        then.status(200)
+            .header("Content-Type", "application/json")
+            .body(
+                r#"{"status":"Rejected","rejection_reason":{"message":"Validation failed: Instruction execution failed: Invalid instruction parameter"}}"#,
+            );
+    });
+
+    let submit_summary_path = tempdir.path().join("submit_summary.rejected.json");
+    let response_path = tempdir.path().join("torii_response.rejected.json");
+
+    let output = sorafs_cli_cmd()
+        .arg("manifest")
+        .arg("submit")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--chunk-plan={}", plan_path.display()))
+        .arg(format!("--torii-url={}", server.base_url()))
+        .arg("--submitted-epoch=7")
+        .arg(format!("--authority={authority}"))
+        .arg(format!("--private-key={private_key}"))
+        .arg(format!("--summary-out={}", submit_summary_path.display()))
+        .arg(format!("--response-out={}", response_path.display()))
+        .output()
+        .expect("command executes");
+
+    assert!(
+        !output.status.success(),
+        "CLI must fail when the fallback transaction is rejected"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("CanRegisterSorafsPin"),
+        "stderr should surface the rejection reason, got: {stderr}"
+    );
+
+    register_mock.assert_calls(1);
+    registry_mock.assert_calls(1);
+    tx_mock.assert_calls(1);
+    status_mock.assert_calls(1);
+    explorer_mock.assert_calls(1);
+
+    let summary_bytes = fs::read(&submit_summary_path).expect("read rejected submit summary");
+    let summary: Value = from_slice(&summary_bytes).expect("rejected summary json");
+    assert_eq!(
+        summary.get("submission_mode").and_then(Value::as_str),
+        Some("transaction_fallback")
+    );
+    assert_eq!(
+        summary
+            .get("torii_response")
+            .and_then(|value| value.get("status"))
+            .and_then(Value::as_str),
+        Some("REJECTED")
+    );
+    assert_eq!(
+        summary
+            .get("torii_response")
+            .and_then(|value| value.get("rejection_message"))
+            .and_then(Value::as_str),
+        Some("permission CanRegisterSorafsPin required for SoraFS operation")
+    );
+
+    let response_bytes = fs::read(&response_path).expect("read rejected response");
+    let response_value: Value = from_slice(&response_bytes).expect("rejected response json");
+    assert_eq!(
+        response_value.get("status").and_then(Value::as_str),
+        Some("REJECTED")
+    );
 }
 
 #[test]
@@ -1246,6 +1731,72 @@ fn proof_verify_reports_chunk_digest() {
             .get("manifest_digest_hex")
             .and_then(Value::as_str),
         Some(manifest_digest_hex.as_str())
+    );
+}
+
+#[test]
+fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
+    let tempdir = tempdir().expect("tempdir");
+    let site_dir = tempdir.path().join("site");
+    let assets_dir = site_dir.join("assets");
+    fs::create_dir_all(&assets_dir).expect("create assets dir");
+    fs::write(
+        site_dir.join("index.html"),
+        "<!doctype html><html><body>ok</body></html>",
+    )
+    .expect("write index");
+    fs::write(site_dir.join("env.json"), "{\"NETWORK\":\"taira\"}\n").expect("write env");
+    fs::write(assets_dir.join("app.js"), "console.log('sorafs');\n").expect("write app");
+
+    let car_path = tempdir.path().join("site.car");
+    let plan_path = tempdir.path().join("site.plan.json");
+    let pack_summary_path = tempdir.path().join("site.pack.summary.json");
+    sorafs_cli_cmd()
+        .arg("car")
+        .arg("pack")
+        .arg(format!("--input={}", site_dir.display()))
+        .arg(format!("--car-out={}", car_path.display()))
+        .arg(format!("--plan-out={}", plan_path.display()))
+        .arg(format!("--summary-out={}", pack_summary_path.display()))
+        .assert()
+        .success();
+
+    let manifest_path = tempdir.path().join("site.manifest.to");
+    sorafs_cli_cmd()
+        .arg("manifest")
+        .arg("build")
+        .arg(format!("--summary={}", pack_summary_path.display()))
+        .arg(format!("--manifest-out={}", manifest_path.display()))
+        .assert()
+        .success();
+
+    let verify_summary_path = tempdir.path().join("site.verify.summary.json");
+    let assert = sorafs_cli_cmd()
+        .arg("proof")
+        .arg("verify")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--car={}", car_path.display()))
+        .arg(format!("--chunk-plan={}", plan_path.display()))
+        .arg(format!("--summary-out={}", verify_summary_path.display()))
+        .assert()
+        .success();
+
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
+    let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("verify summary json");
+    let plan_value: Value =
+        from_slice(&fs::read(&plan_path).expect("read plan")).expect("plan json");
+    let specs = chunk_fetch_specs_from_json(&plan_value).expect("plan specs");
+    assert_eq!(
+        summary_stdout
+            .get("chunk_plan_source")
+            .and_then(Value::as_str),
+        Some(plan_path.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        summary_stdout
+            .get("chunk_plan_chunk_count")
+            .and_then(Value::as_u64),
+        Some(specs.len() as u64)
     );
 }
 

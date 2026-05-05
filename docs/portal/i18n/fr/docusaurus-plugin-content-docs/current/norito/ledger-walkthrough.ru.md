@@ -29,8 +29,8 @@ Pour toutes les instructions, indiquez `$ADMIN_ACCOUNT` et `$RECEIVER_ACCOUNT` p
 Cartes d'identité. Dans le bundle proposé, il y a un compte contenant un extrait de la démo :
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Подтвердите значения, выведя первые аккаунты:
@@ -49,7 +49,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts внутри wonderland (увеличьте --limit при необходимости)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions, которые уже существуют
@@ -63,7 +63,7 @@ Ajoutez les nouvelles activités personnalisables `coffee` au domaine `wonderlan
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 La CLI vous permet de passer automatiquement (par exemple, `0x5f…`). Сохраните его, чтобы
@@ -72,7 +72,7 @@ Vous pouvez vérifier le statut.
 ## 3. Planifiez vos modifications sur le compte de l'opérateur
 
 Le colis est activé pour le `(asset definition, account)`. Замитьте 250
-Éditer `coffee#wonderland` pour `$ADMIN_ACCOUNT` :
+Éditer `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` pour `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \

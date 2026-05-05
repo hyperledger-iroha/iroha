@@ -58,7 +58,7 @@ Dashboards et vías de escalada.
 | Tabla + adiciones KPI | `docs/source/sns/governance_addenda/` | Cartas firmadas con control de versión, acuerdos KPI y decisiones de gobierno referenciadas por los votos CLI. |
 | Esquema de registro | [`registry-schema.md`](./registry-schema.md) | Estructuras canónicas Norito (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Contrato de registro | [`registrar-api.md`](./registrar-api.md) | Cargas útiles REST/gRPC, métricas `sns_registrar_status_total` y attentes des hooks de gouvernance. |
-| Guía UX de direcciones | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus canoniques I105 (preferido) y compresas (segunda opción) reproducidos por billeteras/exploradores. |
+| Guía UX de direcciones | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus canoniques i105 (preferido) y compresas (segunda opción) reproducidos por billeteras/exploradores. |
 | Documentos SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | La derivación determina los hosts, el flujo de trabajo del colador de transparencia y las reglas de alerta. |
 | Notas reglamentarias | `docs/source/sns/regulatory/` | Notes d'accueil par juridiction (ex. EU DSA), agradecimientos del administrador, anexos de modelo. |
 | Diario de ejercicios | `ops/drill-log.md` | Journal des rehearsals caos et IR requis avant sorties de stage. |
@@ -96,7 +96,7 @@ decisión en 24 horas.
    Declencher le tailer de transparence du resolutor pour confirmer que le nouvel
    etat GAR/zone s'est propage (ver 4.5).
 6. **Cliente de divulgación:** Mettre a jour le ledger oriente client (wallet/explorer)a través de los accesorios compartidos en [`address-display-guidelines.md`](./address-display-guidelines.md),
-   En s'assurant que les rendus I105 et comprime las guías auxiliares correspondientes copia/QR.
+   En s'assurant que les rendus i105 et comprime las guías auxiliares correspondientes copia/QR.
 
 ### 4.3 Renovaciones, facturación y conciliación de tesorería- **Flujo de trabajo de renovación:** Les registradores aplican la ventana de gracia de
   30 días + la ventana de redención de 60 días especificada en `SuffixPolicyV1`.
@@ -125,11 +125,11 @@ decisión en 24 horas.
 ### 4.4 Geles, litigios y apelaciones| Fase | Propietario | Acción y lucha | Acuerdo de Nivel de Servicio |
 |-------|--------------|------------------|-----|
 | Demanda de gel suave | Mayordomo / apoyo | Deposer un ticket `SNS-DF-<id>` avec preuves de paiement, reference de bond de litige et selecteur(s) afecto(s). | <=4 h después del plato principal. |
-| Guardián de entradas | Consejo tutor | `sns governance freeze --selector <I105> --reason <text> --until <ts>` producto `GuardianFreezeTicketV1`. Guarde el JSON del billete en `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h de ejecución. |
+| Guardián de entradas | Consejo tutor | `sns governance freeze --selector <i105> --reason <text> --until <ts>` producto `GuardianFreezeTicketV1`. Guarde el JSON del billete en `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h de ejecución. |
 | Ratificación del consejo | Consejo de Gobierno | Aprobar o rechazar los geles, documentar la decisión con el gravamen frente al ticket guardian y el resumen del vínculo de litigio. | Prochaine session du conseil ou vote asincrono. |
 | Panel de arbitraje | Conformite + azafato | Convoque un panel de 7 jurados (según la hoja de ruta) con los boletines hashes a través de `sns governance dispute ballot`. Joindre les recus de vote anonymises au paquet d'incident. | Veredicto <=7 días después del depósito del bono. |
 | Apelación | Guardián + consejo | Les appels doublent le bond et repetent le processus des jurors; Registre el manifiesto Norito `DisputeAppealV1` y haga referencia al ticket primario. | <=10 días. |
-| Degel y remediación | Registrador + solucionador de operaciones | El ejecutor `sns governance unfreeze --selector <I105> --ticket <id>`, ingresa al día el estado del registrador y propaga las diferencias GAR/resolver. | Inmediato después del veredicto. |Les canons d'urgence (gels declenches par guardian <=72 h) después del flujo del meme
+| Degel y remediación | Registrador + solucionador de operaciones | El ejecutor `sns governance unfreeze --selector <i105> --ticket <id>`, ingresa al día el estado del registrador y propaga las diferencias GAR/resolver. | Inmediato después del veredicto. |Les canons d'urgence (gels declenches par guardian <=72 h) después del flujo del meme
 mais exigente una revista retroactiva del consejo y una nota de transparencia bajo
 `docs/source/sns/regulatory/`.
 

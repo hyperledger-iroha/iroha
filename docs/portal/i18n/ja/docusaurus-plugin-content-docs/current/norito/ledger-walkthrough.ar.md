@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 `$ADMIN_ACCOUNT` と `$RECEIVER_ACCOUNT` を確認してください。バンドルのバンドルのバンドル:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 回答:
@@ -46,7 +46,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts داخل wonderland (استبدل --limit بعدد اكبر عند الحاجة)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions الموجودة مسبقا
@@ -61,14 +61,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI ハッシュ المقدمة (مثلا `0x5f…`)。ありがとうございます。
 
 ## 3. いいえ、いいえ。
 
-`(asset definition, account)` を確認してください。 250 日 `coffee#wonderland` 日 `$ADMIN_ACCOUNT`:
+`(asset definition, account)` を確認してください。 250 日 `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` 日 `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

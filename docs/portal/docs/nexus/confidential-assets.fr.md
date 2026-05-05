@@ -94,7 +94,7 @@ Exemple de reponse:
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -252,7 +252,7 @@ Documentez les overrides locaux dans le runbook d operations; les politiques de 
 - Hierarchie de derivation par account:
   - `sk_spend` -> `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - Les payloads de notes chiffre es utilisent AEAD avec des shared keys derivees par ECDH; des view keys d auditeur optionnelles peuvent etre attachees aux outputs selon la politique de l actif.
-- Ajouts CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling auditeur pour dechiffrer les memos, et le helper `iroha app zk envelope` pour produire/inspecter des envelopes Norito offline. Torii expose le meme flux de derivation via `POST /v1/confidential/derive-keyset`, retournant des formes hex et base64 pour que les wallets puissent recuperer les hierarchies de cles programmatiquement.
+- Ajouts CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, tooling auditeur pour dechiffrer les memos, et le helper `iroha app zk envelope` pour produire/inspecter des envelopes Norito offline.
 
 ## Gas, limites et controles DoS
 - Schedule de gas deterministe:

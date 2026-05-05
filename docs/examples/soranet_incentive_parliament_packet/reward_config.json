@@ -1,7 +1,7 @@
 {
   "policy": {
     "minimum_exit_bond": "5000",
-    "bond_asset_id": "sora#xor",
+    "bond_asset_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
     "uptime_floor_per_mille": 930,
     "slash_penalty_basis_points": 250,
     "activation_grace_epochs": 6

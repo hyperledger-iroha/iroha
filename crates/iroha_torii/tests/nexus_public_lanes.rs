@@ -2,7 +2,7 @@
 //! Tests for the Nexus public-lane REST endpoints.
 #![cfg(feature = "app_api")]
 
-use std::{collections::HashSet, num::NonZeroU64, str::FromStr, sync::Arc};
+use std::{collections::HashSet, net::SocketAddr, num::NonZeroU64, str::FromStr, sync::Arc};
 
 use axum::{body::Body, http::Request};
 use http::{Method, StatusCode, header};
@@ -45,6 +45,16 @@ use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
 
+fn with_loopback_connect_info(mut request: Request<Body>) -> Request<Body> {
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))));
+    request
+}
+
 fn enable_nexus(state: &mut State, escrow: &AccountId) {
     let mut nexus = state.nexus_snapshot();
     nexus.enabled = true;
@@ -74,24 +84,24 @@ async fn nexus_public_lane_endpoints_exist() {
 
     let resp = router
         .clone()
-        .oneshot(
+        .oneshot(with_loopback_connect_info(
             Request::builder()
                 .uri("/v1/nexus/public_lanes/0/validators")
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
     let resp = router
         .clone()
-        .oneshot(
+        .oneshot(with_loopback_connect_info(
             Request::builder()
                 .uri("/v1/nexus/public_lanes/0/stake")
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -110,12 +120,12 @@ async fn nexus_public_lane_endpoints_list_records() {
 
     let resp = router
         .clone()
-        .oneshot(
+        .oneshot(with_loopback_connect_info(
             Request::builder()
                 .uri("/v1/nexus/public_lanes/0/validators")
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -132,12 +142,12 @@ async fn nexus_public_lane_endpoints_list_records() {
 
     let resp = router
         .clone()
-        .oneshot(
+        .oneshot(with_loopback_connect_info(
             Request::builder()
                 .uri("/v1/nexus/public_lanes/0/stake")
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     let shares = read_json(resp.into_body()).await;
@@ -145,14 +155,14 @@ async fn nexus_public_lane_endpoints_list_records() {
 
     let resp = router
         .clone()
-        .oneshot(
+        .oneshot(with_loopback_connect_info(
             Request::builder()
                 .uri(format!(
                     "/v1/nexus/public_lanes/0/stake?validator={validator}"
                 ))
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -168,12 +178,12 @@ async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
 
     let resp = router
         .clone()
-        .oneshot(
+        .oneshot(with_loopback_connect_info(
             Request::builder()
                 .uri("/v1/nexus/public_lanes/0/validators")
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -220,24 +230,22 @@ async fn da_commitments_reject_when_nexus_disabled() {
 }
 
 fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
-    let domain_id: DomainId = "nexus".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("nexus", "universal").expect("domain id");
     let validator_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::BlsNormal);
     let validator_id = AccountId::new(validator_keypair.public_key().clone());
-    let validator =
-        Account::new(validator_id.to_account_id(domain_id.clone())).build(&validator_id);
+    let validator = Account::new(validator_id.clone()).build(&validator_id);
 
     let delegator_keypair = KeyPair::from_seed(vec![0x02; 32], Algorithm::Ed25519);
     let delegator_id = AccountId::new(delegator_keypair.public_key().clone());
-    let delegator =
-        Account::new(delegator_id.to_account_id(domain_id.clone())).build(&delegator_id);
+    let delegator = Account::new(delegator_id.clone()).build(&delegator_id);
 
     let escrow_keypair = KeyPair::from_seed(vec![0x04; 32], Algorithm::Ed25519);
     let escrow_id = AccountId::new(escrow_keypair.public_key().clone());
-    let escrow = Account::new(escrow_id.to_account_id(domain_id.clone())).build(&escrow_id);
+    let escrow = Account::new(escrow_id.clone()).build(&escrow_id);
 
     let domain = Domain::new(domain_id.clone()).build(&validator_id);
     let asset_definition_id = AssetDefinitionId::new(
-        "nexus".parse().expect("domain id"),
+        DomainId::try_new("nexus", "universal").expect("domain id"),
         "xor".parse().expect("asset definition name"),
     );
     let asset_definition =
@@ -323,6 +331,7 @@ fn seed_public_lane_state(
     RegisterPublicLaneValidator {
         lane_id: LaneId::SINGLE,
         validator: validator.clone(),
+        peer_id: PeerId::from(validator.signatory().clone()),
         stake_account: validator.clone(),
         initial_stake: Numeric::new(1000, 0),
         metadata,

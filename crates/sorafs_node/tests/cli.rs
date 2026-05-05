@@ -1,11 +1,9 @@
 //! End-to-end checks for the sorafs-node CLI helpers.
 
-use std::{fs, path::Path};
+use std::{fs, io, path::Path};
 
 use assert_cmd::cargo::cargo_bin_cmd;
-use blake3::hash;
-use sorafs_car::CarBuildPlan;
-use sorafs_chunker::ChunkProfile;
+use sorafs_car::{CarBuildPlan, CarWriter};
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy,
     por::{
@@ -20,6 +18,25 @@ fn ingest_tests_enabled() -> bool {
     std::env::var("SORAFS_NODE_SKIP_INGEST_TESTS").map_or(true, |value| value != "1")
 }
 
+fn build_manifest(
+    payload: &[u8],
+) -> Result<(CarBuildPlan, sorafs_manifest::ManifestV1), Box<dyn std::error::Error>> {
+    let plan = CarBuildPlan::single_file(payload)?;
+    let stats = CarWriter::new(&plan, payload)?.write_to(io::sink())?;
+    let mut car_digest = [0u8; 32];
+    car_digest.copy_from_slice(stats.car_archive_digest.as_bytes());
+    let manifest = ManifestBuilder::new()
+        .root_cid(stats.root_cids[0].clone())
+        .dag_codec(DagCodecId(stats.dag_codec))
+        .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
+        .content_length(plan.content_length)
+        .car_digest(car_digest)
+        .car_size(stats.car_size)
+        .pin_policy(PinPolicy::default())
+        .build()?;
+    Ok((plan, manifest))
+}
+
 #[test]
 fn sorafs_node_cli_ingest_and_export_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
     if !ingest_tests_enabled() {
@@ -31,19 +48,7 @@ fn sorafs_node_cli_ingest_and_export_roundtrip() -> Result<(), Box<dyn std::erro
     let storage_dir = temp_dir.path().join("storage");
 
     let payload = b"sorafs-node CLI integration payload";
-    let plan = CarBuildPlan::single_file(payload)?;
-    let digest = hash(payload);
-
-    let manifest = ManifestBuilder::new()
-        .root_cid(digest.as_bytes().to_vec())
-        .dag_codec(DagCodecId(0x71))
-        .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
-        .content_length(plan.content_length)
-        .car_digest(digest.into())
-        .car_size(plan.content_length)
-        .pin_policy(PinPolicy::default())
-        .build()
-        .expect("manifest build");
+    let (_plan, manifest) = build_manifest(payload)?;
     let manifest_bytes = norito::to_bytes(&manifest)?;
 
     let manifest_path = temp_dir.path().join("manifest.to");
@@ -187,19 +192,7 @@ fn sorafs_node_cli_ingest_por_replays_proof() -> Result<(), Box<dyn std::error::
     let storage_dir = temp_dir.path().join("storage");
 
     let payload = b"sorafs-node PoR replay payload";
-    let plan = CarBuildPlan::single_file(payload)?;
-    let digest = hash(payload);
-
-    let manifest = ManifestBuilder::new()
-        .root_cid(digest.as_bytes().to_vec())
-        .dag_codec(DagCodecId(0x71))
-        .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
-        .content_length(plan.content_length)
-        .car_digest(digest.into())
-        .car_size(plan.content_length)
-        .pin_policy(PinPolicy::default())
-        .build()
-        .expect("manifest build");
+    let (_plan, manifest) = build_manifest(payload)?;
     let manifest_bytes = norito::to_bytes(&manifest)?;
 
     let manifest_path = temp_dir.path().join("manifest_por.to");

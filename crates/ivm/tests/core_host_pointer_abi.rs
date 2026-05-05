@@ -5,13 +5,12 @@ use norito::to_bytes;
 
 mod common;
 
-const SAMPLE_NFT_ID: &[u8] = b"rose$wonderland";
-const ALT_NFT_ID: &[u8] = b"lily$wonderland";
+const SAMPLE_NFT_ID: &[u8] = b"rose$wonderland.universal";
+const ALT_NFT_ID: &[u8] = b"lily$wonderland.universal";
 
 fn account_id_literal(public_key: &str) -> Vec<u8> {
-    let domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("valid domain");
     let public_key: PublicKey = public_key.parse().expect("valid public key");
-    ivm::mock_wsv::ScopedAccountId::new(domain, public_key)
+    ivm::mock_wsv::AccountId::new(public_key)
         .to_string()
         .into_bytes()
 }
@@ -27,7 +26,7 @@ fn bob_account_id_literal() -> Vec<u8> {
 fn assemble(code: &[u8]) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 0,
@@ -162,7 +161,11 @@ fn transfer_asset_validates_tlvs() {
     vm.memory
         .preload_input(from.len() as u64 + 8, &to)
         .expect("preload input");
-    let asset = make_tlv(PointerType::AssetDefinitionId as u16, 1, b"rose#wonderland");
+    let asset = make_tlv(
+        PointerType::AssetDefinitionId as u16,
+        1,
+        b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+    );
     vm.memory
         .preload_input(from.len() as u64 + to.len() as u64 + 16, &asset)
         .expect("preload input");

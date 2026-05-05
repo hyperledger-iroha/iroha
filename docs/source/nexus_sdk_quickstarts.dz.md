@@ -97,15 +97,15 @@ use iroha_client::client::{
 
 fn share_wallet_qr(client: &Client) -> eyre::Result<()> {
     let snapshot = client.get_explorer_account_qr(
-        "i105...",
+        "<i105-account-id>",
     )?;
-    println!("I105 literal: {}", snapshot.literal);
+    println!("i105 literal: {}", snapshot.literal);
     std::fs::write("alice_qr.svg", snapshot.svg)?;
     Ok(())
 }
 ```
 
-The returned `ExplorerAccountQrSnapshot` includes the canonical account id,
+The returned `ExplorerAccountQrSnapshot` includes the canonical I105 account id,
 canonical I105 literal, error-correction settings, and the inline SVG payload used by
 wallet/explorer share flows.
 

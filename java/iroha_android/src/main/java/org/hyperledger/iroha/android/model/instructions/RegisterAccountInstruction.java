@@ -101,7 +101,9 @@ public final class RegisterAccountInstruction implements InstructionTemplate {
     private Builder() {}
 
     public Builder setAccountId(final String accountId) {
-      this.accountId = Objects.requireNonNull(accountId, "accountId");
+      this.accountId =
+          org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
+              accountId, "accountId");
       return this;
     }
 

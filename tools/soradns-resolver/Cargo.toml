@@ -27,7 +27,6 @@ tokio-stream = { workspace = true, features = ["sync"] }
 tokio-rustls = { workspace = true }
 rustls = { version = "0.23.35", default-features = false, features = ["std"] }
 hickory-proto = { version = "0.25.2", default-features = false }
-quinn = "0.11.9"
 iroha_primitives = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["json", "governance"] }
 iroha_crypto = { workspace = true }
@@ -37,5 +36,4 @@ sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 expect-test = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync", "net", "io-util"] }
 tempfile = { workspace = true }
-rcgen = "=0.14.5"
 assert_cmd = "2.1.1"

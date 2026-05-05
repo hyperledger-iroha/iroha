@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -163,82 +163,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## البدلات غير المتصلة بالإنترنت والبيانات الوصفية للحكمتكشف استجابات المخصصات دون اتصال عن بيانات تعريف دفتر الأستاذ المعززة مقدمًا —
-`expires_at_ms`، `policy_expires_at_ms`، `refresh_at_ms`، `verdict_id_hex`،
-يتم إرجاع `attestation_nonce_hex` و`remaining_amount` إلى جانب الملف الخام
-قم بالتسجيل حتى لا تضطر لوحات المعلومات إلى فك تشفير حمولات Norito المضمنة. الجديد
-مساعدو العد التنازلي (`deadline_kind`، `deadline_state`، `deadline_ms`،
-`deadline_ms_remaining`) قم بتسليط الضوء على الموعد النهائي التالي لانتهاء الصلاحية (التحديث → السياسة
-→ الشهادة) حتى تتمكن شارات واجهة المستخدم من تحذير المشغلين عند وجود بدل
-<24 ساعة متبقية. SDK
-يعكس مرشحات REST المكشوفة بواسطة `/v1/offline/allowances`:
-`certificateExpiresBeforeMs/AfterMs`، `policyExpiresBeforeMs/AfterMs`،
-`verdictIdHex`، `attestationNonceHex`، `refreshBeforeMs/AfterMs`، و
-`requireVerdict` / `onlyMissingVerdict` القيم المنطقية. مجموعات غير صالحة (ل
-مثال `onlyMissingVerdict` + `verdictIdHex`) تم رفضه محليًا قبل Torii
-يسمى.
+## Offline V2 readiness
+
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## عمليات تعبئة الرصيد دون الاتصال بالإنترنت (الإصدار + التسجيل)
-
-استخدم مساعدي تعبئة الرصيد عندما تريد إصدار شهادة وعلى الفور
-تسجيله على دفتر الأستاذ. يتحقق SDK من الشهادة الصادرة والمسجلة
-تتطابق المعرفات قبل العودة، وتتضمن الاستجابة كلا الحمولتين. هناك
-لا توجد نقطة نهاية مخصصة لزيادة الرصيد؛ يقوم المساعد بتسلسل المشكلة + تسجيل المكالمات. إذا
-لديك بالفعل شهادة موقعة، اتصل بالرقم `registerOfflineAllowance` (أو
-`renewOfflineAllowance`) مباشرة.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii الاستعلامات والبث (WebSockets)تعرض مساعدات الاستعلام الحالة ومقاييس Prometheus ولقطات القياس عن بعد والحدث
 التدفقات باستخدام قواعد التصفية Norito. يتم ترقية البث تلقائيًا إلى
 WebSockets ويستأنف عندما تسمح ميزانية إعادة المحاولة.
@@ -271,7 +220,7 @@ abort.abort(); // closes the underlying WebSocket cleanly
 نقاط النهاية `/v1/explorer/accounts/{account_id}/qr` حتى تتمكن لوحات المعلومات من إعادة تشغيل
 نفس اللقطات التي تعمل على تشغيل البوابة. `getExplorerMetrics()` يقوم بتطبيع ملف
 الحمولة وإرجاع `null` عند تعطيل المسار. إقرانها مع
-`getExplorerAccountQr()` عندما تحتاج إلى I105 (المفضل)/sora (ثاني أفضل) حرفية بالإضافة إلى المضمنة
+`getExplorerAccountQr()` عندما تحتاج إلى i105 (المفضل)/sora (ثاني أفضل) حرفية بالإضافة إلى المضمنة
 SVG لأزرار المشاركة.
 
 ```ts
@@ -286,7 +235,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -294,8 +243,8 @@ console.log(
 );
 ```
 
-يؤدي تمرير `I105` إلى عكس ضغط Explorer الافتراضي
-محددات. حذف التجاوز لمخرج I105 المفضل أو طلب `i105_qr`
+يؤدي تمرير `i105` إلى عكس ضغط Explorer الافتراضي
+محددات. حذف التجاوز لمخرج i105 المفضل أو طلب `i105_qr`
 عندما تحتاج إلى متغير QR الآمن. الحرفي المضغوط هو ثاني أفضل
 خيار Sora فقط لـ UX. يقوم المساعد دائمًا بإرجاع المعرف الأساسي،
 البيانات الحرفية والبيانات التعريفية المحددة (بادئة الشبكة، إصدار/وحدات QR، الخطأ
@@ -506,7 +455,7 @@ for await (const event of torii.streamEvents({
   تجميع ممتلكات الأصول حسب معرفات الحساب الأساسية؛ قم بتمرير `assetId` لتصفية ملف
   المحفظة وصولاً إلى مثيل أصل واحد.
 - يقوم `getUaidBindings(uaid)` بتعداد كل حساب ↔ لمساحة البيانات
-  الربط (`I105` يُرجع القيم الحرفية `i105`).
+  الربط (`i105` يُرجع القيم الحرفية `i105`).
 - `getUaidManifests(uaid, { dataspaceId })` يُرجع كل بيان قدرة،
   حالة دورة الحياة، والحسابات المقيدة للتدقيق.
 
@@ -551,7 +500,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -561,7 +510,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

@@ -48,10 +48,10 @@ fn seeded_account(seed_byte: u8) -> (AccountId, KeyPair) {
 
 fn build_account_in_domain(
     account_id: AccountId,
-    domain_id: DomainId,
+    _domain_id: DomainId,
     authority: &AccountId,
 ) -> Account {
-    Account::new(account_id.to_account_id(domain_id)).build(authority)
+    Account::new(account_id.clone()).build(authority)
 }
 
 fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
@@ -84,11 +84,11 @@ fn prepare_state(
     policy: Option<AccountAdmissionPolicy>,
     alice_balance: Numeric,
 ) -> (State, AccountId, KeyPair, AssetDefinitionId, AssetId) {
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let (alice_id, alice_kp) = seeded_account(1);
     let domain = Domain::new(domain_id.clone()).build(&alice_id);
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&alice_id);

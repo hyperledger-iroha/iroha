@@ -193,7 +193,8 @@ private final class PipelineURLProtocol: URLProtocol {
     private static var nodeCapabilitiesBody: Data {
         let body: [String: Any] = [
             "abi_version": 1,
-            "data_model_version": ToriiNodeCapabilities.expectedDataModelVersion
+            "data_model_version": ToriiNodeCapabilities.expectedDataModelVersion,
+            "signed_transaction_schema_hash_hex": ToriiNodeCapabilities.expectedSignedTransactionSchemaHashHex
         ]
         return (try? JSONSerialization.data(withJSONObject: body)) ?? Data()
     }
@@ -214,9 +215,31 @@ private func expectedTail(forTTL ttl: UInt64?) -> Data {
 final class TxBuilderTests: XCTestCase {
     private static let fixturePrivateKeyHex = "000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F"
     private static let fixtureChainId = "00000000-0000-0000-0000-000000000000"
-    private static let fixtureDomain = "wonderland"
+    private static let fixtureDomain = "wonderland.universal"
+    private static let fixtureGovernanceContractAddress =
+        "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+    private static let fixtureClaimPolicyId = "email#retail"
+    private static let fixtureClaimProgramId = "identifier_lookup_retail"
+    private static let fixtureClaimProgramDigestHex =
+        "1111111111111111111111111111111111111111111111111111111111111111"
+    private static let fixtureClaimOutputHashHex =
+        "2222222222222222222222222222222222222222222222222222222222222223"
+    private static let fixtureClaimAssociatedDataHashHex =
+        "3333333333333333333333333333333333333333333333333333333333333333"
+    private static let fixtureClaimOpaqueIdHex =
+        "d82f9eab952f7a5241bb2339c0095ebc61958428164ab820fad85952f3574585"
+    private static let fixtureClaimReceiptHashHex =
+        "032df7e7370e04ddbabf0cd40932935a1d2c77a9b8d723bbb9f1472f2791cc71"
+    private static let fixtureClaimUaidHex =
+        "c60973f731ccb57008687f9bc38cc712e3be7ab46d99a1beffd1c9fd61e60a87"
+    private static let fixtureClaimResolvedAtMs: UInt64 = 1_764_450_000_024
+    private static let fixtureClaimExpiresAtMs: UInt64 = 1_764_453_000_056
+    private static let fixtureClaimAccountMultihash =
+        "ed01205634E9071E8662974A22F137972663C4644DC3546A1938E1CAC58DE4CBA8D965"
+    private static let fixtureClaimSignatureHex =
+        "9262CA8C755D47207ED0CD2E19892DFAA4612701A36DCAF87173D42CC754DFB6A66158856FDFD25974C2A11E9FC32940CA0DF18CAC25A38CB5DEDC4625E67900"
     private static let fixtureExplorerAccountId = AccountId.make(publicKey: Data(repeating: 0x2A, count: 32))
-    private static let fixtureAssetDefinition = "rose#wonderland"
+    private static let fixtureAssetDefinition = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private static let fixtureCreationTimeMs: UInt64 = 1_700_000_000_000
     private enum FixtureError: Error { case invalidKey }
 
@@ -277,6 +300,12 @@ final class TxBuilderTests: XCTestCase {
         data.map { String(format: "%02x", $0) }.joined()
     }
 
+    private func makeNativeClaimIdentifierReceiptJSON(
+        _ receipt: ToriiIdentifierResolutionReceipt
+    ) throws -> Data {
+        try JSONEncoder().encode(receipt)
+    }
+
     private func requireEd25519Encoder() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
                       "Native transaction encoder unavailable")
@@ -285,13 +314,8 @@ final class TxBuilderTests: XCTestCase {
     private func normalizeNativeSignedTransaction(
         _ native: NativeSignedTransaction
     ) -> (signed: Data, norito: Data) {
-        if let framed = noritoDecodeFrame(native.signedBytes) {
-            return (signed: framed.payload, norito: native.signedBytes)
-        }
-        let norito = noritoEncode(typeName: "iroha_data_model::transaction::signed::SignedTransaction",
-                                  payload: native.signedBytes,
-                                  flags: 0x04)
-        return (signed: native.signedBytes, norito: norito)
+        XCTAssertEqual(native.signedBytes.first, 1)
+        return (signed: Data(native.signedBytes.dropFirst()), norito: native.signedBytes)
     }
 
     private func makeRegisterZkAssetRequest(authority: String,
@@ -310,19 +334,68 @@ final class TxBuilderTests: XCTestCase {
                                       ttlMs: ttlMs)
     }
 
+    private func makeClaimIdentifierRequest(authority: String,
+                                            ttlMs: UInt64? = 30) throws -> ClaimIdentifierRequest {
+        guard let multihashBytes = Data(hexString: Self.fixtureClaimAccountMultihash),
+              multihashBytes.count == 35,
+              multihashBytes.prefix(3) == Data([0xED, 0x01, 0x20]) else {
+            throw FixtureError.invalidKey
+        }
+        let claimAccountId = AccountId.make(publicKey: Data(multihashBytes.dropFirst(3)))
+        let payload = ToriiIdentifierResolutionPayload(
+            policyId: Self.fixtureClaimPolicyId,
+            opaqueId: "opaque:\(Self.fixtureClaimOpaqueIdHex)",
+            receiptHash: Self.fixtureClaimReceiptHashHex,
+            uaid: "uaid:\(Self.fixtureClaimUaidHex)",
+            accountId: claimAccountId,
+            execution: ToriiIdentifierResolutionExecutionPayload(
+                programId: Self.fixtureClaimProgramId,
+                programDigest: Self.fixtureClaimProgramDigestHex,
+                backend: "bfv-programmed-sha3-256-v1",
+                verificationMode: "signed",
+                outputHash: Self.fixtureClaimOutputHashHex,
+                associatedDataHash: Self.fixtureClaimAssociatedDataHashHex,
+                executedAtMs: Self.fixtureClaimResolvedAtMs,
+                expiresAtMs: Self.fixtureClaimExpiresAtMs
+            )
+        )
+        guard let payloadJSON = String(data: try JSONEncoder().encode(payload), encoding: .utf8) else {
+            throw FixtureError.invalidKey
+        }
+        let receiptJSON = """
+        {
+          "payload":\(payloadJSON),
+          "attestation":{
+            "kind":"signed",
+            "signature":"\(Self.fixtureClaimSignatureHex)"
+          }
+        }
+        """
+        let receipt = try JSONDecoder().decode(
+            ToriiIdentifierResolutionReceipt.self,
+            from: Data(receiptJSON.utf8)
+        )
+        return ClaimIdentifierRequest(chainId: Self.fixtureChainId,
+                                      authority: authority,
+                                      accountId: claimAccountId,
+                                      receipt: receipt,
+                                      ttlMs: ttlMs)
+    }
+
     func testBuildSignedTransferProducesEnvelope() throws {
         try requireEd25519Encoder()
         let keypair = try Keypair.generate()
         let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: AccountId.make(publicKey: keypair.publicKey),
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: AccountId.make(publicKey: keypair.publicKey),
                                        description: nil,
                                        ttlMs: 90)
         let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
-        XCTAssertEqual(String(data: envelope.norito.prefix(4), encoding: .ascii), "NRT0")
+        XCTAssertEqual(envelope.norito.first, 1)
+        XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)
         XCTAssertNil(envelope.payload, "Swift encoder does not embed payload bytes yet")
         XCTAssertEqual(envelope.transactionHash.count, 32)
         if let payload = envelope.payload {
@@ -811,7 +884,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
@@ -840,8 +913,79 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeRegisterZkAssetRequest(authority: authority, ttlMs: 60)
         let envelope = try sdk.buildRegisterZkAsset(request: request, keypair: keypair)
-        XCTAssertEqual(String(data: envelope.norito.prefix(4), encoding: .ascii), "NRT0")
+        XCTAssertEqual(envelope.norito.first, 1)
+        XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)
         XCTAssertEqual(envelope.transactionHash.count, 32)
+    }
+
+    func testBuildClaimIdentifierProducesEnvelope() throws {
+        let keypair = try makeFixtureKeypair()
+        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let request = try makeClaimIdentifierRequest(authority: authority, ttlMs: 60)
+        let envelope = try sdk.buildClaimIdentifier(request: request, keypair: keypair)
+        XCTAssertEqual(envelope.norito.first, 1)
+        XCTAssertEqual(Data(envelope.norito.dropFirst()), envelope.signedTransaction)
+        XCTAssertEqual(envelope.transactionHash.count, 32)
+    }
+
+    func testSetPrimaryAccountAliasUsesDataspaceIdInEncoding() throws {
+        let keypair = try makeFixtureKeypair()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let globalRequest = SetPrimaryAccountAliasRequest(
+            chainId: Self.fixtureChainId,
+            authority: authority,
+            accountId: authority,
+            aliasDomain: "hbl",
+            aliasDataspaceId: 0,
+            alias: "ayesha",
+            ttlMs: 60
+        )
+        let paynetRequest = SetPrimaryAccountAliasRequest(
+            chainId: Self.fixtureChainId,
+            authority: authority,
+            accountId: authority,
+            aliasDomain: "hbl",
+            aliasDataspaceId: 7,
+            alias: "ayesha",
+            ttlMs: 60
+        )
+
+        let global = try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
+            request: globalRequest,
+            keypair: keypair,
+            creationTimeMs: Self.fixtureCreationTimeMs
+        )
+        let paynet = try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
+            request: paynetRequest,
+            keypair: keypair,
+            creationTimeMs: Self.fixtureCreationTimeMs
+        )
+
+        XCTAssertNotEqual(global.transactionHash, paynet.transactionHash)
+        XCTAssertNotEqual(global.signedTransaction, paynet.signedTransaction)
+    }
+
+    func testSetPrimaryAccountAliasRejectsDottedAliasDomain() throws {
+        let keypair = try makeFixtureKeypair()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let request = SetPrimaryAccountAliasRequest(
+            chainId: Self.fixtureChainId,
+            authority: authority,
+            accountId: authority,
+            aliasDomain: "hbl.paynet",
+            aliasDataspaceId: 7,
+            alias: "ayesha",
+            ttlMs: 60
+        )
+
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
+                request: request,
+                keypair: keypair,
+                creationTimeMs: Self.fixtureCreationTimeMs
+            )
+        )
     }
 
     func testVerifyingKeyIdReferenceValidation() {
@@ -865,7 +1009,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
@@ -891,7 +1035,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil)
@@ -912,7 +1056,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil)
@@ -929,7 +1073,7 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(Set(stub.submittedModes), [.pipeline])
     }
 
-    func testFallbackTransferMatchesNativeBridge() throws {
+    func testSwiftTransferMatchesNativeBridge() throws {
         try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
@@ -942,9 +1086,9 @@ final class TxBuilderTests: XCTestCase {
                                       description: nil,
                                       ttlMs: 90)
 
-        let fallback = try SwiftTransactionEncoder.encodeTransfer(transfer: request,
-                                                                  keypair: keypair,
-                                                                  creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeTransfer(transfer: request,
+                                                               keypair: keypair,
+                                                               creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeTransfer(chainId: request.chainId,
                                                                          authority: request.authority,
@@ -959,9 +1103,9 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testSigningKeyTransferMatchesKeypairEncoding() throws {
@@ -986,7 +1130,7 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(withKeypair.transactionHash, withSigningKey.transactionHash)
     }
 
-    func testFallbackMintMatchesNativeBridge() throws {
+    func testSwiftMintMatchesNativeBridge() throws {
         try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
@@ -998,9 +1142,9 @@ final class TxBuilderTests: XCTestCase {
                                   destination: authority,
                                   ttlMs: 45)
 
-        let fallback = try SwiftTransactionEncoder.encodeMint(request: request,
-                                                              keypair: keypair,
-                                                              creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeMint(request: request,
+                                                           keypair: keypair,
+                                                           creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeMint(chainId: request.chainId,
                                                                      authority: request.authority,
@@ -1015,12 +1159,12 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
-    func testFallbackBurnMatchesNativeBridge() throws {
+    func testSwiftBurnMatchesNativeBridge() throws {
         try requireEd25519Encoder()
 
         let keypair = try makeFixtureKeypair()
@@ -1032,9 +1176,9 @@ final class TxBuilderTests: XCTestCase {
                                   destination: authority,
                                   ttlMs: 120)
 
-        let fallback = try SwiftTransactionEncoder.encodeBurn(request: request,
-                                                              keypair: keypair,
-                                                              creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeBurn(request: request,
+                                                           keypair: keypair,
+                                                           creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeBurn(chainId: request.chainId,
                                                                      authority: request.authority,
@@ -1049,9 +1193,9 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testSetMetadataMatchesNativeBridge() throws {
@@ -1068,9 +1212,9 @@ final class TxBuilderTests: XCTestCase {
                                          value: value,
                                          ttlMs: 30)
 
-        let fallback = try SwiftTransactionEncoder.encodeSetMetadata(request: request,
-                                                                     keypair: keypair,
-                                                                     creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeSetMetadata(request: request,
+                                                                  keypair: keypair,
+                                                                  creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeSetKeyValue(
             chainId: request.chainId,
@@ -1088,9 +1232,42 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
+    }
+
+    func testClaimIdentifierMatchesNativeBridge() throws {
+        try XCTSkipIf(!NoritoNativeBridge.shared.supportsTransactions(using: .ed25519),
+                      "Native transaction encoder unavailable")
+
+        let keypair = try makeFixtureKeypair()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let request = try makeClaimIdentifierRequest(authority: authority, ttlMs: 75)
+
+        let swift = try SwiftTransactionEncoder.encodeClaimIdentifier(request: request,
+                                                                      keypair: keypair,
+                                                                      creationTimeMs: Self.fixtureCreationTimeMs)
+
+        let receiptJSON = try makeNativeClaimIdentifierReceiptJSON(request.receipt)
+        guard let native = try? NoritoNativeBridge.shared.encodeClaimIdentifier(
+            chainId: request.chainId,
+            authority: request.authority,
+            creationTimeMs: Self.fixtureCreationTimeMs,
+            ttlMs: request.ttlMs,
+            accountId: request.accountId,
+            receiptJSON: receiptJSON,
+            privateKey: keypair.privateKeyBytes,
+            algorithm: .ed25519
+        ) else {
+            XCTFail("Expected native bridge claim identifier encoding")
+            return
+        }
+
+        let normalized = normalizeNativeSignedTransaction(native)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testGovernanceProposeDeployMatchesNativeBridge() throws {
@@ -1104,26 +1281,24 @@ final class TxBuilderTests: XCTestCase {
         let window = GovernanceWindow(lower: 4, upper: 8)
         let request = ProposeDeployContractRequest(chainId: Self.fixtureChainId,
                                                    authority: authority,
-                                                   namespace: "contracts",
-                                                   contractId: "demo",
+                                                   contractAddress: Self.fixtureGovernanceContractAddress,
                                                    codeHashHex: hexEncoded(codeHash),
                                                    abiHashHex: hexEncoded(abiHash),
-                                                   abiVersion: "1.0.0",
+                                                   abiVersion: "1",
                                                    window: window,
                                                    mode: .plain,
                                                    ttlMs: 20)
 
-        let fallback = try SwiftTransactionEncoder.encodeProposeDeploy(request: request,
-                                                                       keypair: keypair,
-                                                                       creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeProposeDeploy(request: request,
+                                                                    keypair: keypair,
+                                                                    creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeGovernanceProposeDeploy(
             chainId: request.chainId,
             authority: request.authority,
             creationTimeMs: Self.fixtureCreationTimeMs,
             ttlMs: request.ttlMs,
-            namespace: request.namespace,
-            contractId: request.contractId,
+            contractAddress: request.contractAddress,
             codeHashHex: request.codeHashHex,
             abiHashHex: request.abiHashHex,
             abiVersion: request.abiVersion,
@@ -1136,9 +1311,9 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testPersistCouncilMatchesNativeBridge() throws {
@@ -1155,9 +1330,9 @@ final class TxBuilderTests: XCTestCase {
                                             derivedBy: .vrf,
                                             ttlMs: 15)
 
-        let fallback = try SwiftTransactionEncoder.encodePersistCouncil(request: request,
-                                                                        keypair: keypair,
-                                                                        creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodePersistCouncil(request: request,
+                                                                     keypair: keypair,
+                                                                     creationTimeMs: Self.fixtureCreationTimeMs)
         let membersJson = try NoritoJSON(request.members).data
 
         guard let native = try? NoritoNativeBridge.shared.encodeGovernancePersistCouncil(
@@ -1176,9 +1351,9 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testNativeBridgeTransferWhenAvailable() throws {
@@ -1188,7 +1363,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
@@ -1219,7 +1394,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                        authority: authority,
-                                       assetDefinitionId: "rose#wonderland",
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                        quantity: "1",
                                        destination: authority,
                                        description: nil,
@@ -1234,6 +1409,34 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertTrue(json.contains("\"instructions\""))
     }
 
+    func testDecodeSignedTransactionJSONIncludesFeeSponsorWhenPresent() throws {
+        guard NoritoNativeBridge.shared.isAvailable else {
+            throw XCTSkip("NoritoBridge native encoder not linked")
+        }
+
+        let keypair = try Keypair.generate()
+        let sponsorKeypair = try Keypair.generate()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let feeSponsor = AccountId.make(publicKey: sponsorKeypair.publicKey)
+        let transfer = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
+                                       authority: authority,
+                                       assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+                                       quantity: "1",
+                                       destination: authority,
+                                       description: nil,
+                                       feeSponsor: feeSponsor,
+                                       ttlMs: nil)
+        let sdk = IrohaSDK(baseURL: URL(string: "https://example.test")!)
+        let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: keypair)
+        guard let json = sdk.decodeSignedTransaction(envelope: envelope) else {
+            XCTFail("expected JSON from native bridge")
+            return
+        }
+
+        XCTAssertTrue(json.contains("\"fee_sponsor\""), json)
+        XCTAssertTrue(json.contains(feeSponsor), json)
+    }
+
     func testMintNativeBridgeWhenAvailable() throws {
         try requireEd25519Encoder()
 
@@ -1245,7 +1448,7 @@ final class TxBuilderTests: XCTestCase {
                                                                      authority: authority,
                                                                      creationTimeMs: UInt64(Date().timeIntervalSince1970 * 1000),
                                                                      ttlMs: nil,
-                                                                     assetDefinitionId: "rose#wonderland",
+                                                                     assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                                                      quantity: "42",
                                                                      destination: destination,
                                                                      privateKey: keypair.privateKeyBytes) else {
@@ -1285,8 +1488,7 @@ final class TxBuilderTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = ProposeDeployContractRequest(chainId: Self.fixtureChainId,
                                                    authority: authority,
-                                                   namespace: "apps",
-                                                   contractId: "demo.contract",
+                                                   contractAddress: Self.fixtureGovernanceContractAddress,
                                                    codeHashHex: String(repeating: "aa", count: 32),
                                                    abiHashHex: String(repeating: "bb", count: 32),
                                                    abiVersion: "1",
@@ -1310,7 +1512,7 @@ final class TxBuilderTests: XCTestCase {
         let destination = authority
         let request = MintRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                   authority: authority,
-                                  assetDefinitionId: "rose#wonderland",
+                                  assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                   quantity: "3.14",
                                   destination: destination,
                                   ttlMs: 45)
@@ -1353,7 +1555,7 @@ final class TxBuilderTests: XCTestCase {
         let destination = authority
         let request = BurnRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                   authority: authority,
-                                  assetDefinitionId: "rose#wonderland",
+                                  assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                                   quantity: "2",
                                   destination: destination,
                                   ttlMs: 120)
@@ -1394,9 +1596,9 @@ final class TxBuilderTests: XCTestCase {
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeShieldRequest(authority: authority)
-        let fallback = try SwiftTransactionEncoder.encodeShield(request: request,
-                                                                keypair: keypair,
-                                                                creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeShield(request: request,
+                                                             keypair: keypair,
+                                                             creationTimeMs: Self.fixtureCreationTimeMs)
 
         guard let native = try? NoritoNativeBridge.shared.encodeShield(chainId: request.chainId,
                                                                        authority: request.authority,
@@ -1415,9 +1617,9 @@ final class TxBuilderTests: XCTestCase {
         }
 
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     func testUnshieldRequestRequiresInputs() throws {
@@ -1486,9 +1688,9 @@ final class TxBuilderTests: XCTestCase {
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = try makeUnshieldRequest(authority: authority)
-        let fallback = try SwiftTransactionEncoder.encodeUnshield(request: request,
-                                                                  keypair: keypair,
-                                                                  creationTimeMs: Self.fixtureCreationTimeMs)
+        let swift = try SwiftTransactionEncoder.encodeUnshield(request: request,
+                                                               keypair: keypair,
+                                                               creationTimeMs: Self.fixtureCreationTimeMs)
         guard let native = try? NoritoNativeBridge.shared.encodeUnshield(chainId: request.chainId,
                                                                          authority: request.authority,
                                                                          creationTimeMs: Self.fixtureCreationTimeMs,
@@ -1504,16 +1706,16 @@ final class TxBuilderTests: XCTestCase {
             return
         }
         let normalized = normalizeNativeSignedTransaction(native)
-        XCTAssertEqual(normalized.signed, fallback.signedTransaction)
-        XCTAssertEqual(native.hash, fallback.transactionHash)
-        XCTAssertEqual(normalized.norito, fallback.norito)
+        XCTAssertEqual(normalized.signed, swift.signedTransaction)
+        XCTAssertEqual(native.hash, swift.transactionHash)
+        XCTAssertEqual(normalized.norito, swift.norito)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testSubmitAndWaitAsyncSucceeds() async throws {
         try requireEd25519Encoder()
         PipelineURLProtocol.reset()
-        PipelineURLProtocol.configure(statuses: ["Queued", "Approved"])
+        PipelineURLProtocol.configure(statuses: ["Queued", "Approved", "Committed"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
@@ -1524,7 +1726,38 @@ final class TxBuilderTests: XCTestCase {
                                       description: nil,
                                       ttlMs: 60)
         let status = try await sdk.submitAndWait(transfer: request, keypair: keypair)
-        XCTAssertEqual(status.content.status.kind, "Approved")
+        XCTAssertEqual(status.content.status.kind, "Committed")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitAndWaitAsyncDoesNotTreatApprovedAsDefaultSuccess() async throws {
+        try requireEd25519Encoder()
+        PipelineURLProtocol.reset()
+        PipelineURLProtocol.configure(statuses: ["Approved"])
+        let sdk = try makePipelineSDK()
+        let keypair = try makeFixtureKeypair()
+        let request = TransferRequest(chainId: Self.fixtureChainId,
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
+                                      assetDefinitionId: Self.fixtureAssetDefinition,
+                                      quantity: "1",
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
+                                      description: nil,
+                                      ttlMs: 60)
+        let options = PipelineStatusPollOptions(pollInterval: 0,
+                                                timeout: 0.1,
+                                                maxAttempts: 2)
+        do {
+            _ = try await sdk.submitAndWait(transfer: request, keypair: keypair, pollOptions: options)
+            XCTFail("Expected Approved-only status stream to time out")
+        } catch let error as PipelineStatusError {
+            if case .timeout = error {
+                // expected
+            } else {
+                XCTFail("Unexpected error: \(error)")
+            }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -1590,7 +1823,7 @@ final class TxBuilderTests: XCTestCase {
     func testSubmitAndWaitCompletionDeliversStatus() async throws {
         try requireEd25519Encoder()
         PipelineURLProtocol.reset()
-        PipelineURLProtocol.configure(statuses: ["Approved"])
+        PipelineURLProtocol.configure(statuses: ["Approved", "Applied"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
@@ -1604,7 +1837,7 @@ final class TxBuilderTests: XCTestCase {
         let task = sdk.submitAndWait(transfer: request, keypair: keypair) { result in
             switch result {
             case .success(let status):
-                XCTAssertEqual(status.content.status.kind, "Approved")
+                XCTAssertEqual(status.content.status.kind, "Applied")
                 expectation.fulfill()
             case .failure(let error):
                 XCTFail("Unexpected error: \(error)")
@@ -1647,7 +1880,7 @@ final class TxBuilderTests: XCTestCase {
     func testSubmitAndWaitCustomSuccessStates() async throws {
         try requireEd25519Encoder()
         PipelineURLProtocol.reset()
-        PipelineURLProtocol.configure(statuses: ["Queued"])
+        PipelineURLProtocol.configure(statuses: ["Approved"])
         let sdk = try makePipelineSDK()
         let keypair = try makeFixtureKeypair()
         let request = TransferRequest(chainId: Self.fixtureChainId,
@@ -1657,9 +1890,9 @@ final class TxBuilderTests: XCTestCase {
                                       destination: AccountId.make(publicKey: keypair.publicKey),
                                       description: nil,
                                       ttlMs: 60)
-        let options = PipelineStatusPollOptions(successStates: Set([.queued]), failureStates: Set())
+        let options = PipelineStatusPollOptions(successStates: Set([.approved]), failureStates: Set())
         let status = try await sdk.submitAndWait(transfer: request, keypair: keypair, pollOptions: options)
-        XCTAssertEqual(status.content.status.kind, "Queued")
+        XCTAssertEqual(status.content.status.kind, "Approved")
     }
 
     @available(iOS 15.0, macOS 12.0, *)

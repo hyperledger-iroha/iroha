@@ -5,6 +5,7 @@ use std::vec::Vec;
 use iroha_data_model::prelude::*;
 use iroha_primitives::json::Json;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls};
+use ivm_abi::metadata::LITERAL_SECTION_MAGIC;
 
 const HALT_WORD: u32 = encoding::wide::encode_halt();
 pub const HALT: [u8; 4] = HALT_WORD.to_le_bytes();
@@ -127,6 +128,34 @@ pub fn assemble(code: &[u8]) -> Vec<u8> {
     assemble_with_mode(code, 0)
 }
 
+/// Assemble a program with an `LTLB` literal section and return the program
+/// bytes plus the literal addresses inside the loaded code region.
+pub fn assemble_with_literal_section(code: &[u8], literals: &[&[u8]]) -> (Vec<u8>, Vec<u64>) {
+    let mut program = ProgramMetadata::default().encode();
+    let offsets_len = literals.len() * 8;
+    let data_start = 16 + offsets_len;
+    let data_len: usize = literals.iter().map(|literal| literal.len()).sum();
+    let mut offsets = Vec::with_capacity(literals.len());
+    let mut data = Vec::with_capacity(data_len);
+    let mut cursor = data_start as u64;
+    for literal in literals {
+        offsets.push(cursor);
+        data.extend_from_slice(literal);
+        cursor += literal.len() as u64;
+    }
+    program.extend_from_slice(&LITERAL_SECTION_MAGIC);
+    program.extend_from_slice(&(literals.len() as u32).to_le_bytes());
+    program.extend_from_slice(&0u32.to_le_bytes()); // post-pad
+    program.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    for offset in &offsets {
+        program.extend_from_slice(&offset.to_le_bytes());
+    }
+    program.extend_from_slice(&data);
+    let literal_addrs = offsets.into_iter().collect();
+    program.extend_from_slice(code);
+    (program, literal_addrs)
+}
+
 /// Assemble a program that consists of one or more SCALL instructions followed by HALT.
 pub fn assemble_syscalls(syscalls: &[u8]) -> Vec<u8> {
     let mut code = Vec::with_capacity((syscalls.len() + 1) * 4);
@@ -136,6 +165,21 @@ pub fn assemble_syscalls(syscalls: &[u8]) -> Vec<u8> {
     }
     code.extend_from_slice(&HALT);
     assemble(&code)
+}
+
+/// Assemble a SCALL/HALT program with a literal-table prefix and return the
+/// program bytes plus literal addresses inside the loaded code region.
+pub fn assemble_syscalls_with_literal_section(
+    syscalls: &[u8],
+    literals: &[&[u8]],
+) -> (Vec<u8>, Vec<u64>) {
+    let mut code = Vec::with_capacity((syscalls.len() + 1) * 4);
+    for &num in syscalls {
+        let word = encoding::wide::encode_sys(instruction::wide::system::SCALL, num);
+        code.extend_from_slice(&word.to_le_bytes());
+    }
+    code.extend_from_slice(&HALT);
+    assemble_with_literal_section(&code, literals)
 }
 
 pub fn assemble_zk(code: &[u8], max_cycles: u64) -> Vec<u8> {
@@ -152,7 +196,7 @@ pub fn payload_for_type(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
             encode_from_str::<AssetDefinitionId>(payload, "AssetDefinitionId")
         }
         PointerType::AssetId => encode_from_str::<AssetId>(payload, "AssetId"),
-        PointerType::DomainId => encode_from_str::<DomainId>(payload, "DomainId"),
+        PointerType::DomainId => encode_domain_id_payload(payload),
         PointerType::Name => encode_name_payload(payload),
         PointerType::NftId => encode_from_str::<NftId>(payload, "NftId"),
         PointerType::Json => encode_json_payload(payload),
@@ -209,4 +253,22 @@ fn encode_name_payload(payload: &[u8]) -> Vec<u8> {
         // not `Name`; pass them through as raw bytes so host-side parsing decides.
         Err(_) => payload.to_vec(),
     }
+}
+
+fn encode_domain_id_payload(payload: &[u8]) -> Vec<u8> {
+    if norito::decode_from_bytes::<DomainId>(payload).is_ok() {
+        return payload.to_vec();
+    }
+
+    let raw = core::str::from_utf8(payload).expect("payload must be utf-8");
+    // Older IVM pointer-TLV tests still pass bare domain labels. Canonicalize
+    // those onto the universal dataspace so the helper matches the checked-in
+    // TLV examples and existing fixture usage.
+    let domain = if raw.contains('.') {
+        DomainId::parse_fully_qualified(raw)
+    } else {
+        DomainId::try_new(raw, "universal")
+    }
+    .unwrap_or_else(|err| panic!("DomainId literal `{raw}` failed to parse: {err}"));
+    norito::to_bytes(&domain).expect("encode payload")
 }

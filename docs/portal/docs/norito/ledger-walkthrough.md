@@ -25,8 +25,8 @@ account IDs you plan to use. The defaults bundle already includes two accounts
 derived from the demo keys:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Confirm the values by listing the first few accounts:
@@ -45,7 +45,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts inside wonderland (replace --limit with a higher number if needed)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions that already exist
@@ -62,7 +62,7 @@ domain:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 The CLI prints the submitted transaction hash (for example,
@@ -71,7 +71,7 @@ The CLI prints the submitted transaction hash (for example,
 ## 3. Mint units into the operator account
 
 Asset quantities live under the `(asset definition, account)` pair. Mint 250
-units of `coffee#wonderland` into `$ADMIN_ACCOUNT`:
+units of `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` into `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

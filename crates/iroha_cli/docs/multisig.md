@@ -95,39 +95,23 @@ __Usage:__
 iroha ledger multisig list all
 ```
 
-__Example output:__
+__Example text output (`--output-format text`):__
 
-```json
-{
-  "FB8AEBB405236A9B4CCD26BBA4988D0B8E03957FDC52DD2A1F9F0A6953079989": {
-    "instructions": [
-      {
-        "SetKeyValue": {
-          "Account": {
-            "object": "<canonical-i105-multisig>",
-            "key": "success_marker",
-            "value": "congratulations"
-          }
-        }
-      }
-    ],
-    "proposed_at": "2025-02-06T19:59:58Z",
-    "expires_in": "1year 6months 17days 12h 26m 39s",
-    "approval_path": [
-      "2 -> [1/3] <canonical-i105-multisig>"
-    ]
-  }
-}
+```text
+multisig_account_id: <canonical-i105-multisig>
+proposal_id: FB8AEBB405236A9B4CCD26BBA4988D0B8E03957FDC52DD2A1F9F0A6953079989
+status: COLLECTING_SIGNATURES
+operation_type: SET_KEY_VALUE
+intent: null
+proposed_at_ms: 1738871998000
 ```
 
 __Explanation:__
 
-- The key `FB8A..9989` is the __instructions hash__, identifying the proposal.
-- `instructions` contains the proposed changes that will be executed once the quorum is reached.
-- `approval_path` represents the approval chain from your account to the root multi-signature account for this proposal.
-
-  The notation `2 -> [1/3]` means:
-  You are adding a weight of 2 to an existing 1 (by the proposer), out of a required 3 (quorum).
+- Each block represents one proposal visible to the authenticated signatory authority.
+- `proposal_id` is the stable proposal hash. `status`, `operation_type`, and `intent` come directly from the approvals API ordering and classification.
+- `proposed_at_ms` is the proposal creation timestamp in milliseconds since the Unix epoch.
+- JSON mode remains machine-readable and emits one approval entry per array item using the same server ordering.
 
 ## Approving a Multi-Signature Transaction
 

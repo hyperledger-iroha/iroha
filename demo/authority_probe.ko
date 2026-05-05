@@ -3,7 +3,7 @@ seiyaku AuthorityProbe {
 
   kotoage fn main() permission(Admin) {
     let caller = authority();
-    let alice = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+    let alice = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
     let key = name!("authority_probe");
 
     if (caller == alice) {

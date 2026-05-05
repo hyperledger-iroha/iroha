@@ -1182,7 +1182,7 @@ impl<'a> DilithiumVerifyCircuit<'a> {
     /// Verify the signature using the appropriate Dilithium level and compare
     /// with the expected `result` flag.
     pub fn verify(&self) -> Result<(), &'static str> {
-        use pqcrypto_dilithium::{dilithium2, dilithium3, dilithium5};
+        use pqcrypto_mldsa::{mldsa44 as dilithium2, mldsa65 as dilithium3, mldsa87 as dilithium5};
         use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
 
         let valid = match self.level {

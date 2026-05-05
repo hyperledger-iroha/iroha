@@ -241,10 +241,11 @@ fn permissions_allow_manifest<'a>(
 ) -> bool {
     permissions.into_iter().any(|permission| {
         permission.name() == MANIFEST_PERMISSION
-            && permission
-                .payload()
-                .try_into_any_norito::<CanPublishSpaceDirectoryManifest>()
-                .is_ok_and(|token| token.dataspace == dataspace)
+            && (permission.payload().as_ref().trim() == "null"
+                || permission
+                    .payload()
+                    .try_into_any_norito::<CanPublishSpaceDirectoryManifest>()
+                    .is_ok_and(|token| token.dataspace == dataspace))
     })
 }
 
@@ -265,6 +266,7 @@ mod tests {
         permission::Permissions,
         prelude::Register,
     };
+    use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
 
@@ -288,6 +290,20 @@ mod tests {
         world
             .account_permissions
             .insert(authority.clone(), permissions);
+    }
+
+    #[test]
+    fn permissions_allow_manifest_accepts_legacy_null_payload_as_wildcard() {
+        let mut permissions = Permissions::new();
+        permissions.insert(Permission::new(
+            MANIFEST_PERMISSION.parse().expect("permission ident"),
+            Json::from_string_unchecked("null".to_string()),
+        ));
+
+        assert!(permissions_allow_manifest(
+            &permissions,
+            DataSpaceId::new(10)
+        ));
     }
 
     fn sample_manifest(
@@ -397,6 +413,39 @@ mod tests {
     }
 
     #[test]
+    fn publish_manifest_allows_cross_account_direct_grant() {
+        let mut state = test_state();
+        let grantee = AccountId::new(KeyPair::random().public_key().clone());
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::cross-grant"));
+        let dataspace = DataSpaceId::new(77);
+        seed_dataspace_catalog(&mut state, dataspace);
+        grant_manifest_permission(&mut state.world, &grantee, dataspace);
+        let manifest = sample_manifest(uaid, dataspace, 7);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        PublishSpaceDirectoryManifest {
+            manifest: manifest.clone(),
+        }
+        .execute(&grantee, &mut tx)
+        .expect("cross-account direct grant should authorize publish");
+        tx.apply();
+        block.commit().unwrap();
+
+        let view = state.view();
+        let stored = view
+            .world()
+            .space_directory_manifests()
+            .get(&uaid)
+            .and_then(|set| set.get(&dataspace))
+            .expect("manifest stored after cross-account direct grant");
+        assert_eq!(stored.manifest.uaid, manifest.uaid);
+        assert_eq!(stored.manifest.dataspace, manifest.dataspace);
+    }
+
+    #[test]
     fn publishing_replaces_existing_manifest_and_rebuilds_bindings() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
@@ -405,12 +454,11 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::rotate"));
         grant_manifest_permission(&mut state.world, &authority, dataspace);
 
-        let domain_id: DomainId = "space.publish".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("space", "publish").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account =
-            NewAccount::new_in_domain(account_id.clone(), domain_id.clone()).with_uaid(Some(uaid));
+        let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -474,12 +522,11 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::activate"));
         grant_manifest_permission(&mut state.world, &authority, dataspace);
 
-        let domain_id: DomainId = "spaces.activate".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("spaces", "activate").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
-        let new_account =
-            NewAccount::new_in_domain(account_id.clone(), domain_id.clone()).with_uaid(Some(uaid));
+        let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -538,12 +585,11 @@ mod tests {
         seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
 
-        let domain_id: DomainId = "spaces.revoke".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("spaces", "revoke").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let kp = KeyPair::random();
         let account_id = AccountId::new(kp.public_key().clone());
-        let new_account =
-            NewAccount::new_in_domain(account_id, domain_id.clone()).with_uaid(Some(uaid));
+        let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -630,12 +676,11 @@ mod tests {
         seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
 
-        let domain_id: DomainId = "spaces.expire".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("spaces", "expire").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let kp = KeyPair::random();
         let account_id = AccountId::new(kp.public_key().clone());
-        let new_account =
-            NewAccount::new_in_domain(account_id, domain_id.clone()).with_uaid(Some(uaid));
+        let new_account = NewAccount::new(account_id.clone()).with_uaid(Some(uaid));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -709,8 +754,8 @@ mod tests {
     fn publish_manifest_rejects_unknown_dataspace() {
         let mut state = test_state();
         state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
-            alias: "global".to_string(),
+            id: DataSpaceId::UNIVERSAL,
+            alias: "universal".to_string(),
             description: None,
             fault_tolerance: 1,
         }])
@@ -742,8 +787,8 @@ mod tests {
     fn revoke_manifest_rejects_unknown_dataspace() {
         let mut state = test_state();
         state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
-            alias: "global".to_string(),
+            id: DataSpaceId::UNIVERSAL,
+            alias: "universal".to_string(),
             description: None,
             fault_tolerance: 1,
         }])
@@ -779,8 +824,8 @@ mod tests {
     fn expire_manifest_rejects_unknown_dataspace() {
         let mut state = test_state();
         state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
-            alias: "global".to_string(),
+            id: DataSpaceId::UNIVERSAL,
+            alias: "universal".to_string(),
             description: None,
             fault_tolerance: 1,
         }])
@@ -808,6 +853,34 @@ mod tests {
         assert!(
             message.contains("unknown dataspace id"),
             "error should mention unknown dataspace: {message}"
+        );
+    }
+
+    #[test]
+    fn publish_manifest_rejects_after_direct_permission_revoke() {
+        let mut state = test_state();
+        let grantee = AccountId::new(KeyPair::random().public_key().clone());
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::revoked-grant"));
+        let dataspace = DataSpaceId::new(78);
+        seed_dataspace_catalog(&mut state, dataspace);
+        grant_manifest_permission(&mut state.world, &grantee, dataspace);
+        state
+            .world
+            .account_permissions
+            .insert(grantee.clone(), Permissions::new());
+        let manifest = sample_manifest(uaid, dataspace, 8);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let err = PublishSpaceDirectoryManifest { manifest }
+            .execute(&grantee, &mut tx)
+            .expect_err("revoked direct grant should reject publish");
+        let message = err.to_string();
+        assert!(
+            message.contains("CanPublishSpaceDirectoryManifest"),
+            "error references missing permission after revoke: {message}"
         );
     }
 }

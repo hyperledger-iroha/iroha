@@ -19,7 +19,7 @@ NFT est un outil de recherche en ligne gratuit : il s'agit d'un modèle de réf
 
 ## لیجر واک تھرو
 
-- Le logiciel NFT (`n0#wonderland`) est également disponible en ligne. والے مالک/موصول کنندہ اکاؤنٹس (`i105...`, `i105...`) par ھی موجود ہوں۔
+- Le logiciel NFT (`n0#wonderland`) est également disponible en ligne. والے مالک/موصول کنندہ اکاؤنٹس (`<i105-account-id>`, `<i105-account-id>`) par ھی موجود ہوں۔
 - `nft_issue_and_transfer` L'application NFT est basée sur Alice et Bob et sur l'application NFT. کرنے والا میٹا ڈیٹا فلیگ منسلک ہو۔
 - `iroha_cli ledger nfts list --account <id>` pour un SDK permettant de créer un lien NFT avec un logiciel de stockage ہو، پھر تصدیق کریں کہ برن انسٹرکشن چلنے کے بعد اثاثہ حذف ہو جاتا ہے۔
 
@@ -35,11 +35,11 @@ NFT est un outil de recherche en ligne gratuit : il s'agit d'un modèle de réf
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("i105...");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("i105...");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

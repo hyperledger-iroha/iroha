@@ -10,12 +10,23 @@ use iroha_core::{
 };
 use iroha_data_model::{
     Registrable,
+    domain::DomainId,
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
 
 fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
+}
+
+fn proposal_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &iroha_test_samples::ALICE_ID,
+        0,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+    )
+    .expect("proposal contract address")
 }
 
 #[test]
@@ -36,12 +47,11 @@ fn auto_close_emits_approved() {
     // Minimal state
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let alice_account: Account =
-        Account::new(ALICE_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
-    let bob_account: Account =
-        Account::new(BOB_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
+    let alice_account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let bob_account: Account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [alice_account, bob_account], []);
     let mut state = State::new_for_testing(world, kura, query_handle);
 
@@ -69,7 +79,7 @@ fn auto_close_emits_approved() {
         let mut sblock1 = state.block(block1);
         let mut stx1 = sblock1.transaction();
         let p1: Permission = CanProposeContractDeployment {
-            contract_id: "demo.contract".into(),
+            contract_address: proposal_contract_address(),
         }
         .into();
         Grant::account_permission(p1, ALICE_ID.clone())
@@ -86,8 +96,7 @@ fn auto_close_emits_approved() {
             .execute(&BOB_ID, &mut stx1)
             .expect("grant ballot B");
         ProposeDeployContract {
-            namespace: "apps".into(),
-            contract_id: "demo.contract".into(),
+            contract_address: proposal_contract_address(),
             code_hash_hex: "aa".repeat(32),
             abi_hash_hex: canonical_abi_hex(),
             abi_version: "1".into(),

@@ -1,11 +1,11 @@
 {
   "billing": {
     "allow_hard_cap": true,
-    "asset": "xor#wonderland",
+    "asset": "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
     "catalog": "../gateway_m0/meter_catalog.json",
     "guardrails": "../gateway_m0/billing_guardrails.json",
-    "payer": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-    "treasury": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+    "payer": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+    "treasury": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
     "usage": "../gateway_m0/billing_usage_sample.json"
   },
   "image_tag": "soranet-gateway-m1-alpha",

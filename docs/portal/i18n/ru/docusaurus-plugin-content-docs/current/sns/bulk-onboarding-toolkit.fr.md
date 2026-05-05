@@ -38,7 +38,7 @@ Le parseur exige la ligne d'en-tete suivante (l'ordre est гибкий):
 | `suffix_id` | Да | Идентификатор суффикса (десятичный или шестнадцатеричный `0x`). |
 | `owner` | Да | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Да | Энтьер `1..=255`. |
-| `payment_asset_id` | Да | Акт урегулирования (пример `xor#sora`). |
+| `payment_asset_id` | Да | Акт урегулирования (пример `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Да | Entiers не является представителем объединения местных жителей в действии. |
 | `settlement_tx` | Да | Значение JSON или цепочка слов, определяющая платежную транзакцию или хэш. |
 | `payment_payer` | Да | AccountId для авторизации платежа. |
@@ -77,18 +77,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -112,7 +112,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -132,9 +132,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Помощник по запросу `POST /v1/sns/registrations` по запросу и по прибытии в премьер-министр
+- Помощник по запросу `POST /v1/sns/names` по запросу и по прибытии в премьер-министр
   ошибка HTTP. Ответы присылаются в журнале регистрации NDJSON.
-- `--poll-status` повторный опрос `/v1/sns/registrations/{selector}` после перерыва
+- `--poll-status` повторный опрос `/v1/sns/names/{namespace}/{literal}` после перерыва
   soumission (jusqu'a `--poll-attempts`, по умолчанию 5) для подтверждения того, что
   регистрация est видна. Фурнисс `--suffix-map` (JSON de `suffix_id`
   vers des valeurs «суффикс») для того, чтобы получить мусор
@@ -225,7 +225,7 @@ Le fichier de meteriques Genere par `sns_bulk_release.sh` раскрывает �
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -249,7 +249,7 @@ panneaux pour les comptes par suffixe, le Volume de Paiement et les Ratios de
   ссылки на файлы, которые разрешают соотнесение с размещением CSV.
   Необъективные метаданные приводят к ошибке проверки.
 - **Контроллеры:** ячейки имеют соответствующий `--default-controllers`. Фурниссе
-  явные списки (пример `i105...;i105...`), когда вы делегируете их
+  явные списки (пример `<i105-account-id>;<i105-account-id>`), когда вы делегируете их
   актеры не являются владельцами.
 
 Сигнальные сигналы с числом строк контекста (например,

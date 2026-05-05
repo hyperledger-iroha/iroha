@@ -2,16 +2,16 @@
 
 mod mldsa_tests {
     use iroha_crypto::{Algorithm, Error, KeyPair, PrivateKey, PublicKey, Signature};
-    use pqcrypto_dilithium::dilithium3 as dilithium;
+    use pqcrypto_mldsa::mldsa65;
     use pqcrypto_traits::sign::{PublicKey as _, SecretKey as _};
 
-    fn seeded_pair(label: &[u8]) -> (dilithium::PublicKey, dilithium::SecretKey) {
+    fn seeded_pair(label: &[u8]) -> (mldsa65::PublicKey, mldsa65::SecretKey) {
         let kp = KeyPair::from_seed(label.to_vec(), Algorithm::MlDsa);
         let pk_bytes = kp.public_key().to_bytes().1;
         let sk_bytes = kp.private_key().to_bytes().1;
-        let pk = dilithium::PublicKey::from_bytes(pk_bytes)
+        let pk = mldsa65::PublicKey::from_bytes(pk_bytes)
             .expect("seeded ML-DSA public key bytes should decode");
-        let sk = dilithium::SecretKey::from_bytes(&sk_bytes)
+        let sk = mldsa65::SecretKey::from_bytes(&sk_bytes)
             .expect("seeded ML-DSA secret key bytes should decode");
         (pk, sk)
     }
@@ -61,6 +61,18 @@ mod mldsa_tests {
     }
 
     #[test]
+    fn keypair_from_seed_changes_with_seed() {
+        let first = KeyPair::from_seed(b"ml-dsa-seed-a".to_vec(), Algorithm::MlDsa);
+        let second = KeyPair::from_seed(b"ml-dsa-seed-b".to_vec(), Algorithm::MlDsa);
+
+        assert_ne!(first.public_key(), second.public_key());
+
+        let (_, first_secret_bytes) = first.private_key().to_bytes();
+        let (_, second_secret_bytes) = second.private_key().to_bytes();
+        assert_ne!(first_secret_bytes, second_secret_bytes);
+    }
+
+    #[test]
     fn keypair_from_seed_signs_and_verifies() {
         let kp = KeyPair::from_seed(b"ml-dsa-sign".to_vec(), Algorithm::MlDsa);
         let message = b"ml-dsa signing smoke test";
@@ -71,6 +83,117 @@ mod mldsa_tests {
             signature.verify(kp.public_key(), message).is_ok(),
             "ML-DSA signature generated from seeded key should verify"
         );
+    }
+
+    #[test]
+    fn signature_rejects_modified_message() {
+        let kp = KeyPair::from_seed(b"ml-dsa-modified-message".to_vec(), Algorithm::MlDsa);
+        let message = b"ml-dsa original message";
+        let signature = Signature::new(kp.private_key(), message);
+
+        let result = signature.verify(kp.public_key(), b"ml-dsa modified message");
+
+        assert!(matches!(result, Err(Error::BadSignature)));
+    }
+
+    #[test]
+    fn signature_rejects_different_mldsa_public_key() {
+        let signer = KeyPair::from_seed(b"ml-dsa-signer".to_vec(), Algorithm::MlDsa);
+        let verifier = KeyPair::from_seed(b"ml-dsa-verifier".to_vec(), Algorithm::MlDsa);
+        let message = b"ml-dsa public key mismatch";
+        let signature = Signature::new(signer.private_key(), message);
+
+        let result = signature.verify(verifier.public_key(), message);
+
+        assert!(matches!(result, Err(Error::BadSignature)));
+    }
+
+    #[test]
+    fn signature_rejects_invalid_mldsa_signature_length() {
+        let kp = KeyPair::from_seed(b"ml-dsa-short-signature".to_vec(), Algorithm::MlDsa);
+        let signature = Signature::from_bytes(&[0u8; 8]);
+
+        let result = signature.verify(kp.public_key(), b"message");
+
+        assert!(matches!(result, Err(Error::BadSignature)));
+    }
+
+    #[test]
+    fn mldsa_signature_payload_bytes_roundtrip() {
+        let kp = KeyPair::from_seed(
+            b"ml-dsa-signature-payload-roundtrip".to_vec(),
+            Algorithm::MlDsa,
+        );
+        let message = b"ml-dsa signature payload roundtrip";
+        let signature = Signature::new(kp.private_key(), message);
+
+        let decoded = Signature::from_bytes(signature.payload());
+
+        assert_eq!(decoded.payload(), signature.payload());
+        assert!(decoded.verify(kp.public_key(), message).is_ok());
+    }
+
+    #[test]
+    fn mldsa_key_parsers_reject_invalid_lengths() {
+        let public = PublicKey::from_bytes(Algorithm::MlDsa, &[0u8; 8]);
+        let private = PrivateKey::from_bytes(Algorithm::MlDsa, &[0u8; 8]);
+
+        assert!(public.is_err());
+        assert!(private.is_err());
+    }
+
+    #[test]
+    fn mldsa_prefixed_public_key_roundtrips() {
+        let kp = KeyPair::from_seed(b"ml-dsa-prefixed-public-key".to_vec(), Algorithm::MlDsa);
+        let encoded = kp.public_key().to_prefixed_string();
+
+        let decoded: PublicKey = encoded.parse().expect("prefixed ML-DSA public key");
+
+        assert_eq!(decoded, kp.public_key().clone());
+        assert!(encoded.starts_with("ml-dsa:"));
+    }
+
+    #[test]
+    fn mldsa_public_key_bytes_roundtrip() {
+        let kp = KeyPair::from_seed(b"ml-dsa-public-key-bytes".to_vec(), Algorithm::MlDsa);
+        let (algorithm, payload) = kp.public_key().to_bytes();
+
+        let decoded = PublicKey::from_bytes(algorithm, payload).expect("valid ML-DSA public key");
+
+        assert_eq!(decoded, kp.public_key().clone());
+    }
+
+    #[test]
+    fn malformed_mldsa_prefixed_public_key_is_rejected() {
+        let parsed = "ml-dsa:not-hex".parse::<PublicKey>();
+
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn mldsa_private_key_bytes_roundtrip() {
+        let kp = KeyPair::from_seed(b"ml-dsa-private-key-roundtrip".to_vec(), Algorithm::MlDsa);
+        let (algorithm, secret_bytes) = kp.private_key().to_bytes();
+
+        let decoded =
+            PrivateKey::from_bytes(algorithm, &secret_bytes).expect("valid ML-DSA private key");
+
+        assert_eq!(decoded, kp.private_key().clone());
+    }
+
+    #[test]
+    fn mldsa_public_and_private_key_hex_roundtrip() {
+        let kp = KeyPair::from_seed(b"ml-dsa-key-hex-roundtrip".to_vec(), Algorithm::MlDsa);
+        let (public_algorithm, public_bytes) = kp.public_key().to_bytes();
+        let (private_algorithm, private_bytes) = kp.private_key().to_bytes();
+
+        let public =
+            PublicKey::from_hex(public_algorithm, hex::encode(public_bytes)).expect("public hex");
+        let private = PrivateKey::from_hex(private_algorithm, hex::encode(&private_bytes))
+            .expect("private hex");
+
+        assert_eq!(public, kp.public_key().clone());
+        assert_eq!(private, kp.private_key().clone());
     }
 
     #[test]

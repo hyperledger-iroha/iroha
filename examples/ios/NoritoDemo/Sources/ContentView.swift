@@ -94,7 +94,6 @@ final class DemoConnectViewModel: ObservableObject {
 
   struct AddressPreview: Equatable {
     let i105: String
-    let i105Default: String
     let i105Warning: String
     let domain: String
     let implicitDefault: Bool
@@ -110,7 +109,6 @@ final class DemoConnectViewModel: ObservableObject {
       let formats = try address.displayFormats()
       return AddressPreview(
         i105: formats.i105,
-        i105Default: formats.i105Default,
         i105Warning: formats.i105Warning,
         domain: sampleDomain,
         implicitDefault: sampleDomain == AccountAddress.defaultDomainName,
@@ -119,7 +117,6 @@ final class DemoConnectViewModel: ObservableObject {
     } catch {
       return AddressPreview(
         i105: "i105-unavailable",
-        i105Default: "sora-unavailable",
         i105Warning: "Address preview unavailable: \(error.localizedDescription)",
         domain: sampleDomain,
         implicitDefault: sampleDomain == AccountAddress.defaultDomainName,
@@ -713,18 +710,11 @@ struct AddressPreviewCard: View {
             .font(.system(.body, design: .monospaced))
             .textSelection(.enabled)
         }
-      }
-
-      VStack(alignment: .leading, spacing: 4) {
-        Text("i105-default Sora-only").font(.subheadline)
-        ScrollView(.horizontal) {
-          Text(address.i105Default)
-            .font(.system(.body, design: .monospaced))
-            .textSelection(.enabled)
+        if !address.i105Warning.isEmpty {
+          Text(address.i105Warning)
+            .font(.caption)
+            .foregroundColor(.orange)
         }
-        Text(address.i105Warning)
-          .font(.caption)
-          .foregroundColor(.orange)
       }
 
       HStack(spacing: 12) {
@@ -735,19 +725,6 @@ struct AddressPreviewCard: View {
         .accessibilityLabel("Copy I105 address")
         .accessibilityHint("Copies the canonical I105 payload to the clipboard and records telemetry.")
         .accessibilityIdentifier("address-copy-i105")
-
-        Button("Copy i105-default") {
-          copy(
-            value: address.i105Default,
-            label: "i105_default",
-            warning: address.i105Warning,
-            mode: .i105Default
-          )
-        }
-        .help("i105-default addresses are Sora-only; remind recipients before sharing.")
-        .accessibilityLabel("Copy i105-default Sora-only address")
-        .accessibilityHint("Copies the i105-default Sora-only literal and announces the inline warning.")
-        .accessibilityIdentifier("address-copy-i105-default")
       }
 
       QRCodeView(text: address.i105)
@@ -888,7 +865,6 @@ struct ContentView: View {
 
 enum AddressCopyMode: String {
   case i105 = "i105"
-  case i105Default = "i105_default"
 }
 
 final class AddressCopyTelemetry {

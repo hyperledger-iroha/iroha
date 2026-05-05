@@ -91,7 +91,7 @@ tooling) قبول کرنے سے پہلے ایک ہی deterministic checks لاگ
    compare کریں قبل اس کے کہ key decompress/expand کی جائے۔ جو ویلیو length
    چیک میں fail ہو اسے reject کریں تاکہ خراب inputs جلدی نکل جائیں۔
 3. **Algorithm-specific decoding چلائیں:** `iroha_crypto` کے وہی canonical decoders
-   استعمال کریں (`ed25519_dalek`, `pqcrypto_dilithium`, `w3f_bls`/`blstrs`, `sm2`,
+   استعمال کریں (`ed25519_dalek`, `pqcrypto_mldsa`, `w3f_bls`/`blstrs`, `sm2`,
    TC26 helpers وغیرہ) تاکہ تمام implementations میں subgroup/point validation
    کا یکساں رویہ رہے۔
 4. **Signature sizes verify کریں:** admission اور SDKs کو نیچے دیے گئے signature
@@ -101,7 +101,7 @@ tooling) قبول کرنے سے پہلے ایک ہی deterministic checks لاگ
 | الگورتھم | `curve_id` | پبلک کی بائٹس | سائنچر بائٹس | اہم چیکس |
 |----------|------------|---------------|--------------|----------|
 | `ed25519` | `0x01` | 32 | 64 | غیر معیاری compressed points reject کریں، cofactor clearing نافذ کریں (small-order points نہ ہوں)، اور signatures validate کرتے وقت `s < L` یقینی بنائیں۔ |
-| `ml-dsa` (Dilithium3) | `0x02` | 1952 | 3309 | 1952 bytes کے علاوہ payloads کو decode سے پہلے reject کریں؛ Dilithium3 public key parse کریں اور pqcrypto-dilithium کے ساتھ canonical lengths پر signatures verify کریں۔ |
+| `ml-dsa` (Dilithium3) | `0x02` | 1952 | 3309 | 1952 bytes کے علاوہ payloads کو decode سے پہلے reject کریں؛ Dilithium3 public key parse کریں اور pqcrypto-mldsa کے ساتھ canonical lengths پر signatures verify کریں۔ |
 | `bls_normal` | `0x03` | 48 | 96 | صرف canonical compressed G1 public keys اور compressed G2 signatures قبول کریں؛ identity points اور non-canonical encodings reject کریں۔ |
 | `secp256k1` | `0x04` | 33 | 64 | صرف SEC1-compressed points قبول کریں؛ decompress کر کے non-canonical/invalid points reject کریں، اور signatures کو canonical 64‑byte `r∥s` encoding سے verify کریں (low‑`s` normalization signer پر ہوتی ہے)۔ |
 | `bls_small` | `0x05` | 96 | 48 | صرف canonical compressed G2 public keys اور compressed G1 signatures قبول کریں؛ identity points اور non-canonical encodings reject کریں۔ |

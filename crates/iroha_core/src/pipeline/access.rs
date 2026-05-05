@@ -19,34 +19,37 @@ use iroha_data_model::{
         BurnBox, GrantBox, InstructionBox, Log, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
         SetKeyValueBox, TransferBox, UnregisterBox, zk,
     },
+    metadata::Metadata,
     nexus::LaneId,
     nft::NftId,
     permission,
     prelude::*,
     role::RoleId,
+    rwa::RwaId,
     smart_contract::manifest::{ContractManifest, EntrypointDescriptor, MANIFEST_METADATA_KEY},
     state::{
         AccountMetadataKey, AccountRoleKey, AssetDefinitionMetadataKey, AssetMetadataKey,
-        CanonicalStateKey, DomainMetadataKey, NftMetadataKey, StateAccessSetAdvisory,
-        TriggerMetadataKey, TxQueueKey,
+        CanonicalStateKey, DomainMetadataKey, NftMetadataKey, RwaMetadataKey,
+        StateAccessSetAdvisory, TriggerMetadataKey, TxQueueKey,
     },
-    transaction::SignedTransaction,
+    transaction::{SignedTransaction, executable::ContractInvocation},
 };
+use iroha_primitives::json::Json;
 use ivm::host::IVMHost;
 use mv::storage::StorageReadOnly; // bring trait into scope for .get()
 use parking_lot::RwLock;
 
 use crate::{
     executor::parse_gas_limit,
-    smartcontracts::ivm::host::QueryStateSource,
     smartcontracts::triggers::set::{ExecutableRef, SetReadOnly},
+    smartcontracts::{code, ivm::host::QueryStateSource},
     state::{StateReadOnly, WorldReadOnly},
 };
 
 /// Canonical string key used for conflict detection (Norito-like ordering).
 ///
 /// Keys are generated deterministically from data model identifiers such as
-/// `AccountId`, `DomainId`, `AssetDefinitionId`, `AssetId`, and `NftId`.
+/// `AccountId`, `DomainId`, `AssetDefinitionId`, `AssetId`, `NftId`, and `RwaId`.
 pub type AccessKey = String;
 
 /// Access set with separate read and write collections.
@@ -157,11 +160,124 @@ fn manifest_from_metadata(tx: &SignedTransaction) -> Option<ContractManifest> {
         .and_then(|json| json.clone().try_into_any_norito::<ContractManifest>().ok())
 }
 
+#[derive(Clone, Debug)]
+struct ContractCallExecutionContext {
+    entrypoint: Option<String>,
+    entrypoint_pc: Option<u64>,
+    args: Json,
+}
+
+fn requested_contract_entrypoint(metadata: &Metadata) -> Option<String> {
+    metadata
+        .get("contract_entrypoint")
+        .and_then(|raw| raw.clone().try_into_any_norito::<String>().ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn parse_contract_call_execution_context(
+    metadata: &Metadata,
+    bytecode: &[u8],
+) -> Result<Option<ContractCallExecutionContext>, String> {
+    let entrypoint = requested_contract_entrypoint(metadata);
+    let payload = metadata.get("contract_payload").cloned();
+    if entrypoint.is_none() && payload.is_none() {
+        return Ok(None);
+    }
+
+    let entrypoint_pc = if let Some(selector) = entrypoint.as_deref() {
+        let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+            format!("invalid contract artifact for contract call dispatch: {err}")
+        })?;
+        let prefix_len = parsed.prefix_len() as u64;
+        let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+            "contract call entrypoint metadata requires a self-describing contract artifact"
+                .to_owned()
+        })?;
+        let descriptor = contract_interface
+            .entrypoints
+            .iter()
+            .find(|candidate| candidate.name == selector)
+            .ok_or_else(|| format!("unknown contract entrypoint `{selector}`"))?;
+        if !matches!(
+            descriptor.kind,
+            iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+        ) {
+            return Err(format!("contract entrypoint `{selector}` is not public"));
+        }
+        Some(prefix_len + descriptor.entry_pc)
+    } else {
+        None
+    };
+
+    Ok(Some(ContractCallExecutionContext {
+        entrypoint,
+        entrypoint_pc,
+        args: payload.unwrap_or_default(),
+    }))
+}
+
+fn parse_contract_invocation_execution_context(
+    invocation: &ContractInvocation,
+    bytecode: &[u8],
+) -> Result<ContractCallExecutionContext, String> {
+    let selector = invocation.entrypoint.trim();
+    if selector.is_empty() {
+        return Err("contract entrypoint must not be empty".to_owned());
+    }
+
+    let parsed = ivm::ProgramMetadata::parse(bytecode)
+        .map_err(|err| format!("invalid contract artifact for contract call dispatch: {err}"))?;
+    let prefix_len = parsed.prefix_len() as u64;
+    let contract_interface = parsed
+        .contract_interface
+        .as_ref()
+        .ok_or_else(|| "contract call requires a self-describing contract artifact".to_owned())?;
+    let descriptor = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| format!("unknown contract entrypoint `{selector}`"))?;
+    if !matches!(
+        descriptor.kind,
+        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+    ) {
+        return Err(format!("contract entrypoint `{selector}` is not public"));
+    }
+
+    Ok(ContractCallExecutionContext {
+        entrypoint: Some(selector.to_owned()),
+        entrypoint_pc: Some(prefix_len + descriptor.entry_pc),
+        args: invocation.payload.clone().unwrap_or_default(),
+    })
+}
+
+fn apply_contract_call_execution_context(
+    vm: &mut ivm::IVM,
+    context: Option<&ContractCallExecutionContext>,
+) -> Result<(), String> {
+    if let Some(context) = context
+        && let Some(entrypoint_pc) = context.entrypoint_pc
+    {
+        // Match runtime contract-call semantics during access derivation so
+        // non-`main` entrypoints can return cleanly to the VM end-of-stream.
+        vm.set_register(1, vm.memory.code_len());
+        vm.set_program_counter(entrypoint_pc).map_err(|err| {
+            format!(
+                "contract entrypoint `{}` resolved to invalid pc: {err}",
+                context.entrypoint.as_deref().unwrap_or("main")
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn manifest_access_set(
     manifest: &ContractManifest,
     code_hash: IrohaHash,
     bytecode: &[u8],
     cache_enabled: bool,
+    requested_entrypoint: Option<&str>,
 ) -> Option<(AccessSet, AccessSetSource)> {
     let manifest_hash = cache_enabled.then(|| manifest_signature_hash(manifest));
     if let Some(hints) = manifest.access_set_hints.as_ref() {
@@ -182,7 +298,7 @@ fn manifest_access_set(
         }
     }
     if let Some(entrypoints) = manifest.entrypoints.as_deref()
-        && let Some(entrypoint) = select_entrypoint(entrypoints)
+        && let Some(entrypoint) = select_entrypoint(entrypoints, requested_entrypoint)
     {
         let key = AccessSetCacheKey {
             code_hash,
@@ -243,12 +359,61 @@ where
             derive_from_isi_batch_with_state(batch.as_ref(), state_ro),
             None,
         ),
+        Executable::ContractCall(call) => {
+            if let Some(view) = state_ro
+                && let Some(record) =
+                    code::fetch_bound_contract_record(view, &call.contract_address)
+            {
+                if let Some((set, source)) = manifest_access_set(
+                    &record.manifest,
+                    record.code_hash,
+                    record.code_bytes.as_ref(),
+                    view.pipeline().access_set_cache_enabled,
+                    Some(call.entrypoint.as_str()),
+                ) {
+                    return (set, Some(source));
+                }
+
+                if matches!(ivm_strategy, IvmStrategy::DynamicThenConservative) {
+                    let set = tx_gas_limit(tx)
+                        .and_then(|gas_limit| {
+                            let context = parse_contract_invocation_execution_context(
+                                call,
+                                record.code_bytes.as_ref(),
+                            )?;
+                            derive_from_ivm_dynamic_with_context(
+                                record.code_bytes.as_ref(),
+                                tx.authority(),
+                                Some(context),
+                                view,
+                                gas_limit,
+                            )
+                        })
+                        .unwrap_or_else(|_| AccessSet::global());
+                    let source = if set.read_keys.is_empty()
+                        && set.write_keys.len() == 1
+                        && set.write_keys.contains("*")
+                    {
+                        AccessSetSource::ConservativeFallback
+                    } else {
+                        AccessSetSource::PrepassMerge
+                    };
+                    return (set, Some(source));
+                }
+            }
+
+            (
+                AccessSet::global(),
+                Some(AccessSetSource::ConservativeFallback),
+            )
+        }
         Executable::IvmProved(proved) => (
             derive_from_isi_batch_with_state(proved.overlay.as_ref(), state_ro),
             None,
         ),
         Executable::Ivm(bytecode) => {
             let bytecode_ref = bytecode.as_ref();
+            let requested_entrypoint = requested_contract_entrypoint(tx.metadata());
             if let Ok(parsed) = ivm::ProgramMetadata::parse(bytecode_ref) {
                 let code_hash = IrohaHash::new(&bytecode_ref[parsed.header_len..]);
                 // 1) Try static hints from on-chain manifest (by code_hash)
@@ -259,6 +424,7 @@ where
                             code_hash,
                             bytecode_ref,
                             view.pipeline().access_set_cache_enabled,
+                            requested_entrypoint.as_deref(),
                         ) {
                             return (set, Some(source));
                         }
@@ -267,9 +433,13 @@ where
                 // 1b) Fallback to manifest provided in transaction metadata.
                 if let Some(manifest) = manifest_from_metadata(tx) {
                     if manifest.code_hash == Some(code_hash) {
-                        if let Some((set, source)) =
-                            manifest_access_set(&manifest, code_hash, bytecode_ref, false)
-                        {
+                        if let Some((set, source)) = manifest_access_set(
+                            &manifest,
+                            code_hash,
+                            bytecode_ref,
+                            false,
+                            requested_entrypoint.as_deref(),
+                        ) {
                             return (set, Some(source));
                         }
                     }
@@ -280,7 +450,13 @@ where
                 (IvmStrategy::DynamicThenConservative, Some(view)) => {
                     let set = tx_gas_limit(tx)
                         .and_then(|gas_limit| {
-                            derive_from_ivm_dynamic(bytecode_ref, tx.authority(), view, gas_limit)
+                            derive_from_ivm_dynamic(
+                                bytecode_ref,
+                                tx.authority(),
+                                tx.metadata(),
+                                view,
+                                gas_limit,
+                            )
                         })
                         .unwrap_or_else(|_| AccessSet::global());
                     let source = if set.read_keys.is_empty()
@@ -330,9 +506,15 @@ fn entrypoint_access_set_if_safe(
     access_set_from_hint_keys(&entrypoint.read_keys, &entrypoint.write_keys)
 }
 
-fn select_entrypoint(entrypoints: &[EntrypointDescriptor]) -> Option<&EntrypointDescriptor> {
+fn select_entrypoint<'a>(
+    entrypoints: &'a [EntrypointDescriptor],
+    requested_entrypoint: Option<&str>,
+) -> Option<&'a EntrypointDescriptor> {
     if entrypoints.is_empty() {
         return None;
+    }
+    if let Some(requested) = requested_entrypoint {
+        return entrypoints.iter().find(|entry| entry.name == requested);
     }
     if let Some(entrypoint) = entrypoints.iter().find(|entry| entry.name == "main") {
         return Some(entrypoint);
@@ -395,7 +577,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
         }
         if let Some(rest) = raw.strip_prefix("domain.detail:") {
             let (id, key) = rest.split_once(':')?;
-            let id: DomainId = id.parse().ok()?;
+            let id = DomainId::parse_fully_qualified(id).ok()?;
             let key: Name = key.parse().ok()?;
             canonical.push(CanonicalStateKey::DomainMetadata(DomainMetadataKey {
                 id,
@@ -405,7 +587,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
         }
         if let Some(rest) = raw.strip_prefix("asset_def.detail:") {
             let (id, key) = rest.split_once(':')?;
-            let id: AssetDefinitionId = id.parse().ok()?;
+            let id = AssetDefinitionId::parse_address_literal(id).ok()?;
             let key: Name = key.parse().ok()?;
             canonical.push(CanonicalStateKey::AssetDefinitionMetadata(
                 AssetDefinitionMetadataKey { id, key },
@@ -421,7 +603,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
                 let Ok(key) = key_raw.parse::<Name>() else {
                     continue;
                 };
-                match AssetId::parse_encoded(id_raw) {
+                match AssetId::parse_literal(id_raw) {
                     Ok(id) => {
                         parsed = Some(AssetMetadataKey { id, key });
                         break;
@@ -442,6 +624,13 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             let id: NftId = id.parse().ok()?;
             let key: Name = key.parse().ok()?;
             canonical.push(CanonicalStateKey::NftMetadata(NftMetadataKey { id, key }));
+            return Some(());
+        }
+        if let Some(rest) = raw.strip_prefix("rwa.detail:") {
+            let (id, key) = rest.split_once(':')?;
+            let id: RwaId = id.parse().ok()?;
+            let key: Name = key.parse().ok()?;
+            canonical.push(CanonicalStateKey::RwaMetadata(RwaMetadataKey { id, key }));
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("trigger.detail:") {
@@ -491,24 +680,20 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("domain:") {
-            let id: DomainId = rest.parse().ok()?;
+            let id = DomainId::parse_fully_qualified(rest).ok()?;
             canonical.push(CanonicalStateKey::Domain(id));
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset_def:") {
-            if let Ok(id) = rest.parse::<AssetDefinitionId>() {
+            if let Ok(id) = AssetDefinitionId::parse_address_literal(rest) {
                 canonical.push(CanonicalStateKey::AssetDefinition(id));
-            } else if !rest.is_empty() {
-                // Compatibility: accept historical alias-shaped asset definition hints
-                // (e.g. `asset_def:name#domain`) and preserve them verbatim.
-                state_keys.insert(raw.to_owned());
             } else {
                 return None;
             }
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("asset:") {
-            match AssetId::parse_encoded(rest) {
+            match AssetId::parse_literal(rest) {
                 Ok(id) => canonical.push(CanonicalStateKey::Asset(id)),
                 Err(_) => return None,
             }
@@ -517,6 +702,11 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
         if let Some(rest) = raw.strip_prefix("nft:") {
             let id: NftId = rest.parse().ok()?;
             canonical.push(CanonicalStateKey::Nft(id));
+            return Some(());
+        }
+        if let Some(rest) = raw.strip_prefix("rwa:") {
+            let id: RwaId = rest.parse().ok()?;
+            canonical.push(CanonicalStateKey::Rwa(id));
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("trigger:") {
@@ -553,6 +743,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             CanonicalStateKey::Asset(id) => format!("asset:{id}"),
             CanonicalStateKey::AssetDefinition(id) => format!("asset_def:{id}"),
             CanonicalStateKey::Nft(id) => format!("nft:{id}"),
+            CanonicalStateKey::Rwa(id) => format!("rwa:{id}"),
             CanonicalStateKey::Trigger(id) => format!("trigger:{id}"),
             CanonicalStateKey::Role(id) => format!("role:{id}"),
             CanonicalStateKey::AccountPermissions(id) => format!("perm.account:{id}"),
@@ -571,6 +762,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             }
             CanonicalStateKey::AssetMetadata(key) => format!("asset.detail:{}:{}", key.id, key.key),
             CanonicalStateKey::NftMetadata(key) => format!("nft.detail:{}:{}", key.id, key.key),
+            CanonicalStateKey::RwaMetadata(key) => format!("rwa.detail:{}:{}", key.id, key.key),
             CanonicalStateKey::TriggerMetadata(key) => {
                 format!("trigger.detail:{}:{}", key.id, key.key)
             }
@@ -653,6 +845,9 @@ fn is_entrypoint_hint_safe_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_NAME_DECODE
             | ivm::syscalls::SYSCALL_JSON_ENCODE
             | ivm::syscalls::SYSCALL_JSON_DECODE
+            | ivm::syscalls::SYSCALL_JSON_OBJECT
+            | ivm::syscalls::SYSCALL_JSON_SET_I64
+            | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
             | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
             | ivm::syscalls::SYSCALL_SCHEMA_DECODE
             | ivm::syscalls::SYSCALL_SCHEMA_INFO
@@ -664,6 +859,8 @@ fn is_entrypoint_hint_safe_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_STATE_SET
             | ivm::syscalls::SYSCALL_STATE_DEL
             | ivm::syscalls::SYSCALL_GET_AUTHORITY
+            | ivm::syscalls::SYSCALL_CALL_CONTRACT
+            | ivm::syscalls::SYSCALL_CURRENT_TIME_MS
             | ivm::syscalls::SYSCALL_SM3_HASH
             | ivm::syscalls::SYSCALL_SM2_VERIFY
             | ivm::syscalls::SYSCALL_SM4_GCM_SEAL
@@ -706,6 +903,9 @@ fn is_state_only_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_NAME_DECODE
             | ivm::syscalls::SYSCALL_JSON_ENCODE
             | ivm::syscalls::SYSCALL_JSON_DECODE
+            | ivm::syscalls::SYSCALL_JSON_OBJECT
+            | ivm::syscalls::SYSCALL_JSON_SET_I64
+            | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
             | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
             | ivm::syscalls::SYSCALL_SCHEMA_DECODE
             | ivm::syscalls::SYSCALL_SCHEMA_INFO
@@ -717,6 +917,8 @@ fn is_state_only_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_STATE_SET
             | ivm::syscalls::SYSCALL_STATE_DEL
             | ivm::syscalls::SYSCALL_GET_AUTHORITY
+            | ivm::syscalls::SYSCALL_CALL_CONTRACT
+            | ivm::syscalls::SYSCALL_CURRENT_TIME_MS
             | ivm::syscalls::SYSCALL_SM3_HASH
             | ivm::syscalls::SYSCALL_SM2_VERIFY
             | ivm::syscalls::SYSCALL_SM4_GCM_SEAL
@@ -778,6 +980,12 @@ where
     if any.downcast_ref::<Log>().is_some() {
         return set;
     }
+    if any
+        .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
+        .is_some()
+    {
+        return set;
+    }
 
     // Transfers
     if let Some(tb) = any.downcast_ref::<TransferBox>() {
@@ -808,6 +1016,39 @@ where
         return set;
     }
 
+    if let Some(rb) = any.downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>() {
+        use iroha_data_model::isi::rwa::RwaInstructionBox;
+
+        match rb {
+            RwaInstructionBox::Register(r) => {
+                add_domain_rw(&mut set, r.rwa.domain());
+            }
+            RwaInstructionBox::Transfer(t) => {
+                add_rwa_rw(&mut set, t.rwa());
+                add_account_r(&mut set, t.source());
+                add_account_r(&mut set, t.destination());
+            }
+            RwaInstructionBox::Merge(m) => {
+                for parent in m.parents() {
+                    add_rwa_rw(&mut set, parent.rwa());
+                }
+            }
+            RwaInstructionBox::Redeem(r) => add_rwa_rw(&mut set, r.rwa()),
+            RwaInstructionBox::Freeze(r) => add_rwa_rw(&mut set, r.rwa()),
+            RwaInstructionBox::Unfreeze(r) => add_rwa_rw(&mut set, r.rwa()),
+            RwaInstructionBox::Hold(r) => add_rwa_rw(&mut set, r.rwa()),
+            RwaInstructionBox::Release(r) => add_rwa_rw(&mut set, r.rwa()),
+            RwaInstructionBox::ForceTransfer(r) => {
+                add_rwa_rw(&mut set, r.rwa());
+                add_account_r(&mut set, r.destination());
+            }
+            RwaInstructionBox::SetControls(r) => add_rwa_rw(&mut set, r.rwa()),
+            RwaInstructionBox::SetKeyValue(r) => add_rwa_detail_rw(&mut set, &r.object, &r.key),
+            RwaInstructionBox::RemoveKeyValue(r) => add_rwa_detail_rw(&mut set, &r.object, &r.key),
+        }
+        return set;
+    }
+
     // Mint
     if let Some(mb) = any.downcast_ref::<MintBox>() {
         match mb {
@@ -834,6 +1075,13 @@ where
             }
         }
         return set;
+    }
+
+    if any
+        .downcast_ref::<iroha_data_model::isi::SetAssetDefinitionBalancePolicy>()
+        .is_some()
+    {
+        return AccessSet::global();
     }
 
     // Set / Remove key-values
@@ -884,10 +1132,7 @@ where
     if let Some(rb) = any.downcast_ref::<RegisterBox>() {
         match rb {
             RegisterBox::Domain(r) => add_domain_rw(&mut set, &r.object.id().clone()),
-            RegisterBox::Account(r) => {
-                add_domain_r(&mut set, r.object.domain());
-                add_account_rw(&mut set, r.object.id());
-            }
+            RegisterBox::Account(r) => add_account_rw(&mut set, r.object.id()),
             RegisterBox::AssetDefinition(r) => {
                 add_asset_def_rw(&mut set, &r.object.id().clone());
             }
@@ -1035,6 +1280,22 @@ where
                 ));
             }
         }
+        ExecutableRef::ContractCall(invocation) => {
+            if let Some(record) =
+                code::fetch_bound_contract_record(state_ro, &invocation.contract_address)
+                && let Some((hinted, _source)) = manifest_access_set(
+                    &record.manifest,
+                    record.code_hash,
+                    record.code_bytes.as_ref(),
+                    state_ro.pipeline().access_set_cache_enabled,
+                    Some(invocation.entrypoint.as_str()),
+                )
+            {
+                set.union_with(hinted);
+            } else {
+                set.union_with(AccessSet::global());
+            }
+        }
         ExecutableRef::Ivm(hash) => {
             let Some(code) = triggers.get_original_contract(&hash) else {
                 return set;
@@ -1063,6 +1324,7 @@ where
         code_hash,
         bytecode_ref,
         state_ro.pipeline().access_set_cache_enabled,
+        None,
     )
     .map(|(set, _source)| set)
 }
@@ -1096,6 +1358,12 @@ fn key_nft(id: &NftId) -> AccessKey {
 fn key_nft_detail(id: &NftId, key: &Name) -> AccessKey {
     format!("nft.detail:{id}:{key}")
 }
+fn key_rwa(id: &RwaId) -> AccessKey {
+    format!("rwa:{id}")
+}
+fn key_rwa_detail(id: &RwaId, key: &Name) -> AccessKey {
+    format!("rwa.detail:{id}:{key}")
+}
 
 fn add_account_r(set: &mut AccessSet, id: &AccountId) {
     set.add_read(key_account(id));
@@ -1126,14 +1394,23 @@ fn add_domain_detail_rw(set: &mut AccessSet, id: &DomainId, key: &Name) {
     set.add_write(d);
 }
 fn add_asset_def_rw(set: &mut AccessSet, id: &AssetDefinitionId) {
+    if let Some(domain) = id.try_domain() {
+        add_domain_r(set, domain);
+    }
     let k = key_asset_def(id);
     set.add_read(k.clone());
     set.add_write(k);
 }
 fn add_asset_def_r(set: &mut AccessSet, id: &AssetDefinitionId) {
+    if let Some(domain) = id.try_domain() {
+        add_domain_r(set, domain);
+    }
     set.add_read(key_asset_def(id));
 }
 fn add_asset_def_detail_rw(set: &mut AccessSet, id: &AssetDefinitionId, key: &Name) {
+    if let Some(domain) = id.try_domain() {
+        add_domain_r(set, domain);
+    }
     set.add_read(key_asset_def(id));
     let d = key_asset_def_detail(id, key);
     set.add_read(d.clone());
@@ -1145,8 +1422,8 @@ fn add_asset_rw(set: &mut AccessSet, id: &AssetId) {
     set.add_write(k);
     // Asset operations rely on the owning account/domain and definition state.
     add_account_r(set, id.account());
-    if !id.definition().is_opaque_canonical() {
-        add_domain_r(set, id.definition().domain());
+    if let Some(domain) = id.definition().try_domain() {
+        add_domain_r(set, domain);
     }
     add_asset_def_r(set, id.definition());
 }
@@ -1158,6 +1435,17 @@ fn add_nft_rw(set: &mut AccessSet, id: &NftId) {
 fn add_nft_detail_rw(set: &mut AccessSet, id: &NftId, key: &Name) {
     set.add_read(key_nft(id));
     let d = key_nft_detail(id, key);
+    set.add_read(d.clone());
+    set.add_write(d);
+}
+fn add_rwa_rw(set: &mut AccessSet, id: &RwaId) {
+    let k = key_rwa(id);
+    set.add_read(k.clone());
+    set.add_write(k);
+}
+fn add_rwa_detail_rw(set: &mut AccessSet, id: &RwaId, key: &Name) {
+    set.add_read(key_rwa(id));
+    let d = key_rwa_detail(id, key);
     set.add_read(d.clone());
     set.add_write(d);
 }
@@ -1208,6 +1496,27 @@ fn tx_gas_limit(tx: &SignedTransaction) -> Result<u64, String> {
 fn derive_from_ivm_dynamic<R>(
     bytecode: &[u8],
     authority: &AccountId,
+    metadata: &Metadata,
+    state_ro: &R,
+    gas_limit: u64,
+) -> Result<AccessSet, String>
+where
+    R: StateReadOnly + QueryStateSource,
+{
+    let contract_call_context = parse_contract_call_execution_context(metadata, bytecode)?;
+    derive_from_ivm_dynamic_with_context(
+        bytecode,
+        authority,
+        contract_call_context,
+        state_ro,
+        gas_limit,
+    )
+}
+
+fn derive_from_ivm_dynamic_with_context<R>(
+    bytecode: &[u8],
+    authority: &AccountId,
+    contract_call_context: Option<ContractCallExecutionContext>,
     state_ro: &R,
     gas_limit: u64,
 ) -> Result<AccessSet, String>
@@ -1219,10 +1528,18 @@ where
     let mut vm = ivm::IVM::new(gas_limit);
     // Supply accounts snapshot for vendor helpers to become deterministic.
     let accounts = state_ro.accounts_snapshot();
-    let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
-        authority.clone(),
-        Arc::clone(&accounts),
-    )
+    let mut host = if let Some(context) = contract_call_context.as_ref() {
+        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+            authority.clone(),
+            Arc::clone(&accounts),
+            context.args.clone(),
+        )
+    } else {
+        crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
+            authority.clone(),
+            Arc::clone(&accounts),
+        )
+    }
     .with_access_logging();
     #[cfg(feature = "telemetry")]
     host.set_telemetry(state_ro.metrics().clone());
@@ -1240,6 +1557,8 @@ where
     vm.load_program(bytecode)
         .map_err(|e| format!("ivm.load_program: {e}"))?;
     vm.set_gas_limit(gas_limit);
+    apply_contract_call_execution_context(&mut vm, contract_call_context.as_ref())
+        .map_err(|e| format!("ivm.contract_call: {e}"))?;
     vm.run_with_host(&mut host)
         .map_err(|e| format!("ivm.run: {e}"))?;
     let mut set = AccessSet::new();
@@ -1310,11 +1629,11 @@ mod tests {
     const TEST_GAS_LIMIT: u64 = 50_000_000;
 
     fn wonderland_domain_id() -> DomainId {
-        "wonderland".parse().expect("static domain id")
+        DomainId::try_new("wonderland", "universal").expect("static domain id")
     }
 
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-        Account::new(account_id.clone().to_account_id(wonderland_domain_id()))
+        Account::new(account_id.clone())
     }
 
     fn build_wonderland_account(account_id: &AccountId) -> Account {
@@ -1347,7 +1666,7 @@ mod tests {
         let (bob, _) = iroha_test_samples::gen_account_in("wonderland");
         let domain_id = wonderland_domain_id();
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let src = AssetId::of(ad.clone(), alice.clone());
@@ -1406,7 +1725,7 @@ mod tests {
         let domain_id = wonderland_domain_id();
         let account = new_wonderland_account(&alice);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let asset_def = AssetDefinition::numeric(asset_def_id.clone());
@@ -1439,7 +1758,8 @@ mod tests {
     fn ivm_access_dynamic_prepass_set_account_detail_sentinel() {
         // World and state for view
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1562,7 +1882,8 @@ mod tests {
     #[test]
     fn ivm_access_dynamic_prepass_requires_gas_limit() {
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1638,7 +1959,7 @@ mod tests {
         ];
         let writes = vec![
             "state:beta".to_owned(),
-            "asset_def:rose#wonderland".to_owned(),
+            "asset_def:62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned(),
         ];
         let set =
             access_set_from_hint_keys(&reads, &writes).expect("expected valid access set hints");
@@ -1649,7 +1970,10 @@ mod tests {
                 .contains(&format!("account.detail:{alice}:cursor"))
         );
         assert!(set.write_keys.contains("state:beta"));
-        assert!(set.write_keys.contains("asset_def:rose#wonderland"));
+        assert!(
+            set.write_keys
+                .contains("asset_def:62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
+        );
     }
 
     #[test]
@@ -1677,7 +2001,8 @@ mod tests {
 
         // World/state setup with one account to own the manifest
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1692,7 +2017,7 @@ mod tests {
 
         // Insert manifest with access-set hints into WSV
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, alice.clone());
@@ -1751,7 +2076,8 @@ mod tests {
         access_set_cache_clear();
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1764,7 +2090,7 @@ mod tests {
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, alice.clone());
@@ -1809,7 +2135,8 @@ mod tests {
         access_set_cache_clear();
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1886,7 +2213,8 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1939,7 +2267,8 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1965,6 +2294,8 @@ mod tests {
             EntrypointDescriptor {
                 name: "main".to_owned(),
                 kind: EntryPointKind::Public,
+                params: Vec::new(),
+                return_type: None,
                 permission: None,
                 read_keys: vec!["state:alpha".to_owned()],
                 write_keys: vec!["state:beta".to_owned()],
@@ -1975,6 +2306,8 @@ mod tests {
             EntrypointDescriptor {
                 name: "run".to_owned(),
                 kind: EntryPointKind::Public,
+                params: Vec::new(),
+                return_type: None,
                 permission: None,
                 read_keys: vec!["state:run-read".to_owned()],
                 write_keys: vec!["state:run-write".to_owned()],
@@ -2026,7 +2359,8 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2051,6 +2385,8 @@ mod tests {
         let entrypoints = vec![EntrypointDescriptor {
             name: "main".to_owned(),
             kind: EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
             permission: None,
             read_keys: vec!["state:alpha".to_owned()],
             write_keys: vec!["state:beta".to_owned()],
@@ -2098,7 +2434,8 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2121,13 +2458,15 @@ mod tests {
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, alice.clone());
         let entrypoints = vec![EntrypointDescriptor {
             name: "main".to_owned(),
             kind: EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
             permission: None,
             read_keys: vec![format!("account:{alice}")],
             write_keys: vec![format!("asset:{asset_id}")],
@@ -2250,7 +2589,7 @@ mod tests {
         let mut st_block = state.block(header);
         {
             let mut stx = st_block.transaction();
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&alice, &mut stx)
                 .unwrap();
@@ -2258,7 +2597,7 @@ mod tests {
                 .execute(&alice, &mut stx)
                 .unwrap();
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             Register::asset_definition({
@@ -2303,7 +2642,7 @@ mod tests {
         );
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def_id.clone(), alice.clone());
@@ -2327,9 +2666,11 @@ mod tests {
         let mut st_block = state.block(header);
         {
             let mut stx = st_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&alice, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&alice, &mut stx)
+            .unwrap();
             Register::account(new_wonderland_account(&alice))
                 .execute(&alice, &mut stx)
                 .unwrap();
@@ -2388,9 +2729,11 @@ mod tests {
         let mut st_block = state.block(header);
         let (code_hash, trigger_id, hints) = {
             let mut stx = st_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&alice, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&alice, &mut stx)
+            .unwrap();
             Register::account(new_wonderland_account(&alice))
                 .execute(&alice, &mut stx)
                 .unwrap();

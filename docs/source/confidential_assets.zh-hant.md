@@ -89,7 +89,7 @@ Swift SDK 現在可以發出屏蔽指令，無需定制 JSON 膠水：構造一�
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ Swift SDK 現在可以發出屏蔽指令，無需定制 JSON 膠水：構造一�
 - 每個帳戶的密鑰派生層次結構：
   - `sk_spend` → `nk`（無效鍵）、`ivk`（傳入查看鍵）、`ovk`（傳出查看鍵）、`fvk`。
 - 加密的票據有效負載使用 AEAD 和 ECDH 派生的共享密鑰；可選的審計員查看鍵可以附加到每個資產策略的輸出。
-- CLI 添加：`confidential create-keys`、`confidential send`、`confidential export-view-key`、用於解密備忘錄的審計工具，以及用於離線生成/檢查 Norito 備忘錄信封的 `iroha app zk envelope` 幫助程序。 Torii 通過 `POST /v1/confidential/derive-keyset` 公開相同的派生流程，返回十六進制和 base64 形式，以便錢包可以以編程方式獲取密鑰層次結構。
+- CLI 添加：`confidential create-keys`、`confidential send`、`confidential export-view-key`、用於解密備忘錄的審計工具，以及用於離線生成/檢查 Norito 備忘錄信封的 `iroha app zk envelope` 幫助程序。
 
 ## Gas、限制和 DoS 控制
 - 確定性氣體調度：
@@ -391,7 +391,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -423,8 +423,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -455,7 +455,7 @@ M2 階段現在直接通過 Prometheus 和 Grafana 導出 CommitmentTree 運行�
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 將其與同一刮擦上的 `rg 'iroha_confidential_tree_depth'` 配對，以確認深度隨著新的承諾而增長，而逐出計數器僅在歷史上限修剪條目時增加。這些值必須與您附加到治理證據包的 Grafana 儀表板導出一致。

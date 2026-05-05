@@ -352,7 +352,7 @@ public final class ConnectSessionDiagnostics {
         if let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             return base.appendingPathComponent("IrohaConnect/queues", isDirectory: true)
         }
-        // Fallback for environments without Application Support (should not hit on iOS).
+        // Use a temporary directory in environments without Application Support.
         return URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("IrohaConnect/queues", isDirectory: true)
     }

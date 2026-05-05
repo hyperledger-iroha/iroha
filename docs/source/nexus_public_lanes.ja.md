@@ -1,113 +1,114 @@
 ---
-lang: ja
-direction: ltr
-source: docs/source/nexus_public_lanes.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: f9bb3a13cec7d80bfd1729709eb0744a5a062954002ada5d48608f62f8907668
-source_last_modified: "2025-12-08T18:48:53.874766+00:00"
-translation_last_reviewed: 2026-01-01
+title: Nexus Public Lane Staking
+description: NX-9 specification for permissionless validator admission, stake accounting, and reward records.
 ---
 
 # Nexus Public Lane Staking (NX-9)
 
-ステータス: 🈺 進行中 → **runtime + オペレータードキュメント整合** (2026年4月)
-オーナー: Economics WG / Governance WG / Core Runtime
-ロードマップ参照: NX-9 – Public lane staking & reward module
+Status: 🈺 In Progress → **runtime + operator docs aligned** (Apr 2026)  
+Owners: Economics WG / Governance WG / Core Runtime  
+Roadmap ref: NX-9 – Public lane staking & reward module
 
-本ノートは、Nexus の public-lane ステーキングプログラムに向けたカノニカルなデータモデル、
-命令サーフェス、ガバナンス制御、運用フックをまとめる。目的は、permissionless バリデータが
-public lanes に参加し、stake をボンドし、ブロックをサービスし、報酬を得る一方で、
-ガバナンスが決定論的な slashing/runbook のレバーを維持することにある。
+This note captures the canonical data model, instruction surface, governance
+controls, and operational hooks for the Nexus public-lane staking program. The
+goal is to let permissionless validators join the public lanes, bond stake,
+service blocks, and receive rewards while governance maintains deterministic
+slashing/runbook levers.
 
-コードの足場は以下に配置済み:
+The code scaffolding now lives in:
 
-- データモデル型: `crates/iroha_data_model/src/nexus/staking.rs`
-- ISI 定義: `crates/iroha_data_model/src/isi/staking.rs`
-- Core executor stub (NX-9 実装まで決定論的 guard エラーを返す):
+- Data model types: `crates/iroha_data_model/src/nexus/staking.rs`
+- ISI definitions: `crates/iroha_data_model/src/isi/staking.rs`
+- Core executor stub (returns a deterministic guard error until NX-9 logic lands):
   `crates/iroha_core/src/smartcontracts/isi/staking.rs`
 
-Torii/SDKs は完全な runtime 実装前に Norito payload を配線できる。ステーク命令は
-設定済みの staking asset を `stake_account`/`staker` から bonded escrow account
-(`nexus.staking.stake_escrow_account_id`) へ引き落としてロックする。Slashes は escrow を
-デビットし、設定済み sink (`nexus.staking.slash_sink_account_id`) をクレジットする。Unbonds は
-タイマー満了後に元のアカウントへ返金する。
+Torii/SDKs can begin plumbing the Norito payloads ahead of the full runtime
+implementation; stake instructions now lock the configured staking asset by
+withdrawing from the `stake_account`/`staker` into a bonded escrow account
+(`nexus.staking.stake_escrow_account_id`). Slashes debit the escrow and credit
+the configured sink (`nexus.staking.slash_sink_account_id`), and unbonds return
+funds to the originating account once the timer expires.
 
-## 1. Ledger state と型
+## 1. Ledger State & Types
 
-### 1.1 バリデータレコード
+### 1.1 Validator Records
 
-`PublicLaneValidatorRecord` は各バリデータのカノニカル状態を追跡する:
+`PublicLaneValidatorRecord` tracks the canonical state for each validator:
 
-| フィールド | 説明 |
-|-----------|------|
-| `lane_id: LaneId` | バリデータが担当する lane。 |
-| `validator: AccountId` | コンセンサスメッセージに署名するアカウント。 |
-| `stake_account: AccountId` | self-bond を供給するアカウント (validator のアイデンティティと異なる場合あり)。 |
-| `total_stake: Numeric` | self stake + 承認済みデリゲーション。 |
-| `self_stake: Numeric` | バリデータが提供する stake。 |
-| `metadata: Metadata` | コミッション率、テレメトリID、管轄フラグ、連絡先情報。 |
-| `status: PublicLaneValidatorStatus` | ライフサイクル (pending/active/jailed/exiting/etc.)。`PendingActivation` の payload がターゲット epoch を持つ。 |
-| `activation_epoch: Option<u64>` | バリデータが active になった epoch (アクティベーション時に設定)。 |
-| `activation_height: Option<u64>` | アクティベーション時に記録された block height。 |
-| `last_reward_epoch: Option<u64>` | 最後の支払いを行った epoch。 |
+| Field | Description |
+|-------|-------------|
+| `lane_id: LaneId` | Lane the validator services. |
+| `validator: AccountId` | Account that signs consensus messages. |
+| `stake_account: AccountId` | Account that supplies the self-bond (may differ from the validator identity). |
+| `total_stake: Numeric` | Self stake + approved delegations. |
+| `self_stake: Numeric` | Stake provided by the validator. |
+| `metadata: Metadata` | Commission %, telemetry ids, jurisdiction flags, contact info. |
+| `status: PublicLaneValidatorStatus` | Lifecycle (pending/active/jailed/exiting/etc.). The `PendingActivation` payload encodes the target epoch. |
+| `activation_epoch: Option<u64>` | Epoch when the validator became active (set on activation). |
+| `activation_height: Option<u64>` | Block height recorded at activation. |
+| `last_reward_epoch: Option<u64>` | Epoch that last produced a payout. |
 
-`PublicLaneValidatorStatus` のライフサイクル:
+`PublicLaneValidatorStatus` enumerates lifecycle phases:
 
-- `PendingActivation(epoch)` — ガバナンス指定の activation epoch を待機。タプル payload は
-  `current_epoch + 1` (genesis bootstrap uses `current_epoch`) で計算される最短 activation epoch を保持する
-  (`epoch_length_blocks` から epoch を導出)。
-- `Active` — コンセンサスに参加し、報酬を受け取れる。
-- `Jailed { reason }` — 一時停止 (downtime, telemetry breach など)。
-- `Exiting { releases_at_ms }` — unbonding; 報酬の加算は停止。
-- `Exited` — セットから除外。
-- `Slashed { slash_id }` — 監査向けの slashing イベント。
+- `PendingActivation(epoch)` — waiting for the governance-specified activation epoch; the tuple payload stores the earliest activation epoch (usually `current_epoch + 1`, derived from `epoch_length_blocks`; genesis bootstrap registrations target `current_epoch` so validators can activate in the genesis block).
+- `Active` — participates in consensus and can collect rewards.
+- `Jailed { reason }` — temporarily suspended (downtime, telemetry breach, etc.).
+- `Exiting { releases_at_ms }` — unbonding; rewards stop accruing.
+- `Exited` — removed from the set.
+- `Slashed { slash_id }` — governance slashing event recorded for audits.
 
-アクティベーションのメタデータは単調増加である。`activation_epoch`/`activation_height` は
-pending バリデータが最初に active になった時点で設定され、それ以前の epoch/height への
-再アクティベーション試行は拒否される。pending バリデータは、スケジュール境界に到達した
-最初のブロックで自動昇格し、アクティベーションメトリクスカウンタ
-(`nexus_public_lane_validator_activation_total`) が状態変更とともに記録する。
+Activation metadata is monotonic: `activation_epoch`/`activation_height` are set the first time a
+pending validator becomes active and any attempt to reactivate at an earlier epoch/height is rejected.
+Pending validators are promoted automatically at the start of the first block whose epoch meets the
+scheduled boundary, and the activation metrics counter (`nexus_public_lane_validator_activation_total`)
+records the promotion alongside the status change.
 
-Permissioned 展開は、public-lane の stake が存在しない場合でも genesis peers をアクティブに
-維持する。consensus keys が生きている限り、runtime は validator set に genesis peers を
-フォールバックし、staking admission が無効または rollout 中でも bootstrap deadlock を回避する。
+Permissioned deployments keep the genesis peer roster active even before any
+public-lane validator stake exists: as long as the peers have live consensus
+keys, the runtime falls back to the genesis peers for the validator set. This
+avoids a bootstrap deadlock while staking admission is disabled or still being
+rolled out.
 
-### 1.2 Stake shares と unbonding
+### 1.2 Stake Shares & Unbonding
 
-Delegators (および self-bond を追加するバリデータ) は `PublicLaneStakeShare` で表現される:
+Delegators (and validators topping up their own bond) are modelled via
+`PublicLaneStakeShare`:
 
-- `bonded: Numeric` — 現在の bonded 量。
-- `pending_unbonds: BTreeMap<Hash, PublicLaneUnbonding>` — クライアント指定の `request_id` を鍵にした pending withdrawals。
-- `metadata` は UX/バックオフィスのヒント (例: custody desk 参照番号) を格納。
+- `bonded: Numeric` — live bonded amount.
+- `pending_unbonds: BTreeMap<Hash, PublicLaneUnbonding>` — pending withdrawals keyed by a
+  client-supplied `request_id`.
+- `metadata` stores UX/back-office hints (e.g., custody desk reference numbers).
 
-`PublicLaneUnbonding` は決定論的な引き出しスケジュール (`amount`, `release_at_ms`) を持つ。
-Torii は `GET /v1/nexus/public_lanes/{lane}/stake` で live shares と pending withdrawals を公開し、
-ウォレットが RPC 拡張なしでタイマー表示できるようにする。
+`PublicLaneUnbonding` holds the deterministic withdrawal schedule
+(`amount`, `release_at_ms`). Torii now exposes the live shares and pending
+withdrawals via `GET /v1/nexus/public_lanes/{lane}/stake` so wallets can show
+timers without bespoke RPCs.
 
-ライフサイクルフック (runtime enforced):
+Lifecycle hooks (runtime enforced):
 
-- `PendingActivation(epoch)` は現在の epoch が `epoch` に到達すると自動的に `Active` に移行する。
-  アクティベーションは `activation_epoch` と `activation_height` を記録し、auto-activation と
-  明示的な `ActivatePublicLaneValidator` 呼び出しの両方で regressions を拒否する。
-- `Exiting(releases_at_ms)` は block timestamp が `releases_at_ms` を超えると `Exited` に遷移し、
-  stake-share 行をクリアして容量を手動清掃なしで回収する。
-- 報酬記録は validator が `Active` でない場合は shares を拒否し、pending/exiting/jailed が
-  payouts を累積しないようにする。
+- `PendingActivation(epoch)` entries automatically flip to `Active` once the
+  current epoch reaches `epoch`. Activation records `activation_epoch` and
+  `activation_height`, and regressions are rejected both for auto-activation
+  and explicit `ActivatePublicLaneValidator` calls.
+- `Exiting(releases_at_ms)` entries transition to `Exited` when the block
+  timestamp passes `releases_at_ms`, clearing stake-share rows so validator
+  capacity can be reclaimed without manual cleanup.
+- Reward recording rejects validator shares unless the validator is `Active`,
+  keeping pending/exiting/jailed validators from accruing payouts.
 
-### 1.3 報酬レコード
+### 1.3 Reward Records
 
-報酬分配は `PublicLaneRewardRecord` と `PublicLaneRewardShare` を使用する:
+Reward distributions use `PublicLaneRewardRecord` and `PublicLaneRewardShare`:
 
 ```norito
 {
   "lane_id": 1,
   "epoch": 4242,
-  "asset": "xor#wonderland",
+  "asset": "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
   "total_reward": "250.0000",
   "shares": [
-    { "account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw", "role": "Validator", "amount": "150" },
-    { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
+    { "account": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE", "role": "Validator", "amount": "150" },
+    { "account": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
     "telemetry_epoch_root": "0x4afe…",
@@ -116,31 +117,32 @@ Torii は `GET /v1/nexus/public_lanes/{lane}/stake` で live shares と pending 
 }
 ```
 
-レコードは監査人とダッシュボードに各 payout の決定論的証跡を提供する。報酬構造は
-`RecordPublicLaneRewards` ISI に流れる。
+Records give auditors and dashboards deterministic evidence for each payout. The
+reward struct flows into the `RecordPublicLaneRewards` ISI.
 
 Runtime guards:
 
-- Nexus builds が有効であること。offline/stub builds は報酬記録を拒否する。
-- Reward epochs は lane ごとに単調に進む。stale/重複 epochs は拒否。
-- Reward assets は設定済みの fee sink (`nexus.fees.fee_sink_account_id` /
-  `nexus.fees.fee_asset_id`) と一致し、sink 残高は `total_reward` を完全に賄う必要がある。
-- 各 share は正であり、asset の数値仕様を満たすこと。share 合計は `total_reward` に一致すること。
+- Nexus builds must be enabled; offline/stub builds reject reward recording.
+- Reward epochs advance monotonically per lane; stale or duplicate epochs are rejected.
+- Reward assets must match the configured fee sink (`nexus.fees.fee_sink_account_id` /
+  `nexus.fees.fee_asset_id`) and the sink balance must fully cover `total_reward`.
+- Each share must be positive and respect the reward asset’s numeric spec; share totals must
+  equal `total_reward`.
 
-## 2. 命令カタログ
+## 2. Instruction Catalog
 
-すべての命令は `iroha_data_model::isi::staking` に配置される。Norito encoders/decoders を
-derive しているため、SDKs は bespoke codec なしで payloads を送信できる。
+All instructions live under `iroha_data_model::isi::staking`. They derive Norito
+encoders/decoders so SDKs can submit the payloads without bespoke codecs.
 
 ### 2.1 `RegisterPublicLaneValidator`
 
-バリデータを登録し、初期 stake をボンドする:
+Registers a validator and bonds an initial stake:
 
 ```norito
 {
   "lane_id": 1,
-  "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-  "stake_account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+  "validator": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+  "stake_account": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
   "initial_stake": "150000",
   "metadata": {
     "commission_bps": 750,
@@ -150,122 +152,52 @@ derive しているため、SDKs は bespoke codec なしで payloads を送信�
 }
 ```
 
-検証ルール:
+Validation rules:
 
-- `initial_stake` >= `min_self_stake` (ガバナンスパラメータ)。
-- Metadata はアクティベーション前に contact/telemetry hooks を含むこと。
-- ガバナンスが承認/却下する。承認まで status は `PendingActivation` で、ターゲット epoch
-  (`current_epoch + 1` (genesis bootstrap uses `current_epoch`) 登録時) 到達後の次の境界で runtime が
-  `Active` に昇格させる。
+- `initial_stake` ≥ `min_self_stake` (governance parameter).
+- Metadata MUST include contact/telemetry hooks before activation.
+- Governance approves/denies the entry; until then the status is `PendingActivation` and the runtime promotes the validator to `Active` at the next epoch boundary once the target activation epoch (`current_epoch + 1` at registration, or `current_epoch` for genesis bootstrap) is reached.
 
 ### 2.2 `BondPublicLaneStake`
 
-追加 stake をボンドする (validator の self-bond または delegator の寄与)。
+Bonds additional stake (validator self-bond or delegator contribution).
 
-主要フィールド: `staker`, `amount`, 任意の metadata。Runtime は lane 固有の制限
-(`max_delegators`, `min_bond`, `commission caps`) を強制する。
+Key fields: `staker`, `amount`, optional metadata for statements. Runtime must
+enforce lane-specific limits (`max_delegators`, `min_bond`, `commission caps`).
 
 ### 2.3 `SchedulePublicLaneUnbond`
 
-Unbonding タイマーを開始する。submitters は決定論的な `request_id`
-(推奨: `blake2b(invoice)`)、`amount`、`release_at_ms` を指定する。Runtime は
-`amount` <= bonded stake を検証し、`release_at_ms` を設定済みの unbonding period にクランプする。
+Starts the unbonding timer. Submitters provide a deterministic `request_id`
+(recommendation: `blake2b(invoice)`), `amount`, and `release_at_ms`. Runtime must
+verify the amount ≤ bonded stake and clamp `release_at_ms` to the configured
+unbonding period.
 
 ### 2.4 `FinalizePublicLaneUnbond`
 
-タイマー満了後、この ISI は pending stake を解除して `staker` に返す。executor は request id を
-検証し、unlock timestamp が過去であることを確認し、`PublicLaneStakeShare` の更新を emit し、
-telemetry を記録する。
+After the timer expires, this ISI unlocks the pending stake and returns it to
+`staker`. The executor validates the request id, ensures the unlock timestamp is
+in the past, emits a `PublicLaneStakeShare` update, and records telemetry.
 
 ### 2.5 `SlashPublicLaneValidator`
 
-ガバナンスはこの命令を用いて stake をデビットし、validator を jail/eject する。
+Governance uses this instruction to debit stake and jail/eject validators.
 
-- `slash_id` はイベントを telemetry + incident docs に紐付ける。
-- `reason_code` は安定した enum 文字列 (例: `double_sign`, `downtime`, `safety_violation`).
-- `metadata` は証拠バンドルのハッシュ、runbook 参照、regulator IDs を格納する。
+- `slash_id` ties the event to telemetry + incident docs.
+- `reason_code` is a stable enum string (e.g., `double_sign`, `downtime`,
+  `safety_violation`).
+- `metadata` stores hashes of evidence bundles, runbook pointers, or regulator IDs.
 
-Slashes はガバナンスポリシーに応じて delegators に波及する (比例または validator-first)。
-Runtime ロジックは NX-9 実装時に `PublicLaneRewardRecord` 注釈を emit する。
+Slashes ripple to delegators based on governance policy (proportional or
+validator-first loss). Runtime logic will emit `PublicLaneRewardRecord`
+annotations once NX-9 lands.
 
 ### 2.6 `RecordPublicLaneRewards`
 
-ある epoch の payout を記録する。フィールド:
+Records the payout for an epoch. Fields:
 
-- `reward_asset`: 配布 asset (デフォルト `xor#nexus`).
-- `total_reward`: minted/transferred の合計。
-- `shares`: `PublicLaneRewardShare` のベクタ。
-- `metadata`: payout トランザクション、root hashes、または dashboards への参照。
-
-この ISI は `(lane_id, epoch)` 単位で idempotent であり、夜間会計の基盤となる。
-
-## 3. 運用、ライフサイクル、ツール
-
-- **ライフサイクル + モード:** stake-elected lanes は
-  `nexus.staking.public_validator_mode = stake_elected` で有効化され、restricted lanes は
-  admin-managed のまま (`nexus.staking.restricted_validator_mode = admin_managed`)。Permissioned
-  deployments は stake が存在するまで genesis peers を保持する。stake-elected lanes では
-  `RegisterPublicLaneValidator` が成功する前に、commit topology に live consensus key を持つ
-  登録済み peer が必要。genesis fingerprints と `use_stake_snapshot_roster` は runtime が
-  stake snapshots から roster を導出するか、genesis peers にフォールバックするかを決める。
-- **Activation/exit operations:** 登録は `PendingActivation` に入り、`current_epoch + 1` (genesis bootstrap uses `current_epoch`)
-  をターゲットに `epoch_length_blocks` の境界に到達した最初のブロックで自動昇格する。オペレーターは境界後に
-  `ActivatePublicLaneValidator` を呼び出して強制昇格もできる。退出は `Exiting(release_at_ms)`
-  に移行し、block timestamp が `release_at_ms` に到達して初めて容量が解放される。slash 後の
-  再登録でも退出が必要で、`Exited` へ遷移して容量が回収される。容量チェックは
-  `nexus.staking.max_validators` を使い exit finalizer の後に実行されるため、将来時刻の exit
-  はタイマー満了まで新規登録をブロックする。
-- **Config knobs:** `nexus.staking.min_validator_stake`, `nexus.staking.stake_asset_id`,
-  `nexus.staking.stake_escrow_account_id`, `nexus.staking.slash_sink_account_id`,
-  `nexus.staking.unbonding_delay`, `nexus.staking.withdraw_grace`,
-  `nexus.staking.max_validators`,
-  `nexus.staking.max_slash_bps`, `nexus.staking.reward_dust_threshold`, および上記の validator-mode
-  switches。`iroha_config::parameters::actual::Nexus` を通して配線し、GA 値が確定したら
-  `status.md` に反映する。
-- **Torii/CLI quickstart:**
-  - `iroha app nexus lane-report --summary` は lane catalog entries、manifest readiness、validator modes
-    (stake-elected vs admin-managed) を表示し、ステーキング admission が有効か確認できる。
-  - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
-    は lifecycle/activation 指標 (pending target epoch, `activation_epoch` / `activation_height`,
-    exit release, slash id) と bonded/self stake を表示する。
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]` は
-    `(validator, staker)` ペアの pending-unbond ヒント付きで `/stake` をミラーする。
-  - Torii snapshots (dashboards/SDKs 向け):
-    - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
-      (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
-      release timers, bonded stake, last reward epoch.
-      `canonical I105 literal rendering` で literal 表示を制御（I105 推奨、i105-default（`sora`）は Sora 専用の次善）。
-    - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
-      `staker`, bonded amount) と pending unbond timers。`?validator=i105...` は
-      特定バリデータ向けにフィルタし、`canonical I105 rendering` は全 literal に適用。
-  - Lifecycle ISIs は標準トランザクションパスを使用 (Torii `/v1/transactions`
-    または CLI instruction pipeline)。Norito JSON payload 例:
-
-    ```jsonc
-    [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw" } },
-      {
-        "ExitPublicLaneValidator": {
-          "lane_id": 1,
-          "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-          "release_at_ms": 1730000000000
-        }
-      }
-    ]
-    ```
-- **Telemetry + runbooks:** メトリクスは validator 数、bonded/pending stake、reward totals、slash counters を
-  `nexus_public_lane_*` ファミリで公開する。NX-9 acceptance tests と同じデータセットに
-  dashboards を接続し、validator deltas と reward/slash evidence を監査可能に保つ。Slashing
-  instructions は governance-only のまま。報酬記録は payout totals の証明 (payout batch の hash) が必要。
-
-## 4. Roadmap alignment
-
-- ✅ Runtime と WSV storages が NX-9 の validator lifecycle を実装。activation timing、peer prerequisites、
-  delayed exits、slash 後の再登録を回帰テストでカバー。
-- ✅ Torii が `/v1/nexus/public_lanes/{lane}/{validators,stake,rewards/pending}` を Norito JSON で提供し、
-  SDKs と dashboards が custom RPC なしで lane 状態を監視可能。
-- ✅ Config/telemetry knobs をドキュメント化。混在 deployments でも stake-elected と admin-managed lanes を
-  分離し、validator rosters の決定性を維持。
+- `reward_asset`: asset distributed (default `xor#nexus`).
+- `total_reward`: minted/transferred total.
+- `shares`: vector of `PublicLaneRewardShare` entries.
 
 ### 2.7 `CancelConsensusEvidencePenalty`
 
@@ -273,3 +205,94 @@ Cancels consensus slashing before the delayed penalty applies.
 
 - `evidence`: the Norito-encoded `Evidence` payload that was recorded in `consensus_evidence`.
 - The record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, preventing slashing when `slashing_delay_blocks` elapses.
+- `metadata`: references to payout transactions, root hashes, or dashboards.
+
+This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
+
+## 3. Operations, lifecycle, and tooling
+
+- **Lifecycle + modes:** stake-elected lanes are enabled via
+  `nexus.staking.public_validator_mode = stake_elected` while restricted lanes
+  stay admin-managed (`nexus.staking.restricted_validator_mode = admin_managed`).
+  Permissioned deployments keep genesis peers active until stake exists; for
+  stake-elected lanes we still require a registered peer with a live consensus
+  key present in the commit topology before `RegisterPublicLaneValidator`
+  succeeds. Genesis fingerprints and `use_stake_snapshot_roster` decide whether
+  the runtime derives the roster from stake snapshots or falls back to genesis
+  peers.
+- **Activation/exit operations:** registrations land in `PendingActivation` for
+  `current_epoch + 1` (genesis bootstrap registrations use `current_epoch`) and
+  auto-promote at the first block whose epoch meets that boundary (epochs are
+  derived from `epoch_length_blocks`). Operators can also call
+  `ActivatePublicLaneValidator` after the boundary to force promotion. Exits
+  move validators to `Exiting(release_at_ms)` and free capacity only once the
+  block timestamp reaches `release_at_ms`; re-registration after a slash still
+  requires exiting so the record is marked `Exited` and capacity is reclaimed.
+  Capacity checks use `nexus.staking.max_validators` and run after the exit
+  finalizer, so future-dated exits block new registrations until the timer
+  elapses.
+- **Config knobs:** `nexus.staking.min_validator_stake`,
+  `nexus.staking.stake_asset_id`, `nexus.staking.stake_escrow_account_id`,
+  `nexus.staking.slash_sink_account_id`, `nexus.staking.unbonding_delay`,
+  `nexus.staking.withdraw_grace`, `nexus.staking.max_validators`,
+  `nexus.staking.max_slash_bps`, `nexus.staking.reward_dust_threshold`, and the
+  validator-mode switches above.
+  Thread them through
+  `iroha_config::parameters::actual::Nexus` and surface them in `status.md`
+  once GA values are ratified.
+- **Torii/CLI quickstart:**
+  - `iroha app nexus lane-report --summary` shows lane catalog entries, manifest
+    readiness, and validator modes (stake-elected vs admin-managed) so operators
+    can confirm whether staking admission is enabled for a lane.
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
+    surfaces lifecycle/activation markers (pending target epoch, `activation_epoch` /
+    `activation_height`, exit release, slash id) alongside bonded/self stake.
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator <i105-account-id>] [--summary]`
+    mirrors the `/stake` endpoint with pending-unbond hints per `(validator, staker)` pair.
+  - Torii snapshots for dashboards and SDKs:
+    - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
+      (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation
+      epoch/height, release timers, bonded stake, last reward epoch.
+      Optional `canonical I105 literal rendering` controls the literal rendering
+      (canonical I105 output only).
+    - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
+      `staker`, bonded amount) plus pending unbond timers. Optional
+      `?validator=<i105-account-id>` filters the response for dashboards that focus
+      on a single validator; `canonical I105 rendering` applies to all literals.
+    - `GET /v1/nexus/public_lanes/{lane}/rewards/pending` – pending rewards per
+      asset for the requested account. Requires `account=<i105-account-id>` and accepts
+      optional `asset_id` and `upto_epoch` filters; `canonical I105 rendering` applies to
+      the account literal in the response.
+  - Lifecycle ISIs use the standard transaction path (Torii
+    `/v1/transactions` or the CLI instruction pipeline). Example Norito JSON
+    payloads:
+
+    ```jsonc
+    [
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "<i105-account-id>" } },
+      {
+        "ExitPublicLaneValidator": {
+          "lane_id": 1,
+          "validator": "<i105-account-id>",
+          "release_at_ms": 1730000000000
+        }
+      }
+    ]
+    ```
+- **Telemetry + runbooks:** metrics expose validator counts, bonded and pending
+  stake, reward totals, and slash counters under the
+  `nexus_public_lane_*` family. Wire dashboards to the same data set used by
+  NX-9 acceptance tests so validator deltas and reward/slash evidence remain
+  auditable. Slashing instructions remain governance-only; reward recording must
+  prove payout totals (hash of payout batch).
+
+## 4. Roadmap alignment
+
+- ✅ Runtime and WSV storages implement the NX-9 validator lifecycle; regressions
+  cover activation timing, peer prerequisites, delayed exits, and
+  re-registration after slashes.
+- ✅ Torii exposes `/v1/nexus/public_lanes/{lane}/{validators,stake,rewards/pending}` with
+  Norito JSON so SDKs and dashboards can monitor lane state without custom RPCs.
+- ✅ Config and telemetry knobs are documented; mixed deployments keep
+  stake-elected and admin-managed lanes isolated so validator rosters stay
+  deterministic.

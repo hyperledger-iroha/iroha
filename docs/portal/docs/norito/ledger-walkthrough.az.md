@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2c61035c0e4b0fd478f08beeef34d7ae41415f55b09dc93dfda9490efe94fb91
-source_last_modified: "2026-01-22T16:26:46.505734+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: a26e8de48d00066a9551f1909840165fc33e0ffc18b38b7ac4c6491b2c825f7b
+source_last_modified: "2026-04-03T17:43:03.931384+00:00"
+translation_last_reviewed: 2026-04-08
 title: Ledger Walkthrough
 description: Reproduce a deterministic register → mint → transfer flow with the `iroha` CLI and verify the resulting ledger state.
 slug: /norito/ledger-walkthrough
@@ -34,8 +34,8 @@ istifadə etməyi planlaşdırdığınız hesab identifikatorları. Defolt paket
 demo açarlarından əldə edilmişdir:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 İlk bir neçə hesabı sadalayaraq dəyərləri təsdiqləyin:
@@ -54,7 +54,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts inside wonderland (replace --limit with a higher number if needed)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions that already exist
@@ -71,7 +71,7 @@ domen:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI təqdim edilmiş əməliyyat hashını çap edir (məsələn,
@@ -80,7 +80,7 @@ CLI təqdim edilmiş əməliyyat hashını çap edir (məsələn,
 ## 3. Vahidləri operator hesabına köçürün
 
 Aktiv kəmiyyətləri `(asset definition, account)` cütü altında yaşayır. Nanə 250
-`coffee#wonderland` vahidləri `$ADMIN_ACCOUNT`-ə:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` vahidləri `$ADMIN_ACCOUNT`-ə:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

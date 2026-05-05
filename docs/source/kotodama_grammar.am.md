@@ -117,7 +117,7 @@ seiyaku Name {
 የትርጓሜ ትምህርት
 - `meta { ... }` መስኮች የማጠናከሪያ ነባሪዎችን ለተለቀቀው IVM አርዕስት፡ `abi_version`፣ `vector_length` (0 ማለት ያልተዋቀረ ማለት ነው)፣ `max_cycles` (0 ማለት የአቀናባሪ ነባሪ0 ወደ I1810000138X) ቢትስ (ZK መከታተል፣ የቬክተር ማስታወቅ)። አቀናባሪው `max_cycles: 0`ን እንደ “ነባሪ ተጠቀም” ይቆጥረዋል እና የመግቢያ መስፈርቶችን ለማሟላት የተዋቀረውን ዜሮ ያልሆነ ነባሪ ያወጣል። የማይደገፉ ባህሪያት ከማስጠንቀቂያ ጋር ችላ ይባላሉ። `meta {}` ሲቀር፣ አቀናባሪው `abi_version = 1` ያወጣል እና ለቀሪዎቹ የራስጌ መስኮች አማራጭ ነባሪዎች ይጠቀማል።
 - `features: ["zk", "simd"]` (ቅጽል ስም፡ `"vector"`) ተዛማጅ የሆኑትን የራስጌ ቢትስ በግልፅ ይጠይቃል። ያልታወቁ የባህሪ ሕብረቁምፊዎች አሁን ችላ ከመባል ይልቅ የመተንተኛ ስህተት ይፈጥራሉ።
-- `state` የሚበረክት የኮንትራት ተለዋዋጮች ያውጃል። ማቀናበሪያው ወደ `STATE_GET/STATE_SET/STATE_DEL` syscalls መግባቱን ዝቅ ያደርጋል እና አስተናጋጁ በየግብይት ተደራቢ (የመመልከቻ ነጥብ/ወደነበረበት መመለስ፣ ወደ WSV-በማስገባት) ደረጃ ያደርጋቸዋል። የመዳረሻ ፍንጮች ለትክክለኛው የግዛት ጎዳናዎች ይወጣሉ; ተለዋዋጭ ቁልፎች ወደ ካርታ-ደረጃ ግጭት ቁልፎች ይመለሳሉ። ግልጽ በሆነ አስተናጋጅ ለሚደገፉ ንባብ/መፃፍ የ`state_get/state_set/state_del` አጋዥ እና የ`get_or_insert_default` ካርታ ረዳቶችን ይጠቀሙ። እነዚህ በNorito TLVs በኩል የሚሄዱ ሲሆን የስሞች/የመስክ ቅደም ተከተሎችን የተረጋጋ እንዲሆን ያድርጉ።
+- `state` የሚበረክት የኮንትራት ተለዋዋጮች ያውጃል። ማቀናበሪያው ወደ `STATE_GET/STATE_SET/STATE_DEL` syscalls መግባቱን ዝቅ ያደርጋል እና አስተናጋጁ በየግብይት ተደራቢ (የመመልከቻ ነጥብ/ወደነበረበት መመለስ፣ ወደ WSV-በማስገባት) ደረጃ ያደርጋቸዋል። የመዳረሻ ፍንጮች ለትክክለኛው የግዛት ጎዳናዎች ይወጣሉ; ተለዋዋጭ ቁልፎች ወደ ካርታ-ደረጃ ግጭት ቁልፎች ይመለሳሉ። ግልጽ በሆነ አስተናጋጅ ለሚደገፉ ንባብ/መፃፍ የ`state_get/state_set/state_del` አጋዥ እና የ`map.ensure(...)` ካርታ ረዳቶችን ይጠቀሙ። እነዚህ በNorito TLVs በኩል የሚሄዱ ሲሆን የስሞች/የመስክ ቅደም ተከተሎችን የተረጋጋ እንዲሆን ያድርጉ።
 - የግዛት መለያዎች የተጠበቁ ናቸው; የ `state` ስም በመለኪያ ወይም `let` ማሰሪያው ውድቅ ተደርጓል (`E_STATE_SHADOWED`)።
 - የግዛት ካርታ እሴቶች አንደኛ ደረጃ አይደሉም፡ ለካርታ ስራዎች እና ለመድገም የስቴት መለያን በቀጥታ ይጠቀሙ። የስቴት ካርታዎችን በተጠቃሚ-የተገለጹ ተግባራት ላይ ማሰር ወይም ማለፍ ውድቅ ሆኗል (`E_STATE_MAP_ALIAS`)።
 - ዘላቂ የስቴት ካርታዎች በአሁኑ ጊዜ `int` እና የጠቋሚ-ABI ቁልፍ ዓይነቶችን ብቻ ይደግፋሉ; ሌሎች ቁልፍ ዓይነቶች በማጠናቀር ጊዜ ውድቅ ይደረጋሉ።
@@ -146,7 +146,7 @@ register_trigger wake {
   call run;
   on time pre_commit;
   repeats 2;
-  authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+  authority "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
   metadata { tag: "alpha"; count: 1; enabled: true; }
 }
 ```
@@ -227,8 +227,8 @@ register_trigger wake {
 - `axt_descriptor(string|0xhex) -> AxtDescriptor*`
 - `asset_handle(string|0xhex) -> AssetHandle*`
 - `proof_blob(string|0xhex) -> ProofBlob*`Prelude ማክሮዎች ለእነዚህ ግንበኞች አጠር ያሉ ተለዋጭ ስሞችን እና የመስመር ላይ ማረጋገጫን ይሰጣሉ፡-
-- `account!("i105...")`፣ `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`፣ `asset_id!("rose#wonderland")`
+- `account!("<i105-account-id>")`፣ `account_id!("<i105-account-id>")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`፣ `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`፣ `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` ወይም እንደ `json!{ hello: "world" }` ያሉ የተዋቀሩ ቀጥተኛ ቃላት

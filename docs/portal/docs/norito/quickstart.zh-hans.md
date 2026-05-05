@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e39dc94f52395bd9323177df1a7feeb7bbd4f9a3cdea07b02f9d60e7826e199e
-source_last_modified: "2026-01-22T16:26:46.506936+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
 title: Norito Quickstart
 description: Build, validate, and deploy a Kotodama contract with the release tooling and default single-peer network.
 slug: /norito/quickstart
@@ -19,7 +19,7 @@ translator: machine-google-reviewed
 参考 CLI。
 
 该示例合约将键/值对写入调用者的帐户，以便您可以
-立即使用 `iroha_cli` 验证副作用。
+立即使用 `iroha` 验证副作用。
 
 ## 先决条件
 
@@ -27,7 +27,7 @@ translator: machine-google-reviewed
   启动 `defaults/docker-compose.single.yml` 中定义的示例对等点）。
 - Rust 工具链（1.76+），用于构建辅助二进制文件（如果您不下载）
   已发表的。
-- `koto_compile`、`ivm_run` 和 `iroha_cli` 二进制文件。您可以从以下位置构建它们
+- `koto_compile`、`ivm_run` 和 `iroha` 二进制文件。您可以从以下位置构建它们
   工作区结帐如下所示或下载匹配的发布工件：
 
 ```sh
@@ -66,8 +66,14 @@ seiyaku Hello {
     info("Hello from Kotodama");
   }
 
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
   // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),
@@ -107,7 +113,7 @@ ABI 标头、功能位和导出的入口点。
 默认的开发身份来自于公钥
 `defaults/client.toml`，所以账户ID为
 ```
-i105...
+<i105-account-id>
 ```
 
 使用配置文件提供 Torii URL、链 ID 和签名密钥：
@@ -129,7 +135,7 @@ CLI 使用 Norito 对交易进行编码，使用开发密钥对其进行签名�
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

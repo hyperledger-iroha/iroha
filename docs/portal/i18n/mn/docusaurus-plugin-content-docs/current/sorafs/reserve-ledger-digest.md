@@ -30,10 +30,10 @@ CLI туслахууд дээр нэмэх нь `scripts/telemetry/reserve_ledge
 
   sorafs reserve ledger \
     --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
-    --provider-account i105... \
-    --treasury-account i105... \
-    --reserve-account i105... \
-    --asset-definition xor#sora \
+    --provider-account <i105-account-id> \
+    --treasury-account <i105-account-id> \
+    --reserve-account <i105-account-id> \
+    --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    Бүртгэлийн туслах нь `ledger_projection` блок (түрээсийн хугацаа, нөөц) хавсаргана.

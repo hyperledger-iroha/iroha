@@ -30,8 +30,8 @@ Este ウォークスルーの補足 [Norito クイックスタート](./quicksta
 デモ版:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 os valores listando を primeiras contas として確認します。
@@ -50,7 +50,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dentro de wonderland (substitua --limit por um numero maior se necessario)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions que ja existem
@@ -66,7 +66,7 @@ Esses コマンドは、Norito の応答投稿に依存し、ページを決定�
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 O CLI インプリメまたはハッシュ ダ トランザクション エンビアダ (例、`0x5f...`)。ガーデオパラ
@@ -75,7 +75,7 @@ O CLI インプリメまたはハッシュ ダ トランザクション エン�
 ## 3. Minte unidades na conta do operador
 
 `(asset definition, account)` の生存期間の量として。ミンテ250
-`coffee#wonderland` と `$ADMIN_ACCOUNT` の結果:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` と `$ADMIN_ACCOUNT` の結果:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

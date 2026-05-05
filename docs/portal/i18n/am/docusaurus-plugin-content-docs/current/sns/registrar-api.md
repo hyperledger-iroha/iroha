@@ -108,17 +108,17 @@ Struct ReservedAssignmentRequestV1 {
 
 | የመጨረሻ ነጥብ | ዘዴ | ጭነት | መግለጫ |
 |-------|--------|----
-| `/v1/sns/registrations` | መለጠፍ | `RegisterNameRequestV1` | ስም ይመዝገቡ ወይም እንደገና ይክፈቱ። የዋጋ ደረጃን ይፈታል፣ የክፍያ/የአስተዳደር ማረጋገጫዎችን ያጸድቃል፣ የመመዝገቢያ ክስተቶችን ያወጣል። |
-| `/v1/sns/registrations/{selector}/renew` | መለጠፍ | `RenewNameRequestV1` | ጊዜን ያራዝሙ። ከፖሊሲ የጸጋ/መቤዠት መስኮቶችን ያስገድዳል። |
-| `/v1/sns/registrations/{selector}/transfer` | መለጠፍ | `TransferNameRequestV1` | የአስተዳደር ማፅደቆች ከተያያዙ በኋላ ባለቤትነትን ያስተላልፉ። |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | የመቆጣጠሪያውን ስብስብ ይተኩ; የተፈረመ የመለያ አድራሻዎችን ያረጋግጣል። |
-| `/v1/sns/registrations/{selector}/freeze` | መለጠፍ | `FreezeNameRequestV1` | ጠባቂ/ካውንስል ቀረ። የአሳዳጊ ትኬት እና የአስተዳደር ሰነድ ማጣቀሻ ያስፈልገዋል። |
-| `/v1/sns/registrations/{selector}/freeze` | ሰርዝ | `GovernanceHookV1` | ከማስተካከያው በኋላ አይቀዘቅዙ; የምክር ቤቱ መሻር መመዝገቡን ያረጋግጣል። |
+| `/v1/sns/names` | መለጠፍ | `RegisterNameRequestV1` | ስም ይመዝገቡ ወይም እንደገና ይክፈቱ። የዋጋ ደረጃን ይፈታል፣ የክፍያ/የአስተዳደር ማረጋገጫዎችን ያጸድቃል፣ የመመዝገቢያ ክስተቶችን ያወጣል። |
+| `/v1/sns/names/{namespace}/{literal}/renew` | መለጠፍ | `RenewNameRequestV1` | ጊዜን ያራዝሙ። ከፖሊሲ የጸጋ/መቤዠት መስኮቶችን ያስገድዳል። |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | መለጠፍ | `TransferNameRequestV1` | የአስተዳደር ማፅደቆች ከተያያዙ በኋላ ባለቤትነትን ያስተላልፉ። |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | PUT | `UpdateControllersRequestV1` | የመቆጣጠሪያውን ስብስብ ይተኩ; የተፈረመ የመለያ አድራሻዎችን ያረጋግጣል። |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | መለጠፍ | `FreezeNameRequestV1` | ጠባቂ/ካውንስል ቀረ። የአሳዳጊ ትኬት እና የአስተዳደር ሰነድ ማጣቀሻ ያስፈልገዋል። |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | ሰርዝ | `GovernanceHookV1` | ከማስተካከያው በኋላ አይቀዘቅዙ; የምክር ቤቱ መሻር መመዝገቡን ያረጋግጣል። |
 | `/v1/sns/reserved/{selector}` | መለጠፍ | `ReservedAssignmentRequestV1` | የተያዙ ስሞች መጋቢ/ምክር ቤት ምደባ። |
 | `/v1/sns/policies/{suffix_id}` | አግኝ | - | የአሁኑን `SuffixPolicyV1` (መሸጎጫ) ያውጡ። |
-| `/v1/sns/registrations/{selector}` | አግኝ | - | የአሁኑን I18NI0000067X + ውጤታማ ሁኔታ ይመልሳል (ገባሪ፣ ጸጋ፣ ወዘተ)። |
+| `/v1/sns/names/{namespace}/{literal}` | አግኝ | - | የአሁኑን I18NI0000067X + ውጤታማ ሁኔታ ይመልሳል (ገባሪ፣ ጸጋ፣ ወዘተ)። |
 
-** የመራጭ ኢንኮዲንግ፡** የ`{selector}` ዱካ ክፍል I105 (ተመራጭ)፣ የተጨመቀ (`sora`፣ ሁለተኛ-ምርጥ)፣ ወይም ቀኖናዊ ሄክስ በ ADDR-5 ይቀበላል። Torii በ I18NI0000070X በኩል መደበኛ ያደርገዋል።
+** የመራጭ ኢንኮዲንግ፡** የ`{selector}` ዱካ ክፍል i105 (ተመራጭ)፣ የተጨመቀ (`sora`፣ ሁለተኛ-ምርጥ)፣ ወይም ቀኖናዊ ሄክስ በ ADDR-5 ይቀበላል። Torii በ I18NI0000070X በኩል መደበኛ ያደርገዋል።
 
 ** የስህተት ሞዴል፡** ሁሉም የመጨረሻ ነጥቦች Norito JSON በ `code`፣ `message`፣ `details` ይመለሳሉ። ኮዶች `sns_err_reserved`፣ `sns_err_payment_mismatch`፣ `sns_err_policy_violation`፣ I18NI0000077X ያካትታሉ።
 
@@ -131,7 +131,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -156,7 +156,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -164,7 +164,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -179,7 +179,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` ትክክለኛ የ`GovernanceHookV1` መዝገብ (የፕሮፖዛል መታወቂያ፣የድምፅ ሃሽ፣የመጋቢ/አሳዳጊ ፊርማ) መያዝ አለበት። እያንዳንዱ ትዕዛዝ ተጓዳኝ `/v1/sns/registrations/{selector}/…` የመጨረሻ ነጥብን ያንፀባርቃል ስለዚህ የቅድመ-ይሁንታ ኦፕሬተሮች ኤስዲኬዎች የሚጠሩትን ትክክለኛ የTorii ወለል መልመድ ይችላሉ።
+`--governance-json` ትክክለኛ የ`GovernanceHookV1` መዝገብ (የፕሮፖዛል መታወቂያ፣የድምፅ ሃሽ፣የመጋቢ/አሳዳጊ ፊርማ) መያዝ አለበት። እያንዳንዱ ትዕዛዝ ተጓዳኝ `/v1/sns/names/{namespace}/{literal}/…` የመጨረሻ ነጥብን ያንፀባርቃል ስለዚህ የቅድመ-ይሁንታ ኦፕሬተሮች ኤስዲኬዎች የሚጠሩትን ትክክለኛ የTorii ወለል መልመድ ይችላሉ።
 
 ## 4. gRPC አገልግሎት
 
@@ -226,7 +226,7 @@ Torii ማረጋገጫዎችን በማረጋገጥ ያረጋግጣል፡-
 
 1. የደንበኛ ጥያቄዎች I18NI0000098X ዋጋ አሰጣጥን፣ ጸጋን እና የሚገኙ ደረጃዎችን ለማምጣት።
 2. ደንበኛ `RegisterNameRequestV1` ይገነባል፡
-   - `selector` ከተመረጡት I105 ወይም ሁለተኛ-ምርጥ የታመቀ (`sora`) መለያ የተገኘ።
+   - `selector` ከተመረጡት i105 ወይም ሁለተኛ-ምርጥ የታመቀ (`sora`) መለያ የተገኘ።
    - `term_years` በፖሊሲ ገደቦች ውስጥ።
    - `payment` የግምጃ ቤት / መጋቢ ክፍፍል ማስተላለፍን በመጥቀስ።
 3. Torii ያረጋግጣል፡-

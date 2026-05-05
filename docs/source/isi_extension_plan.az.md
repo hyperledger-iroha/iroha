@@ -1,18 +1,20 @@
+<!-- Auto-generated stub for Azerbaijani (az) translation. Replace this content with the full translation. -->
+
 ---
 lang: az
 direction: ltr
 source: docs/source/isi_extension_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
-source_last_modified: "2025-12-29T18:16:35.969398+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 9648381ac7cc1716ffd3c48aca425ed17a6afe1ac73bdeff866ebbbd9147cf68
+source_last_modified: "2026-03-30T18:22:55.972718+00:00"
+translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---
 
 # ISI Genişləndirilməsi Planı (v1)
 
-Bu qeyd yeni Iroha Xüsusi Təlimatlar və çəkilişlər üçün prioritet qaydada imzalanır.
+Bu qeyd yeni Iroha Xüsusi Təlimatlar və çəkilişlər üçün prioritet qaydada imzalanır
 icradan əvvəl hər bir təlimat üçün müzakirə olunmayan invariantlar. Sifariş uyğun gəlir
 təhlükəsizlik və əməliyyat riski birinci, UX ötürmə qabiliyyəti ikinci.
 
@@ -34,23 +36,21 @@ təhlükəsizlik və əməliyyat riski birinci, UX ötürmə qabiliyyəti ikinci
 - Təsirə məruz qalan `AssetId` ilə `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` buraxın.
 - Mövcud aktiv metadata redaktələri ilə eyni icazə nişanlarını tələb edin (tərif sahibi OR
   `CanModifyAssetMetadata` üslublu qrantlar).
-- Aktiv qeydi yoxdursa dayandırın (dolaylı yaradılması yoxdur).
-
-### Hesabı İmzalayanı Döndürün
+- Aktiv qeydi yoxdursa dayandırın (dolaylı yaradılması yoxdur).### Hesabı İmzalayanı Döndürün
 - `AccountId`-də hesabın metadatasını qoruyarkən imzalayanın atom mübadiləsi və əlaqəli
   resurslar (aktivlər, tetikler, rollar, icazələr, gözlənilən hadisələr).
 - Cari imza sahibinin zəng edənə (yaxud açıq-saçıq işarə ilə verilmiş səlahiyyətə) uyğun olduğunu yoxlayın.
-- Yeni açıq açar artıq eyni domendə başqa hesabı dəstəkləyirsə, rədd edin.
+- Yeni açıq açar artıq başqa bir kanonik hesabı dəstəkləyirsə, rədd edin.
 - Hesab identifikatorunu daxil edən bütün kanonik açarları yeniləyin və əməliyyatdan əvvəl keşləri etibarsız edin.
 - Audit yolları üçün köhnə/yeni açarlarla xüsusi `AccountEvent::SignatoryRotated` buraxın.
-- Miqrasiya iskelesi: `AccountLabel` + `AccountRekeyRecord` (bax `account::rekey`) təqdim edin
-  mövcud hesablar hash fasilələri olmadan yuvarlanan təkmilləşdirmə zamanı sabit etiketlərə uyğunlaşdırıla bilər.
+- Miqrasiya iskelesi: `AccountAlias` + `AccountRekeyRecord`-ə etibar edin (bax: `account::rekey`)
+  mövcud hesablar təkmilləşdirmə zamanı hash fasilələri olmadan sabit ləqəb bağlamalarını saxlaya bilər.
 
 ### Müqavilə Nümunəsini Deaktiv edin
 - Mənbə məlumatlarını davam etdirərkən `(namespace, contract_id)` bağlamasını silin və ya məzar daşı
   problemlərin aradan qaldırılması üçün (kim, nə vaxt, səbəb kodu).
-- Aktivləşdirmə ilə eyni idarəetmə icazəsini tələb edin, icazə verilməməsi üçün siyasət qarmaqları
-  yüksək təsdiq olmadan əsas sistem ad boşluqlarının deaktiv edilməsi.
+- Aktivləşdirmə ilə eyni idarəetmə icazəsini tələb edin, icazə verilməyən siyasət qarmaqları ilə
+  yüksək təsdiq olmadan əsas sistem ad məkanlarının deaktiv edilməsi.
 - Hadisə qeydlərini deterministik saxlamaq üçün instansiya artıq qeyri-aktiv olduqda rədd edin.
 - Aşağı axını müşahidə edənlərin istehlak edə biləcəyi `ContractInstanceEvent::Deactivated` buraxın.### SmartContractBytes Sil
 - Yalnız heç bir manifest və ya aktiv nümunə olmadıqda `code_hash` tərəfindən saxlanılan bayt kodunun kəsilməsinə icazə verin
@@ -72,14 +72,12 @@ təhlükəsizlik və əməliyyat riski birinci, UX ötürmə qabiliyyəti ikinci
   və ya verilmiş qabiliyyət) dövlət mutasiyasından əvvəl.
 - Məsləhətçi giriş dəstləri optimist paralelliyi düzgün saxlamaq üçün bütün oxu/yazma düymələrini birləşdirməlidir.
 
-## İcra İskeleleri
-
-- Data modeli indi balans metadatası üçün `SetAssetKeyValue` / `RemoveAssetKeyValue` skafoldlarını daşıyır
+## İcra İskeleleri- Data modeli indi balans metadatası üçün `SetAssetKeyValue` / `RemoveAssetKeyValue` skafoldlarını daşıyır
   redaktələr (`transparent.rs`).
 - İcraçı ziyarətçilər məftil torpaqlarına ev sahibliyi etdikdən sonra icazələri bağlayacaq yer tutucuları ifşa edirlər
   (`default/mod.rs`).
 - Rekey prototip növləri (`account::rekey`) yuvarlanan miqrasiya üçün eniş zonasını təmin edir.
-- Dünya dövlətinə `AccountLabel` ilə işarələnmiş `account_rekey_records` daxildir ki, biz etiket hazırlaya bilək →
+- Dünya vəziyyətinə `AccountAlias` tərəfindən düymələnmiş `account_rekey_records` daxildir ki, biz ləqəb hazırlaya bilək →
   tarixi `AccountId` kodlaşdırmasına toxunmadan imzalayan miqrasiya.
 
 ## IVM Syscall Layihəsi

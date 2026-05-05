@@ -127,6 +127,11 @@ pub struct DenylistEntry {
     canon: Option<String>,
     governance_reference: Option<String>,
     review_deadline: Option<SystemTime>,
+    source_pack_id: Option<String>,
+    source_pack_manifest_cid: Option<String>,
+    source_pack_merkle_root: Option<String>,
+    issued_by_proposal_id: Option<String>,
+    review_reference: Option<String>,
 }
 
 impl DenylistEntry {
@@ -160,7 +165,7 @@ impl DenylistEntry {
         self.issued_at
     }
 
-    /// Optional routing alias (if supplied alongside a canonical identifier).
+    /// Optional on-chain account alias (if supplied alongside a canonical identifier).
     #[must_use]
     pub fn alias(&self) -> Option<&str> {
         self.alias.as_deref()
@@ -189,6 +194,44 @@ impl DenylistEntry {
     pub fn review_deadline(&self) -> Option<SystemTime> {
         self.review_deadline
     }
+
+    /// Catalog pack identifier that sourced this entry, if any.
+    #[must_use]
+    pub fn source_pack_id(&self) -> Option<&str> {
+        self.source_pack_id.as_deref()
+    }
+
+    /// Pack manifest CID that sourced this entry, if any.
+    #[must_use]
+    pub fn source_pack_manifest_cid(&self) -> Option<&str> {
+        self.source_pack_manifest_cid.as_deref()
+    }
+
+    /// Merkle root of the source pack, if any.
+    #[must_use]
+    pub fn source_pack_merkle_root(&self) -> Option<&str> {
+        self.source_pack_merkle_root.as_deref()
+    }
+
+    /// Proposal identifier that issued the source pack, if any.
+    #[must_use]
+    pub fn issued_by_proposal_id(&self) -> Option<&str> {
+        self.issued_by_proposal_id.as_deref()
+    }
+
+    /// Review reference attached to the source pack, if any.
+    #[must_use]
+    pub fn review_reference(&self) -> Option<&str> {
+        self.review_reference.as_deref()
+    }
+
+    /// Whether the entry carries governance provenance rather than a local-only source.
+    #[must_use]
+    pub fn is_governance_backed(&self) -> bool {
+        self.governance_reference.as_deref().is_some()
+            || self.issued_by_proposal_id.as_deref().is_some()
+            || self.review_reference.as_deref().is_some()
+    }
 }
 
 /// Builder for [`DenylistEntry`] metadata.
@@ -203,6 +246,11 @@ pub struct DenylistEntryBuilder {
     canon: Option<String>,
     governance_reference: Option<String>,
     review_deadline: Option<SystemTime>,
+    source_pack_id: Option<String>,
+    source_pack_manifest_cid: Option<String>,
+    source_pack_merkle_root: Option<String>,
+    issued_by_proposal_id: Option<String>,
+    review_reference: Option<String>,
 }
 
 impl Default for DenylistEntryBuilder {
@@ -217,6 +265,11 @@ impl Default for DenylistEntryBuilder {
             canon: None,
             governance_reference: None,
             review_deadline: None,
+            source_pack_id: None,
+            source_pack_manifest_cid: None,
+            source_pack_merkle_root: None,
+            issued_by_proposal_id: None,
+            review_reference: None,
         }
     }
 }
@@ -294,6 +347,41 @@ impl DenylistEntryBuilder {
         self
     }
 
+    /// Records the catalog pack identifier that sourced the entry.
+    #[must_use]
+    pub fn source_pack_id(mut self, pack_id: Option<String>) -> Self {
+        self.source_pack_id = pack_id;
+        self
+    }
+
+    /// Records the source pack manifest CID.
+    #[must_use]
+    pub fn source_pack_manifest_cid(mut self, manifest_cid: Option<String>) -> Self {
+        self.source_pack_manifest_cid = manifest_cid;
+        self
+    }
+
+    /// Records the source pack Merkle root.
+    #[must_use]
+    pub fn source_pack_merkle_root(mut self, merkle_root: Option<String>) -> Self {
+        self.source_pack_merkle_root = merkle_root;
+        self
+    }
+
+    /// Records the governance proposal that issued the source pack.
+    #[must_use]
+    pub fn issued_by_proposal_id(mut self, proposal_id: Option<String>) -> Self {
+        self.issued_by_proposal_id = proposal_id;
+        self
+    }
+
+    /// Records the review reference attached to the source pack.
+    #[must_use]
+    pub fn review_reference(mut self, review_reference: Option<String>) -> Self {
+        self.review_reference = review_reference;
+        self
+    }
+
     /// Completes the builder.
     #[must_use]
     pub fn build(self) -> DenylistEntry {
@@ -307,6 +395,11 @@ impl DenylistEntryBuilder {
             canon: self.canon,
             governance_reference: self.governance_reference,
             review_deadline: self.review_deadline,
+            source_pack_id: self.source_pack_id,
+            source_pack_manifest_cid: self.source_pack_manifest_cid,
+            source_pack_merkle_root: self.source_pack_merkle_root,
+            issued_by_proposal_id: self.issued_by_proposal_id,
+            review_reference: self.review_reference,
         }
     }
 
@@ -375,14 +468,23 @@ impl DenylistEntryBuilder {
                 if self.expires_at.is_some() {
                     return Err("permanent entries must omit `expires_at`".to_string());
                 }
-                if policy.require_governance_reference()
-                    && self
-                        .governance_reference
+                let has_governance_provenance = self
+                    .governance_reference
+                    .as_deref()
+                    .is_some_and(|value| !value.is_empty())
+                    || self
+                        .issued_by_proposal_id
                         .as_deref()
-                        .map(str::is_empty)
-                        .unwrap_or(true)
-                {
-                    return Err("permanent entries require `governance_reference`".to_string());
+                        .is_some_and(|value| !value.is_empty())
+                    || self
+                        .review_reference
+                        .as_deref()
+                        .is_some_and(|value| !value.is_empty());
+                if policy.require_governance_reference() && !has_governance_provenance {
+                    return Err(
+                        "permanent entries require governance provenance (`governance_reference`, `issued_by_proposal_id`, or `review_reference`)"
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -722,7 +824,7 @@ impl GatewayDenylist {
         self.lookup(&DenylistKind::Url(url.as_ref().to_owned()), now)
     }
 
-    /// Checks whether the given canonical account identifier is blocked.
+    /// Checks whether the given canonical I105 account identifier is blocked.
     #[must_use]
     pub fn check_account_id<S: AsRef<str>>(
         &self,
@@ -735,7 +837,7 @@ impl GatewayDenylist {
         )
     }
 
-    /// Checks whether the given routing alias is blocked.
+    /// Checks whether the given on-chain account alias is blocked.
     #[must_use]
     pub fn check_account_alias<S: AsRef<str>>(
         &self,
@@ -975,5 +1077,33 @@ mod tests {
             Some("council-resolution-2025-014")
         );
         assert_eq!(entry.policy_tier(), DenylistPolicyTier::Permanent);
+    }
+
+    #[test]
+    fn entry_preserves_source_pack_metadata() {
+        let entry = DenylistEntryBuilder::default()
+            .source_pack_id(Some("global-core".to_owned()))
+            .source_pack_manifest_cid(Some("bafy-pack".to_owned()))
+            .source_pack_merkle_root(Some("merkle-root".to_owned()))
+            .issued_by_proposal_id(Some("AC-2026-241".to_owned()))
+            .review_reference(Some("review-42".to_owned()))
+            .build();
+
+        assert_eq!(entry.source_pack_id(), Some("global-core"));
+        assert_eq!(entry.source_pack_manifest_cid(), Some("bafy-pack"));
+        assert_eq!(entry.source_pack_merkle_root(), Some("merkle-root"));
+        assert_eq!(entry.issued_by_proposal_id(), Some("AC-2026-241"));
+        assert_eq!(entry.review_reference(), Some("review-42"));
+        assert!(entry.is_governance_backed());
+    }
+
+    #[test]
+    fn entry_without_governance_provenance_remains_local() {
+        let entry = DenylistEntryBuilder::default()
+            .source_pack_id(Some("local-ops".to_owned()))
+            .build();
+
+        assert_eq!(entry.source_pack_id(), Some("local-ops"));
+        assert!(!entry.is_governance_backed());
     }
 }

@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - AEAD/對稱：`aes-gcm`、`chacha20poly1305`、`aead` 特徵 (RustCrypto) — 規範。
 - 簽名/ECC：`ed25519-dalek`、`x25519-dalek`（dalek 項目）、`k256`（RustCrypto）、`secp256k1`（libsecp 綁定）——全部合法；更喜歡單個 secp256k1 堆棧（`k256` 對於純 Rust 或 `secp256k1` 對於 libsecp）以減少表面積。
 - BLS12-381/ZK：`blstrs`、`halo2_*` — 廣泛應用於生產 ZK 生態系統；合法的。
-- PQ：`pqcrypto-dilithium`、`pqcrypto-traits` — 合法參考包。
+- PQ：`pqcrypto-mldsa`、`pqcrypto-traits` — 合法參考包。
 - TLS：`rustls`、`tokio-rustls`、`hyper-rustls` — 規範的現代 Rust TLS 堆棧。
 - 噪聲：`snow` — 規範實現。
 - 序列化：`parity-scale-codec` 是 SCALE 的規範。 Serde 已從整個工作區的生產依賴關係中刪除； Norito 派生/編寫器涵蓋每個運行時路徑。任何殘留的 Serde 引用都存在於歷史文檔、護欄腳本或僅限測試的白名單中。

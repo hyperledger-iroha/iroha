@@ -1,256 +1,123 @@
 ---
-lang: ur
-direction: rtl
-source: docs/portal/docs/sns/address-display-guidelines.pt.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+id: address-display-guidelines
+title: Sora Address Display Guidelines
+sidebar_label: Address display
+description: UX and CLI requirements for canonical i105 account ids and on-chain aliases (ADDR-6).
 ---
 
-'@سائٹ/ایس آر سی/اجزاء/ایکسپلور ایڈڈریس کارڈ' سے ایکسپلور ایڈریس کارڈ درآمد کریں۔
+import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
-::: نوٹ کینونیکل ماخذ
-یہ صفحہ `docs/source/sns/address_display_guidelines.md` کا آئینہ دار ہے اور اب کام کرتا ہے
-پورٹل کی کیننیکل کاپی کے طور پر۔ ماخذ فائل PRS کے لئے باقی ہے
-ترجمہ
+:::note Canonical Source
+This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
+as the canonical portal copy. The source file sticks around for translation PRs.
 :::
 
-بٹوے ، ایکسپلورر ، اور ایس ڈی کے مثالوں میں اکاؤنٹ کے پتے کا علاج کرنا چاہئے
-ناقابل تسخیر پے لوڈز۔ میں اینڈروئیڈ ریٹیل پرس کی مثال
-`examples/android/retail-wallet` اب مطلوبہ UX پیٹرن کو ظاہر کرتا ہے:
+Wallets, explorers, and SDK samples must treat the canonical I105
+literal as the only public account-id format. On-chain aliases are separate
+lookup keys:
 
-- ** کاپی کے دو اہداف۔ ** دو واضح کاپی بٹن بھیجیں: I105
-  (ترجیحی) کمپریسڈ فارم صرف سورہ (`sora...` ، دوسرا بہترین آپشن) ہے۔ I105 اور ہمیشہ کے لئے محفوظ
-  بیرونی طور پر شیئر کریں اور QR پے لوڈ کو کھانا کھلائیں۔ کمپریسڈ مختلف قسم
-  ان لائن انتباہ کو شامل کرنا ضروری ہے کیونکہ یہ صرف ان ایپس کے اندر کام کرتا ہے جو سپورٹ کرتے ہیں
-  سورہ۔ اینڈروئیڈ ریٹیل پرس کی مثال مادی بٹنوں اور ان دونوں کو جوڑتی ہے
-  ٹول ٹپس میں
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml` ، اور
-  ios swiftui ڈیمو `AddressPreviewCard` in کے ذریعے اسی ux کی آئینہ دار ہے
-  `examples/ios/NoritoDemo/Sources/ContentView.swift`۔
-- ** مونو اسپیس ، انتخابی متن۔ ** ایک فونٹ کے ساتھ دونوں ڈور پیش کریں
-  مونو اسپیس اور `textIsSelectable="true"` تاکہ صارف معائنہ کرسکیں
-  IME کی درخواست کے بغیر اقدار۔ قابل تدوین والے شعبوں سے پرہیز کریں: آئی ایم ای کانا کو دوبارہ لکھ سکتا ہے
-  یا انجیکشن صفر چوڑائی والے کوڈ پوائنٹس۔
-- ** ضمنی ڈیفالٹ ڈومین اشارے۔ ** جب سلیکٹر ڈومین کی طرف اشارہ کرتا ہے
-  مضمر `default` ، ایک لیجنڈ کو یاد دلاتے ہوئے آپریٹرز کو دکھائیں جو کوئی نہیں
-  لاحقہ ضروری ہے۔ ایکسپلورر کو بھی ڈومین لیبل کو اجاگر کرنا چاہئے
-  کیننیکل جب سلیکٹر ایک ڈائجسٹ کو انکوڈ کرتا ہے۔
-- ** QR I105. ** QR کوڈز کو تار I105 کو انکوڈ کرنا ہوگا۔ اگر QR کی نسل
-  ناکام ، خالی شبیہہ کے بجائے ایک واضح غلطی دکھائیں۔
-- ** کلپ بورڈ پیغام۔ ** کمپریسڈ فارم کی کاپی کرنے کے بعد ،
-  ٹوسٹ یا سنیک بار جاری کریں صارفین کو یاد دلاتے ہیں کہ وہ صرف سورہ ہے اور
-  IME کے ذریعہ مسخ کرنے کا خطرہ۔
+- `name@dataspace`
+- `name@domain.dataspace`
 
-ان محافظوں کے بعد یونیکوڈ/آئی ایم ای بدعنوانی کو روکتا ہے اور اس کے معیار پر پورا اترتا ہے
-بٹوے/ایکسپلورر کے UX کے لئے EDDR-6 روڈ میپ کی قبولیت۔
+Those aliases resolve on-chain to the canonical i105 account id. They are not
+an alternate public account-id encoding.
 
-## حوالہ اسکرین شاٹس
+## Required UX
 
-اس بات کو یقینی بنانے کے لئے مقام کے جائزوں کے دوران درج ذیل حوالوں کا استعمال کریں
-بٹن کے لیبل ، ٹول ٹپس اور انتباہات پلیٹ فارمز میں منسلک ہیں:
+- **Copy/share only canonical i105.** Ship one primary copy action for the
+  canonical I105 account id. That same literal powers QR payloads,
+  deep links, and clipboard actions.
+- **Render aliases separately.** If a workflow includes an alias, show it in a
+  labeled field such as “Alias” or “Routing alias”. Do not concatenate it onto
+  the i105 literal.
+- **Monospace, selectable text.** Render the i105 literal with a monospace font
+  and `textIsSelectable="true"` so users can inspect it without invoking an
+  IME. Avoid editable fields: IMEs can rewrite kana or inject zero-width code
+  points.
+- **Confirm the exact copied value.** After copying the i105 form, emit a toast
+  or snackbar that quotes the canonical i105 literal.
+- **No alternate public encodings.** Canonical hex and legacy/non-canonical
+  address forms are tooling/debug inputs only and must not be marketed as
+  copy/share formats.
 
-- Android حوالہ: `/img/sns/address_copy_android.svg`
+## Screenshot fixtures
 
-  ! [ڈبل کاپی Android حوالہ] (/img/sns/address_copy_android.svg)
+Use the following fixtures during localization reviews to ensure button labels,
+tooltips, and warnings stay aligned across platforms:
 
-- iOS حوالہ: `/img/sns/address_copy_ios.svg`
+- Android reference: `/img/sns/address_copy_android.svg`
 
-  ! [ڈبل کاپی iOS حوالہ] (/img/sns/address_copy_ios.svg)
+  ![Android address copy reference](/img/sns/address_copy_android.svg)
 
-## SDK مددگار
+- iOS reference: `/img/sns/address_copy_ios.svg`
 
-ہر ایس ڈی کے ایک سہولت مددگار کو بے نقاب کرتا ہے جو I105 اور کمپریسڈ فارم واپس کرتا ہے
-انتباہی تار کے ساتھ ساتھ تاکہ UI پرتیں مستقل ہوں:- جاوا اسکرپٹ: `AccountAddress.displayFormats(networkPrefix?: number)`
+  ![iOS address copy reference](/img/sns/address_copy_ios.svg)
+
+## SDK helpers
+
+Each SDK exposes a convenience helper that returns canonical I105
+rendering plus warning text so UI layers can stay consistent:
+
+- JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
-- جاوا اسکرپٹ انسپکٹر: `inspectAccountId(...)` انتباہی تار لوٹاتا ہے
-  جب کال کرنے والے لفظی فراہم کرتے ہیں تو اس کو کمپریسڈ اور اس کو `warnings` میں شامل کرتا ہے
-  `sora...` ، لہذا پرس/ایکسپلورر ڈیش بورڈز انتباہ ظاہر کرسکتے ہیں
-  صرف پیدا ہونے کے بجائے گلونگ/توثیق کے بہاؤ کے دوران صرف سورہ
-  کمپریسڈ فارم خود ہی۔
-- ازگر: `AccountAddress.display_formats(network_prefix: int = 753)`
-- سوئفٹ: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
-- جاوا/کوٹلن: `AccountAddress.displayFormats(int networkPrefix = 753)`
+- Python: `AccountAddress.display_formats(network_prefix: int = 753)`
+- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
   (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
-UI پرتوں میں انکوڈ منطق کو تبدیل کرنے کے بجائے ان مددگاروں کا استعمال کریں۔ اے
-جاوا اسکرپٹ ہیلپر `domainSummary` (`tag` ، میں ایک پے لوڈ `selector` کو بھی بے نقاب کرتا ہے۔
-`digest_hex` ، `registry_id` ، `label`) UIS کے لئے اس بات کی نشاندہی کرنے کے لئے کہ آیا ایک سلیکٹر اور
-لوکل 12 یا رجسٹری کی حمایت کے بغیر کچے پے لوڈ کو دوبارہ بھیجے۔
+Use these helpers instead of reimplementing the encode logic in UI layers.
+Use alias-aware Torii endpoints when you need to resolve `name@dataspace` or
+`name@domain.dataspace` into the canonical i105 account id.
 
-## ایکسپلورر انسٹرومینٹیشن ڈیمو
+## Explorer instrumentation demo
 
+<ExplorerAddressCard />
 
+Explorers should mirror the wallet telemetry and accessibility work:
 
-ایکسپلورر کو لازمی طور پر ٹیلی میٹری اور قابل رسا کام کا آئینہ دار ہونا چاہئے
-پرس:
+- Apply `data-copy-mode="i105|alias|qr"` to copy buttons so front-ends can emit
+  usage counters alongside server-side account-literal metrics.
+- Pair every control with distinct `aria-label`/`aria-describedby` hints that
+  explain whether a control copies the canonical i105 account id, views the
+  alias, or shares the QR payload.
+- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
+  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
 
-- کاپی بٹنوں پر `data-copy-mode="i105|i105_default|qr"` کا اطلاق کریں تاکہ
-  فرنٹ اینڈز Torii میٹرک کے ساتھ ساتھ استعمال کے کاؤنٹرز کا اخراج کرسکتے ہیں
-  `torii_address_format_total`۔ ڈیمو کے جزو کے اوپر ایک واقعہ فائر کرتا ہے
-  `iroha:address-copy` کے ساتھ `{mode,timestamp}` ؛ اسے اپنی پائپ لائن سے مربوط کریں
-  تجزیات/ٹیلی میٹری (جیسے طبقہ یا نوریٹو کلیکٹر کو بھیجیں)
-  تاکہ ڈیش بورڈز ایڈریس فارمیٹس کے استعمال سے باہمی تعلق رکھ سکیں
-  کلائنٹ کاپی طریقوں کے ساتھ سرور۔ کاؤنٹرز کو بھی نقل تیار کریں
-  اسی فیڈ میں ڈومین Torii (`torii_address_domain_total{domain_kind}`)
-  یہ کہ مقامی -12 ریٹائرمنٹ جائزے 30 دن کا ثبوت برآمد کرسکتے ہیں
-  `domain_kind="local12"` براہ راست `address_ingest` Grafana کے پینل سے۔
-- ہر کنٹرولر کو مختلف `aria-label`/`aria-describedby` ٹریک کے ساتھ جوڑیں
-  اس کی وضاحت ہے کہ آیا لفظی اور محفوظ کرنا (I105) یا صرف سورہ
-  (گولی) وضاحت میں ضمنی ڈومین کے عنوان کو شامل کریں تاکہ
-  معاون ٹیکنالوجی وہی سیاق و سباق کو ظاہر کرتی ہے جو ضعف سے ظاہر ہوتا ہے۔
-- براہ راست خطے کو بے نقاب کریں (جیسے `<output aria-live="polite">...</output>`)
-  کاپی کے نتائج اور انتباہات کا اعلان ، کے طرز عمل کو سیدھ میں کرنا
-  وائس اوور/ٹاک بیک پہلے ہی سوئفٹ/اینڈروئیڈ مثالوں میں جڑا ہوا ہے۔
+## Enforcing canonical forms
 
-یہ آلہ کار ADDR-6B کو یہ ثابت کرکے مطمئن کرتا ہے کہ آپریٹرز مشاہدہ کرسکتے ہیں
-Torii دونوں ہی اس سے پہلے کے کلائنٹ کاپی کے طریقوں
-مقام کے سلیکٹرز غیر فعال ہیں۔
+Use the CLI workflow documented under ADDR-5:
 
-## مقامی -> عالمی منتقلی ٹول کٹ
-
-خود کار طریقے سے [مقامی -> عالمی ٹول کٹ] (local-to-global-toolkit.md) استعمال کریں
-متبادل مقامی سلیکٹرز کا جائزہ اور تبادلہ۔ مددگار دونوں رپورٹ جاری کرتا ہے
-I105 تبدیل/کمپریسڈ لسٹ آپریٹرز کے لئے آڈٹ JSON
-تیاری کے ٹکٹوں سے منسلک ہوں ، جبکہ اس سے وابستہ رن بک ڈیش بورڈز کو لنک کرتا ہے
-Grafana اور الرٹ مینجر قواعد جو سخت وضع میں کٹ اوور کو کنٹرول کرتے ہیں۔
-
-## بائنری لے آؤٹ فوری حوالہ (EDDR-1A)جب ایس ڈی کے اعلی ایڈریس ٹولنگ (انسپکٹرز ، ٹول ٹپس ، کو بے نقاب کرتے ہیں ،
-توثیق ، ​​منشور بلڈرز) ، تار کی شکل میں ڈویلپرز پوائنٹ
-`docs/account_structure.md` پر کیننیکل۔ ترتیب ہمیشہ
-`header · selector · controller` ، جہاں ہیڈر بٹس ہیں:
-
-```
-bit index:   7        5 4      3 2      1 0
-             ┌─────────┬────────┬────────┬────┐
-payload bit: │version  │ class  │  norm  │ext │
-             └─────────┴────────┴────────┴────┘
-```
-
-- `addr_version = 0` (بٹس 7-5) آج ؛ غیر صفر اقدار محفوظ ہیں اور ضروری ہیں
-  `AccountAddressError::InvalidHeaderVersion` کو بڑھاؤ۔
-- `addr_class` سادہ کنٹرولرز (`0`) کو ملٹی سیگ (`1`) سے ممتاز کرتا ہے۔
-- `norm_version = 1` انکوڈس نورم V1 سلیکٹر کے قواعد۔ مستقبل کے معیارات
-  اسی 2 بٹ فیلڈ کو دوبارہ استعمال کریں گے۔
-- `ext_flag` اور ہمیشہ `0` ؛ فعال بٹس پے لوڈ کی توسیع کی نشاندہی نہیں کرتے ہیں
-  تائید
-
-سلیکٹر فورا. ہیڈر کی پیروی کرتا ہے:
-
-```
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind)           │
-└──────────┴──────────────────────────────────────────────┘
-```
-
-UIS اور SDKs کو سلیکٹر کی قسم کو ظاہر کرنے کے لئے تیار رہنا چاہئے:
-
-- `0x00` = ضمنی ڈیفالٹ ڈومین (بغیر پے لوڈ کے)۔
-- `0x01` = لوکل ڈائجسٹ (12-بائٹ `blake2s_mac("SORA-LOCAL-K:v1", label)`)۔
-- `0x02` = عالمی رجسٹری انٹری (`registry_id:u32` بگ اینڈین)۔
-
-کیننیکل ہیکس کی مثالیں جو بٹوے کے اوزار لنک کرسکتی ہیں یا سرایت کرسکتی ہیں
- دستاویزات/ٹیسٹ:
-
-| سلیکٹر کی قسم | کیننیکل ہیکس |
-| ----------------- | ----------------- |
-| مضمر پیٹرن | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| مقامی ڈائجسٹ (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| عالمی رجسٹریشن (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
-
-کے مکمل جدول کے لئے `docs/source/references/address_norm_v1.md` دیکھیں
-مکمل بائٹ ڈایاگرام کے لئے سلیکٹر/ریاست اور `docs/account_structure.md`۔
-
-## کیننیکل فارم مسلط کریں
-
-آپریٹرز جو متبادل مقامی انکوڈنگ کو کیننیکل I105 میں تبدیل کرتے ہیں یا
-کمپریسڈ ڈوروں کو EDDR-5 میں دستاویزی CLI ورک فلو کی پیروی کرنا ہوگی:
-
-1. `iroha tools address inspect` اب I105 کے ساتھ تشکیل شدہ JSON ڈائجسٹ کو آؤٹ پٹ کرتا ہے ،
-   کمپریسڈ اور کیننیکل ہیکس پے لوڈز۔ خلاصہ میں ایک شے بھی شامل ہے
-   Torii فیلڈز کے ساتھ `kind`/`warning` اور کسی بھی ڈومین کے ذریعہ فراہم کردہ ڈومین کی بازگشت کرتا ہے
-   فیلڈ `input_domain`۔ جب `kind` اور `local12` ، CLI پر ایک انتباہ پرنٹ کرتا ہے
-   stderr اور JSON ڈائجسٹ ایک ہی رہنمائی کی بازگشت کریں تاکہ CI پائپ لائنز اور SDKs
-   اسے ڈسپلے کرسکتے ہیں۔ جب بھی آپ کھیلنا چاہتے ہو `legacy  suffix` پاس کریں
-   `<i105>@<domain>` کے بطور انکوڈنگ تبدیل کی گئی۔
-2. ایس ڈی کے جاوا اسکرپٹ مددگار کے ذریعہ ایک ہی انتباہ/خلاصہ ظاہر کرسکتے ہیں:
+1. Run `iroha tools address convert <address-or-account_id> --format json`.
+   The summary reports the detected format and canonical encodings (`i105`,
+   `canonical_hex`). Strict parser paths accept canonical I105 only.
+2. SDKs can surface the same summary via JavaScript:
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("sora...");
-   if (summary.domain.warning) {
-     console.warn(summary.domain.warning);
-   }
+   const summary = inspectAccountId(accountLiteral);
    console.log(summary.i105.value, summary.i105Warning);
    ```
-  مددگار لفظی کے پتہ لگائے گئے I105 سابقہ ​​کو محفوظ رکھتا ہے جب تک کہ آپ فراہم نہ کریں
-  واضح طور پر `networkPrefix` ، لہذا غیر معیاری نیٹ ورکس کے لئے خلاصے نہیں ہیں
-  ڈیفالٹ سابقہ ​​کے ساتھ خاموشی سے دوبارہ پیش کیا گیا۔3. `i105.value` کو دوبارہ استعمال کرکے کیننیکل پے لوڈ کو تبدیل کریں
-   `i105_default` خلاصہ سے (یا `--format` کے ذریعے ایک اور انکوڈنگ کی درخواست کریں)۔ یہ
-   بیرونی اشتراک کے لئے ڈور پہلے ہی محفوظ ہیں۔
-4. اپ ڈیٹ کریں ، ریکارڈ اور کسٹمر کا سامنا کرنے والے دستاویزات فارم کے ساتھ
-   کیننیکل اور ہم منصبوں کو مطلع کریں کہ مقامی سلیکٹرز کو مسترد کردیا جائے گا
-   جب کٹ اوور مکمل ہو۔
-5. بلک ڈیٹاسیٹس کے لئے ، چلائیں
-   `iroha tools address audit --input addresses.txt --network-prefix 753`۔ حکم
-   نیو لائن کے ذریعہ الگ ہونے والے ایل ای لٹرلز (`#` کے ساتھ شروع ہونے والے تبصرے ہیں
-   نظرانداز کیا گیا ، اور `--input -` یا کوئی پرچم STDIN استعمال نہیں کرتا ہے) ، JSON کی ایک رپورٹ کو آؤٹ پٹ کرتا ہے
-   ہر اندراج کے لئے کیننیکل/I105/کمپریسڈ سمریوں کے ساتھ اور غلطیوں کی گنتی کے لئے
-   پارس اور مقامی ڈومین انتباہات۔ متبادل ڈمپ آڈٹ کرتے وقت `--allow-errors` استعمال کریں
-   کچرے کی لکیروں کے ساتھ ، اور `strict CI post-check` کے ساتھ آٹومیشن کو لاک کریں جب
-   آپریٹرز CI میں مقامی سلیکٹرز کو لاک کرنے کے لئے تیار ہیں۔
-6. جب آپ کو لائن بائی لائن دوبارہ لکھنے کی ضرورت ہو تو ، استعمال کریں
-  مقامی سلیکٹر ریمیڈیشن ورک شیٹ کے لئے ، استعمال کریں
-  ایک CSV `input,status,format,...` برآمد کرنے کے لئے جو انکوڈنگ کو اجاگر کرتا ہے
-  ایک ہی پاس میں کیننیکلز ، انتباہات اور تجزیہ ناکامی۔
-   مددگار غیر مقامی لائنوں کو بطور ڈیفالٹ نظرانداز کرتا ہے ، ہر باقی اندراج کو تبدیل کرتا ہے
-   درخواست کردہ انکوڈنگ (I105/کمپریسڈ/ہیکس/JSON) کے لئے ، اور ڈومین کو محفوظ رکھتا ہے
-   اصل جب `legacy  suffix` سیٹ کیا گیا ہے۔ کام `--allow-errors` کو یکجا کریں
-   اسکیننگ جاری رکھنا یہاں تک کہ جب ڈمپ میں بدتمیزی والے لفظی ہوتے ہیں۔
-7. CI/LINT آٹومیشن `ci/check_address_normalize.sh` چلا سکتا ہے ، جو نکالتا ہے
-   `fixtures/account/address_vectors.json` کے مقامی سلیکٹرز ، کے ذریعے تبدیل ہوتے ہیں
-   `iroha tools address normalize` ، اور دوبارہ
-   `iroha tools address audit` یہ ثابت کرنے کے لئے کہ ریلیز جاری نہیں ہوتی ہے
-   مزید مقامی ڈائجسٹ۔
+3. Resolve aliases through alias-aware APIs instead of feeding
+   `name@dataspace` or `name@domain.dataspace` into strict `AccountId`
+   parsers.
+4. Reuse `i105.value` from the summary (or request another encoding via
+   `--format`) in manifests and user-facing docs.
+4. For bulk data sets, run
+   `iroha tools address audit --input addresses.txt --network-prefix 753`.
+   Audit emits JSON/CSV summaries per row and fails on parse errors by default.
+   Use `--allow-errors` only for best-effort scans.
+5. For newline-to-newline rewrites, run
+   `iroha tools address normalize --input addresses.txt --network-prefix 753 --format i105`.
+   This rewrites each parsed row to the requested encoding
+   (canonical I105/hex/JSON). Pair with
+   `--allow-errors` for malformed dump triage.
 
-`torii_address_local8_total{endpoint}` کے ساتھ مل کر
-`torii_address_collision_total{endpoint,kind="local12_digest"}` ،
-`torii_address_collision_domain_total{endpoint,domain}` ، اور پینل Grafana
-`dashboards/grafana/address_ingest.json` نفاذ کا سگنل فراہم کریں: کب
-پروڈکشن ڈیش بورڈز صفر جائز مقامی بھیجنے اور صفر تصادم کو ظاہر کرتے ہیں
-لوکل -12 مسلسل 30 دن کے لئے ، Torii مقامی 8 گیٹ کو سخت فیل میں بدل دے گا
-مین نیٹ پر ، اس کے بعد مقامی 12 کے بعد جب عالمی ڈومینز ڈومین اندراجات رکھتے ہیں
-اسی ریکارڈ آپریٹر کو انتباہ کے طور پر سی ایل آئی آؤٹ پٹ پر غور کریں
-یہ منجمد - وہی انتباہی تار SDK ٹول ٹپس اور میں استعمال ہوتا ہے
-روڈ میپ آؤٹ پٹ کے معیار کے ساتھ برابری کو برقرار رکھنے کے لئے آٹومیشن۔ Torii اب
-جب رجعت پسندی کی تشخیص کرتے ہو تو دیو/ٹیسٹ کلسٹرز۔ آئینہ دار جاری رکھیں
-`torii_address_domain_total{domain_kind}` پر Grafana
-(`dashboards/grafana/address_ingest.json`) تاکہ EDDR-7 ثبوت پیکیج
-ثابت کریں کہ `domain_kind="local12"` 30 کی مطلوبہ ونڈو میں صفر پر رہا
- مین نیٹ سے متبادل سلیکٹرز کو غیر فعال کرنے سے کچھ دن پہلے۔ الرٹ مینجر پیکیج
-.- `AddressLocal8Resurgence` صفحہ جب بھی کوئی سیاق و سباق میں اضافے کی اطلاع دیتا ہے
-  مقامی 8 نووو۔ سخت موڈ رول آؤٹ کو روکیں ، ایس ڈی کے سطح کا پتہ لگائیں
-  ڈیش بورڈ پر ذمہ دار اور ، اگر ضروری ہو تو ، عارضی طور پر وضاحت کریں
-  پہلے سے طے شدہ (`true`)۔
-- `AddressLocal12Collision` فائر ہوتا ہے جب دو مقامی 12 لیبل ہیش کو
-  وہی ہاضمہ۔ توقف کی پروموشنز کو روکیں ، ٹول کٹ لوکل چلائیں -> گلوبل
-  ڈائجسٹ میپنگ کا آڈٹ کرنے اور اس سے پہلے گورننس Nexus کے ساتھ ہم آہنگی
-  to reissue the registry entry or reactivate downstream rollouts.
-- `AddressInvalidRatioSlo` انتباہ کرتا ہے جب تناسب پورے بیڑے میں غلط ہے
-  ۔
-  ذمہ دارانہ سیاق و سباق/وجہ تلاش کرنے کے لئے `torii_address_invalid_total` استعمال کریں
-  اور سخت وضع کو دوبارہ فعال کرنے سے پہلے ملکیتی ایس ڈی کے ٹیم کے ساتھ ہم آہنگی کریں۔
+### Release note snippet (wallet & explorer)
 
-ریلیز نوٹ (پرس اور ایکسپلورر) سے ### اقتباس
+Include the following bullet in wallet/explorer release notes when shipping the cutover:
 
-براہ کرم جمع کرواتے وقت بٹوے/ایکسپلورر کی رہائی کے نوٹ میں درج ذیل گولی شامل کریں
-کٹ اوور:
-
-> ** پتے: ** شامل کرنے والا `iroha tools address normalize`
-> اور IC (`ci/check_address_normalize.sh`) سے منسلک ہے تاکہ پائپ لائنز
-> پرس/ایکسپلورر متبادل مقام کے سلیکٹرز کو شکلوں میں تبدیل کرسکتے ہیں
-> لوکل 8/لوکل -12 سے پہلے کیننیکل I105/کمپریسڈ میں بند ہوجاتا ہے
-> مین نیٹ۔ کمانڈ چلانے کے لئے کسی بھی کسٹم برآمدات کو اپ ڈیٹ کریں اور
-> ریلیز ثبوت کے بنڈل سے معمول کی فہرست منسلک کریں۔
+> **Addresses:** Copy/share flows now use canonical I105 account ids
+> only. On-chain aliases remain available as separate routing labels in
+> `name@dataspace` / `name@domain.dataspace` form and resolve to the same
+> canonical i105 account id.

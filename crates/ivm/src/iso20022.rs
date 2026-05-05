@@ -3844,7 +3844,7 @@ pub fn msg_sign(key: &[u8]) -> Vec<u8> {
         Ok(bytes) => bytes,
         Err(_) => return Vec::new(),
     };
-    use pqcrypto_dilithium::dilithium3 as dilithium;
+    use pqcrypto_mldsa::mldsa65 as dilithium;
     use pqcrypto_traits::sign::{DetachedSignature as _, SecretKey as _};
 
     if let Some((tag, rest)) = key.split_first() {
@@ -3903,7 +3903,7 @@ pub fn msg_verify_sig(sig: &[u8], key: &[u8]) -> bool {
         }
     }
     {
-        use pqcrypto_dilithium::dilithium3 as dilithium;
+        use pqcrypto_mldsa::mldsa65 as dilithium;
         if key.len() == dilithium::public_key_bytes() && sig.len() == dilithium::signature_bytes() {
             return verify_signature(SignatureScheme::MlDsa, &msg, sig, key);
         }
@@ -5691,7 +5691,7 @@ mod tests {
 
     #[test]
     fn msg_sign_and_verify_roundtrip_dilithium() {
-        use pqcrypto_dilithium::dilithium3 as dilithium;
+        use pqcrypto_mldsa::mldsa65 as dilithium;
         use pqcrypto_traits::sign::{PublicKey, SecretKey};
         reset();
         msg_parse("pacs.008", b"field=value").unwrap();

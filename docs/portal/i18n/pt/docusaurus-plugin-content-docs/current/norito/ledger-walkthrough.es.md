@@ -30,8 +30,8 @@ IDs de conta que os planos usam. O pacote por defeito inclui duas contas
 Demonstração de Derivadas das Claves:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Confirme os valores listando as primeiras contas:
@@ -50,7 +50,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dentro de wonderland (reemplaza --limit por un numero mayor si hace falta)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions que ya existen
@@ -66,7 +66,7 @@ Crie um novo ativo infinitamente acunável chamado `coffee` dentro do domínio
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 A CLI imprime o hash da transação enviada (por exemplo, `0x5f...`). Guarde-o para consultar o estado mais tarde.
@@ -74,7 +74,7 @@ A CLI imprime o hash da transação enviada (por exemplo, `0x5f...`). Guarde-o p
 ## 3. Acuna unidades na conta do operador
 
 As quantidades de ativos vivem abaixo do par `(asset definition, account)`. Acuna
-250 unidades de `coffee#wonderland` em `$ADMIN_ACCOUNT`:
+250 unidades de `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` em `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -7,7 +7,7 @@ cd "$REPO_ROOT"
 
 packages=(
   mochi-core
-  mochi-ui-egui
+  mochi-ui
   mochi-integration
 )
 
@@ -18,5 +18,8 @@ for package in "${packages[@]}"; do
   echo "[mochi] cargo test -p ${package}"
   cargo test -p "${package}"
 done
+
+echo "[mochi] bash -n scripts/mochi_local_sandbox.sh"
+bash -n scripts/mochi_local_sandbox.sh
 
 echo "[mochi] cargo gating complete"

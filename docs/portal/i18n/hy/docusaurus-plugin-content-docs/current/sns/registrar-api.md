@@ -108,17 +108,17 @@ Struct ReservedAssignmentRequestV1 {
 
 | Վերջնակետ | Մեթոդ | Օգտակար բեռ | Նկարագրություն |
 |----------|--------|---------|-------------|
-| `/v1/sns/registrations` | ՓՈՍՏ | `RegisterNameRequestV1` | Գրանցվեք կամ նորից բացեք անունը: Լուծում է գնագոյացման մակարդակը, վավերացնում է վճարման/կառավարման ապացույցները, թողարկում է գրանցման իրադարձությունները: |
-| `/v1/sns/registrations/{selector}/renew` | ՓՈՍՏ | `RenewNameRequestV1` | Երկարացնել ժամկետը. Պարտադրում է շնորհի/մարման պատուհանները քաղաքականությունից: |
-| `/v1/sns/registrations/{selector}/transfer` | ՓՈՍՏ | `TransferNameRequestV1` | Փոխանցել սեփականության իրավունքը, երբ կցվեն կառավարման հաստատումները: |
-| `/v1/sns/registrations/{selector}/controllers` | ԴՐԵԼ | `UpdateControllersRequestV1` | Փոխարինեք վերահսկիչի հավաքածու; վավերացնում է ստորագրված հաշվի հասցեները: |
-| `/v1/sns/registrations/{selector}/freeze` | ՓՈՍՏ | `FreezeNameRequestV1` | Խնամակալի/խորհրդի սառեցում. Պահանջում է խնամակալի տոմս և հղում կառավարման փաստաթղթերին: |
-| `/v1/sns/registrations/{selector}/freeze` | ՋՆՋԵԼ | `GovernanceHookV1` | Ապասառեցնել վերականգնումից հետո; ապահովում է խորհրդի անտեսումը գրանցված: |
+| `/v1/sns/names` | ՓՈՍՏ | `RegisterNameRequestV1` | Գրանցվեք կամ նորից բացեք անունը: Լուծում է գնագոյացման մակարդակը, վավերացնում է վճարման/կառավարման ապացույցները, թողարկում է գրանցման իրադարձությունները: |
+| `/v1/sns/names/{namespace}/{literal}/renew` | ՓՈՍՏ | `RenewNameRequestV1` | Երկարացնել ժամկետը. Պարտադրում է շնորհի/մարման պատուհանները քաղաքականությունից: |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | ՓՈՍՏ | `TransferNameRequestV1` | Փոխանցել սեփականության իրավունքը, երբ կցվեն կառավարման հաստատումները: |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | ԴՐԵԼ | `UpdateControllersRequestV1` | Փոխարինեք վերահսկիչի հավաքածու; վավերացնում է ստորագրված հաշվի հասցեները: |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | ՓՈՍՏ | `FreezeNameRequestV1` | Խնամակալի/խորհրդի սառեցում. Պահանջում է խնամակալի տոմս և հղում կառավարման փաստաթղթերին: |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | ՋՆՋԵԼ | `GovernanceHookV1` | Ապասառեցնել վերականգնումից հետո; ապահովում է խորհրդի անտեսումը գրանցված: |
 | `/v1/sns/reserved/{selector}` | ՓՈՍՏ | `ReservedAssignmentRequestV1` | Ստյուարդ/խորհուրդ վերապահված անունների նշանակում: |
 | `/v1/sns/policies/{suffix_id}` | ՍՏԱՆԱԼ | — | Ներբեռնեք ընթացիկ `SuffixPolicyV1` (cacheable): |
-| `/v1/sns/registrations/{selector}` | ՍՏԱՆԱԼ | — | Վերադարձնում է ընթացիկ `NameRecordV1` + արդյունավետ վիճակ (Ակտիվ, շնորհ և այլն): |
+| `/v1/sns/names/{namespace}/{literal}` | ՍՏԱՆԱԼ | — | Վերադարձնում է ընթացիկ `NameRecordV1` + արդյունավետ վիճակ (Ակտիվ, շնորհ և այլն): |
 
-**Ընտրողի կոդավորում.** `{selector}` ուղու հատվածը ընդունում է I105 (նախընտրելի), սեղմված (`sora`, երկրորդ լավագույն) կամ կանոնական վեցանկյուն ADDR-5-ի համար; Torii-ը նորմալացնում է այն `NameSelectorV1`-ի միջոցով:
+**Ընտրողի կոդավորում.** `{selector}` ուղու հատվածը ընդունում է i105 (նախընտրելի), սեղմված (`sora`, երկրորդ լավագույն) կամ կանոնական վեցանկյուն ADDR-5-ի համար; Torii-ը նորմալացնում է այն `NameSelectorV1`-ի միջոցով:
 
 **Սխալի մոդել.** բոլոր վերջնակետերը վերադարձնում են Norito JSON `code`, `message`, `details`-ով: Կոդերը ներառում են `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`:
 
@@ -131,7 +131,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -156,7 +156,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -164,7 +164,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -179,7 +179,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json`-ը պետք է պարունակի վավեր `GovernanceHookV1` գրառում (առաջարկի id, քվեարկության հեշեր, կառավարչի/խնամակալի ստորագրություններ): Յուրաքանչյուր հրաման պարզապես արտացոլում է համապատասխան `/v1/sns/registrations/{selector}/…` վերջնակետը, որպեսզի բետա օպերատորները կարողանան կրկնել ճշգրիտ Torii մակերեսները, որոնք կկանչեն SDK-ները:
+`--governance-json`-ը պետք է պարունակի վավեր `GovernanceHookV1` գրառում (առաջարկի id, քվեարկության հեշեր, կառավարչի/խնամակալի ստորագրություններ): Յուրաքանչյուր հրաման պարզապես արտացոլում է համապատասխան `/v1/sns/names/{namespace}/{literal}/…` վերջնակետը, որպեսզի բետա օպերատորները կարողանան կրկնել ճշգրիտ Torii մակերեսները, որոնք կկանչեն SDK-ները:
 
 ## 4. gRPC ծառայություն
 
@@ -226,7 +226,7 @@ Torii-ը ստուգում է ապացույցները՝ ստուգելով.
 
 1. Հաճախորդը հարցումներ է կատարում `/v1/sns/policies/{suffix_id}`-ին՝ գները, շնորհը և մատչելի մակարդակները ստանալու համար:
 2. Հաճախորդը կառուցում է `RegisterNameRequestV1`:
-   - `selector` ստացված նախընտրելի I105 կամ երկրորդ լավագույն սեղմված (`sora`) պիտակից:
+   - `selector` ստացված նախընտրելի i105 կամ երկրորդ լավագույն սեղմված (`sora`) պիտակից:
    - `term_years` քաղաքականության սահմաններում:
    - `payment` հղում կատարելով գանձապետարանի/տնտեսավարի բաժանարար փոխանցմանը:
 3. Torii վավերացնում է.
@@ -251,7 +251,7 @@ Grace-ի թարմացումները ներառում են ստանդարտ հա�
 
 1. Guardian-ը ներկայացնում է `FreezeNameRequestV1` տոմսի վկայակոչման միջադեպի ID-ով:
 2. Torii-ը ռեկորդը տեղափոխում է `NameStatus::Frozen`, արտանետում `NameFrozen`:
-3. Վերանորոգումից հետո ավագանու հարցերը գերակայում են. օպերատորն ուղարկում է DELETE `/v1/sns/registrations/{selector}/freeze` `GovernanceHookV1`-ով:
+3. Վերանորոգումից հետո ավագանու հարցերը գերակայում են. օպերատորն ուղարկում է DELETE `/v1/sns/names/{namespace}/{literal}/freeze` `GovernanceHookV1`-ով:
 4. Torii-ը վավերացնում է անտեսումը, արտանետում `NameUnfrozen`:
 
 ## 7. Վավերացման և սխալի կոդերը

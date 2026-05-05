@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
+use iroha::crypto::{Algorithm, KeyPair};
 use iroha::data_model::{
     Level,
     account::Account,
@@ -26,7 +27,7 @@ use iroha_primitives::numeric::{Numeric, NumericSpec};
 use iroha_test_network::{
     NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
 };
-use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+use iroha_test_samples::ALICE_ID;
 use norito::json;
 use tokio::time::{sleep, timeout};
 use toml::Table;
@@ -35,19 +36,80 @@ const COMMIT_CERT_TIMEOUT: Duration = Duration::from_secs(120);
 const COMMIT_CERT_POLL: Duration = Duration::from_millis(200);
 const HIGH_STAKE: u64 = 7_000;
 const LOW_STAKE: u64 = 1_000;
+const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STAKE_QUORUM_WAIT: Duration = Duration::from_secs(5);
 
 type CommitCertificate = Qc;
 
+fn validator_account_id_for_index(index: usize) -> AccountId {
+    let key_pair = KeyPair::from_seed(
+        format!("integration_tests::sumeragi_commit_certificates::{index}").into_bytes(),
+        Algorithm::Ed25519,
+    );
+    AccountId::new(key_pair.public_key().clone())
+}
+
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        "nexus".parse().expect("nexus domain"),
+        DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
 
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
+}
+
+fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::new(
+        DomainId::try_new("universal", "universal").expect("fee asset domain"),
+        "xor".parse().expect("fee asset name"),
+    )
+}
+
+fn nexus_fee_asset_id_literal() -> String {
+    nexus_fee_asset_definition_id().to_string()
+}
+
+fn npos_commit_quorum_network_builder() -> NetworkBuilder {
+    NetworkBuilder::new()
+        .with_peers(4)
+        .with_auto_populated_trusted_peers()
+        .with_config_layer(|layer| {
+            let gas_account_str = ALICE_ID.to_string();
+            layer
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(["nexus", "enabled"], true)
+                .write(
+                    ["nexus", "fees", "fee_asset_id"],
+                    nexus_fee_asset_id_literal(),
+                )
+                .write(
+                    ["nexus", "staking", "stake_asset_id"],
+                    stake_asset_id_literal(),
+                )
+                .write(
+                    ["nexus", "staking", "stake_escrow_account_id"],
+                    gas_account_str.clone(),
+                )
+                .write(
+                    ["nexus", "staking", "slash_sink_account_id"],
+                    gas_account_str,
+                )
+                .write(["sumeragi", "collectors", "k"], 1_i64)
+                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64);
+        })
+        // The test provides its own staking bootstrap and stake distribution.
+        .without_npos_genesis_bootstrap()
+        .with_genesis_block(|topology, topology_entries| {
+            let post_topology = stake_genesis_post_topology_transactions(topology.as_ref());
+            genesis_factory_with_post_topology(
+                Vec::new(),
+                post_topology,
+                topology,
+                topology_entries,
+            )
+        })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -200,43 +262,8 @@ async fn commit_certificate_block_sync_restores_restart_peer() -> Result<()> {
 async fn npos_commit_quorum_requires_stake() -> Result<()> {
     init_instruction_registry();
 
-    let builder = NetworkBuilder::new()
-        .with_peers(4)
-        .with_auto_populated_trusted_peers()
-        .with_config_layer(|layer| {
-            let gas_account_str = ALICE_ID.to_string();
-            layer
-                .write(["sumeragi", "consensus_mode"], "npos")
-                .write(["nexus", "enabled"], true)
-                .write(
-                    ["nexus", "staking", "stake_asset_id"],
-                    stake_asset_id_literal(),
-                )
-                .write(
-                    ["nexus", "staking", "stake_escrow_account_id"],
-                    gas_account_str.clone(),
-                )
-                .write(
-                    ["nexus", "staking", "slash_sink_account_id"],
-                    gas_account_str,
-                )
-                .write(["sumeragi", "collectors", "k"], 1_i64)
-                .write(["sumeragi", "collectors", "redundant_send_r"], 1_i64);
-        })
-        // The test provides its own staking bootstrap and stake distribution.
-        .without_npos_genesis_bootstrap()
-        .with_genesis_block(|topology, topology_entries| {
-            let post_topology = stake_genesis_post_topology_transactions(topology.as_ref());
-            genesis_factory_with_post_topology(
-                Vec::new(),
-                post_topology,
-                topology,
-                topology_entries,
-            )
-        });
-
     let Some(network) = sandbox::start_network_async_or_skip(
-        builder,
+        npos_commit_quorum_network_builder(),
         stringify!(npos_commit_quorum_requires_stake),
     )
     .await?
@@ -254,10 +281,6 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
             .get(1)
             .cloned()
             .ok_or_else(|| eyre!("expected at least 2 peers"))?;
-        let config_layers: Vec<ConfigLayer> = network
-            .config_layers()
-            .map(|layer| ConfigLayer(layer.into_owned()))
-            .collect();
 
         high_stake_peer.shutdown().await;
 
@@ -270,24 +293,53 @@ async fn npos_commit_quorum_requires_stake() -> Result<()> {
             blocked.is_none(),
             "non-empty block committed without stake quorum"
         );
+        Ok(())
+    }
+    .await;
 
-        high_stake_peer
-            .start_checked(config_layers.iter().cloned(), None)
-            .await
-            .wrap_err("restart high-stake peer")?;
+    network.shutdown().await;
+    drop(network);
+    result?;
+
+    let Some(network) = sandbox::start_network_async_or_skip(
+        npos_commit_quorum_network_builder(),
+        stringify!(npos_commit_quorum_requires_stake),
+    )
+    .await?
+    else {
+        return Ok(());
+    };
+
+    let result: Result<()> = async {
+        let high_stake_peer = network
+            .peers()
+            .first()
+            .cloned()
+            .ok_or_else(|| eyre!("expected at least 1 peer"))?;
+        let client = network.client();
+        let baseline = client.get_status()?.blocks_non_empty;
         client.submit_blocking(Log::new(
             Level::INFO,
-            "npos stake quorum recovered".to_string(),
+            "npos stake quorum restored".to_string(),
         ))?;
-        let status = client.get_status()?;
+        let status =
+            wait_for_non_empty_blocks(&client, baseline.saturating_add(1), COMMIT_CERT_TIMEOUT)
+                .await?
+                .ok_or_else(|| {
+                    eyre!("timed out waiting for NPoS quorum with high-stake validator online")
+                })?;
         ensure!(
             status.blocks_non_empty >= baseline.saturating_add(1),
-            "timed out waiting for stake quorum to commit"
+            "expected NPoS quorum to commit with high-stake validator online"
         );
         let expected_height = status.blocks;
 
         let http = reqwest::Client::new();
-        let submit_torii = submit_peer.torii_url();
+        let submit_torii = network
+            .torii_urls()
+            .into_iter()
+            .next()
+            .ok_or_else(|| eyre!("expected at least one Torii URL"))?;
         let cert =
             wait_for_commit_certificate(&http, submit_torii.as_str(), expected_height).await?;
         let high_stake_id = high_stake_peer.id();
@@ -522,12 +574,19 @@ async fn fetch_metrics(
 }
 
 fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<InstructionBox>> {
-    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+    let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
     let stake_asset_id = stake_asset_definition_id();
-    let gas_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
+    let fee_asset_id = nexus_fee_asset_definition_id();
+    let gas_account_id = ALICE_ID.clone();
 
     let definition = {
         let __asset_definition_id = stake_asset_id.clone();
+        AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+            .with_name(__asset_definition_id.name().to_string())
+    }
+    .with_metadata(Metadata::default());
+    let fee_definition = {
+        let __asset_definition_id = fee_asset_id.clone();
         AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
             .with_name(__asset_definition_id.name().to_string())
     }
@@ -536,31 +595,49 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
         Register::asset_definition(definition).into(),
+        Register::asset_definition(fee_definition).into(),
+        Mint::asset_numeric(
+            HIGH_STAKE,
+            AssetId::new(stake_asset_id.clone(), gas_account_id.clone()),
+        )
+        .into(),
+        Mint::asset_numeric(
+            NEXUS_FEE_SEED_AMOUNT,
+            AssetId::new(fee_asset_id.clone(), gas_account_id.clone()),
+        )
+        .into(),
     ];
-    for (idx, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(peer.public_key().clone());
+    for (idx, _peer) in topology.iter().enumerate() {
+        let validator_id = validator_account_id_for_index(idx);
         let stake = if idx == 0 { HIGH_STAKE } else { LOW_STAKE };
         if validator_id != gas_account_id {
-            bootstrap_tx.push(
-                Register::account(Account::new(
-                    validator_id.to_account_id(nexus_domain.clone()),
-                ))
-                .into(),
-            );
+            bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         }
         bootstrap_tx.push(
-            Mint::asset_numeric(stake, AssetId::new(stake_asset_id.clone(), validator_id)).into(),
+            Mint::asset_numeric(
+                stake,
+                AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+            )
+            .into(),
+        );
+        bootstrap_tx.push(
+            Mint::asset_numeric(
+                NEXUS_FEE_SEED_AMOUNT,
+                AssetId::new(fee_asset_id.clone(), validator_id),
+            )
+            .into(),
         );
     }
 
     let mut validator_tx = Vec::new();
     for (idx, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(peer.public_key().clone());
+        let validator_id = validator_account_id_for_index(idx);
         let stake = if idx == 0 { HIGH_STAKE } else { LOW_STAKE };
         validator_tx.push(
             RegisterPublicLaneValidator {
                 lane_id: LaneId::SINGLE,
                 validator: validator_id.clone(),
+                peer_id: PeerId::from(peer.public_key().clone()),
                 stake_account: validator_id.clone(),
                 initial_stake: Numeric::from(stake),
                 metadata: Metadata::default(),

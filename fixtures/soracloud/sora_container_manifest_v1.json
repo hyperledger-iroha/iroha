@@ -15,16 +15,31 @@
     "APP_ENV": "production",
     "LOG_LEVEL": "info"
   },
+  "inrou": null,
+  "required_config_names": [],
+  "required_secret_names": [],
+  "config_exports": [],
   "capabilities": {
     "network": {
       "mode": "Allowlist",
       "value": [
-        "api.sora.internal",
-        "wallet.sora.internal"
+        {
+          "host": "api.sora.internal",
+          "ports": [
+            443
+          ]
+        },
+        {
+          "host": "wallet.sora.internal",
+          "ports": [
+            443
+          ]
+        }
       ]
     },
     "allow_wallet_signing": true,
     "allow_state_writes": true,
+    "allow_model_inference": true,
     "allow_model_training": false
   },
   "resources": {

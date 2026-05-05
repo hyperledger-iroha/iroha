@@ -34,10 +34,10 @@ Esta pagina reflete `docs/source/soranexus_bootstrap_plan.md`. Mantenha as duas 
 ## Ambientes de rede
 - Operar dois ambientes Nexus com prefixos de rede distintos:
 - **Sora Nexus (mainnet)** - prefixo de rede de producao `nexus`, hospedando governanca canonica e servicos piggyback SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - prefixo de rede de staging `testus`, espelhando a configuracao da mainnet para testes de integracao e validacao pre-release (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Manter arquivos genesis separados, chaves de governanca e footprints de infraestrutura para cada ambiente. Testus atua como campo de provas para rollouts SoraFS/SoraNet antes de promover para Nexus.
-- Pipelines de CI/CD devem fazer deploy primeiro em Testus, executar smoke tests automatizados e exigir promocao manual para Nexus quando os checks passarem.
-- Bundles de configuracao de referencia vivem em `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/testus/` (testnet), cada um contendo `config.toml`, `genesis.json` e diretorios de admissao Torii de exemplo.
+- **Sora Taira (testnet)** - prefixo de rede de staging `taira`, espelhando a configuracao da mainnet para testes de integracao e validacao pre-release (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- Manter arquivos genesis separados, chaves de governanca e footprints de infraestrutura para cada ambiente. Taira atua como campo de provas para rollouts SoraFS/SoraNet antes de promover para Nexus.
+- Pipelines de CI/CD devem fazer deploy primeiro em Taira, executar smoke tests automatizados e exigir promocao manual para Nexus quando os checks passarem.
+- Bundles de configuracao de referencia vivem em `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/taira/` (testnet), cada um contendo `config.toml`, `genesis.json` e diretorios de admissao Torii de exemplo.
 
 ## Etapa 1 - Revisao de configuracao
 1. Auditar documentacao existente:

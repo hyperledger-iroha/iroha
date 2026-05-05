@@ -19,9 +19,9 @@ title: Зарегистрировать домен и выпустить акт�
 
 ## Пошаговый обход реестра
 
-- Убедитесь, что назначение учетной записи (например, `i105...`) существует, повторите этап подготовки в каждом SDK быстрого запуска.
+- Убедитесь, что назначение учетной записи (например, `<i105-account-id>`) существует, повторите этап подготовки в каждом SDK быстрого запуска.
 - Вызовите точку входа `register_and_mint`, чтобы создать определение активации ROSE и выпустить 250 единиц для Алисы в одной передаче.
-- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account i105...`, чтобы обеспечить успешный выпуск.
+- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account <i105-account-id>`, чтобы обеспечить успешный выпуск.
 
 ## Связанные управления SDK
 
@@ -43,8 +43,8 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("i105...");
-    let asset = asset_definition!("rose#wonderland");
+    let to = account!("<i105-account-id>");
+    let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }
 }

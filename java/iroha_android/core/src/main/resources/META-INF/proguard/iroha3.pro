@@ -52,7 +52,7 @@
 -dontwarn android.net.**
 -dontwarn android.os.**
 
-# BouncyCastle (optional fallback crypto provider)
+# BouncyCastle crypto provider
 -dontwarn org.bouncycastle.**
 
 # Zstd compression (optional, loaded via reflection in NoritoCompression.java)

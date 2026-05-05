@@ -28,14 +28,14 @@ security and operability risk first, UX throughput second.
 - Atomic swap of the signatory in `AccountId` while preserving account metadata and linked
   resources (assets, triggers, roles, permissions, pending events).
 - Verify the current signatory matches the caller (or delegated authority via explicit token).
-- Reject if the new public key already backs another account in the same domain.
+- Reject if the new public key already backs another canonical account.
 - Update all canonical keys that embed the account ID and invalidate caches before commit.
 - Emit a dedicated `AccountEvent::SignatoryRotated` with old/new keys for audit trails.
-- Migration scaffold: introduce `AccountLabel` + `AccountRekeyRecord` (see `account::rekey`) so
-  existing accounts can be mapped to stable labels during a rolling upgrade without hash breaks.
+- Migration scaffold: rely on `AccountAlias` + `AccountRekeyRecord` (see `account::rekey`) so
+  existing accounts can keep stable alias bindings during a rolling upgrade without hash breaks.
 
 ### DeactivateContractInstance
-- Remove or tombstone the `(namespace, contract_id)` binding while persisting provenance data
+- Remove or tombstone the `contract_address` binding while persisting provenance data
   (who, when, reason code) for troubleshooting.
 - Require the same governance permission set as activation, with policy hooks to disallow
   deactivation of core system namespaces without elevated approval.
@@ -69,7 +69,7 @@ security and operability risk first, UX throughput second.
 - Executor visitors expose placeholders that will gate permissions once host wiring lands
   (`default/mod.rs`).
 - Rekey prototype types (`account::rekey`) provide a landing zone for rolling migrations.
-- World state includes `account_rekey_records` keyed by `AccountLabel` so we can stage label →
+- World state includes `account_rekey_records` keyed by `AccountAlias` so we can stage alias →
   signatory migrations without touching the historical `AccountId` encoding.
 
 ## IVM Syscall Drafting
@@ -85,5 +85,8 @@ security and operability risk first, UX throughput second.
 
 ## Status
 
-The above ordering and invariants are ready for implementation. Follow-up branches should reference
-this document when wiring execution paths and syscall exposure.
+Update (2026-04-02): the highest-priority account-rotation item has now landed
+as `ReplaceAccountController` plus alias-keyed account recovery, which
+supersedes the narrower `RotateAccountSignatory` label used in this planning
+note. The remaining items stay open. Follow-up branches should still reference
+this document for the outstanding ISIs and syscall exposure work.

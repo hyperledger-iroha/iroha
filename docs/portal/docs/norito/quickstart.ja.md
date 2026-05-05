@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7c9a8e27bb8f586eac6bf4925cc69357dfa6d3f94c3dcf9e032b916c27fadf21
-source_last_modified: "2025-11-07T12:25:50.867928+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -17,13 +17,13 @@ slug: /norito/quickstart
 
 このウォークスルーは、初めて Norito と Kotodama を学ぶ開発者に期待するワークフローを反映しています。決定的な単一ピアネットワークを起動し、コントラクトをコンパイルし、ローカルでドライランしてから、参照 CLI で Torii に送信します。
 
-例のコントラクトは呼び出し元のアカウントにキー/値ペアを書き込むため、`iroha_cli` ですぐに副作用を確認できます。
+例のコントラクトは呼び出し元のアカウントにキー/値ペアを書き込むため、`iroha` ですぐに副作用を確認できます。
 
 ## 前提条件
 
 - Compose V2 が有効な [Docker](https://docs.docker.com/engine/install/) ( `defaults/docker-compose.single.yml` で定義されたサンプルピアの起動に使用します)。
 - 公開済みバイナリをダウンロードしない場合に備えて、Rust ツールチェーン (1.76+)。
-- `koto_compile`、`ivm_run`、`iroha_cli` のバイナリ。以下のように workspace のチェックアウトからビルドするか、対応するリリースアーティファクトをダウンロードできます:
+- `koto_compile`、`ivm_run`、`iroha` のバイナリ。以下のように workspace のチェックアウトからビルドするか、対応するリリースアーティファクトをダウンロードできます:
 
 ```sh
 cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
@@ -58,8 +58,14 @@ seiyaku Hello {
     info("Hello from Kotodama");
   }
 
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
   // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),
@@ -91,7 +97,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 ノードが動作している状態で、コンパイル済みバイトコードを CLI で Torii に送信します。デフォルトの開発用アイデンティティは `defaults/client.toml` の公開鍵から導出されるため、アカウント ID は
 ```
-i105...
+<i105-account-id>
 ```
 
 Torii の URL、chain ID、署名鍵は設定ファイルで指定します:
@@ -111,7 +117,7 @@ CLI は Norito でトランザクションをエンコードし、開発用キ�
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

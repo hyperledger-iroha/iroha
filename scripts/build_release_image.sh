@@ -7,8 +7,11 @@ Usage: build_release_image.sh --profile <name> --config <config> [options]
 
 Options:
   --profile <name>        Logical profile name (e.g. iroha2, iroha3). Required.
-  --config <config>       Configuration bundle to embed (single, nexus, or path). Required.
+  --config <config>       Configuration bundle to embed (single, nexus, or taira). Required.
   --features <list>       Optional comma-separated Cargo feature list passed to the Docker build.
+  --cargo-build-jobs <n>  Optional Cargo parallelism limit passed as CARGO_BUILD_JOBS.
+  --binaries "<list>"     Optional space-separated binary list passed as BINARIES.
+  --use-target-prebuilt   Package existing target/deploy binaries instead of compiling them in Docker.
   --tag <tag>             Docker image tag (default: hyperledger/iroha:<profile>-<version>).
   --artifacts-dir <dir>   Output directory for saved images/manifests (default: dist).
   --signing-key <path>    Optional PEM private key for signing the saved image tarball.
@@ -24,6 +27,9 @@ log() {
 profile=""
 config=""
 features=""
+cargo_build_jobs=""
+binaries=""
+use_target_prebuilt="0"
 image_tag=""
 artifacts_dir="dist"
 signing_key=""
@@ -42,6 +48,18 @@ while (($#)); do
         --features)
             features="${2:-}"
             shift 2
+            ;;
+        --cargo-build-jobs)
+            cargo_build_jobs="${2:-}"
+            shift 2
+            ;;
+        --binaries)
+            binaries="${2:-}"
+            shift 2
+            ;;
+        --use-target-prebuilt)
+            use_target_prebuilt="1"
+            shift 1
             ;;
         --tag)
             image_tag="${2:-}"
@@ -83,6 +101,16 @@ fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+build_context="$repo_root"
+temp_build_context=""
+
+cleanup() {
+    if [[ -n "$temp_build_context" && -d "$temp_build_context" ]]; then
+        rm -rf "$temp_build_context"
+    fi
+}
+
+trap cleanup EXIT
 
 version="$(awk -F\" '/^version *=/ { print $2; exit }' Cargo.toml)"
 commit="$(git rev-parse --short HEAD)"
@@ -109,6 +137,22 @@ case "$config" in
     nexus)
         config_profile="nexus"
         ;;
+    taira)
+        config_profile="taira"
+        case ",${features}," in
+            *,embedded-soracloud-runtime,*)
+                ;;
+            *)
+                features="${features:+${features},}embedded-soracloud-runtime"
+                ;;
+        esac
+        if [[ -z "$cargo_build_jobs" ]]; then
+            cargo_build_jobs="1"
+        fi
+        if [[ -z "$binaries" ]]; then
+            binaries="irohad"
+        fi
+        ;;
     *)
         printf 'Unsupported config value: %s\n' "$config" >&2
         exit 1
@@ -116,13 +160,57 @@ case "$config" in
 esac
 
 log "Building Docker image ${image_tag}"
+docker_build_args=(
+    --build-arg PROFILE=deploy
+    --build-arg "FEATURES=${features}"
+    --build-arg "CONFIG_PROFILE=${config_profile}"
+)
+
+if [[ "$use_target_prebuilt" == "1" ]]; then
+    prebuilt_dir="${repo_root}/dist/docker-bin"
+    mkdir -p "$prebuilt_dir"
+    for bin in $binaries; do
+        source_path="${repo_root}/target/deploy/${bin}"
+        target_path="${prebuilt_dir}/${bin}"
+        if [[ ! -f "$source_path" ]]; then
+            printf 'missing prebuilt binary: %s\n' "$source_path" >&2
+            printf 'build it first so target/deploy/%s exists before using --use-target-prebuilt\n' "$bin" >&2
+            exit 1
+        fi
+        cp "$source_path" "$target_path"
+        chmod 755 "$target_path"
+    done
+
+    temp_build_context="$(mktemp -d "${TMPDIR:-/tmp}/iroha-image-context.XXXXXX")"
+    build_context="$temp_build_context"
+    mkdir -p \
+        "${build_context}/scripts" \
+        "${build_context}/configs/soranexus" \
+        "${build_context}/dist" \
+        "${build_context}/defaults" \
+        "${build_context}/codec/rans"
+    cp "${repo_root}/Dockerfile" "${build_context}/Dockerfile"
+    cp "${repo_root}/scripts/docker_entrypoint.sh" "${build_context}/scripts/docker_entrypoint.sh"
+    cp -R "${repo_root}/configs/soranexus/taira" "${build_context}/configs/soranexus/taira"
+    cp -R "${repo_root}/dist/docker-bin" "${build_context}/dist/docker-bin"
+    cp -R "${repo_root}/defaults/." "${build_context}/defaults/"
+    cp -R "${repo_root}/codec/rans/tables" "${build_context}/codec/rans/tables"
+    docker_build_args+=(--build-arg USE_PREBUILT=1)
+fi
+
+if [[ -n "$cargo_build_jobs" ]]; then
+    docker_build_args+=(--build-arg "CARGO_BUILD_JOBS=${cargo_build_jobs}")
+fi
+
+if [[ -n "$binaries" ]]; then
+    docker_build_args+=(--build-arg "BINARIES=${binaries}")
+fi
+
 docker build \
-    --build-arg PROFILE=deploy \
-    --build-arg FEATURES="${features}" \
-    --build-arg CONFIG_PROFILE="${config_profile}" \
+    "${docker_build_args[@]}" \
     --tag "${image_tag}" \
-    --file Dockerfile \
-    .
+    --file "${build_context}/Dockerfile" \
+    "${build_context}"
 
 tarball="${bundle_root}/${profile}-${version}-${os_tag}-image.tar"
 log "Saving image ${image_tag} -> $(basename "$tarball")"
@@ -154,7 +242,7 @@ fi
 
 image_id="$(docker image inspect "${image_tag}" --format '{{.Id}}')"
 
-python - <<PY
+python3 - <<PY
 import json
 from pathlib import Path
 

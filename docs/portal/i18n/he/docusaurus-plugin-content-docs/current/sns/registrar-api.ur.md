@@ -107,17 +107,17 @@ Struct ReservedAssignmentRequestV1 {
 
 | נקודת קצה | طریقہ | מטען | تفصیل |
 |--------|-------|--------|-------|
-| `/v1/sns/registrations` | פוסט | `RegisterNameRequestV1` | نام رجسٹر یا دوبارہ کھولنا۔ pricing tier حل کرتا ہے، payment/governance proofs کی توثیق کرتا ہے، registry events emit کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/renew` | פוסט | `RenewNameRequestV1` | مدت بڑھاتا ہے۔ پالیسی سے grace/redemption windows نافذ کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/transfer` | פוסט | `TransferNameRequestV1` | حکمرانی approvals لگنے کے بعد ownership منتقل کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | controllers کا سیٹ بدلتا ہے؛ signed account addresses کی توثیق کرتا ہے۔ |
-| `/v1/sns/registrations/{selector}/freeze` | פוסט | `FreezeNameRequestV1` | הקפאת אפוטרופוס/מועצה. guardian ticket اور governance docket کا حوالہ درکار۔ |
-| `/v1/sns/registrations/{selector}/freeze` | מחק | `GovernanceHookV1` | remediation کے بعد unfreeze؛ council override ریکارڈ ہونے کو یقینی بناتا ہے۔ |
+| `/v1/sns/names` | פוסט | `RegisterNameRequestV1` | نام رجسٹر یا دوبارہ کھولنا۔ pricing tier حل کرتا ہے، payment/governance proofs کی توثیق کرتا ہے، registry events emit کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/renew` | פוסט | `RenewNameRequestV1` | مدت بڑھاتا ہے۔ پالیسی سے grace/redemption windows نافذ کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | פוסט | `TransferNameRequestV1` | حکمرانی approvals لگنے کے بعد ownership منتقل کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | PUT | `UpdateControllersRequestV1` | controllers کا سیٹ بدلتا ہے؛ signed account addresses کی توثیق کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | פוסט | `FreezeNameRequestV1` | הקפאת אפוטרופוס/מועצה. guardian ticket اور governance docket کا حوالہ درکار۔ |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | מחק | `GovernanceHookV1` | remediation کے بعد unfreeze؛ council override ریکارڈ ہونے کو یقینی بناتا ہے۔ |
 | `/v1/sns/reserved/{selector}` | פוסט | `ReservedAssignmentRequestV1` | reserved names کی steward/council کی طرف سے assignment۔ |
 | `/v1/sns/policies/{suffix_id}` | קבל | -- | `SuffixPolicyV1` موجودہ حاصل کرتا ہے (cacheable)۔ |
-| `/v1/sns/registrations/{selector}` | קבל | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) واپس کرتا ہے۔ |
+| `/v1/sns/names/{namespace}/{literal}` | קבל | -- | موجودہ `NameRecordV1` + موثر حالت (Active, Grace وغیرہ) واپس کرتا ہے۔ |
 
-**Selector encoding:** `{selector}` path segment I105، I105 یا canonical hex ADDR-5 کے مطابق قبول کرتا ہے؛ Torii `NameSelectorV1` سے normalize کرتا ہے۔**Error model:** تمام endpoints Norito JSON `code`, `message`, `details` واپس کرتے ہیں۔ Codes میں `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` شامل ہیں۔
+**Selector encoding:** `{selector}` path segment i105، i105 یا canonical hex ADDR-5 کے مطابق قبول کرتا ہے؛ Torii `NameSelectorV1` سے normalize کرتا ہے۔**Error model:** تمام endpoints Norito JSON `code`, `message`, `details` واپس کرتے ہیں۔ Codes میں `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` شامل ہیں۔
 
 ### 3.1 CLI helpers (N0 دستی registrar ضرورت)
 
@@ -128,7 +128,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -153,7 +153,7 @@ Implementation کے لئے `crates/iroha_cli/src/commands/sns.rs` دیکھیں؛
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -161,7 +161,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -176,7 +176,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (proposal id، vote hashes، steward/guardian signatures)۔ מכשיר קצה `/v1/sns/registrations/{selector}/...` נקודת קצה קודמת שנייה מכשירי בטא אופרטורי בטא מכשירי בטא מכשירי בטא מכשירי בטא משטחים Norito שומעים מחדש سکیں جو SDKs کال کریں گے۔
+`--governance-json` میں درست `GovernanceHookV1` ریکارڈ ہونا چاہیے (proposal id، vote hashes، steward/guardian signatures)۔ מכשיר קצה `/v1/sns/names/{namespace}/{literal}/...` נקודת קצה קודמת שנייה מכשירי בטא אופרטורי בטא מכשירי בטא מכשירי בטא מכשירי בטא משטחים Norito שומעים מחדש سکیں جو SDKs کال کریں گے۔
 
 ## 4. שירות gRPC
 
@@ -221,7 +221,7 @@ Failed checks `sns_err_governance_missing` واپس کرتے ہیں۔
 
 ### 6.1 רישום רגיל1. Client `/v1/sns/policies/{suffix_id}` کو query کرتا ہے تاکہ pricing، grace اور دستیاب tiers حاصل کرے۔
 2. Client `RegisterNameRequestV1` بناتا ہے:
-   - `selector` ترجیحی I105 یا second‑best I105 label سے derived ہے۔
+   - `selector` ترجیحی i105 یا second‑best i105 label سے derived ہے۔
    - `term_years` پالیسی حدود میں۔
    - `payment` treasury/steward splitter transfer کو refer کرتا ہے۔
 3. Torii validate کرتا ہے:
@@ -246,7 +246,7 @@ Grace renewals میں standard request کے ساتھ penalty detection شامل 
 
 1. Guardian `FreezeNameRequestV1` submit کرتا ہے جس میں incident id کا حوالہ دینے والا ticket ہوتا ہے۔
 2. Torii record کو `NameStatus::Frozen` میں منتقل کرتا ہے، `NameFrozen` emit کرتا ہے۔
-3. Remediation کے بعد council override جاری کرتا ہے؛ operator DELETE `/v1/sns/registrations/{selector}/freeze` کو `GovernanceHookV1` کے ساتھ بھیجتا ہے۔
+3. Remediation کے بعد council override جاری کرتا ہے؛ operator DELETE `/v1/sns/names/{namespace}/{literal}/freeze` کو `GovernanceHookV1` کے ساتھ بھیجتا ہے۔
 4. Torii override validate کرتا ہے، `NameUnfrozen` emit کرتا ہے۔
 
 ## 7. אימות וקודי שגיאה

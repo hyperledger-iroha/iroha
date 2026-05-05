@@ -390,10 +390,6 @@ mod tests {
             data_model::block::BlockHeader => BlockHeader,
             data_model::proof::ProofRecord => ProofRecord,
             data_model::permission::Permission => Permission,
-            data_model::offline::OfflineAllowanceRecord => OfflineAllowanceRecord,
-            data_model::offline::OfflineTransferRecord => OfflineToOnlineTransfer,
-            data_model::offline::OfflineCounterSummary => OfflineCounterSummary,
-            data_model::offline::OfflineVerdictRevocation => OfflineVerdictRevocation,
         )
     }
 
@@ -404,6 +400,7 @@ mod tests {
         match query.item {
             QueryItemKind::Domain => QueryOutputBatchBox::Domain(Vec::new()),
             QueryItemKind::Account => QueryOutputBatchBox::Account(Vec::new()),
+            QueryItemKind::AccountId => QueryOutputBatchBox::AccountId(Vec::new()),
             QueryItemKind::Asset => QueryOutputBatchBox::Asset(Vec::new()),
             QueryItemKind::AssetDefinition => QueryOutputBatchBox::AssetDefinition(Vec::new()),
             QueryItemKind::RepoAgreement => QueryOutputBatchBox::RepoAgreement(Vec::new()),
@@ -420,18 +417,6 @@ mod tests {
             QueryItemKind::BlockHeader => QueryOutputBatchBox::BlockHeader(Vec::new()),
             QueryItemKind::ProofRecord => QueryOutputBatchBox::ProofRecord(Vec::new()),
             QueryItemKind::Permission => QueryOutputBatchBox::Permission(Vec::new()),
-            QueryItemKind::OfflineAllowanceRecord => {
-                QueryOutputBatchBox::OfflineAllowanceRecord(Vec::new())
-            }
-            QueryItemKind::OfflineToOnlineTransfer => {
-                QueryOutputBatchBox::OfflineToOnlineTransfer(Vec::new())
-            }
-            QueryItemKind::OfflineCounterSummary => {
-                QueryOutputBatchBox::OfflineCounterSummary(Vec::new())
-            }
-            QueryItemKind::OfflineVerdictRevocation => {
-                QueryOutputBatchBox::OfflineVerdictRevocation(Vec::new())
-            }
         }
     }
 

@@ -57,7 +57,7 @@ translation_last_reviewed: 2026-02-07
 | Справочник + оценка KPI | `docs/source/sns/governance_addenda/` | Он был назначен президентом Сан-Франциско, Нью-Йорком KPI, а также директором по работе с клиентами. Доступ к CLI. |
 | مخطط السجل | [`registry-schema.md`](./registry-schema.md) | Установите Norito (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | عقد المسجل | [`registrar-api.md`](./registrar-api.md) | Подключите REST/gRPC, установите `sns_registrar_status_total` и включите перехватчики. |
-| UX-дизайн | [`address-display-guidelines.md`](./address-display-guidelines.md) | عروض I105 (открытие) والمضغوطة (открытие) المحافظ/المستكشفات. |
+| UX-дизайн | [`address-display-guidelines.md`](./address-display-guidelines.md) | عروض i105 (открытие) والمضغوطة (открытие) المحافظ/المستكشفات. |
 | Регистрация SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Он был убит Сейном и его портным в Лос-Анджелесе. |
 | مذكرات تنظيمية | `docs/source/sns/regulatory/` | Он был назначен капитаном команды из ЕС (в ЕС DSA), стюардом-старшим, Николасом Хейнером. |
 | Сверла | `ops/drill-log.md` | Сделал это в ИК-центре в Вашингтоне. |
@@ -92,11 +92,11 @@ translation_last_reviewed: 2026-02-07
 ### 4.4 Обновление приложения| عرحلة | المالك | الاجراء والدليل | соглашение об уровне обслуживания |
 |---------|--------|------------------|-----|
 | طلب تجميد soft | стюард / الدعم | Код `SNS-DF-<id>` для обеспечения безопасности связи Bond النزاع، والمحدد/ المتاثرة. | <= 4 часа в день. |
-| تذكرة опекун | مجلس опекун | `sns governance freeze --selector <I105> --reason <text> --until <ts>` или `GuardianFreezeTicketV1`. Загрузите JSON-файл `artifacts/sns/guardian/<id>.json`. | <= 30 минут подтверждения, <= 2 часа работы. |
+| تذكرة опекун | مجلس опекун | `sns governance freeze --selector <i105> --reason <text> --until <ts>` или `GuardianFreezeTicketV1`. Загрузите JSON-файл `artifacts/sns/guardian/<id>.json`. | <= 30 минут подтверждения, <= 2 часа работы. |
 | تصديق المجلس | مجلس الحوكمة | Он был рожден в 1980-х годах, когда его отец был опекуном Бонда. | Он сказал, что хочет, чтобы это произошло. |
 | لجنة التحكيم | الامتثال + стюард | Начало работы 7 мая (дорожная карта проекта) на сайте `sns governance dispute ballot`. ارفق ايصالات التصويت المجهولة بحزمة الحادث. | الحكم <=7 дней назад облигация. |
 | ستئناف | опекун + المجلس | يضاعف الاستئناف Bond ويعيد عملية المحلفين; Установите флажок Norito `DisputeAppealV1`. | <= 10 дней. |
-| فك التجميد والمعالجة | المسجل + عمليات преобразователь | Для `sns governance unfreeze --selector <I105> --ticket <id>`, необходимо установить GAR/резольвер. | مباشرة بعد الحكم. |
+| فك التجميد والمعالجة | المسجل + عمليات преобразователь | Для `sns governance unfreeze --selector <i105> --ticket <id>`, необходимо установить GAR/резольвер. | مباشرة بعد الحكم. |
 
 القوانين الطارئة (Тэри Кейл опекун <= 72 ч.)
 Создан файл `docs/source/sns/regulatory/`.

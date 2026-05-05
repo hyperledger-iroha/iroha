@@ -45,7 +45,7 @@ settlement = "xor_dual_fund"
 metadata.scheduler.teu_capacity = "1500"
 metadata.scheduler.starvation_bound_slots = "6"
 metadata.settlement.buffer_account = "buffer::cbdc_treasury"
-metadata.settlement.buffer_asset = "xor#sora"
+metadata.settlement.buffer_asset = "61CtjvNd9T3THAR65GsMVHr82Bjc"
 metadata.settlement.buffer_capacity_micro = "1500000000"
 metadata.telemetry.contact = "ops@cb.example"
 
@@ -95,10 +95,10 @@ Lane manifests live under the directory configured via `nexus.registry.manifest_
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "i105...",
-    "i105...",
-    "i105...",
-    "i105..."
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" }
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -134,7 +134,16 @@ Lane manifests live under the directory configured via `nexus.registry.manifest_
 
 Key requirements:
 
-- Validators **must** be canonical I105 account IDs (no `@domain` suffix; keep domain routing in dedicated fields) that exist in the catalog. Set `quorum` to the multisig threshold (≥2).
+- Validators **must** be declared as explicit bindings with a canonical I105
+  authority account plus a concrete `peer_id`. Legacy string-only validator
+  arrays are rejected.
+- Each manifest `peer_id` must resolve to a registered runtime peer with a live
+  consensus key that is present in the current commit topology; Torii routes
+  only to those authoritative peer bindings and fails closed when the runtime
+  truth disagrees with the manifest.
+- Validator accounts should remain stable governance identities even if the
+  underlying host or peer keys rotate; update the manifest `peer_id` binding
+  when the serving peer changes. Set `quorum` to the multisig threshold (≥2).
 - Protected namespaces are enforced by `Queue::push` (see `crates/iroha_core/src/queue.rs`), so all CBDC contracts must specify `gov_namespace` + `gov_contract_id`.
 - `composability_group` fields follow the schema described in `docs/source/nexus.md` §8.6; the owner (CBDC lane) supplies the whitelist and quotas. Whitelisted DS manifests only specify the `group_id_hex` + `activation_epoch`.
 - After copying the manifest, run `cargo test -p integration_tests nexus::lane_registry -- --nocapture` to confirm `LaneManifestRegistry::from_config` loads it.
@@ -241,7 +250,7 @@ directory so auditors and regulators can replay the exact bytes later.
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "i105...",
+            "authority": "<i105-account-id>",
             "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
@@ -257,7 +266,7 @@ directory so auditors and regulators can replay the exact bytes later.
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "i105...",
+            "authority": "<i105-account-id>",
             "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,

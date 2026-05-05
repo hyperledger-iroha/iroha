@@ -30,8 +30,8 @@ translation_last_reviewed: 2026-02-07
 выпуск демо-версии:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Подтвердите значения в списке главных счетов:
@@ -50,7 +50,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dans wonderland (remplacez --limit par un nombre plus eleve si besoin)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions qui existent deja
@@ -67,7 +67,7 @@ Creez un nouvel actif infiniment mintable appele `coffee` в домене
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI добавляет хэш суммы транзакции (например, `0x5f...`). Консерве-ле
@@ -76,7 +76,7 @@ CLI добавляет хэш суммы транзакции (например,
 ## 3. Minter des unites sur le Compte Operationur
 
 Количество действий, живущих в одной паре `(asset definition, account)`. Минтез 250
-Объединяет `coffee#wonderland` и `$ADMIN_ACCOUNT`:
+Объединяет `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` и `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

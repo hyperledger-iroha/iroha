@@ -158,61 +158,89 @@ impl KisoHandle {
     /// updates/subscriptions with pre-seeded watch channels.
     pub fn mock(state: &Config) -> Self {
         let dto = ConfigGetDTO::from(state);
-        let (actor_sender, mut actor_receiver) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
+        let (actor_sender, actor_receiver) = mpsc::channel(DEFAULT_CHANNEL_SIZE);
         let logger = state.logger.clone();
         let network_acl = Actor::snapshot_network_acl(state);
         let soranet_handshake = state.network.soranet_handshake.clone();
         let confidential_gas = state.confidential.gas;
-        tokio::spawn(async move {
-            let (logger_tx, _) = watch::channel(logger);
-            let (network_acl_tx, _) = watch::channel(network_acl);
-            let (handshake_tx, _) = watch::channel(soranet_handshake);
-            let (confidential_gas_tx, _) = watch::channel(confidential_gas);
-            let mut dto_snapshot = dto;
-            while let Some(msg) = actor_receiver.recv().await {
-                match msg {
-                    Message::GetDTO { respond_to } => {
-                        let _ = respond_to.send(dto_snapshot.clone());
-                    }
-                    Message::UpdateWithDTO { dto, respond_to } => {
-                        // Update the exposed Norito-RPC summary if provided; ignore the rest to
-                        // keep the mock lightweight.
-                        if let Some(transport) = dto.transport.as_ref() {
-                            if let Some(norito_rpc) = transport.norito_rpc.as_ref() {
-                                if let Some(enabled) = norito_rpc.enabled {
-                                    dto_snapshot.transport.norito_rpc.enabled = enabled;
-                                }
-                                if let Some(stage) = norito_rpc.stage.as_ref() {
-                                    dto_snapshot.transport.norito_rpc.stage.clone_from(stage);
-                                }
-                                if let Some(require_mtls) = norito_rpc.require_mtls {
-                                    dto_snapshot.transport.norito_rpc.require_mtls = require_mtls;
-                                }
-                                if let Some(allowlist) = norito_rpc.allowed_clients.as_ref() {
-                                    dto_snapshot.transport.norito_rpc.canary_allowlist_size =
-                                        allowlist.len();
-                                }
-                            }
-                        }
-                        let _ = respond_to.send(Ok(()));
-                    }
-                    Message::SubscribeOnLogLevel { respond_to } => {
-                        let _ = respond_to.send(logger_tx.subscribe());
-                    }
-                    Message::SubscribeOnNetworkAcl { respond_to } => {
-                        let _ = respond_to.send(network_acl_tx.subscribe());
-                    }
-                    Message::SubscribeOnSoranetHandshake { respond_to } => {
-                        let _ = respond_to.send(handshake_tx.subscribe());
-                    }
-                    Message::SubscribeOnConfidentialGas { respond_to } => {
-                        let _ = respond_to.send(confidential_gas_tx.subscribe());
-                    }
-                }
-            }
-        });
+        crate::gas::configure_confidential_gas(confidential_gas.into());
+        let mock_actor = run_mock_actor(
+            actor_receiver,
+            logger,
+            network_acl,
+            soranet_handshake,
+            confidential_gas,
+            dto,
+        );
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(mock_actor);
+        } else {
+            std::thread::spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("test Kiso mock runtime");
+                runtime.block_on(mock_actor);
+            });
+        }
         Self {
             actor: actor_sender,
+        }
+    }
+}
+
+async fn run_mock_actor(
+    mut actor_receiver: mpsc::Receiver<Message>,
+    logger: LoggerConfig,
+    network_acl: NetworkAcl,
+    soranet_handshake: ActualSoranetHandshake,
+    confidential_gas: ActualConfidentialGas,
+    dto: ConfigGetDTO,
+) {
+    let (logger_tx, _) = watch::channel(logger);
+    let (network_acl_tx, _) = watch::channel(network_acl);
+    let (handshake_tx, _) = watch::channel(soranet_handshake);
+    let (confidential_gas_tx, _) = watch::channel(confidential_gas);
+    let mut dto_snapshot = dto;
+    while let Some(msg) = actor_receiver.recv().await {
+        match msg {
+            Message::GetDTO { respond_to } => {
+                let _ = respond_to.send(dto_snapshot.clone());
+            }
+            Message::UpdateWithDTO { dto, respond_to } => {
+                // Update the exposed Norito-RPC summary if provided; ignore the rest to
+                // keep the mock lightweight.
+                if let Some(transport) = dto.transport.as_ref() {
+                    if let Some(norito_rpc) = transport.norito_rpc.as_ref() {
+                        if let Some(enabled) = norito_rpc.enabled {
+                            dto_snapshot.transport.norito_rpc.enabled = enabled;
+                        }
+                        if let Some(stage) = norito_rpc.stage.as_ref() {
+                            dto_snapshot.transport.norito_rpc.stage.clone_from(stage);
+                        }
+                        if let Some(require_mtls) = norito_rpc.require_mtls {
+                            dto_snapshot.transport.norito_rpc.require_mtls = require_mtls;
+                        }
+                        if let Some(allowlist) = norito_rpc.allowed_clients.as_ref() {
+                            dto_snapshot.transport.norito_rpc.canary_allowlist_size =
+                                allowlist.len();
+                        }
+                    }
+                }
+                let _ = respond_to.send(Ok(()));
+            }
+            Message::SubscribeOnLogLevel { respond_to } => {
+                let _ = respond_to.send(logger_tx.subscribe());
+            }
+            Message::SubscribeOnNetworkAcl { respond_to } => {
+                let _ = respond_to.send(network_acl_tx.subscribe());
+            }
+            Message::SubscribeOnSoranetHandshake { respond_to } => {
+                let _ = respond_to.send(handshake_tx.subscribe());
+            }
+            Message::SubscribeOnConfidentialGas { respond_to } => {
+                let _ = respond_to.send(confidential_gas_tx.subscribe());
+            }
         }
     }
 }
@@ -646,6 +674,8 @@ mod tests {
                 trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
                 trust_penalty_unknown_peer: defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
                 trust_min_score: defaults::network::TRUST_MIN_SCORE,
+                debug_packet_loss_inbound_percent: 0,
+                debug_packet_loss_outbound_percent: 0,
                 trust_gossip: defaults::network::TRUST_GOSSIP,
                 dns_refresh_interval: None,
                 dns_refresh_ttl: None,
@@ -770,6 +800,26 @@ mod tests {
                 tx_burst_per_authority: None,
                 deploy_rate_per_origin_per_sec: None,
                 deploy_burst_per_origin: None,
+                soracloud_public_rate_per_ip_per_sec:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC
+                        .and_then(std::num::NonZeroU32::new),
+                soracloud_public_burst_per_ip:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_BURST_PER_IP
+                        .and_then(std::num::NonZeroU32::new),
+                soracloud_public_max_inflight:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT,
+                soracloud_mutation_rate_per_account_origin_per_sec:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC
+                        .and_then(std::num::NonZeroU32::new),
+                soracloud_mutation_burst_per_account_origin:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN
+                        .and_then(std::num::NonZeroU32::new),
+                soracloud_mutation_max_inflight:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_INFLIGHT,
+                soracloud_mutation_max_body_bytes:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES,
+                soracloud_upload_max_body_bytes:
+                    iroha_config::parameters::defaults::torii::SORACLOUD_UPLOAD_MAX_BODY_BYTES,
                 require_api_token: false,
                 api_tokens: Vec::new(),
                 api_fee_asset_id: None,
@@ -780,6 +830,9 @@ mod tests {
                 peer_geo: iroha_config::parameters::actual::ToriiPeerGeo::default(),
                 soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest::default(),
                 debug_match_filters: false,
+                webhooks_enabled: iroha_config::parameters::defaults::torii::WEBHOOKS_ENABLED,
+                zk_attachments_enabled:
+                    iroha_config::parameters::defaults::torii::ZK_ATTACHMENTS_ENABLED,
                 operator_auth: iroha_config::parameters::actual::ToriiOperatorAuth::default(),
                 operator_signatures: iroha_config::parameters::actual::ToriiOperatorSignatures::default(),
                 preauth_max_connections: None,
@@ -792,11 +845,12 @@ mod tests {
                 api_high_load_tx_threshold: None,
                 api_high_load_stream_threshold: None,
                 api_high_load_subscription_threshold: None,
+                ram_lfe: None,
+                tx_history: None,
                 events_buffer_capacity: NonZeroUsize::new(
                     iroha_config::parameters::defaults::torii::EVENTS_BUFFER_CAPACITY,
                 )
                 .expect("non-zero events buffer capacity"),
-                identifier_resolver: None,
                 ws_message_timeout: Duration::from_millis(
                     iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
                 ),
@@ -877,6 +931,7 @@ mod tests {
                 transport: iroha_config::parameters::actual::ToriiTransport::default(),
                 mcp: iroha_config::parameters::actual::ToriiMcp::default(),
                 onboarding: None,
+                faucet: None,
                 offline_issuer: None,
                 proof_api: iroha_config::parameters::actual::ProofApi {
                     rate_per_minute: iroha_config::parameters::defaults::torii::PROOF_RATE_PER_MIN
@@ -919,6 +974,16 @@ mod tests {
                         iroha_config::parameters::defaults::torii::APP_API_RATE_LIMIT_COST_PER_ROW,
                     )
                     .expect("non-zero app-api rate limit cost"),
+                    request_signature_max_clock_skew: Duration::from_secs(
+                        iroha_config::parameters::defaults::torii::app_auth::MAX_CLOCK_SKEW_SECS,
+                    ),
+                    request_signature_nonce_ttl: Duration::from_secs(
+                        iroha_config::parameters::defaults::torii::app_auth::NONCE_TTL_SECS,
+                    ),
+                    request_signature_replay_cache_capacity: NonZeroUsize::new(
+                        iroha_config::parameters::defaults::torii::app_auth::REPLAY_CACHE_CAPACITY,
+                    )
+                    .expect("non-zero app-api replay cache capacity"),
                 },
                 webhook: iroha_config::parameters::actual::Webhook {
                     queue_capacity: NonZeroUsize::new(
@@ -967,6 +1032,7 @@ mod tests {
                     apns_auth_token: None,
                 },
             },
+            soracloud_runtime: iroha_config::parameters::actual::SoracloudRuntime::default(),
             kura: Kura {
                 init_mode: iroha_config::kura::InitMode::Strict,
                 store_dir: WithOrigin::inline(std::env::temp_dir()),
@@ -982,6 +1048,7 @@ mod tests {
                     iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
                 roster_sidecar_retention:
                     iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+                eviction_required_replicas: iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             },
             sumeragi: Sumeragi {
                 role: NodeRole::Validator,
@@ -1185,7 +1252,12 @@ mod tests {
                 },
                 rbc: iroha_config::parameters::actual::SumeragiRbc {
                     chunk_max_bytes: 64 * 1024,
+                    encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                    data_shards: 0,
+                    parity_shards: 0,
                     chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
+                    rs16_initial_fanout:
+                        iroha_config::parameters::actual::RbcRs16InitialFanout::Full,
                     pending_max_chunks:
                         iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
                     pending_max_bytes:
@@ -1277,6 +1349,7 @@ mod tests {
                     use_stake_snapshot_roster:
                         iroha_config::parameters::defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER,
                 },
+                resilience: iroha_config::parameters::actual::SumeragiResilience::default(),
                 adaptive_observability:
                     iroha_config::parameters::actual::AdaptiveObservability::default(),
                 debug: iroha_config::parameters::actual::SumeragiDebug {

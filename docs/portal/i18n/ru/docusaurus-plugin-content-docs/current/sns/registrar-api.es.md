@@ -108,15 +108,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | Конечная точка | Метод | Полезная нагрузка | Описание |
 |----------|--------|---------|-------------|
-| `/v1/sns/registrations` | ПОСТ | `RegisterNameRequestV1` | Регистратор или восстановите номер. Подтвердите уровень драгоценных камней, проверите платежи по паго/гобернансе, создайте события регистрации. |
-| `/v1/sns/registrations/{selector}/renew` | ПОСТ | `RenewNameRequestV1` | Расширенный терминал. Aplica ventanas de gracia/redencion segun la politica. |
-| `/v1/sns/registrations/{selector}/transfer` | ПОСТ | `TransferNameRequestV1` | Transfiere propiedad una vez adjuntas las aprobaciones de gobernanza. |
-| `/v1/sns/registrations/{selector}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | Замените набор контроллеров; действительные направления движения фирм. |
-| `/v1/sns/registrations/{selector}/freeze` | ПОСТ | `FreezeNameRequestV1` | Заморозка опекуна/совета. Потребуйте билет опекуна и справку по досье губернатора. |
-| `/v1/sns/registrations/{selector}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | Разморозить tras remediation; asegura отменяет регистрацию совета. |
+| `/v1/sns/names` | ПОСТ | `RegisterNameRequestV1` | Регистратор или восстановите номер. Подтвердите уровень драгоценных камней, проверите платежи по паго/гобернансе, создайте события регистрации. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | ПОСТ | `RenewNameRequestV1` | Расширенный терминал. Aplica ventanas de gracia/redencion segun la politica. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | ПОСТ | `TransferNameRequestV1` | Transfiere propiedad una vez adjuntas las aprobaciones de gobernanza. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | Замените набор контроллеров; действительные направления движения фирм. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | ПОСТ | `FreezeNameRequestV1` | Заморозка опекуна/совета. Потребуйте билет опекуна и справку по досье губернатора. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | Разморозить tras remediation; asegura отменяет регистрацию совета. |
 | `/v1/sns/reserved/{selector}` | ПОСТ | `ReservedAssignmentRequestV1` | Назначение резервированных имен управляющего/совета. |
 | `/v1/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | Получить актуальный `SuffixPolicyV1` (кэшируемый). |
-| `/v1/sns/registrations/{selector}` | ПОЛУЧИТЬ | -- | Devuelve `NameRecordV1` актуально + estado efectivo (Active, Grace и т. д.). |**Кодификация селектора:** сегмент `{selector}` принимает I105, включая шестнадцатеричный канонический второй ADDR-5; Torii для нормализации через `NameSelectorV1`.
+| `/v1/sns/names/{namespace}/{literal}` | ПОЛУЧИТЬ | -- | Devuelve `NameRecordV1` актуально + estado efectivo (Active, Grace и т. д.). |**Кодификация селектора:** сегмент `{selector}` принимает i105, включая шестнадцатеричный канонический второй ADDR-5; Torii для нормализации через `NameSelectorV1`.
 
 **Модель ошибок:** все конечные точки в формате Norito JSON с `code`, `message`, `details`. В число кодов входят `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -129,7 +129,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -154,7 +154,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -162,7 +162,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -177,7 +177,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` должен содержать действительный регистр `GovernanceHookV1` (идентификатор предложения, хэши голосов, фирмы-распорядители/опекуны). Эта команда просто отражает конечную точку `/v1/sns/registrations/{selector}/...`, соответствующую бета-версиям операторов, и точно указывает на поверхность Torii, которую можно использовать для SDK.
+`--governance-json` должен содержать действительный регистр `GovernanceHookV1` (идентификатор предложения, хэши голосов, фирмы-распорядители/опекуны). Эта команда просто отражает конечную точку `/v1/sns/names/{namespace}/{literal}/...`, соответствующую бета-версиям операторов, и точно указывает на поверхность Torii, которую можно использовать для SDK.
 
 ## 4. Служба gRPC
 
@@ -222,7 +222,7 @@ Torii проверка подтвержденных ошибок:
 
 ### 6.1 Регистрация статуса1. Консультация клиента `/v1/sns/policies/{suffix_id}` для получения ценных, льготных и доступных уровней.
 2. Клиентская арматура `RegisterNameRequestV1`:
-   - `selector` является производным от метки I105 (предпочтительно) или компромиссным (второй лучший вариант).
+   - `selector` является производным от метки i105 (предпочтительно) или компромиссным (второй лучший вариант).
    - `term_years` в пределах границ политики.
    - `payment`, которая ссылается на передачу разделителя tesoreria/steward.
 3. Проверка Torii:
@@ -247,7 +247,7 @@ Las renovaciones en gracia включает в себя запрос на выя
 
 1. Guardian отправляет `FreezeNameRequestV1` с билетом, содержащим ссылку на инцидент.
 2. Torii внесите в реестр `NameStatus::Frozen`, выпустите `NameFrozen`.
-3. После исправления, отказ от решения совета; оператор отправляет DELETE `/v1/sns/registrations/{selector}/freeze` с `GovernanceHookV1`.
+3. После исправления, отказ от решения совета; оператор отправляет DELETE `/v1/sns/names/{namespace}/{literal}/freeze` с `GovernanceHookV1`.
 4. Torii подтвердит переопределение, выпустите `NameUnfrozen`.
 
 ## 7. Проверка и код ошибки

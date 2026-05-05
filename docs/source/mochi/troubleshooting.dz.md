@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 
 ༡ MOCHI ལག་ལེན་འཐབ་བཞིན་པའི་ གནད་སྡུད་རྩ་བ་འདི་ འཛིན་དགོ། སྔོན་སྒྲིག་འོག་གི་ཚུ།
    `$TMPDIR/mochi/<profile-slug>`; སྲོལ་སྒྲིག་འགྲུལ་ལམ་ཚུ་ ཡུ་ཨའི་ མགོ་མིང་ཕྲ་རིང་ནང་འབྱུངམ་ཨིན།
-   བརྒྱུད་དེ་ `cargo run -p mochi-ui-egui -- --data-root ...`.
+   བརྒྱུད་དེ་ `cargo run -p mochi-ui -- --data-root ...`.
 2. ལཱ་གི་ས་སྒོ་རྩ་བ་ལས་ `./ci/check_mochi.sh` གཡོག་བཀོལ། འདི་གིས་ ཀོར་འདི་བདེན་དཔྱད་འབདཝ་ཨིན།
    ཁྱོད་ཀྱིས་རིམ་སྒྲིག་ཚུ་ལེགས་བཅོས་འབད་ནི་འགོ་མ་བཙུགས་པའི་ཧེ་མ་ ཡུ་ཨའི་དང་ མཉམ་བསྡོམས་ཀེརེཊི།
 ༣ སྔོན་སྒྲིག་ (`single-peer` ཡང་ན་ `four-peer-bft`) ལུ་དྲན་འཛིན་འབད། བ ར་བའི་ ས་ ི་ ས་ ་ ས།
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 at ཤེས་རྟོགས་ཡོད་པའི་གཉིས་ལྡན་ཚུ།
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ cargo run -p mochi-ui-egui -- \
 གསལ་སྡུད་གཞི་རིམ་དང་མཉམ་དུ།
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 བཟོ་བསྐྲུན་པ་གིས་ གཞི་རྟེན་དེ་ཚུ་ལས་ རིམ་སྒྲིག་འདྲེན་ལམ་ཚུ་ རླུང་འཚུབ་འབད་འོང་ དེ་འབདཝ་ལས་ ཁྱབ་ཚད་ཅིག་ བཀག་བཞག་དགོ།
@@ -119,14 +119,14 @@ cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
    - ཉམས་སྲུང་འབད་ཡོད་པའི་ CLI/མཐའ་འཁོར་གནས་སྟངས་དང་གཅིག་ཁར་ མཉམ་རོགས་ཚུ་ ལོག་འགོ་བཙུགས།
 3. གལ་ཏེ་ཁྱོད་ཀྱིས་ལག་ཐོག་ལས་འབད་དགོཔ་ཨིན།
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```
    དེ་གི་ཤུལ་ལས་ MOCHI so `NetworkPaths::ensure` ཤིང་འདི་ ལོག་གསར་བསྐྲུན་འབདཝ་ཨིན།
 
 དུས་རྒྱུན་དུ་ འཕྱག་བདའ་པའི་ཧེ་མ་ ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli

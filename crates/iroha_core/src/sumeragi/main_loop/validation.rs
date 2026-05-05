@@ -16,6 +16,7 @@ pub(super) struct ValidationWork {
     pub(super) block: SignedBlock,
     pub(super) height: u64,
     pub(super) view: u64,
+    pub(super) frontier_generation: Option<u64>,
     pub(super) topology: super::network_topology::Topology,
     pub(super) commit_topology: Vec<PeerId>,
 }
@@ -26,6 +27,7 @@ pub(super) struct ValidationResult {
     pub(super) hash: HashOf<BlockHeader>,
     pub(super) height: u64,
     pub(super) view: u64,
+    pub(super) frontier_generation: Option<u64>,
     pub(super) commit_topology: Vec<PeerId>,
     pub(super) outcome: Result<Option<StateRoots>, BlockValidationError>,
 }
@@ -94,6 +96,7 @@ pub(super) fn spawn_validation_workers(
                         block,
                         height,
                         view,
+                        frontier_generation,
                         mut topology,
                         commit_topology,
                     } = work;
@@ -112,6 +115,7 @@ pub(super) fn spawn_validation_workers(
                             hash,
                             height,
                             view,
+                            frontier_generation,
                             commit_topology,
                             outcome,
                         })
@@ -137,6 +141,76 @@ pub(super) fn spawn_validation_workers(
 
 impl Actor {
     const SUPERSEDED_VALIDATION_RESULT_CAP: usize = 4_096;
+
+    fn replay_cached_precommit_qc_for_valid_block(
+        &mut self,
+        hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        commit_topology: &[PeerId],
+        source: &'static str,
+    ) {
+        if !self.block_known_for_lock(hash) {
+            return;
+        }
+        let Some(qc) = qc_cache_for_subject(&self.qc_cache, hash)
+            .filter(|qc| {
+                qc.phase == crate::sumeragi::consensus::Phase::Commit && qc.height == height
+            })
+            .max_by_key(|qc| qc.view)
+            .cloned()
+        else {
+            return;
+        };
+        if self.process_precommit_qc(&qc, true, false) {
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.set_commit_qc_summary(&qc);
+            }
+            debug!(
+                height,
+                view,
+                block = %hash,
+                qc_view = qc.view,
+                source,
+                "replayed cached precommit QC after validation"
+            );
+        }
+        let commit_ready = self
+            .pending
+            .pending_blocks
+            .get(&hash)
+            .and_then(|pending| {
+                let state_height = self.state.committed_height();
+                let tip_hash = self.state.latest_block_hash_fast();
+                let parent = pending.block.header().prev_block_hash();
+                super::pending_extends_tip(pending.height, parent, state_height, tip_hash)
+                    .then_some(())
+            })
+            .is_some();
+        if commit_ready {
+            let _ = self.rehydrate_pending_from_kura_for_qc(&qc);
+            self.apply_commit_qc(&qc, commit_topology, hash, height, view);
+            debug!(
+                height,
+                view,
+                block = %hash,
+                qc_view = qc.view,
+                source,
+                "applied cached precommit QC after validation"
+            );
+        } else if let Some(pending) = self.pending.pending_blocks.get_mut(&hash) {
+            pending.note_commit_qc_observed(qc.epoch);
+            debug!(
+                height,
+                view,
+                block = %hash,
+                qc_view = qc.view,
+                source,
+                "retaining cached precommit QC after validation until block extends committed tip"
+            );
+        }
+    }
 
     fn remember_superseded_validation_result(&mut self, hash: HashOf<BlockHeader>, id: u64) {
         if self.subsystems.validation.superseded_results.len()
@@ -196,16 +270,16 @@ impl Actor {
     }
 
     fn validation_queue_full_inline_cutover(&self) -> Duration {
-        let fast_timeout = self.pending_fast_path_timeout_current();
+        let inline_fallback_timeout = self.commit_validation_inline_fallback_timeout();
         let divisor = self
             .config
             .worker
             .validation_queue_full_inline_cutover_divisor
             .max(1);
-        if fast_timeout == Duration::ZERO {
+        if inline_fallback_timeout == Duration::ZERO {
             Duration::ZERO
         } else {
-            (fast_timeout / divisor).max(Duration::from_millis(1))
+            (inline_fallback_timeout / divisor).max(Duration::from_millis(1))
         }
     }
 
@@ -256,9 +330,27 @@ impl Actor {
             Err(outcome) => return outcome,
         };
 
-        let has_commit_qc =
-            pending.commit_qc_seen || self.pending_block_has_qc(hash, pending.height, pending.view);
-        if !has_commit_qc && !self.slot_has_proposal_evidence(pending.height, pending.view) {
+        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if pending.height == local_height.saturating_add(1) {
+            let expected_parent = self.state.view().latest_block_hash();
+            let actual_parent = pending.block.header().prev_block_hash();
+            if actual_parent != expected_parent {
+                let err = BlockValidationError::PrevBlockHashMismatch {
+                    expected: expected_parent,
+                    actual: actual_parent,
+                };
+                return self.finalize_validation_failure(hash, pending, &err);
+            }
+        }
+
+        let validation_priority_reason =
+            self.pending_block_validation_priority_reason(hash, &pending);
+        let has_qc = pending.commit_qc_observed()
+            || self.pending_block_has_qc(hash, pending.height, pending.view);
+        if !has_qc
+            && !self.slot_has_proposal_evidence(pending.height, pending.view)
+            && validation_priority_reason.is_none()
+        {
             debug!(
                 height = pending.height,
                 view = pending.view,
@@ -268,6 +360,15 @@ impl Actor {
             pending.validation_status = ValidationStatus::Pending;
             self.pending.pending_blocks.insert(hash, pending);
             return ValidationGateOutcome::Deferred;
+        }
+        if let Some(reason) = validation_priority_reason {
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                block = %hash,
+                reason,
+                "allowing validation with priority due to near-tip commit readiness"
+            );
         }
 
         if commit_topology.is_empty() {
@@ -296,13 +397,42 @@ impl Actor {
             return ValidationGateOutcome::Deferred;
         }
 
+        let near_quorum_commit_votes = matches!(validation_priority_reason, Some("commit_votes"))
+            && self
+                .pending_block_commit_votes_count(hash, pending.height, pending.view)
+                .saturating_add(1)
+                >= topology.min_votes_for_commit().max(1);
+        let dispatch = if matches!(dispatch, ValidationDispatch::TryWorker)
+            && (matches!(validation_priority_reason, Some("commit_qc" | "cached_qc"))
+                || near_quorum_commit_votes)
+        {
+            let reason = if near_quorum_commit_votes {
+                Some("commit_votes_near_quorum")
+            } else {
+                validation_priority_reason
+            };
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                block = %hash,
+                reason,
+                "forcing inline validation for pending block with fast-finality evidence"
+            );
+            ValidationDispatch::Inline
+        } else {
+            dispatch
+        };
+
         let superseded_by_newer_view = self.pending.pending_blocks.values().any(|other| {
             other.height == pending.height
                 && other.view > pending.view
                 && !other.aborted
                 && !matches!(other.validation_status, ValidationStatus::Invalid)
         });
-        if superseded_by_newer_view && !pending.commit_qc_seen {
+        if superseded_by_newer_view
+            && !pending.commit_qc_observed()
+            && validation_priority_reason.is_none()
+        {
             debug!(
                 height = pending.height,
                 view = pending.view,
@@ -314,7 +444,6 @@ impl Actor {
             return ValidationGateOutcome::Deferred;
         }
 
-        let local_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         let expected_height = local_height.saturating_add(1);
         if pending.height > expected_height {
             if let Some(parent_hash) = pending.block.header().prev_block_hash() {
@@ -343,7 +472,19 @@ impl Actor {
             return ValidationGateOutcome::Deferred;
         }
 
+        let local_only_commit_topology =
+            commit_topology.len() == 1 && commit_topology[0] == *self.common_config.peer.id();
+        if local_only_commit_topology {
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                block = %hash,
+                "running pre-vote validation inline for local-only commit topology"
+            );
+        }
+
         if matches!(dispatch, ValidationDispatch::TryWorker)
+            && !local_only_commit_topology
             && !self.subsystems.validation.work_txs.is_empty()
         {
             if self.subsystems.validation.inflight.contains_key(&hash) {
@@ -359,12 +500,15 @@ impl Actor {
             }
 
             let id = self.subsystems.validation.next_id();
+            let frontier_generation =
+                self.frontier_owner_generation_for_block(pending.height, pending.view, hash);
             let mut work = ValidationWork {
                 id,
                 hash,
                 block: pending.block.clone(),
                 height: pending.height,
                 view: pending.view,
+                frontier_generation,
                 topology: topology.clone(),
                 commit_topology: commit_topology.to_vec(),
             };
@@ -413,6 +557,7 @@ impl Actor {
                     super::ValidationInFlight {
                         id,
                         started_at: Instant::now(),
+                        frontier_generation,
                     },
                 );
                 pending.validation_status = ValidationStatus::Pending;
@@ -432,7 +577,7 @@ impl Actor {
                 self.subsystems.validation.superseded_results.clear();
             } else {
                 let pending_age = pending.age();
-                let fast_timeout = self.pending_fast_path_timeout_current();
+                let inline_fallback_timeout = self.commit_validation_inline_fallback_timeout();
                 let inline_cutover = self.validation_queue_full_inline_cutover();
                 if pending_age < inline_cutover {
                     warn!(
@@ -440,7 +585,7 @@ impl Actor {
                         view = pending.view,
                         block = %hash,
                         pending_age_ms = pending_age.as_millis(),
-                        fast_timeout_ms = fast_timeout.as_millis(),
+                        inline_fallback_timeout_ms = inline_fallback_timeout.as_millis(),
                         inline_cutover_ms = inline_cutover.as_millis(),
                         "validation worker queue full; deferring pre-vote validation"
                     );
@@ -453,7 +598,7 @@ impl Actor {
                     view = pending.view,
                     block = %hash,
                     pending_age_ms = pending_age.as_millis(),
-                    fast_timeout_ms = fast_timeout.as_millis(),
+                    inline_fallback_timeout_ms = inline_fallback_timeout.as_millis(),
                     inline_cutover_ms = inline_cutover.as_millis(),
                     "validation worker queue saturated; running pre-vote validation inline"
                 );
@@ -482,12 +627,30 @@ impl Actor {
                 if let Some(roots) = roots {
                     pending.parent_state_root = Some(roots.parent_state_root);
                     pending.post_state_root = Some(roots.post_state_root);
+                    pending.note_validated_commit_artifact(
+                        hash,
+                        pending.height,
+                        pending.view,
+                        roots.parent_state_root,
+                        roots.post_state_root,
+                    );
                 } else {
                     pending.parent_state_root = None;
                     pending.post_state_root = None;
+                    pending.validated_commit_artifact = None;
                 }
+                let pending_height = pending.height;
+                let pending_view = pending.view;
                 pending.validation_status = ValidationStatus::Valid;
+                pending.touch_progress(Instant::now());
                 self.pending.pending_blocks.insert(hash, pending);
+                self.replay_cached_precommit_qc_for_valid_block(
+                    hash,
+                    pending_height,
+                    pending_view,
+                    commit_topology,
+                    "validation_inline",
+                );
                 ValidationGateOutcome::Valid
             }
             Err(err) => {
@@ -517,12 +680,22 @@ impl Actor {
                         height = pending.height,
                         view = pending.view,
                         block = %hash,
-                        commit_qc_seen = pending.commit_qc_seen,
+                        commit_qc_seen = pending.commit_qc_observed(),
                         has_cached_qc = self.pending_block_has_qc(hash, pending.height, pending.view),
                         "accepting pending block for commit-only progression despite signature mismatch: local peer outside commit roster"
                     );
+                    let pending_height = pending.height;
+                    let pending_view = pending.view;
                     pending.validation_status = ValidationStatus::Valid;
+                    pending.touch_progress(Instant::now());
                     self.pending.pending_blocks.insert(hash, pending);
+                    self.replay_cached_precommit_qc_for_valid_block(
+                        hash,
+                        pending_height,
+                        pending_view,
+                        commit_topology,
+                        "validation_inline_signature_recovery",
+                    );
                     return ValidationGateOutcome::Valid;
                 }
                 self.finalize_validation_failure(hash, pending, &err)
@@ -544,11 +717,30 @@ impl Actor {
                         hash,
                         height,
                         view,
+                        frontier_generation,
                         commit_topology,
                         outcome,
                     } = result;
-                    let inflight = match self.subsystems.validation.inflight.remove(&hash) {
-                        Some(inflight) => inflight,
+                    let inflight_frontier_generation = match self
+                        .subsystems
+                        .validation
+                        .inflight
+                        .remove(&hash)
+                    {
+                        Some(inflight) => {
+                            if inflight.id != id {
+                                let inflight_id = inflight.id;
+                                self.subsystems.validation.inflight.insert(hash, inflight);
+                                warn!(
+                                    block = %hash,
+                                    inflight_id,
+                                    result_id = id,
+                                    "validation result id mismatch; ignoring"
+                                );
+                                continue;
+                            }
+                            inflight.frontier_generation
+                        }
                         None => {
                             if let Some(superseded_id) =
                                 self.subsystems.validation.superseded_results.remove(&hash)
@@ -567,31 +759,87 @@ impl Actor {
                                         "validation result id mismatch for superseded inflight; dropping stale worker result"
                                     );
                                 }
-                            } else if self.pending.pending_blocks.contains_key(&hash) {
-                                warn!(
-                                    block = %hash,
-                                    result_id = id,
-                                    "validation result received without inflight"
-                                );
-                            } else {
+                                progress = true;
+                                continue;
+                            }
+
+                            let Some(pending) = self.pending.pending_blocks.get(&hash) else {
                                 debug!(
                                     block = %hash,
                                     result_id = id,
                                     "dropping validation result for unknown block"
                                 );
+                                progress = true;
+                                continue;
+                            };
+                            if pending.height != height || pending.view != view {
+                                warn!(
+                                    block = %hash,
+                                    pending_height = pending.height,
+                                    pending_view = pending.view,
+                                    result_height = height,
+                                    result_view = view,
+                                    result_id = id,
+                                    "validation result without inflight does not match pending block"
+                                );
+                                progress = true;
+                                continue;
                             }
-                            continue;
+                            if pending.validation_status != ValidationStatus::Pending {
+                                debug!(
+                                    block = %hash,
+                                    result_id = id,
+                                    ?pending.validation_status,
+                                    "dropping validation result without inflight for non-pending block"
+                                );
+                                progress = true;
+                                continue;
+                            }
+                            if let Some(frontier_generation) = frontier_generation
+                                && !self.frontier_owner_generation_matches(
+                                    height,
+                                    hash,
+                                    frontier_generation,
+                                )
+                            {
+                                debug!(
+                                    block = %hash,
+                                    result_id = id,
+                                    height,
+                                    view,
+                                    frontier_generation,
+                                    "dropping validation result without inflight after frontier owner supersede"
+                                );
+                                progress = true;
+                                continue;
+                            }
+
+                            warn!(
+                                block = %hash,
+                                result_id = id,
+                                height,
+                                view,
+                                "recovering validation result after inflight marker disappeared"
+                            );
+                            None
                         }
                     };
-                    if inflight.id != id {
-                        let inflight_id = inflight.id;
-                        self.subsystems.validation.inflight.insert(hash, inflight);
-                        warn!(
+                    if let Some(frontier_generation) = inflight_frontier_generation
+                        && !self.frontier_owner_generation_matches(
+                            height,
+                            hash,
+                            frontier_generation,
+                        )
+                    {
+                        debug!(
                             block = %hash,
-                            inflight_id,
                             result_id = id,
-                            "validation result id mismatch; ignoring"
+                            height,
+                            view,
+                            frontier_generation,
+                            "dropping validation result for superseded frontier owner generation"
                         );
+                        progress = true;
                         continue;
                     }
 
@@ -613,19 +861,65 @@ impl Actor {
                         progress = true;
                         continue;
                     }
+                    if let Some(frontier_generation) = frontier_generation
+                        && !self.frontier_owner_generation_matches(
+                            height,
+                            hash,
+                            frontier_generation,
+                        )
+                    {
+                        debug!(
+                            block = %hash,
+                            result_id = id,
+                            height,
+                            view,
+                            frontier_generation,
+                            "dropping late validation result after frontier owner supersede"
+                        );
+                        self.pending.pending_blocks.insert(hash, pending);
+                        progress = true;
+                        continue;
+                    }
 
                     match outcome {
                         Ok(roots) => {
                             if let Some(roots) = roots {
                                 pending.parent_state_root = Some(roots.parent_state_root);
                                 pending.post_state_root = Some(roots.post_state_root);
+                                pending.note_validated_commit_artifact(
+                                    hash,
+                                    pending.height,
+                                    pending.view,
+                                    roots.parent_state_root,
+                                    roots.post_state_root,
+                                );
                             } else {
                                 pending.parent_state_root = None;
                                 pending.post_state_root = None;
+                                pending.validated_commit_artifact = None;
                             }
                             pending.validation_status = ValidationStatus::Valid;
+                            pending.touch_progress(Instant::now());
                             self.pending.pending_blocks.insert(hash, pending);
-                            self.request_commit_pipeline();
+                            self.replay_cached_precommit_qc_for_valid_block(
+                                hash,
+                                height,
+                                view,
+                                &commit_topology,
+                                "validation_worker",
+                            );
+                            let _ = self.maybe_emit_local_commit_vote_for_pending_event(
+                                hash,
+                                height,
+                                view,
+                                &commit_topology,
+                                "validation_passed",
+                            );
+                            self.request_commit_pipeline_for_pending(
+                                hash,
+                                super::status::RoundEventCauseTrace::ValidationPassed,
+                                None,
+                            );
                         }
                         Err(err) => {
                             if let BlockValidationError::PrevBlockHeightMismatch {
@@ -659,14 +953,33 @@ impl Actor {
                                     height = pending.height,
                                     view = pending.view,
                                     block = %hash,
-                                    commit_qc_seen = pending.commit_qc_seen,
+                                    commit_qc_seen = pending.commit_qc_observed(),
                                     has_cached_qc = self
                                         .pending_block_has_qc(hash, pending.height, pending.view),
                                     "accepting pending block for commit-only progression despite signature mismatch: local peer outside commit roster"
                                 );
                                 pending.validation_status = ValidationStatus::Valid;
+                                pending.touch_progress(Instant::now());
                                 self.pending.pending_blocks.insert(hash, pending);
-                                self.request_commit_pipeline();
+                                self.replay_cached_precommit_qc_for_valid_block(
+                                    hash,
+                                    height,
+                                    view,
+                                    &commit_topology,
+                                    "validation_worker_signature_recovery",
+                                );
+                                let _ = self.maybe_emit_local_commit_vote_for_pending_event(
+                                    hash,
+                                    height,
+                                    view,
+                                    &commit_topology,
+                                    "validation_passed",
+                                );
+                                self.request_commit_pipeline_for_pending(
+                                    hash,
+                                    super::status::RoundEventCauseTrace::ValidationPassed,
+                                    None,
+                                );
                                 progress = true;
                                 continue;
                             }
@@ -744,8 +1057,8 @@ impl Actor {
         if !signature_mismatch {
             return false;
         }
-        let has_commit_qc =
-            pending.commit_qc_seen || self.pending_block_has_qc(hash, pending.height, pending.view);
+        let has_commit_qc = pending.commit_qc_observed()
+            || self.pending_block_has_qc(hash, pending.height, pending.view);
         if !has_commit_qc {
             return false;
         }
@@ -776,7 +1089,7 @@ impl Actor {
         let height = pending.height;
         let view = pending.view;
         let parent = pending.block.header().prev_block_hash();
-        let txs = pending.block.transactions_vec().clone();
+        let txs: Vec<_> = pending.block.external_entrypoints_cloned().collect();
         let reason_label = validation_reject_reason_label(err);
         let proposal_epoch = self.epoch_for_height(height);
         pending.validation_status = ValidationStatus::Invalid;

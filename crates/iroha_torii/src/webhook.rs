@@ -8,7 +8,7 @@
 //! - Background worker scans a disk-backed queue and delivers payloads with
 //!   optional HMAC-SHA256 signature and exponential backoff retries.
 //! - HTTPS delivery is supported when the `app_api_https` feature is enabled,
-//!   using `hyper` + `rustls` with WebPKI roots. Otherwise, only `http://` is allowed.
+//!   using `reqwest` + `rustls` with native roots. Otherwise, only `http://` is allowed.
 //!
 //! Endpoints (wired in `lib.rs` when `app_api` is enabled):
 //! - POST `/v1/webhooks` – Create a webhook.
@@ -1215,7 +1215,7 @@ fn event_filter_boxes_from_expr(
                     .collect(),
                 "domain_id" => value
                     .as_str()
-                    .and_then(|s| s.parse().ok())
+                    .and_then(|s| iroha_data_model::domain::DomainId::parse_fully_qualified(s).ok())
                     .map(|id| {
                         EventFilterBox::Data(df::DataEventFilter::Domain(
                             df::DomainEventFilter::new().for_domain(id),
@@ -1259,6 +1259,16 @@ fn event_filter_boxes_from_expr(
                     .map(|id| {
                         EventFilterBox::Data(df::DataEventFilter::Nft(
                             df::NftEventFilter::new().for_nft(id),
+                        ))
+                    })
+                    .into_iter()
+                    .collect(),
+                "rwa_id" => value
+                    .as_str()
+                    .and_then(|s| s.parse().ok())
+                    .map(|id| {
+                        EventFilterBox::Data(df::DataEventFilter::Rwa(
+                            df::RwaEventFilter::new().for_rwa(id),
                         ))
                     })
                     .into_iter()
@@ -1360,6 +1370,8 @@ fn event_filter_boxes_from_expr(
                     asset_def_set: Option<df::AssetDefinitionEventSet>,
                     nft_id: Option<iroha_data_model::nft::NftId>,
                     nft_set: Option<df::NftEventSet>,
+                    rwa_id: Option<iroha_data_model::rwa::RwaId>,
+                    rwa_set: Option<df::RwaEventSet>,
                     role_id: Option<iroha_data_model::role::RoleId>,
                     role_set: Option<df::RoleEventSet>,
                     proof_id: Option<iroha_data_model::proof::ProofId>,
@@ -1413,7 +1425,11 @@ fn event_filter_boxes_from_expr(
                         }
                         // data ids
                         "peer_id" => c.peer_id = v.as_str().and_then(|s| s.parse().ok()),
-                        "domain_id" => c.domain_id = v.as_str().and_then(|s| s.parse().ok()),
+                        "domain_id" => {
+                            c.domain_id = v.as_str().and_then(|s| {
+                                iroha_data_model::domain::DomainId::parse_fully_qualified(s).ok()
+                            })
+                        }
                         "account_id" => {
                             c.account_id = v.as_str().and_then(parse_account_id_literal)
                         }
@@ -1422,6 +1438,7 @@ fn event_filter_boxes_from_expr(
                             c.asset_def_id = v.as_str().and_then(|s| s.parse().ok())
                         }
                         "nft_id" => c.nft_id = v.as_str().and_then(|s| s.parse().ok()),
+                        "rwa_id" => c.rwa_id = v.as_str().and_then(|s| s.parse().ok()),
                         "role_id" => c.role_id = v.as_str().and_then(|s| s.parse().ok()),
                         "proof_id" => {
                             c.proof_id = proof_id_from_json(v);
@@ -1500,6 +1517,24 @@ fn event_filter_boxes_from_expr(
                                 "Created" => Some(df::NftEventSet::Created),
                                 "Deleted" => Some(df::NftEventSet::Deleted),
                                 "OwnerChanged" => Some(df::NftEventSet::OwnerChanged),
+                                _ => None,
+                            });
+                        }
+                        "rwa_event" => {
+                            c.rwa_set = parse_event_list(v, &|s| match s {
+                                "Created" => Some(df::RwaEventSet::Created),
+                                "MetadataInserted" => Some(df::RwaEventSet::MetadataInserted),
+                                "MetadataRemoved" => Some(df::RwaEventSet::MetadataRemoved),
+                                "OwnerChanged" => Some(df::RwaEventSet::OwnerChanged),
+                                "Split" => Some(df::RwaEventSet::Split),
+                                "Merged" => Some(df::RwaEventSet::Merged),
+                                "Redeemed" => Some(df::RwaEventSet::Redeemed),
+                                "Frozen" => Some(df::RwaEventSet::Frozen),
+                                "Unfrozen" => Some(df::RwaEventSet::Unfrozen),
+                                "Held" => Some(df::RwaEventSet::Held),
+                                "Released" => Some(df::RwaEventSet::Released),
+                                "ForceTransferred" => Some(df::RwaEventSet::ForceTransferred),
+                                "ControlsChanged" => Some(df::RwaEventSet::ControlsChanged),
                                 _ => None,
                             });
                         }
@@ -1634,6 +1669,16 @@ fn event_filter_boxes_from_expr(
                         f = f.for_events(set);
                     }
                     out.push(EventFilterBox::Data(df::DataEventFilter::Nft(f)));
+                }
+                if c.rwa_id.is_some() || c.rwa_set.is_some() {
+                    let mut f = df::RwaEventFilter::new();
+                    if let Some(id) = c.rwa_id {
+                        f = f.for_rwa(id);
+                    }
+                    if let Some(set) = c.rwa_set {
+                        f = f.for_events(set);
+                    }
+                    out.push(EventFilterBox::Data(df::DataEventFilter::Rwa(f)));
                 }
                 if c.role_id.is_some() || c.role_set.is_some() {
                     let mut f = df::RoleEventFilter::new();
@@ -1831,6 +1876,34 @@ fn host_header_value(url: &Url) -> std::io::Result<String> {
     Ok(out)
 }
 
+#[cfg(feature = "app_api_https")]
+fn https_delivery_dns_override(
+    url: &Url,
+    connect_addrs: &[SocketAddr],
+) -> Option<(String, Vec<SocketAddr>)> {
+    match url.host() {
+        // Preserve the original hostname for SNI / certificate verification while
+        // pinning the actual connect target to the already-vetted address set.
+        Some(Host::Domain(domain)) if !connect_addrs.is_empty() => {
+            Some((domain.to_owned(), connect_addrs.to_vec()))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api_wss")]
+fn websocket_pinned_connect_addr(
+    url: &Url,
+    policy: &WebhookSecurityPolicy,
+    connect_addrs: &[SocketAddr],
+) -> Option<SocketAddr> {
+    match url.scheme() {
+        "ws" => connect_addrs.first().copied(),
+        "wss" if policy.enabled => connect_addrs.first().copied(),
+        _ => None,
+    }
+}
+
 async fn http_post_plain(
     url: &Url,
     connect_addr: SocketAddr,
@@ -1903,44 +1976,44 @@ async fn http_post_plain(
 
 #[cfg(feature = "app_api_https")]
 async fn http_post_https(
-    url: &str,
+    url: &Url,
+    connect_addrs: &[SocketAddr],
     headers: &[(&str, String)],
     body: &[u8],
 ) -> std::io::Result<u16> {
-    use std::str::FromStr as _;
+    use reqwest::header::{HeaderName, HeaderValue};
 
-    use hyper::{Request, body::Body, http::HeaderName};
-    use hyper_rustls::HttpsConnectorBuilder;
+    let mut client_builder = reqwest::Client::builder()
+        .timeout(
+            http_timeout_config().connect
+                + http_timeout_config().write
+                + http_timeout_config().read,
+        )
+        .http1_only();
+    if let Some((domain, pinned_addrs)) = https_delivery_dns_override(url, connect_addrs) {
+        client_builder = client_builder.resolve_to_addrs(&domain, &pinned_addrs);
+    }
+    let client = client_builder
+        .build()
+        .map_err(|e| std::io::Error::other(format!("https client build: {e}")))?;
 
-    let uri = hyper::Uri::from_str(url).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad url: {e}"))
-    })?;
-    let https = HttpsConnectorBuilder::new()
-        .with_webpki_roots()
-        .https_or_http()
-        .enable_http1()
-        .build();
-    let client: hyper::Client<_, Body> = hyper::Client::builder().http1_only(true).build(https);
-
-    let mut req = Request::builder()
-        .method("POST")
-        .uri(uri)
+    let mut req = client
+        .post(url.as_str())
         .header("User-Agent", "iroha-torii-webhook/1")
-        .header("Connection", "close")
-        .body(Body::from(body.to_vec()))
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("req build: {e}")))?;
-
-    let headers_mut = req.headers_mut();
+        .header("Connection", "close");
     for (k, v) in headers {
         if let Ok(name) = HeaderName::from_str(k) {
-            headers_mut.insert(name, v.parse().unwrap_or_default());
+            if let Ok(value) = HeaderValue::from_str(v) {
+                req = req.header(name, value);
+            }
         }
     }
 
-    let resp = client
-        .request(req)
+    let resp = req
+        .body(body.to_vec())
+        .send()
         .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, format!("https req: {e}")))?;
+        .map_err(|e| std::io::Error::other(format!("https req: {e}")))?;
     Ok(resp.status().as_u16())
 }
 
@@ -1957,10 +2030,12 @@ async fn http_post(url: &str, headers: &[(&str, String)], body: &[u8]) -> std::i
     if scheme == "https" {
         #[cfg(feature = "app_api_https")]
         {
-            if policy.enabled {
-                let _ = resolve_destination_addrs(&parsed, &policy).await?;
-            }
-            return http_post_https(url, headers, body).await;
+            let connect_addrs = if policy.enabled {
+                resolve_destination_addrs(&parsed, &policy).await?
+            } else {
+                Vec::new()
+            };
+            return http_post_https(&parsed, &connect_addrs, headers, body).await;
         }
         #[cfg(not(feature = "app_api_https"))]
         {
@@ -1972,17 +2047,12 @@ async fn http_post(url: &str, headers: &[(&str, String)], body: &[u8]) -> std::i
     }
     #[cfg(feature = "app_api_wss")]
     if scheme == "wss" || scheme == "ws" {
-        let connect_addr = if scheme == "ws" {
-            resolve_destination_addrs(&parsed, &policy)
-                .await?
-                .into_iter()
-                .next()
-        } else if policy.enabled {
-            let _ = resolve_destination_addrs(&parsed, &policy).await?;
-            None
+        let connect_addrs = if scheme == "ws" || policy.enabled {
+            resolve_destination_addrs(&parsed, &policy).await?
         } else {
-            None
+            Vec::new()
         };
+        let connect_addr = websocket_pinned_connect_addr(&parsed, &policy, &connect_addrs);
         return ws_send(&parsed, connect_addr, headers, body).await;
     }
     #[cfg(not(feature = "app_api_wss"))]
@@ -2019,7 +2089,7 @@ async fn ws_send(
     use std::str::FromStr;
 
     use futures::SinkExt as _;
-    use tokio_tungstenite::{MaybeTlsStream, client_async, connect_async};
+    use tokio_tungstenite::{client_async_tls_with_config, connect_async};
     use tungstenite::{Message, client::IntoClientRequest, http::HeaderName};
 
     let mut req = url.as_str().into_client_request().map_err(|e| {
@@ -2039,10 +2109,11 @@ async fn ws_send(
             let stream = tokio::time::timeout(timeouts.connect, TcpStream::connect(addr))
                 .await
                 .map_err(|_| io_timeout_error("tcp connect", timeouts.connect))??;
-            let stream = MaybeTlsStream::Plain(stream);
-            client_async(req, stream).await.map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
-            })?
+            client_async_tls_with_config(req, stream, None, None)
+                .await
+                .map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
+                })?
         }
         None => connect_async(req).await.map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::Other, format!("ws connect: {e}"))
@@ -3020,7 +3091,7 @@ mod tests {
             )),
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         });
 
@@ -3217,5 +3288,49 @@ mod tests {
             .block_on(super::resolve_destination_addrs(&url, &policy))
             .expect_err("private destination rejected");
         assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[cfg(feature = "app_api_https")]
+    #[test]
+    fn https_delivery_dns_override_pins_vetted_domain_addresses() {
+        let url = Url::parse("https://example.test/hook").expect("valid url");
+        let addrs = vec![
+            "203.0.113.10:443".parse().expect("addr"),
+            "203.0.113.11:443".parse().expect("addr"),
+        ];
+
+        let override_addrs =
+            super::https_delivery_dns_override(&url, &addrs).expect("domain override");
+
+        assert_eq!(override_addrs.0, "example.test");
+        assert_eq!(override_addrs.1, addrs);
+    }
+
+    #[cfg(feature = "app_api_https")]
+    #[test]
+    fn https_delivery_dns_override_skips_ip_literals() {
+        let url = Url::parse("https://203.0.113.10/hook").expect("valid url");
+        let addrs = vec!["203.0.113.10:443".parse().expect("addr")];
+
+        assert!(
+            super::https_delivery_dns_override(&url, &addrs).is_none(),
+            "ip-literal URLs should not install a DNS override"
+        );
+    }
+
+    #[cfg(feature = "app_api_wss")]
+    #[test]
+    fn websocket_pinned_connect_addr_pins_secure_delivery_when_guarded() {
+        let policy = WebhookSecurityPolicy {
+            enabled: true,
+            allow_nets: Vec::new(),
+        };
+        let url = Url::parse("wss://example.test/socket").expect("valid url");
+        let addrs = vec!["203.0.113.20:443".parse().expect("addr")];
+
+        assert_eq!(
+            super::websocket_pinned_connect_addr(&url, &policy, &addrs),
+            addrs.first().copied()
+        );
     }
 }

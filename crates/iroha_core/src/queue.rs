@@ -52,12 +52,12 @@ use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 use ivm::ProgramMetadata;
-use mv::storage::StorageReadOnly;
-use norito::core::NoritoSerialize;
+use norito::core::{self as ncore, NoritoSerialize};
 use parking_lot::RwLock;
 pub use router::{
     ConfigLaneRouter, LaneRouter, RoutingDecision, RoutingResolveError, SingleLaneRouter,
-    evaluate_policy, evaluate_policy_with_catalog, resolve_routing_decision,
+    evaluate_policy, evaluate_policy_with_catalog, evaluate_policy_with_catalog_and_world,
+    resolve_query_routing_decision, resolve_routing_decision,
 };
 use thiserror::Error;
 use tokio::{
@@ -70,6 +70,7 @@ use crate::telemetry::{DataspaceTeuGaugeUpdate, LaneTeuGaugeUpdate};
 use crate::{
     EventsSender,
     compliance::{LaneComplianceContext, LaneComplianceEngine, LaneComplianceEvaluation},
+    executor::{NexusFeeAdmissionError, check_external_nexus_fee_admission},
     gas,
     governance::manifest::{
         GovernanceGuardError, GovernanceRules, LaneManifestRegistry, LaneManifestRegistryHandle,
@@ -77,16 +78,25 @@ use crate::{
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle, verify_lane_privacy_proofs},
     nexus::space_directory::{
         LaneIdentityMetadataError,
+        extract_authority_domains as extract_directory_authority_domains,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     prelude::*,
     state::{LaneLifecycleError, State, TransactionsReadOnly, WorldReadOnly},
     sumeragi::status,
     telemetry::StateTelemetry,
-    tx::CheckedTransaction,
+    tx::{CheckedTransaction, instructions_allow_multisig_envelope_authority},
 };
 
 type SignedTxHash = HashOf<iroha_data_model::transaction::SignedTransaction>;
+
+/// Return the latest queued routing hint recorded for a transaction hash.
+#[must_use]
+pub fn routing_hint(
+    hash: &HashOf<iroha_data_model::transaction::SignedTransaction>,
+) -> Option<RoutingDecision> {
+    routing_ledger::get(hash)
+}
 
 /// Nexus-derived limits that influence queue telemetry and scheduling defaults.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -184,17 +194,14 @@ impl Default for QueueLimits {
     }
 }
 
-static GOV_NAMESPACE_METADATA_KEY: LazyLock<Name> =
-    LazyLock::new(|| Name::from_str("gov_namespace").expect("static governance metadata key"));
-static GOV_CONTRACT_ID_METADATA_KEY: LazyLock<Name> =
-    LazyLock::new(|| Name::from_str("gov_contract_id").expect("static governance metadata key"));
+static GOV_CONTRACT_ADDRESS_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
+    Name::from_str("gov_contract_address").expect("static governance metadata key")
+});
 static GOV_APPROVERS_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str("gov_manifest_approvers").expect("static governance metadata key")
 });
-static CONTRACT_NAMESPACE_METADATA_KEY: LazyLock<Name> =
-    LazyLock::new(|| Name::from_str("contract_namespace").expect("static contract metadata key"));
-static CONTRACT_ID_METADATA_KEY: LazyLock<Name> =
-    LazyLock::new(|| Name::from_str("contract_id").expect("static contract metadata key"));
+static CONTRACT_ADDRESS_METADATA_KEY: LazyLock<Name> =
+    LazyLock::new(|| Name::from_str("contract_address").expect("static contract metadata key"));
 
 /// Lockfree queue for transactions
 ///
@@ -221,7 +228,13 @@ pub struct Queue {
     tx_encoded_len: DashMap<SignedTxHash, usize>,
     /// Cached proposal gas cost per queued transaction hash.
     tx_gas_cost: DashMap<SignedTxHash, u64>,
-    /// Cached Norito-encoded transaction payloads for gossip retransmit.
+    /// Local enqueue timestamp in milliseconds for tracked transactions.
+    tx_enqueued_at_ms: DashMap<SignedTxHash, u64>,
+    /// Local enqueue timestamp in milliseconds for hashes still waiting in `tx_hashes`.
+    queued_tx_enqueued_at_ms: DashMap<SignedTxHash, u64>,
+    /// FIFO enqueue-age index used to read the oldest queued transaction without scanning.
+    queued_age_ring: parking_lot::Mutex<VecDeque<(SignedTxHash, u64)>>,
+    /// Cached full Norito-framed signed-transaction payloads for gossip retransmit.
     tx_gossip_payloads: DashMap<SignedTxHash, Arc<Vec<u8>>>,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
     removed_hashes: DashMap<SignedTxHash, ()>,
@@ -257,6 +270,8 @@ pub struct Queue {
     tx_gossip: ArrayQueue<SignedTxHash>,
     /// Broadcast queue load so producers can observe backpressure.
     backpressure_tx: watch::Sender<BackpressureState>,
+    /// Age budget in milliseconds used to mark queue pressure as latency-saturated.
+    pressure_age_budget_ms: AtomicU64,
     /// Optional wake handle for the Sumeragi worker when new transactions are enqueued.
     sumeragi_wake: OnceLock<mpsc::SyncSender<()>>,
     /// Limits derived from Nexus configuration (TEU capacity, starvation bounds).
@@ -286,7 +301,55 @@ impl fmt::Debug for Queue {
             .field("tx_time_to_live", &self.tx_time_to_live)
             .field("expired_cull_interval", &self.expired_cull_interval)
             .field("expired_cull_batch", &self.expired_cull_batch)
+            .field(
+                "pressure_age_budget_ms",
+                &self.pressure_age_budget_ms.load(Ordering::Relaxed),
+            )
             .finish_non_exhaustive()
+    }
+}
+
+const QUEUE_PRESSURE_MIN_AGE_BUDGET_MS: u64 = 2_000;
+const QUEUE_PRESSURE_MAX_AGE_BUDGET_MS: u64 = 5_000;
+
+/// Snapshot of queue pressure used by Torii admission and status reporting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueuePressureSnapshot {
+    /// Number of transactions tracked by the queue (queued + in-flight).
+    pub tracked_tx_count: usize,
+    /// Number of transactions still waiting in the queue.
+    pub queued_tx_count: usize,
+    /// Maximum queue capacity configured for the peer.
+    pub capacity: NonZeroUsize,
+    /// Age in milliseconds of the oldest queue-resident transaction's local queue residence.
+    pub oldest_queued_tx_age_ms: u64,
+    /// Whether the queue saturated because the tracked count hit capacity.
+    pub saturated_by_count: bool,
+    /// Whether the queue saturated because the oldest queued age exceeded the budget.
+    pub saturated_by_age: bool,
+}
+
+impl QueuePressureSnapshot {
+    /// Whether either saturation signal is active.
+    #[must_use]
+    pub const fn is_saturated(self) -> bool {
+        self.saturated_by_count || self.saturated_by_age
+    }
+
+    /// Convert the richer pressure snapshot into the coarse backpressure state.
+    #[must_use]
+    pub const fn into_backpressure(self) -> BackpressureState {
+        if self.is_saturated() {
+            BackpressureState::Saturated {
+                queued: self.queued_tx_count,
+                capacity: self.capacity,
+            }
+        } else {
+            BackpressureState::Healthy {
+                queued: self.queued_tx_count,
+                capacity: self.capacity,
+            }
+        }
     }
 }
 
@@ -296,14 +359,14 @@ impl fmt::Debug for Queue {
 pub enum BackpressureState {
     /// Queue has room for new transactions.
     Healthy {
-        /// Number of transactions tracked by the queue (queued + in-flight).
+        /// Number of transactions still waiting in the queue.
         queued: usize,
         /// Maximum queue capacity configured for the peer.
         capacity: NonZeroUsize,
     },
-    /// Queue reached capacity; callers should defer submissions.
+    /// Queue exceeded a capacity or latency budget; callers should defer submissions.
     Saturated {
-        /// Number of transactions tracked by the queue when saturation triggered.
+        /// Number of transactions still waiting in the queue when saturation triggered.
         queued: usize,
         /// Maximum queue capacity configured for the peer.
         capacity: NonZeroUsize,
@@ -318,7 +381,7 @@ impl BackpressureState {
     }
 
     #[must_use]
-    /// Number of transactions tracked by the queue in the snapshot.
+    /// Number of transactions still waiting in the queue in the snapshot.
     pub const fn queued(self) -> usize {
         match self {
             Self::Healthy { queued, .. } | Self::Saturated { queued, .. } => queued,
@@ -350,7 +413,7 @@ pub struct GossipBatchEntry {
     pub tx: AcceptedTransaction<'static>,
     /// Lane/dataspace routing decision cached at admission time.
     pub routing: RoutingDecision,
-    /// Pre-serialized transaction payload for retransmit.
+    /// Pre-serialized full-frame transaction payload for retransmit.
     pub payload: Arc<Vec<u8>>,
 }
 
@@ -431,6 +494,16 @@ pub enum Error {
         /// Lane alias configured for the policy.
         alias: String,
         /// Reason describing why the privacy proof failed.
+        reason: String,
+    },
+    /// Nexus fee admission rejected the transaction before queueing: {reason}
+    NexusFeeAdmissionRejected {
+        /// Reason describing why the transaction could not cover the Nexus fee bound.
+        reason: String,
+    },
+    /// Nexus fee admission encountered invalid node configuration: {reason}
+    NexusFeeAdmissionConfigInvalid {
+        /// Reason describing which Nexus fee configuration entry is invalid.
         reason: String,
     },
 }
@@ -522,44 +595,100 @@ impl Drop for TransactionGuard {
 
 impl Queue {
     fn collect_lane_privacy_proofs(tx: &CheckedTransaction<'_>) -> Vec<LanePrivacyProof> {
-        tx.as_ref()
-            .as_ref()
-            .attachments()
+        tx.external()
+            .into_iter()
+            .flat_map(|signed| signed.attachments().into_iter())
             .into_iter()
             .flat_map(|list| list.0.iter())
             .filter_map(|attachment| attachment.lane_privacy.clone())
             .collect()
     }
 
+    fn publishes_only_space_directory_manifests(tx: &CheckedTransaction<'_>) -> bool {
+        let Some(signed) = tx.external() else {
+            return false;
+        };
+        match signed.instructions() {
+            Executable::Instructions(instructions) if !instructions.is_empty() => {
+                instructions.iter().all(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<
+                            iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest,
+                        >()
+                        .is_some()
+                })
+            }
+            _ => false,
+        }
+    }
+
     fn compute_tx_encoded_len(tx: &AcceptedTransaction<'_>) -> usize {
-        let signed = tx.as_ref();
-        signed
-            .encoded_len_exact()
-            .unwrap_or_else(|| signed.encoded_len())
+        match tx.entrypoint() {
+            iroha_data_model::transaction::TransactionEntrypoint::External(signed) => signed
+                .encoded_len_exact()
+                .unwrap_or_else(|| signed.encoded_len()),
+            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(entrypoint) => {
+                entrypoint
+                    .encoded_len_exact()
+                    .unwrap_or_else(|| entrypoint.encoded_len())
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::Time(entrypoint) => entrypoint
+                .encoded_len_exact()
+                .unwrap_or_else(|| entrypoint.encoded_len()),
+        }
+    }
+
+    fn encode_gossip_payload(tx: &AcceptedTransaction<'_>) -> Arc<Vec<u8>> {
+        let signed = tx
+            .external()
+            .expect("queue gossip only supports external signed transactions");
+        Arc::new(ncore::to_bytes(signed).expect("encode signed transaction gossip payload"))
     }
 
     pub(crate) fn compute_proposal_gas_cost(tx: &AcceptedTransaction<'_>) -> u64 {
-        match tx.as_ref().instructions() {
-            Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
-            Executable::IvmProved(proved) => gas::meter_instructions(proved.overlay.as_ref()),
-            Executable::Ivm(_) => match crate::executor::parse_gas_limit(tx.as_ref().metadata()) {
-                Ok(Some(limit)) => limit,
-                Ok(None) => {
-                    warn!(
-                        tx = %tx.as_ref().hash(),
-                        "missing gas_limit metadata while deriving proposal gas cost"
-                    );
-                    0
+        match tx.entrypoint() {
+            iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
+                match signed.instructions() {
+                    Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
+                    Executable::ContractCall(_) | Executable::Ivm(_) => {
+                        match crate::executor::parse_gas_limit(signed.metadata()) {
+                            Ok(Some(limit)) => limit,
+                            Ok(None) => {
+                                warn!(
+                                    tx = %tx.hash(),
+                                    "missing gas_limit metadata while deriving proposal gas cost"
+                                );
+                                0
+                            }
+                            Err(err) => {
+                                warn!(
+                                    ?err,
+                                    tx = %tx.hash(),
+                                    "invalid gas_limit metadata while deriving proposal gas cost"
+                                );
+                                0
+                            }
+                        }
+                    }
+                    Executable::IvmProved(proved) => {
+                        gas::meter_instructions(proved.overlay.as_ref())
+                    }
                 }
-                Err(err) => {
-                    warn!(
-                        ?err,
-                        tx = %tx.as_ref().hash(),
-                        "invalid gas_limit metadata while deriving proposal gas cost"
-                    );
-                    0
-                }
-            },
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
+                crate::smartcontracts::isi::kaigi::private_instruction_box(private)
+                    .map(|instruction| gas::meter_instruction(&instruction))
+                    .unwrap_or_else(|err| {
+                        warn!(
+                            ?err,
+                            tx = %tx.hash(),
+                            "failed to derive proposal gas cost for private Kaigi transaction"
+                        );
+                        0
+                    })
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::Time(_) => 0,
         }
     }
 
@@ -571,6 +700,15 @@ impl Queue {
     ) -> Result<(Option<UniversalAccountId>, Vec<String>), Error> {
         extract_directory_lane_identity_metadata(world, authority, dataspace_id).map_err(|err| {
             match err {
+                LaneIdentityMetadataError::MissingDataspaceBinding { uaid, dataspace } => {
+                    Error::LaneComplianceDenied {
+                        alias: lane_alias.to_string(),
+                        reason: format!(
+                            "UAID {uaid} is not bound to dataspace {}",
+                            dataspace.as_u64()
+                        ),
+                    }
+                }
                 LaneIdentityMetadataError::InactiveManifest { uaid, dataspace } => {
                     Error::LaneComplianceDenied {
                         alias: lane_alias.to_string(),
@@ -580,6 +718,19 @@ impl Queue {
                         ),
                     }
                 }
+            }
+        })
+    }
+
+    fn extract_lane_authority_domains(
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+        lane_alias: &str,
+    ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
+        extract_directory_authority_domains(world, authority).map_err(|err| {
+            Error::LaneComplianceDenied {
+                alias: lane_alias.to_string(),
+                reason: format!("authority alias domain resolution failed: {err}"),
             }
         })
     }
@@ -677,6 +828,11 @@ impl Queue {
         rules: &GovernanceRules,
         tx: &CheckedTransaction<'_>,
     ) -> Result<(), Error> {
+        if let Executable::Instructions(instructions) = tx.as_ref().as_ref().instructions()
+            && instructions_allow_multisig_envelope_authority(instructions)
+        {
+            return Ok(());
+        }
         let Some(quorum) = rules.quorum else {
             return Ok(());
         };
@@ -705,22 +861,98 @@ impl Queue {
         Ok(())
     }
 
+    fn tx_contains_runtime_upgrade_instruction(tx: &CheckedTransaction<'_>) -> bool {
+        let Executable::Instructions(instructions) = tx.as_ref().as_ref().instructions() else {
+            return false;
+        };
+        instructions.iter().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<ProposeRuntimeUpgrade>()
+                .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<ActivateRuntimeUpgrade>()
+                    .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<CancelRuntimeUpgrade>()
+                    .is_some()
+        })
+    }
+
+    fn tx_touches_manifest_protected_namespace_surface(tx: &CheckedTransaction<'_>) -> bool {
+        let signed = tx.as_ref().as_ref();
+        let metadata = signed.metadata();
+        let has_governance_contract_address =
+            metadata.get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY).is_some();
+        let has_contract_address_hint = metadata.get(&*CONTRACT_ADDRESS_METADATA_KEY).is_some();
+
+        let mut contract_targets_seen = false;
+        let mut register_code_seen = false;
+        match signed.instructions() {
+            Executable::Instructions(instructions) => {
+                for instruction in instructions {
+                    if instruction
+                        .as_any()
+                        .downcast_ref::<ActivateContractInstance>()
+                        .is_some()
+                        || instruction
+                            .as_any()
+                            .downcast_ref::<DeactivateContractInstance>()
+                            .is_some()
+                    {
+                        contract_targets_seen = true;
+                    } else {
+                        let any = instruction.as_any();
+                        if any.is::<RegisterSmartContractCode>()
+                            || any.is::<RegisterSmartContractBytes>()
+                            || any.is::<RemoveSmartContractBytes>()
+                        {
+                            register_code_seen = true;
+                        }
+                    }
+                }
+            }
+            Executable::ContractCall(_) => {
+                contract_targets_seen = true;
+            }
+            Executable::Ivm(_) | Executable::IvmProved(_) => {}
+        }
+
+        let ivm_with_contract_metadata = matches!(signed.instructions(), Executable::Ivm(_))
+            && (has_governance_contract_address || has_contract_address_hint);
+
+        register_code_seen || contract_targets_seen || ivm_with_contract_metadata
+    }
+
+    fn tx_requires_manifest_validator_gating(
+        rules: &GovernanceRules,
+        tx: &CheckedTransaction<'_>,
+    ) -> bool {
+        Self::tx_contains_runtime_upgrade_instruction(tx)
+            || (!rules.protected_namespaces.is_empty()
+                && Self::tx_touches_manifest_protected_namespace_surface(tx))
+    }
+
     fn collect_manifest_approvals(
         alias: &str,
         tx: &CheckedTransaction<'_>,
     ) -> Result<BTreeSet<String>, Error> {
         let mut approvals = BTreeSet::new();
-        let signed = tx.as_ref().as_ref();
-        let authority = signed.authority();
-        let authority_i105 = authority.canonical_i105().map_err(|err| {
-            Self::enforcement_error(
-                alias,
-                format!("failed to encode authority `{authority}` as i105: {err}"),
-            )
-        })?;
-        approvals.insert(authority_i105);
+        if let Some(authority) = tx.as_ref().authority_opt() {
+            let authority_i105 = authority.canonical_i105().map_err(|err| {
+                Self::enforcement_error(
+                    alias,
+                    format!("failed to encode authority `{authority}` as i105: {err}"),
+                )
+            })?;
+            approvals.insert(authority_i105);
+        }
 
-        let metadata = signed.metadata();
+        let Some(metadata) = tx.as_ref().metadata() else {
+            return Ok(approvals);
+        };
         let Some(raw) = metadata.get(&*GOV_APPROVERS_METADATA_KEY) else {
             return Ok(approvals);
         };
@@ -772,291 +1004,157 @@ impl Queue {
         rules: &GovernanceRules,
         tx: &CheckedTransaction<'_>,
         world: &impl WorldReadOnly,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         if rules.protected_namespaces.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
 
         let signed = tx.as_ref().as_ref();
         let metadata = signed.metadata();
-        let metadata_namespace = metadata
-            .get(&*GOV_NAMESPACE_METADATA_KEY)
+        let metadata_governance_contract_address = metadata
+            .get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY)
             .map(|value| {
                 let raw = value.try_into_any_norito::<String>().map_err(|_| {
                     Self::enforcement_error(
                         alias,
-                        "`gov_namespace` metadata must be a string value",
+                        "`gov_contract_address` metadata must be a string value",
                     )
                 })?;
                 let trimmed = raw.trim();
                 if trimmed.is_empty() {
                     return Err(Self::enforcement_error(
                         alias,
-                        "`gov_namespace` metadata must not be blank",
+                        "`gov_contract_address` metadata must not be blank",
                     ));
                 }
-                Name::from_str(trimmed).map_err(|err| {
-                    Self::enforcement_error(
-                        alias,
-                        format!("`gov_namespace` metadata `{trimmed}` is not a valid Name: {err}"),
-                    )
-                })
-            })
-            .transpose()?;
-
-        let metadata_contract_id = metadata
-            .get(&*GOV_CONTRACT_ID_METADATA_KEY)
-            .map(|value| {
-                let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                    Self::enforcement_error(
-                        alias,
-                        "`gov_contract_id` metadata must be a string value",
-                    )
-                })?;
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    return Err(Self::enforcement_error(
-                        alias,
-                        "`gov_contract_id` metadata must not be blank",
-                    ));
-                }
-                Ok(trimmed.to_string())
-            })
-            .transpose()?;
-
-        let metadata_contract_namespace = metadata
-            .get(&*CONTRACT_NAMESPACE_METADATA_KEY)
-            .map(|value| {
-                let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                    Self::enforcement_error(
-                        alias,
-                        "`contract_namespace` metadata must be a string value",
-                    )
-                })?;
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    return Err(Self::enforcement_error(
-                        alias,
-                        "`contract_namespace` metadata must not be blank",
-                    ));
-                }
-                Name::from_str(trimmed).map_err(|err| {
+                trimmed
+                    .parse::<iroha_data_model::smart_contract::ContractAddress>()
+                    .map_err(|err| {
                     Self::enforcement_error(
                         alias,
                         format!(
-                            "`contract_namespace` metadata `{trimmed}` is not a valid Name: {err}"
+                            "`gov_contract_address` metadata `{trimmed}` is not a valid ContractAddress: {err}"
                         ),
                     )
                 })
             })
             .transpose()?;
 
-        let metadata_contract_id_hint = metadata
-            .get(&*CONTRACT_ID_METADATA_KEY)
+        let metadata_contract_address_hint = metadata
+            .get(&*CONTRACT_ADDRESS_METADATA_KEY)
             .map(|value| {
                 let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                    Self::enforcement_error(alias, "`contract_id` metadata must be a string value")
+                    Self::enforcement_error(
+                        alias,
+                        "`contract_address` metadata must be a string value",
+                    )
                 })?;
                 let trimmed = raw.trim();
                 if trimmed.is_empty() {
                     return Err(Self::enforcement_error(
                         alias,
-                        "`contract_id` metadata must not be blank",
+                        "`contract_address` metadata must not be blank",
                     ));
                 }
-                Ok(trimmed.to_string())
+                trimmed
+                    .parse::<iroha_data_model::smart_contract::ContractAddress>()
+                    .map_err(|err| {
+                        Self::enforcement_error(
+                            alias,
+                            format!(
+                                "`contract_address` metadata `{trimmed}` is not a valid ContractAddress: {err}"
+                            ),
+                        )
+                    })
             })
             .transpose()?;
 
-        let mut namespaces_from_instructions = BTreeSet::new();
-        let mut contract_bindings = BTreeSet::new();
+        let mut contract_targets = BTreeSet::new();
         let mut register_code_seen = false;
-        if let Executable::Instructions(instructions) = signed.instructions() {
-            for instruction in instructions {
-                if let Some(activate) = instruction
-                    .as_any()
-                    .downcast_ref::<ActivateContractInstance>()
-                {
-                    let ns = Name::from_str(activate.namespace.trim()).map_err(|err| {
-                        Self::enforcement_error(
-                            alias,
-                            format!(
-                                "instruction namespace `{}` is not valid: {err}",
-                                activate.namespace
-                            ),
-                        )
-                    })?;
-                    namespaces_from_instructions.insert(ns.clone());
-                    let contract_id = activate.contract_id.trim();
-                    if contract_id.is_empty() {
-                        return Err(Self::enforcement_error(
-                            alias,
-                            "contract_id in ActivateContractInstance must not be blank",
-                        ));
-                    }
-                    contract_bindings.insert((ns, contract_id.to_string()));
-                } else if let Some(deactivate) = instruction
-                    .as_any()
-                    .downcast_ref::<DeactivateContractInstance>()
-                {
-                    let ns = Name::from_str(deactivate.namespace.trim()).map_err(|err| {
-                        Self::enforcement_error(
-                            alias,
-                            format!(
-                                "instruction namespace `{}` is not valid: {err}",
-                                deactivate.namespace
-                            ),
-                        )
-                    })?;
-                    namespaces_from_instructions.insert(ns.clone());
-                    let contract_id = deactivate.contract_id.trim();
-                    if contract_id.is_empty() {
-                        return Err(Self::enforcement_error(
-                            alias,
-                            "contract_id in DeactivateContractInstance must not be blank",
-                        ));
-                    }
-                    contract_bindings.insert((ns, contract_id.to_string()));
-                } else {
-                    let modifies_contract_code = {
-                        let any = instruction.as_any();
-                        any.is::<RegisterSmartContractCode>()
-                            || any.is::<RegisterSmartContractBytes>()
-                            || any.is::<RemoveSmartContractBytes>()
-                    };
-                    if modifies_contract_code {
-                        register_code_seen = true;
+        match signed.instructions() {
+            Executable::Instructions(instructions) => {
+                for instruction in instructions {
+                    if let Some(activate) = instruction
+                        .as_any()
+                        .downcast_ref::<ActivateContractInstance>()
+                    {
+                        contract_targets.insert(activate.contract_address().clone());
+                    } else if let Some(deactivate) = instruction
+                        .as_any()
+                        .downcast_ref::<DeactivateContractInstance>()
+                    {
+                        contract_targets.insert(deactivate.contract_address().clone());
+                    } else {
+                        let modifies_contract_code = {
+                            let any = instruction.as_any();
+                            any.is::<RegisterSmartContractCode>()
+                                || any.is::<RegisterSmartContractBytes>()
+                                || any.is::<RemoveSmartContractBytes>()
+                        };
+                        if modifies_contract_code {
+                            register_code_seen = true;
+                        }
                     }
                 }
             }
+            Executable::ContractCall(call) => {
+                contract_targets.insert(call.contract_address.clone());
+            }
+            Executable::Ivm(_) | Executable::IvmProved(_) => {}
         }
 
-        if let Some(ns) = metadata_namespace.clone() {
-            if let Some(cid) = metadata_contract_id
-                .clone()
-                .or_else(|| metadata_contract_id_hint.clone())
-            {
-                namespaces_from_instructions.insert(ns.clone());
-                contract_bindings.insert((ns, cid));
-            }
-        } else if let Some(ns) = metadata_contract_namespace.clone() {
-            if let Some(cid) = metadata_contract_id_hint.clone() {
-                namespaces_from_instructions.insert(ns.clone());
-                contract_bindings.insert((ns, cid));
-            }
+        if let Some(contract_address) = metadata_governance_contract_address.clone() {
+            contract_targets.insert(contract_address);
         }
 
         let ivm_with_contract_metadata = matches!(signed.instructions(), Executable::Ivm(_))
-            && (metadata_namespace.is_some()
-                || metadata_contract_namespace.is_some()
-                || metadata_contract_id_hint.is_some());
+            && (metadata_governance_contract_address.is_some()
+                || metadata_contract_address_hint.is_some());
 
         let contract_instr_seen =
-            register_code_seen || !contract_bindings.is_empty() || ivm_with_contract_metadata;
+            register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
 
-        if contract_instr_seen && metadata_namespace.is_none() {
-            return Err(Self::enforcement_error(
-                alias,
-                "transactions with contract namespace operations must set `gov_namespace` metadata when lane governance protects namespaces",
-            ));
+        if !contract_instr_seen {
+            let _ = world;
+            return Ok(false);
         }
 
-        if (contract_instr_seen || metadata_namespace.is_some()) && metadata_contract_id.is_none() {
-            return Err(Self::enforcement_error(
-                alias,
-                "metadata key `gov_contract_id` is required when `gov_namespace` is provided",
-            ));
-        }
-
-        if let (Some(ns_hint), Some(ns_meta)) = (
-            metadata_contract_namespace.as_ref(),
-            metadata_namespace.as_ref(),
-        ) {
-            if ns_hint != ns_meta {
-                return Err(Self::enforcement_error(
-                    alias,
-                    "`contract_namespace` metadata must match `gov_namespace` for protected operations",
-                ));
-            }
-        }
-
-        if let (Some(cid_hint), Some(cid_meta)) = (
-            metadata_contract_id_hint.as_ref(),
-            metadata_contract_id.as_ref(),
-        ) {
-            if cid_hint != cid_meta {
-                return Err(Self::enforcement_error(
-                    alias,
-                    "`contract_id` metadata must match `gov_contract_id` for protected operations",
-                ));
-            }
-        }
-
-        if let Some(meta_cid) = metadata_contract_id.as_ref()
-            && let Some(target_ns) = metadata_namespace
-                .clone()
-                .or_else(|| namespaces_from_instructions.iter().next().cloned())
-        {
-            let cross_namespace = world
-                .contract_instances()
-                .iter()
-                .filter(|((_ns, cid), _)| cid == meta_cid)
-                .filter_map(|((ns, _), _)| Name::from_str(ns).ok())
-                .any(|existing_ns| existing_ns != target_ns);
-            if cross_namespace {
-                return Err(Self::enforcement_error(
-                    alias,
-                    format!(
-                        "contract `{meta_cid}` is already bound to a different namespace; cross-namespace rebinding is not allowed"
-                    ),
-                ));
-            }
-        }
-
-        let mut namespaces_to_check = namespaces_from_instructions.clone();
-        if let Some(ns) = metadata_namespace.clone() {
-            namespaces_to_check.insert(ns);
-        }
-        if let Some(ns) = metadata_contract_namespace.clone() {
-            namespaces_to_check.insert(ns);
-        }
-
-        for namespace in &namespaces_to_check {
-            if !rules.protected_namespaces.contains(namespace) {
-                return Err(Self::enforcement_error(
-                    alias,
-                    format!(
-                        "namespace `{namespace}` is not declared in lane governance protected set"
-                    ),
-                ));
-            }
-        }
-
-        if let Some(ns) = metadata_namespace
-            && !namespaces_from_instructions.is_empty()
-            && namespaces_from_instructions
-                .iter()
-                .any(|other| other != &ns)
+        if contract_instr_seen
+            && metadata_governance_contract_address.is_none()
+            && !matches!(signed.instructions(), Executable::ContractCall(_))
         {
             return Err(Self::enforcement_error(
                 alias,
-                "`gov_namespace` metadata does not match namespaces referenced by contract instructions",
+                "transactions with contract operations must set `gov_contract_address` metadata when lane governance protects namespaces",
             ));
         }
 
-        if let Some(meta_contract_id) = metadata_contract_id
-            && !contract_bindings.is_empty()
-            && contract_bindings
-                .iter()
-                .any(|(_, cid)| cid != &meta_contract_id)
+        if let (Some(hint), Some(meta)) = (
+            metadata_contract_address_hint.as_ref(),
+            metadata_governance_contract_address.as_ref(),
+        ) && hint != meta
         {
             return Err(Self::enforcement_error(
                 alias,
-                "`gov_contract_id` metadata does not match contract ids referenced by contract instructions",
+                "`contract_address` metadata must match `gov_contract_address` for protected operations",
             ));
         }
 
-        Ok(())
+        if let Some(meta_contract_address) = metadata_governance_contract_address.as_ref()
+            && !contract_targets.is_empty()
+            && contract_targets
+                .iter()
+                .any(|contract_address| contract_address != meta_contract_address)
+        {
+            return Err(Self::enforcement_error(
+                alias,
+                "`gov_contract_address` metadata does not match contract addresses referenced by contract instructions",
+            ));
+        }
+
+        let _ = world;
+
+        Ok(true)
     }
 
     fn enforce_runtime_upgrade_hook(
@@ -1065,28 +1163,7 @@ impl Queue {
         tx: &CheckedTransaction<'_>,
     ) -> Result<bool, Error> {
         let signed = tx.as_ref().as_ref();
-        let mut contains_runtime_upgrade = false;
-        if let Executable::Instructions(instructions) = signed.instructions() {
-            for instruction in instructions {
-                if instruction
-                    .as_any()
-                    .downcast_ref::<ProposeRuntimeUpgrade>()
-                    .is_some()
-                    || instruction
-                        .as_any()
-                        .downcast_ref::<ActivateRuntimeUpgrade>()
-                        .is_some()
-                    || instruction
-                        .as_any()
-                        .downcast_ref::<CancelRuntimeUpgrade>()
-                        .is_some()
-                {
-                    contains_runtime_upgrade = true;
-                    break;
-                }
-            }
-        }
-        if !contains_runtime_upgrade {
+        if !Self::tx_contains_runtime_upgrade_instruction(tx) {
             return Ok(false);
         }
 
@@ -1265,6 +1342,9 @@ impl Queue {
                 routing_decisions: DashMap::new(),
                 tx_encoded_len: DashMap::new(),
                 tx_gas_cost: DashMap::new(),
+                tx_enqueued_at_ms: DashMap::new(),
+                queued_tx_enqueued_at_ms: DashMap::new(),
+                queued_age_ring: parking_lot::Mutex::new(VecDeque::new()),
                 tx_gossip_payloads: DashMap::new(),
                 push_remove_lock: parking_lot::Mutex::new(()),
                 guard_sequence: AtomicU64::new(0),
@@ -1280,6 +1360,7 @@ impl Queue {
                 expiry_ring_members: DashMap::new(),
                 tx_gossip: ArrayQueue::new(capacity.get()),
                 backpressure_tx,
+                pressure_age_budget_ms: AtomicU64::new(Self::default_pressure_age_budget_ms()),
                 sumeragi_wake: OnceLock::new(),
                 nexus_limits: RwLock::new(limits),
                 #[cfg(feature = "telemetry")]
@@ -1341,14 +1422,72 @@ impl Queue {
 
     /// Checks if the transaction is expired at a specific time.
     fn is_expired_at(&self, tx: &AcceptedTransaction<'static>, now: Duration) -> bool {
-        let tx_creation_time = tx.as_ref().creation_time();
-
-        let time_limit = tx.as_ref().time_to_live().map_or_else(
-            || self.tx_time_to_live,
-            |tx_time_to_live| core::cmp::min(self.tx_time_to_live, tx_time_to_live),
-        );
+        let tx_creation_time = tx.creation_time();
+        let time_limit = self.effective_tx_time_to_live(tx);
 
         now.saturating_sub(tx_creation_time) > time_limit
+    }
+
+    fn effective_tx_time_to_live(&self, tx: &AcceptedTransaction<'_>) -> Duration {
+        tx.time_to_live().map_or_else(
+            || self.tx_time_to_live,
+            |tx_time_to_live| core::cmp::min(self.tx_time_to_live, tx_time_to_live),
+        )
+    }
+
+    fn nexus_fee_admission_observation_time_ms(&self, tx: &AcceptedTransaction<'_>) -> u64 {
+        let deadline = tx
+            .creation_time()
+            .saturating_add(self.effective_tx_time_to_live(tx));
+        Self::duration_to_millis(deadline)
+    }
+
+    fn map_nexus_fee_admission_error(err: NexusFeeAdmissionError) -> Error {
+        match err {
+            NexusFeeAdmissionError::Rejected(reason) => Error::NexusFeeAdmissionRejected { reason },
+            NexusFeeAdmissionError::ConfigInvalid(reason) => {
+                Error::NexusFeeAdmissionConfigInvalid { reason }
+            }
+        }
+    }
+
+    fn recheck_external_nexus_fee_admission(
+        &self,
+        tx: &AcceptedTransaction<'static>,
+        world: &impl WorldReadOnly,
+        nexus: &Nexus,
+        route_dataspace_id: Option<DataSpaceId>,
+    ) -> Result<(), Error> {
+        let Some(transaction) = tx.external() else {
+            return Ok(());
+        };
+        let observation_time_ms = self.nexus_fee_admission_observation_time_ms(tx);
+        check_external_nexus_fee_admission(
+            world,
+            nexus,
+            transaction,
+            observation_time_ms,
+            route_dataspace_id,
+        )
+        .map_err(Self::map_nexus_fee_admission_error)
+    }
+
+    fn queue_rejection_reason(
+        err: &Error,
+    ) -> Option<iroha_data_model::transaction::error::TransactionRejectionReason> {
+        match err {
+            Error::NexusFeeAdmissionRejected { reason } => Some(
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::NotPermitted(reason.clone()),
+                ),
+            ),
+            Error::NexusFeeAdmissionConfigInvalid { reason } => Some(
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::InternalError(reason.clone()),
+                ),
+            ),
+            _ => None,
+        }
     }
 
     /// Returns all pending transactions.
@@ -1405,15 +1544,7 @@ impl Queue {
                 let payload = if let Some(entry) = self.tx_gossip_payloads.get(&hash) {
                     Arc::clone(entry.value())
                 } else {
-                    let signed = tx_ref.as_accepted().as_ref();
-                    let encoded_len = self
-                        .tx_encoded_len
-                        .get(&hash)
-                        .map(|entry| *entry.value())
-                        .unwrap_or_else(|| Self::compute_tx_encoded_len(tx_ref.as_accepted()));
-                    let mut buf = Vec::with_capacity(encoded_len);
-                    signed.encode_to(&mut buf);
-                    let payload = Arc::new(buf);
+                    let payload = Self::encode_gossip_payload(tx_ref.as_accepted());
                     self.tx_gossip_payloads.insert(hash, Arc::clone(&payload));
                     payload
                 };
@@ -1457,6 +1588,19 @@ impl Queue {
     /// This path prefers no-state routing and only falls back to a short-lived
     /// snapshot when the active router requires dynamic world data.
     pub(crate) fn route_for_gossip_with_state(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state: &State,
+    ) -> Result<RoutingDecision, RoutingResolveError> {
+        let decision = self.router.read().try_route_with_state(tx, state)?;
+        self.resolve_queue_routing_decision(decision)
+    }
+
+    /// Resolve routing for an admitted transaction against the current state.
+    ///
+    /// This is used by Torii ingress proxying to compute the authoritative lane
+    /// before deciding whether the request can be executed locally.
+    pub fn route_with_state(
         &self,
         tx: &AcceptedTransaction<'_>,
         state: &State,
@@ -1542,7 +1686,7 @@ impl Queue {
         trace!(
             lane_id = %lane_id,
             dataspace_id = %dataspace_id,
-            tx = %tx.as_ref().hash(),
+            tx = %tx.hash(),
             "Pushing to the queue"
         );
         let checked = match tx.into_checked(state_view) {
@@ -1566,6 +1710,7 @@ impl Queue {
             checked,
             routing_decision,
             state_view.world(),
+            &state_view.nexus,
             gossip_payload,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
@@ -1619,11 +1764,11 @@ impl Queue {
         trace!(
             lane_id = %lane_id,
             dataspace_id = %dataspace_id,
-            tx = %tx.as_ref().hash(),
+            tx = %tx.hash(),
             "Pushing to the queue"
         );
 
-        let tx_hash = tx.as_ref().hash();
+        let tx_hash = tx.hash();
         if state.has_committed_transaction(tx_hash) {
             return Err(Failure {
                 tx: tx.into(),
@@ -1639,6 +1784,7 @@ impl Queue {
         }
 
         let world = state.world_view();
+        let nexus = state.nexus_snapshot();
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state.metrics();
 
@@ -1646,6 +1792,7 @@ impl Queue {
             checked,
             routing_decision,
             &world,
+            &nexus,
             gossip_payload,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
@@ -1659,11 +1806,26 @@ impl Queue {
         checked: CheckedTransaction<'static>,
         routing_decision: RoutingDecision,
         world: &impl WorldReadOnly,
+        nexus: &Nexus,
         gossip_payload: Option<Arc<Vec<u8>>>,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<RoutingDecision, Failure> {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
+
+        if checked.as_accepted().external().is_some() {
+            if let Err(err) = self.recheck_external_nexus_fee_admission(
+                checked.as_accepted(),
+                world,
+                nexus,
+                Some(dataspace_id),
+            ) {
+                return Err(Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err,
+                });
+            }
+        }
 
         #[cfg(feature = "telemetry")]
         let mut manifest_allowed = false;
@@ -1690,75 +1852,114 @@ impl Queue {
             });
         }
         if let Some(status) = manifest_status {
-            if let Some(rules) = status.rules() {
+            // Private/admin-managed manifests still provide authoritative routing and
+            // privacy commitments even when the lane is not governed. Admission
+            // checks that depend on validator authority or governance metadata only
+            // apply when the lane explicitly declares a governance module.
+            if status.governance.is_some()
+                && let Some(rules) = status.rules()
+            {
                 let alias = status.alias.clone();
-                if !rules.validators.is_empty()
-                    && !rules
-                        .validators
-                        .iter()
-                        .any(|validator| validator == checked.as_ref().authority())
-                {
-                    iroha_logger::warn!(
-                        lane = %alias,
-                        authority = %checked.as_ref().authority(),
-                        "rejecting transaction not signed by governance validator"
-                    );
-                    #[cfg(feature = "telemetry")]
-                    telemetry_handle.record_manifest_admission("non_validator_authority");
-                    return Err(Failure {
-                        tx: Box::new(checked.as_accepted().clone()),
-                        err: Error::GovernanceNotPermitted {
-                            alias,
-                            reason: "authority not part of lane validator set".to_string(),
-                        },
-                    });
-                }
-                let quorum_required =
-                    rules.quorum.unwrap_or(0).saturating_sub(1) > 0 && !rules.validators.is_empty();
-                let quorum_result = Self::enforce_manifest_quorum(&alias, rules, &checked);
-                if quorum_required {
-                    match quorum_result {
-                        Ok(()) => {
-                            #[cfg(feature = "telemetry")]
-                            telemetry_handle.record_manifest_quorum_enforcement("satisfied");
+                let allows_multisig_envelope_authority =
+                    match checked.as_accepted().as_ref().instructions() {
+                        Executable::Instructions(instructions) => {
+                            instructions_allow_multisig_envelope_authority(&instructions)
                         }
-                        Err(err) => {
-                            #[cfg(feature = "telemetry")]
-                            telemetry_handle.record_manifest_quorum_enforcement("rejected");
-                            #[cfg(feature = "telemetry")]
-                            telemetry_handle.record_manifest_admission("quorum_rejected");
-                            return Err(Failure {
-                                tx: Box::new(checked.as_accepted().clone()),
-                                err,
-                            });
+                        Executable::ContractCall(_)
+                        | Executable::IvmProved(_)
+                        | Executable::Ivm(_) => false,
+                    };
+                let governance_sensitive =
+                    Self::tx_requires_manifest_validator_gating(rules, &checked);
+                if governance_sensitive {
+                    if !rules.validators.is_empty() && checked.as_ref().authority_opt().is_none() {
+                        #[cfg(feature = "telemetry")]
+                        telemetry_handle.record_manifest_admission("missing_authority");
+                        return Err(Failure {
+                            tx: Box::new(checked.as_accepted().clone()),
+                            err: Error::GovernanceNotPermitted {
+                                alias: alias.clone(),
+                                reason: "authority-free transactions cannot satisfy lane validator gating"
+                                    .to_string(),
+                            },
+                        });
+                    }
+                    if let Some(authority) = checked.as_ref().authority_opt()
+                        && !rules.validators.is_empty()
+                        && !allows_multisig_envelope_authority
+                        && !rules
+                            .validators
+                            .iter()
+                            .any(|validator| validator == authority)
+                    {
+                        iroha_logger::warn!(
+                            lane = %alias,
+                            authority = %authority,
+                            "rejecting transaction not signed by governance validator"
+                        );
+                        #[cfg(feature = "telemetry")]
+                        telemetry_handle.record_manifest_admission("non_validator_authority");
+                        return Err(Failure {
+                            tx: Box::new(checked.as_accepted().clone()),
+                            err: Error::GovernanceNotPermitted {
+                                alias: alias.clone(),
+                                reason: "authority not part of lane validator set".to_string(),
+                            },
+                        });
+                    }
+                    let quorum_required = !allows_multisig_envelope_authority
+                        && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
+                        && !rules.validators.is_empty();
+                    let quorum_result = Self::enforce_manifest_quorum(&alias, rules, &checked);
+                    if quorum_required {
+                        match quorum_result {
+                            Ok(()) => {
+                                #[cfg(feature = "telemetry")]
+                                telemetry_handle.record_manifest_quorum_enforcement("satisfied");
+                            }
+                            Err(err) => {
+                                #[cfg(feature = "telemetry")]
+                                telemetry_handle.record_manifest_quorum_enforcement("rejected");
+                                #[cfg(feature = "telemetry")]
+                                telemetry_handle.record_manifest_admission("quorum_rejected");
+                                return Err(Failure {
+                                    tx: Box::new(checked.as_accepted().clone()),
+                                    err,
+                                });
+                            }
                         }
+                    } else if let Err(err) = quorum_result {
+                        #[cfg(feature = "telemetry")]
+                        telemetry_handle.record_manifest_admission("quorum_rejected");
+                        return Err(Failure {
+                            tx: Box::new(checked.as_accepted().clone()),
+                            err,
+                        });
                     }
-                } else if let Err(err) = quorum_result {
-                    #[cfg(feature = "telemetry")]
-                    telemetry_handle.record_manifest_admission("quorum_rejected");
-                    return Err(Failure {
-                        tx: Box::new(checked.as_accepted().clone()),
-                        err,
-                    });
                 }
-                if let Err(err) =
-                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked, world)
-                {
-                    #[cfg(feature = "telemetry")]
-                    if !rules.protected_namespaces.is_empty() {
-                        telemetry_handle.record_protected_namespace_enforcement("rejected");
+                let protected_namespace_result =
+                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked, world);
+                let protected_namespace_applied = match protected_namespace_result {
+                    Ok(applied) => applied,
+                    Err(err) => {
+                        #[cfg(feature = "telemetry")]
+                        if !rules.protected_namespaces.is_empty() {
+                            telemetry_handle.record_protected_namespace_enforcement("rejected");
+                        }
+                        #[cfg(feature = "telemetry")]
+                        telemetry_handle.record_manifest_admission("protected_namespace_rejected");
+                        return Err(Failure {
+                            tx: Box::new(checked.as_accepted().clone()),
+                            err,
+                        });
                     }
-                    #[cfg(feature = "telemetry")]
-                    telemetry_handle.record_manifest_admission("protected_namespace_rejected");
-                    return Err(Failure {
-                        tx: Box::new(checked.as_accepted().clone()),
-                        err,
-                    });
-                }
+                };
                 #[cfg(feature = "telemetry")]
-                if !rules.protected_namespaces.is_empty() {
+                if protected_namespace_applied {
                     telemetry_handle.record_protected_namespace_enforcement("allowed");
                 }
+                #[cfg(not(feature = "telemetry"))]
+                let _ = protected_namespace_applied;
                 let runtime_hook_result =
                     Self::enforce_runtime_upgrade_hook(&alias, rules, &checked);
                 let runtime_hook_applied = match runtime_hook_result {
@@ -1816,24 +2017,48 @@ impl Queue {
             Some(lane_privacy_registry_handle)
         };
 
-        let lane_identity = Self::extract_lane_identity_metadata(
-            world,
-            checked.as_ref().authority(),
-            dataspace_id,
-            &lane_alias,
-        )
-        .map_err(|err| Failure {
-            tx: Box::new(checked.as_accepted().clone()),
-            err,
-        })?;
+        let publishes_space_directory_manifest =
+            Self::publishes_only_space_directory_manifests(&checked);
+        let lane_identity = if publishes_space_directory_manifest {
+            (None, Vec::new())
+        } else {
+            checked
+                .as_ref()
+                .authority_opt()
+                .map(|authority| {
+                    Self::extract_lane_identity_metadata(
+                        world,
+                        authority,
+                        dataspace_id,
+                        &lane_alias,
+                    )
+                })
+                .transpose()
+                .map_err(|err| Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err,
+                })?
+                .unwrap_or((None, Vec::new()))
+        };
 
         let lane_compliance = self.lane_compliance.read().clone();
-        if let Some(engine) = lane_compliance.as_ref() {
+        if !publishes_space_directory_manifest
+            && let (Some(engine), Some(authority)) =
+                (lane_compliance.as_ref(), checked.as_ref().authority_opt())
+        {
             let (uaid_value, capability_tags) = lane_identity;
+            let authority_domains =
+                Self::extract_lane_authority_domains(world, authority, &lane_alias).map_err(
+                    |err| Failure {
+                        tx: Box::new(checked.as_accepted().clone()),
+                        err,
+                    },
+                )?;
             let ctx = LaneComplianceContext {
                 lane_id,
                 dataspace_id,
-                authority: checked.as_ref().authority(),
+                authority,
+                authority_domains: authority_domains.as_slice(),
                 uaid: uaid_value.as_ref(),
                 capability_tags: capability_tags.as_slice(),
                 lane_privacy_registry,
@@ -1880,6 +2105,7 @@ impl Queue {
             .unwrap_or_else(|| Self::compute_tx_encoded_len(checked.as_accepted()));
         let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
         let hash = checked.as_ref().hash();
+        let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
         let _guard = self.push_remove_lock.lock();
         let txs_len = self.txs.len();
         let entry = match self.txs.entry(hash) {
@@ -1906,11 +2132,13 @@ impl Queue {
             });
         }
 
-        if let Err(err) = self.check_and_increase_per_user_tx_count(checked.as_ref().authority()) {
-            return Err(Failure {
-                tx: checked.as_accepted().clone().into(),
-                err,
-            });
+        if let Some(authority) = checked.as_ref().authority_opt() {
+            if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
+                return Err(Failure {
+                    tx: checked.as_accepted().clone().into(),
+                    err,
+                });
+            }
         }
 
         // Insert entry first so that the `tx` popped from `queue` will always have a `(hash, tx)` record in `txs`.
@@ -1918,6 +2146,8 @@ impl Queue {
         entry.insert(Arc::clone(&tx_arc));
         self.routing_decisions.insert(hash, routing_decision);
         routing_ledger::record(hash, routing_decision);
+        self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
+        self.record_queued_age(hash, enqueue_at_ms);
         // Drop the local holder before attempting to unwrap on push failure.
         drop(tx_arc);
         let mut pushed = self.tx_hashes.push(hash).is_ok();
@@ -1933,7 +2163,11 @@ impl Queue {
             if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                 routing_ledger::discard_if_matches(&hash, decision);
             }
-            self.decrease_per_user_tx_count(err_tx.as_ref().as_ref().authority());
+            self.tx_enqueued_at_ms.remove(&hash);
+            self.remove_queued_age(&hash);
+            if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
+                self.decrease_per_user_tx_count(authority);
+            }
             self.publish_backpressure_state(self.capacity.get(), backpressure_telemetry);
             return Err(Failure {
                 tx: Box::new(
@@ -1996,7 +2230,7 @@ impl Queue {
         Ok(routing_decision)
     }
 
-    /// Pushes an accepted transaction into the queue using a cached gossip payload.
+    /// Pushes an accepted transaction into the queue using a cached default full-frame gossip payload.
     ///
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is full
@@ -2011,7 +2245,7 @@ impl Queue {
             .map(|_| ())
     }
 
-    /// Pushes an accepted transaction into the queue using a cached gossip payload.
+    /// Pushes an accepted transaction into the queue using a cached default full-frame gossip payload.
     ///
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is full
@@ -2026,7 +2260,7 @@ impl Queue {
     }
 
     /// Pushes an accepted transaction into the queue using narrow state accessors and a cached
-    /// gossip payload.
+    /// default full-frame gossip payload.
     ///
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is
@@ -2042,7 +2276,7 @@ impl Queue {
     }
 
     /// Pushes an accepted transaction into the queue using a precomputed routing decision and a
-    /// cached gossip payload.
+    /// cached default full-frame gossip payload.
     ///
     /// # Errors
     /// Propagates [`Failure`] when the queue rejects the transaction (for example, when it is
@@ -2097,6 +2331,23 @@ impl Queue {
         state: &State,
     ) -> Result<RoutingDecision, Failure> {
         self.push_with_lane_internal_with_state(tx, state, None)
+    }
+
+    /// Push transaction into queue using a caller-provided routing decision.
+    ///
+    /// The caller must pass a decision resolved against the same state horizon used for
+    /// admission. This avoids repeating route resolution in batch ingress paths that
+    /// already needed the decision for local/proxy routing.
+    ///
+    /// # Errors
+    /// See [`enum@Error`]
+    pub fn push_with_lane_with_state_and_routing(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+        routing_decision: RoutingDecision,
+    ) -> Result<RoutingDecision, Failure> {
+        self.push_with_lane_internal_with_state_and_routing(tx, state, Some(routing_decision), None)
     }
 
     /// Pushes an accepted transaction into the queue, routing it to the lane resolved from the
@@ -2180,6 +2431,7 @@ impl Queue {
         let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted());
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
+        let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
         let _guard = self.push_remove_lock.lock();
         let txs_len = self.txs.len();
         let entry = match self.txs.entry(hash) {
@@ -2206,11 +2458,13 @@ impl Queue {
             });
         }
 
-        if let Err(err) = self.check_and_increase_per_user_tx_count(checked.as_ref().authority()) {
-            return Err(Failure {
-                tx: checked.as_accepted().clone().into(),
-                err,
-            });
+        if let Some(authority) = checked.as_ref().authority_opt() {
+            if let Err(err) = self.check_and_increase_per_user_tx_count(authority) {
+                return Err(Failure {
+                    tx: checked.as_accepted().clone().into(),
+                    err,
+                });
+            }
         }
 
         // Insert entry first so that the `tx` popped from `queue` will always have a `(hash, tx)` record in `txs`.
@@ -2218,6 +2472,8 @@ impl Queue {
         entry.insert(Arc::clone(&tx_arc));
         self.routing_decisions.insert(hash, routing_decision);
         routing_ledger::record(hash, routing_decision);
+        self.tx_enqueued_at_ms.insert(hash, enqueue_at_ms);
+        self.record_queued_age(hash, enqueue_at_ms);
         // Drop the local holder before attempting to unwrap on push failure.
         drop(tx_arc);
         let mut pushed = self.tx_hashes.push(hash).is_ok();
@@ -2233,7 +2489,11 @@ impl Queue {
             if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                 routing_ledger::discard_if_matches(&hash, decision);
             }
-            self.decrease_per_user_tx_count(err_tx.as_ref().as_ref().authority());
+            self.tx_enqueued_at_ms.remove(&hash);
+            self.remove_queued_age(&hash);
+            if let Some(authority) = err_tx.as_ref().as_ref().authority_opt() {
+                self.decrease_per_user_tx_count(authority);
+            }
             self.publish_backpressure_state(self.capacity.get(), backpressure_telemetry);
             return Err(Failure {
                 tx: Box::new(
@@ -2308,6 +2568,8 @@ impl Queue {
         self.expiry_ring.lock().clear();
         self.tx_encoded_len.clear();
         self.tx_gas_cost.clear();
+        self.tx_enqueued_at_ms.clear();
+        self.clear_queued_age_index();
         self.tx_gossip_payloads.clear();
         #[cfg(feature = "telemetry")]
         {
@@ -2346,6 +2608,7 @@ impl Queue {
                 }
                 return None;
             };
+            self.remove_queued_age(&hash);
             if self.removed_hashes.remove(&hash).is_some() {
                 continue;
             }
@@ -2374,7 +2637,9 @@ impl Queue {
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
                     self.untrack_expiry_hash(&hash);
-                    self.decrease_per_user_tx_count(removed_tx.as_ref().as_ref().authority());
+                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
                     if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                         routing_ledger::discard_if_matches(&hash, decision);
                     } else {
@@ -2383,6 +2648,8 @@ impl Queue {
                     }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(state_view.telemetry));
+                    self.tx_enqueued_at_ms.remove(&hash);
+                    self.remove_queued_age(&hash);
                     if let Error::Expired = e
                         && let Ok(tx) = Arc::try_unwrap(removed_tx)
                     {
@@ -2391,6 +2658,57 @@ impl Queue {
                 }
                 self.tx_encoded_len.remove(&hash);
                 self.tx_gas_cost.remove(&hash);
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
+                self.tx_gossip_payloads.remove(&hash);
+                continue;
+            }
+
+            if let Err(e) = self.recheck_external_nexus_fee_admission(
+                tx_arc.as_accepted(),
+                state_view.world(),
+                &state_view.nexus,
+                routing_ledger::get(&hash).map(|decision| decision.dataspace_id),
+            ) {
+                iroha_logger::warn!(
+                    tx = %hash,
+                    ?e,
+                    "dropping transaction during queue pop (nexus fee recheck)"
+                );
+                drop(tx_arc);
+                if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_expiry_hash(&hash);
+                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
+                    let routing = if let Some((_, decision)) = self.routing_decisions.remove(&hash)
+                    {
+                        routing_ledger::discard_if_matches(&hash, decision);
+                        decision
+                    } else {
+                        routing_ledger::take(&hash).unwrap_or_default()
+                    };
+                    #[cfg(feature = "telemetry")]
+                    self.record_teu_dequeue(&hash, Some(state_view.telemetry));
+                    self.tx_enqueued_at_ms.remove(&hash);
+                    self.remove_queued_age(&hash);
+                    if let Some(reason) = Self::queue_rejection_reason(&e) {
+                        let _ = self.events_sender.send(
+                            TransactionEvent {
+                                hash,
+                                block_height: None,
+                                lane_id: routing.lane_id,
+                                dataspace_id: routing.dataspace_id,
+                                status: TransactionStatus::Rejected(Box::new(reason)),
+                            }
+                            .into(),
+                        );
+                    }
+                }
+                self.tx_encoded_len.remove(&hash);
+                self.tx_gas_cost.remove(&hash);
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
                 self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
@@ -2444,6 +2762,8 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
         let committed_transactions = state.transactions.view();
+        let world = state.world_view();
+        let nexus = state.nexus_snapshot();
         loop {
             let hash = if let Some(hash) = self.tx_hashes.pop() {
                 hash
@@ -2453,6 +2773,7 @@ impl Queue {
                 }
                 return None;
             };
+            self.remove_queued_age(&hash);
             if self.removed_hashes.remove(&hash).is_some() {
                 continue;
             }
@@ -2480,7 +2801,9 @@ impl Queue {
                 drop(tx_arc);
                 if let Some((_, removed_tx)) = self.txs.remove(&hash) {
                     self.untrack_expiry_hash(&hash);
-                    self.decrease_per_user_tx_count(removed_tx.as_ref().as_ref().authority());
+                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
                     if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
                         routing_ledger::discard_if_matches(&hash, decision);
                     } else {
@@ -2489,6 +2812,8 @@ impl Queue {
                     }
                     #[cfg(feature = "telemetry")]
                     self.record_teu_dequeue(&hash, Some(telemetry_handle));
+                    self.tx_enqueued_at_ms.remove(&hash);
+                    self.remove_queued_age(&hash);
                     if let Error::Expired = e
                         && let Ok(tx) = Arc::try_unwrap(removed_tx)
                     {
@@ -2497,6 +2822,62 @@ impl Queue {
                 }
                 self.tx_encoded_len.remove(&hash);
                 self.tx_gas_cost.remove(&hash);
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
+                self.tx_gossip_payloads.remove(&hash);
+                continue;
+            }
+
+            let route_dataspace_id = self
+                .routing_decisions
+                .get(&hash)
+                .map(|decision| decision.dataspace_id)
+                .or_else(|| routing_ledger::get(&hash).map(|decision| decision.dataspace_id));
+            if let Err(e) = self.recheck_external_nexus_fee_admission(
+                tx_arc.as_accepted(),
+                &world,
+                &nexus,
+                route_dataspace_id,
+            ) {
+                iroha_logger::warn!(
+                    tx = %hash,
+                    ?e,
+                    "dropping transaction during queue pop (nexus fee recheck)"
+                );
+                drop(tx_arc);
+                if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_expiry_hash(&hash);
+                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
+                    let routing = if let Some((_, decision)) = self.routing_decisions.remove(&hash)
+                    {
+                        routing_ledger::discard_if_matches(&hash, decision);
+                        decision
+                    } else {
+                        routing_ledger::take(&hash).unwrap_or_default()
+                    };
+                    #[cfg(feature = "telemetry")]
+                    self.record_teu_dequeue(&hash, Some(telemetry_handle));
+                    self.tx_enqueued_at_ms.remove(&hash);
+                    self.remove_queued_age(&hash);
+                    if let Some(reason) = Self::queue_rejection_reason(&e) {
+                        let _ = self.events_sender.send(
+                            TransactionEvent {
+                                hash,
+                                block_height: None,
+                                lane_id: routing.lane_id,
+                                dataspace_id: routing.dataspace_id,
+                                status: TransactionStatus::Rejected(Box::new(reason)),
+                            }
+                            .into(),
+                        );
+                    }
+                }
+                self.tx_encoded_len.remove(&hash);
+                self.tx_gas_cost.remove(&hash);
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
                 self.tx_gossip_payloads.remove(&hash);
                 continue;
             }
@@ -2559,6 +2940,7 @@ impl Queue {
         hashes.sort();
 
         let mut inserted = 0usize;
+        let mut inserted_hashes = Vec::new();
         for hash in hashes {
             if self.tx_hashes.push(hash).is_err() {
                 warn!(
@@ -2569,10 +2951,12 @@ impl Queue {
                 break;
             }
             self.removed_hashes.remove(&hash);
+            inserted_hashes.push(hash);
             inserted = inserted.saturating_add(1);
         }
 
         if inserted > 0 {
+            self.rebuild_queued_age_index(inserted_hashes);
             self.removed_hashes.clear();
             self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
             warn!(
@@ -2825,6 +3209,129 @@ impl Queue {
         u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
     }
 
+    fn pressure_age_budget_ms_from_block_time(block_time: Duration) -> u64 {
+        Self::duration_to_millis(block_time)
+            .saturating_mul(3)
+            .clamp(
+                QUEUE_PRESSURE_MIN_AGE_BUDGET_MS,
+                QUEUE_PRESSURE_MAX_AGE_BUDGET_MS,
+            )
+    }
+
+    fn default_pressure_age_budget_ms() -> u64 {
+        Self::pressure_age_budget_ms_from_block_time(
+            iroha_data_model::parameter::system::SumeragiParameters::default()
+                .effective_block_time(),
+        )
+    }
+
+    fn record_queued_age(&self, hash: SignedTxHash, enqueued_at_ms: u64) {
+        self.queued_tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+        self.queued_age_ring
+            .lock()
+            .push_back((hash, enqueued_at_ms));
+    }
+
+    fn remove_queued_age(&self, hash: &SignedTxHash) {
+        self.queued_tx_enqueued_at_ms.remove(hash);
+    }
+
+    fn clear_queued_age_index(&self) {
+        self.queued_tx_enqueued_at_ms.clear();
+        self.queued_age_ring.lock().clear();
+    }
+
+    fn oldest_queued_tx_age_ms(&self) -> u64 {
+        if self.tx_hashes.is_empty() {
+            self.queued_age_ring.lock().clear();
+            return 0;
+        }
+        let now_ms = Self::duration_to_millis(self.time_source.get_unix_time());
+        let mut ring = self.queued_age_ring.lock();
+        while let Some(&(hash, enqueued_at_ms)) = ring.front() {
+            if self
+                .queued_tx_enqueued_at_ms
+                .get(&hash)
+                .is_some_and(|entry| *entry.value() == enqueued_at_ms)
+            {
+                return now_ms.saturating_sub(enqueued_at_ms);
+            }
+            ring.pop_front();
+        }
+        0
+    }
+
+    fn rebuild_queued_age_index(&self, queued_hashes: impl IntoIterator<Item = SignedTxHash>) {
+        self.clear_queued_age_index();
+        let mut age_entries = Vec::new();
+        for hash in queued_hashes {
+            let Some(enqueued_at_ms) = self
+                .tx_enqueued_at_ms
+                .get(&hash)
+                .map(|entry| *entry.value())
+            else {
+                continue;
+            };
+            self.queued_tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+            age_entries.push((hash, enqueued_at_ms));
+        }
+        age_entries.sort_by_key(|(_, enqueued_at_ms)| *enqueued_at_ms);
+        self.queued_age_ring.lock().extend(age_entries);
+    }
+
+    fn pressure_snapshot_with_tracked_count(
+        &self,
+        tracked_tx_count: usize,
+    ) -> QueuePressureSnapshot {
+        let queued_tx_count = self.queued_len();
+        let oldest_queued_tx_age_ms = self.oldest_queued_tx_age_ms();
+        let saturated_by_count = tracked_tx_count >= self.capacity.get();
+        let age_budget_ms = self.pressure_age_budget_ms.load(Ordering::Relaxed);
+        let saturated_by_age =
+            queued_tx_count > 0 && oldest_queued_tx_age_ms >= age_budget_ms && age_budget_ms > 0;
+
+        QueuePressureSnapshot {
+            tracked_tx_count,
+            queued_tx_count,
+            capacity: self.capacity,
+            oldest_queued_tx_age_ms,
+            saturated_by_count,
+            saturated_by_age,
+        }
+    }
+
+    fn refresh_backpressure_state(
+        &self,
+        tracked_tx_count: usize,
+        telemetry: Option<&StateTelemetry>,
+    ) -> BackpressureState {
+        let snapshot = self.pressure_snapshot_with_tracked_count(tracked_tx_count);
+        let state = snapshot.into_backpressure();
+
+        let _ = self.backpressure_tx.send_if_modified(|current| {
+            if *current == state {
+                false
+            } else {
+                *current = state;
+                true
+            }
+        });
+
+        #[cfg(feature = "telemetry")]
+        if let Some(tel) = telemetry {
+            crate::telemetry::record_state_tx_queue_backpressure(
+                tel,
+                snapshot.queued_tx_count as u64,
+                self.capacity.get() as u64,
+                state.is_saturated(),
+            );
+        }
+        #[cfg(not(feature = "telemetry"))]
+        let _ = telemetry;
+
+        state
+    }
+
     /// Remove any entries from `txs` that have expired, emitting expiration
     /// events for TTL-elapsed transactions.
     fn cull_expired_entries(&self, now: Duration) -> usize {
@@ -2885,9 +3392,13 @@ impl Queue {
                     .unwrap_or_default();
                 self.removed_hashes.insert(hash, ());
                 self.untrack_expiry_hash(&hash);
-                self.decrease_per_user_tx_count(tx_arc.as_ref().as_ref().authority());
+                if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
+                    self.decrease_per_user_tx_count(authority);
+                }
                 #[cfg(feature = "telemetry")]
                 self.record_teu_dequeue(&hash, None);
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.remove_queued_age(&hash);
                 if let Ok(tx) = Arc::try_unwrap(tx_arc) {
                     let accepted = tx.into_accepted();
                     if self.is_expired_at(&accepted, now) {
@@ -2940,6 +3451,7 @@ impl Queue {
     fn compact_hash_queue_locked(&self) -> usize {
         let mut retained = Vec::with_capacity(self.txs.len());
         let mut dropped = 0usize;
+        let mut inserted_hashes = Vec::new();
         while let Some(hash) = self.tx_hashes.pop() {
             self.removed_hashes.remove(&hash);
             if self.txs.contains_key(&hash) {
@@ -2957,7 +3469,9 @@ impl Queue {
                 );
                 break;
             }
+            inserted_hashes.push(hash);
         }
+        self.rebuild_queued_age_index(inserted_hashes);
         self.removed_hashes.clear();
         dropped
     }
@@ -2984,13 +3498,17 @@ impl Queue {
                 .routing_decisions
                 .remove(&hash)
                 .map(|(_, decision)| decision);
-            self.decrease_per_user_tx_count(tx.as_ref().authority());
+            if let Some(authority) = tx.as_ref().authority_opt() {
+                self.decrease_per_user_tx_count(authority);
+            }
             if let Some(decision) = decision {
                 routing_ledger::record(hash, decision);
             }
         }
         self.tx_encoded_len.remove(&hash);
         self.tx_gas_cost.remove(&hash);
+        self.tx_enqueued_at_ms.remove(&hash);
+        self.remove_queued_age(&hash);
         self.tx_gossip_payloads.remove(&hash);
         // Transaction guards always represent popped hashes; clear any stale marker even if
         // the entry was culled while the guard was in-flight.
@@ -3016,10 +3534,14 @@ impl Queue {
             let _ = routing_ledger::take(&hash);
             self.tx_encoded_len.remove(&hash);
             self.tx_gas_cost.remove(&hash);
+            self.tx_enqueued_at_ms.remove(&hash);
+            self.remove_queued_age(&hash);
             self.tx_gossip_payloads.remove(&hash);
             if let Some(tx_arc) = tx_arc {
                 self.removed_hashes.insert(hash, ());
-                self.decrease_per_user_tx_count(tx_arc.as_ref().as_ref().authority());
+                if let Some(authority) = tx_arc.as_ref().as_ref().authority_opt() {
+                    self.decrease_per_user_tx_count(authority);
+                }
                 #[cfg(feature = "telemetry")]
                 self.record_teu_dequeue(&hash, telemetry);
                 removed = removed.saturating_add(1);
@@ -3071,45 +3593,37 @@ impl Queue {
 
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
     fn publish_backpressure_state(&self, queued: usize, telemetry: Option<&StateTelemetry>) {
-        let capacity = self.capacity;
-        let state = if queued >= capacity.get() {
-            BackpressureState::Saturated { queued, capacity }
-        } else {
-            BackpressureState::Healthy { queued, capacity }
-        };
-
-        let _ = self.backpressure_tx.send_if_modified(|current| {
-            if *current == state {
-                false
-            } else {
-                *current = state;
-                true
-            }
-        });
-
-        #[cfg(feature = "telemetry")]
-        if let Some(tel) = telemetry {
-            crate::telemetry::record_state_tx_queue_backpressure(
-                tel,
-                queued as u64,
-                capacity.get() as u64,
-                state.is_saturated(),
-            );
-        }
-        #[cfg(not(feature = "telemetry"))]
-        let _ = telemetry;
+        let _ = self.refresh_backpressure_state(queued, telemetry);
     }
 
     fn compute_teu_weight(tx: &AcceptedTransaction<'static>) -> u64 {
         use iroha_data_model::transaction::Executable;
 
-        match tx.as_ref().instructions() {
-            Executable::Instructions(batch) => {
-                let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
-                gas::meter_instructions(&instructions)
+        match tx.entrypoint() {
+            iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
+                match signed.instructions() {
+                    Executable::Instructions(batch) => {
+                        let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
+                        gas::meter_instructions(&instructions)
+                    }
+                    Executable::ContractCall(_) => {
+                        match crate::executor::parse_gas_limit(signed.metadata()) {
+                            Ok(Some(limit)) => limit,
+                            _ => 0,
+                        }
+                    }
+                    Executable::IvmProved(proved) => {
+                        gas::meter_instructions(proved.overlay.as_ref())
+                    }
+                    Executable::Ivm(bytecode) => Self::compute_ivm_teu_weight(bytecode.as_ref()),
+                }
             }
-            Executable::IvmProved(proved) => gas::meter_instructions(proved.overlay.as_ref()),
-            Executable::Ivm(bytecode) => Self::compute_ivm_teu_weight(bytecode.as_ref()),
+            iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
+                crate::smartcontracts::isi::kaigi::private_instruction_box(private)
+                    .map(|instruction| gas::meter_instruction(&instruction))
+                    .unwrap_or(0)
+            }
+            iroha_data_model::transaction::TransactionEntrypoint::Time(_) => 0,
         }
     }
 
@@ -3476,7 +3990,58 @@ impl Queue {
     /// Snapshot current load without subscribing to updates.
     #[must_use]
     pub fn current_backpressure(&self) -> BackpressureState {
-        *self.backpressure_tx.borrow()
+        self.refresh_backpressure_state(self.active_len(), None)
+    }
+
+    /// Compute the richer queue pressure snapshot without subscribing to the
+    /// watch channel.
+    #[must_use]
+    pub fn pressure_snapshot(&self) -> QueuePressureSnapshot {
+        self.pressure_snapshot_with_tracked_count(self.active_len())
+    }
+
+    /// Refresh the queue age budget from the effective block time and return
+    /// the latest pressure snapshot.
+    #[must_use]
+    pub fn refresh_pressure_budget_from_block_time(
+        &self,
+        block_time: Duration,
+    ) -> QueuePressureSnapshot {
+        let budget_ms = Self::pressure_age_budget_ms_from_block_time(block_time);
+        self.pressure_age_budget_ms
+            .store(budget_ms, Ordering::Relaxed);
+        self.refresh_backpressure_state(self.active_len(), None);
+        self.pressure_snapshot()
+    }
+
+    /// Set the age budget used by queue pressure snapshots in tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn set_pressure_age_budget_for_tests(&self, budget: Duration) -> QueuePressureSnapshot {
+        self.pressure_age_budget_ms
+            .store(Self::duration_to_millis(budget), Ordering::Relaxed);
+        self.refresh_backpressure_state(self.active_len(), None);
+        self.pressure_snapshot()
+    }
+
+    /// Backdate queued transaction residence timestamps in tests.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn backdate_queued_transactions_for_tests(&self, age: Duration) -> QueuePressureSnapshot {
+        let now_ms = Self::duration_to_millis(self.time_source.get_unix_time());
+        let enqueued_at_ms = now_ms.saturating_sub(Self::duration_to_millis(age));
+        let queued_hashes: Vec<SignedTxHash> = self
+            .queued_tx_enqueued_at_ms
+            .iter()
+            .map(|entry| *entry.key())
+            .collect();
+
+        for hash in queued_hashes.iter().copied() {
+            self.tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+            self.queued_tx_enqueued_at_ms.insert(hash, enqueued_at_ms);
+        }
+        self.rebuild_queued_age_index(queued_hashes);
+
+        self.refresh_backpressure_state(self.active_len(), None);
+        self.pressure_snapshot()
     }
 
     pub(crate) fn estimate_teu(tx: &AcceptedTransaction<'static>) -> u64 {
@@ -3599,17 +4164,13 @@ impl Queue {
 pub mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
+        num::NonZeroU32,
         path::PathBuf,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::{Arc, atomic::Ordering},
         thread,
         time::Duration,
     };
 
-    use crossbeam_queue::ArrayQueue;
-    use dashmap::DashMap;
     use iroha_crypto::{
         Hash, KeyPair, MerkleTree,
         privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment},
@@ -3621,21 +4182,26 @@ pub mod tests {
         metadata::Metadata,
         name::Name,
         nexus::{
-            AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceId, JurisdictionSet,
-            LaneCatalog, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule,
-            LaneConfig, LaneId, LaneLifecyclePlan, LanePrivacyMerkleWitness, LanePrivacyProof,
-            LanePrivacyWitness, ManifestVersion, ParticipantSelector,
+            AssetPermissionManifest, AuditControls, DataSpaceCatalog, DataSpaceId,
+            DataSpaceMetadata, JurisdictionSet, LaneCatalog, LaneCompliancePolicy,
+            LaneCompliancePolicyId, LaneComplianceRule, LaneConfig, LaneId, LaneLifecyclePlan,
+            LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness, ManifestVersion,
+            ParticipantSelector,
         },
         parameter::TransactionParameters,
         prelude::*,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
         runtime::RuntimeUpgradeManifest,
     };
+    use iroha_executor_data_model::isi::multisig::{MultisigPropose, MultisigSpec};
+    use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
+    use iroha_logger::Level;
     use iroha_primitives::json::Json;
     use iroha_schema::Ident;
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
     use iroha_test_samples::{ALICE_KEYPAIR, gen_account_in};
+    use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
     use rand::Rng as _;
 
@@ -3653,6 +4219,7 @@ pub mod tests {
             SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
         },
         query::store::LiveQueryStore,
+        smartcontracts::Execute,
         state::{State, World},
     };
 
@@ -3672,75 +4239,88 @@ pub mod tests {
             time_source: &TimeSource,
             router: Arc<dyn LaneRouter>,
         ) -> Self {
-            let (backpressure_tx, _) = watch::channel(BackpressureState::Healthy {
-                queued: 0,
-                capacity: cfg.capacity,
-            });
-            let queue = {
-                let lane_catalog = Arc::new(LaneCatalog::default());
-                let dataspace_catalog = Arc::new(DataSpaceCatalog::default());
-                let queue = Self {
-                    events_sender: tokio::sync::broadcast::Sender::new(1),
-                    router: parking_lot::RwLock::new(router),
-                    lane_compliance: parking_lot::RwLock::new(None),
-                    lane_catalog: parking_lot::RwLock::new(Arc::clone(&lane_catalog)),
-                    dataspace_catalog: parking_lot::RwLock::new(Arc::clone(&dataspace_catalog)),
-                    tx_hashes: ArrayQueue::new(cfg.capacity.get()),
-                    tx_gossip: ArrayQueue::new(cfg.capacity.get()),
-                    txs: DashMap::new(),
-                    routing_decisions: DashMap::new(),
-                    tx_encoded_len: DashMap::new(),
-                    tx_gas_cost: DashMap::new(),
-                    tx_gossip_payloads: DashMap::new(),
-                    removed_hashes: DashMap::new(),
-                    txs_per_user: DashMap::new(),
-                    push_remove_lock: parking_lot::Mutex::new(()),
-                    guard_sequence: AtomicU64::new(0),
-                    inflight_guards: AtomicUsize::new(0),
-                    capacity: cfg.capacity,
-                    capacity_per_user: cfg.capacity_per_user,
-                    time_source: time_source.clone(),
-                    tx_time_to_live: cfg.transaction_time_to_live,
-                    expired_cull_interval: cfg.expired_cull_interval,
-                    expired_cull_batch: cfg.expired_cull_batch,
-                    last_expired_cull_ms: AtomicU64::new(0),
-                    expiry_ring: parking_lot::Mutex::new(VecDeque::new()),
-                    expiry_ring_members: DashMap::new(),
-                    backpressure_tx,
-                    sumeragi_wake: OnceLock::new(),
-                    nexus_limits: parking_lot::RwLock::new(QueueLimits::default()),
-                    #[cfg(feature = "telemetry")]
-                    tx_teu: DashMap::new(),
-                    #[cfg(feature = "telemetry")]
-                    lane_teu_pending: DashMap::new(),
-                    #[cfg(feature = "telemetry")]
-                    dataspace_teu_pending: DashMap::new(),
-                    lane_manifests: parking_lot::RwLock::new(Arc::new(
-                        LaneManifestRegistry::empty(),
-                    )),
-                    lane_privacy_registry: parking_lot::RwLock::new(Arc::new(
-                        LanePrivacyRegistry::empty(),
-                    )),
-                    #[cfg(test)]
-                    vacant_entry_warnings: AtomicUsize::new(0),
-                };
-                #[cfg(feature = "telemetry")]
-                {
-                    for lane in lane_catalog.lanes() {
-                        queue
-                            .lane_teu_pending
-                            .insert(lane.id, PendingTeu::default());
-                        for dataspace in dataspace_catalog.entries() {
-                            queue
-                                .dataspace_teu_pending
-                                .insert((lane.id, dataspace.id), PendingTeu::default());
-                        }
-                    }
-                }
-                queue
-            };
-            queue.publish_backpressure_state(0, None);
+            Self::test_with_router_for_routes(cfg, time_source, router, &[])
+        }
+
+        /// Construct a `Queue` with synthetic Nexus catalogs matching static test routes.
+        pub fn test_with_router_for_routes(
+            cfg: Config,
+            time_source: &TimeSource,
+            router: Arc<dyn LaneRouter>,
+            routes: &[(LaneId, DataSpaceId)],
+        ) -> Self {
+            let (lane_catalog, dataspace_catalog) = Self::test_catalogs_for_routes(routes);
+            let mut queue = Self::from_config_with_router_limits_and_catalogs(
+                cfg,
+                tokio::sync::broadcast::Sender::new(1),
+                router,
+                QueueLimits::default(),
+                &lane_catalog,
+                &dataspace_catalog,
+                None,
+            );
+            queue.time_source = time_source.clone();
             queue
+        }
+
+        fn test_catalogs_for_routes(
+            routes: &[(LaneId, DataSpaceId)],
+        ) -> (Arc<LaneCatalog>, Arc<DataSpaceCatalog>) {
+            let mut lanes_by_id = BTreeMap::new();
+            let mut dataspaces = BTreeSet::new();
+            for (lane, dataspace) in routes {
+                match lanes_by_id.insert(*lane, *dataspace) {
+                    Some(existing) if existing != *dataspace => {
+                        panic!("test route catalog cannot bind lane {lane:?} to two dataspaces")
+                    }
+                    _ => {}
+                }
+                dataspaces.insert(*dataspace);
+            }
+            if lanes_by_id.is_empty() {
+                lanes_by_id.insert(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+            }
+            dataspaces.insert(DataSpaceId::UNIVERSAL);
+
+            let max_lane_id = lanes_by_id
+                .keys()
+                .map(|id| id.as_u32())
+                .max()
+                .expect("at least one lane");
+            let lane_count = NonZeroU32::new(max_lane_id.saturating_add(1))
+                .expect("lane count should be non-zero");
+            let lanes = lanes_by_id
+                .into_iter()
+                .map(|(id, dataspace_id)| LaneConfig {
+                    id,
+                    dataspace_id,
+                    alias: if id == LaneId::SINGLE {
+                        "default".to_string()
+                    } else {
+                        format!("test-lane-{}", id.as_u32())
+                    },
+                    ..LaneConfig::default()
+                })
+                .collect();
+            let lane_catalog =
+                Arc::new(LaneCatalog::new(lane_count, lanes).expect("valid test lane catalog"));
+
+            let entries = dataspaces
+                .into_iter()
+                .map(|id| DataSpaceMetadata {
+                    id,
+                    alias: if id == DataSpaceId::UNIVERSAL {
+                        "universal".to_string()
+                    } else {
+                        format!("test-dataspace-{}", id.as_u64())
+                    },
+                    description: None,
+                    fault_tolerance: 1,
+                })
+                .collect();
+            let dataspace_catalog =
+                Arc::new(DataSpaceCatalog::new(entries).expect("valid test dataspace catalog"));
+            (lane_catalog, dataspace_catalog)
         }
     }
 
@@ -3791,16 +4371,17 @@ pub mod tests {
 
     #[test]
     fn apply_lane_lifecycle_reconfigures_router_and_limits() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let NexusFeeFixture {
+            mut state,
+            authority_id,
+            authority_keypair,
+            ..
+        } = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
         let lane_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog");
-        let nexus = Nexus {
-            enabled: true,
-            lane_catalog: lane_catalog.clone(),
-            ..Nexus::default()
-        };
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = true;
+        nexus.lane_catalog = lane_catalog.clone();
         state
             .set_nexus(nexus.clone())
             .expect("apply initial Nexus config");
@@ -3829,8 +4410,16 @@ pub mod tests {
         );
         queue.time_source = time_source.clone();
 
-        let (account_id, keypair) = gen_account_in("wonderland");
-        let tx = accepted_tx_by(account_id, &keypair, &time_source);
+        let tx = accepted_tx_with(
+            authority_id,
+            &authority_keypair,
+            &time_source,
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                "lane lifecycle reroute".into(),
+            ))],
+            Metadata::default(),
+        );
         let tx_hash = tx.as_ref().hash();
         queue.push(tx, state.view()).expect("push");
 
@@ -3868,7 +4457,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn governance_manifest_validators_gate_admission() {
+    async fn governance_manifest_allows_ordinary_transactions_from_non_validator_authorities() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         #[cfg(feature = "telemetry")]
@@ -3897,7 +4486,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "default".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -3913,28 +4502,65 @@ pub mod tests {
         queue
             .push(validator_tx, state.view())
             .expect("validator should be admitted");
+
+        let other_tx = accepted_tx_by(other_id.clone(), &other_keypair, &time_source);
+        queue.push(other_tx, state.view()).expect(
+            "ordinary governed-lane transactions must not require end users to be validators",
+        );
         #[cfg(feature = "telemetry")]
         assert_eq!(
             metrics
                 .governance_manifest_admission_total
                 .with_label_values(&["allowed"])
                 .get(),
-            1
+            2
         );
+    }
+
+    #[tokio::test]
+    async fn non_governed_manifest_validators_do_not_gate_admission() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        #[cfg(feature = "telemetry")]
+        let state = Arc::new(State::with_telemetry(
+            world_with_test_domains(),
+            kura.clone(),
+            query_handle.clone(),
+            StateTelemetry::new(Arc::new(Metrics::default()), true),
+        ));
+        #[cfg(not(feature = "telemetry"))]
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let time_source = TimeSource::new_system();
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+
+        let (validator_id, _validator_keypair) = gen_account_in("wonderland");
+        let (other_id, other_keypair) = gen_account_in("wonderland");
+
+        let mut statuses = BTreeMap::new();
+        let rules = GovernanceRules {
+            validators: vec![validator_id],
+            ..GovernanceRules::default()
+        };
+        let status = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "default".to_string(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: None,
+            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        statuses.insert(LaneId::SINGLE, status);
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        queue.install_lane_manifests(&manifests);
 
         let other_tx = accepted_tx_by(other_id.clone(), &other_keypair, &time_source);
-        let err = queue
+        queue
             .push(other_tx, state.view())
-            .expect_err("non-validator should be rejected");
-        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
-        #[cfg(feature = "telemetry")]
-        assert_eq!(
-            metrics
-                .governance_manifest_admission_total
-                .with_label_values(&["non_validator_authority"])
-                .get(),
-            1
-        );
+            .expect("non-governed manifest should not gate transaction authority");
     }
 
     #[test]
@@ -3950,7 +4576,7 @@ pub mod tests {
             LaneManifestStatus {
                 lane: LaneId::SINGLE,
                 alias: "default".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::CommitmentOnly,
                 governance: None,
@@ -3972,6 +4598,86 @@ pub mod tests {
                 .expect("lane registry entry")
                 .get(LaneCommitmentId::new(7))
                 .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn governance_manifest_allows_multisig_propose_envelope_from_live_signer() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let signer_key = KeyPair::random();
+        let signer_id = AccountId::new(signer_key.public_key().clone());
+        let cosigner_key = KeyPair::random();
+        let cosigner_id = AccountId::new(cosigner_key.public_key().clone());
+        let validator_key = KeyPair::random();
+        let validator_id = AccountId::new(validator_key.public_key().clone());
+        let multisig_key = KeyPair::random();
+        let multisig_id = AccountId::new(multisig_key.public_key().clone());
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("static domain");
+
+        let mut multisig_metadata = Metadata::default();
+        multisig_metadata.insert(
+            crate::smartcontracts::isi::multisig::spec_key(),
+            Json::new(MultisigSpec {
+                signatories: BTreeMap::from([(signer_id.clone(), 1), (cosigner_id.clone(), 1)]),
+                quorum: nonzero!(2_u16),
+                transaction_ttl_ms: nonzero!(
+                    iroha_executor_data_model::isi::multisig::DEFAULT_MULTISIG_TTL_MS
+                ),
+            }),
+        );
+
+        let domain = Domain::new(domain_id.clone()).build(&signer_id);
+        let signer = Account::new(signer_id.clone()).build(&signer_id);
+        let cosigner = Account::new(cosigner_id.clone()).build(&cosigner_id);
+        let validator = Account::new(validator_id.clone()).build(&validator_id);
+        let multisig = Account::new(multisig_id.clone())
+            .with_metadata(multisig_metadata)
+            .build(&multisig_id);
+        let world = World::with([domain], [signer, cosigner, validator, multisig], []);
+        let state = Arc::new(State::new(world, kura, query_handle));
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let mut statuses = BTreeMap::new();
+        let rules = GovernanceRules {
+            validators: vec![validator_id.clone()],
+            quorum: Some(3),
+            ..GovernanceRules::default()
+        };
+        let status = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "centralbank".to_string(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("parliament".to_string()),
+            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        statuses.insert(LaneId::SINGLE, status);
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        queue.install_lane_manifests(&manifests);
+
+        let tx = accepted_tx_with(
+            signer_id,
+            &signer_key,
+            &time_source,
+            vec![InstructionBox::from(MultisigPropose::new(
+                multisig_id,
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "multisig envelope".into(),
+                ))],
+                None,
+            ))],
+            Metadata::default(),
+        );
+        queue.push(tx, state.view()).expect(
+            "multisig propose envelopes from live signers should bypass lane-validator gating",
         );
     }
 
@@ -4022,7 +4728,7 @@ pub mod tests {
             id: LaneCompliancePolicyId::new(Hash::prehashed([0xAA; 32])),
             version: 1,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             jurisdiction: JurisdictionSet::default(),
             deny: vec![LaneComplianceRule {
                 selector: ParticipantSelector {
@@ -4064,7 +4770,7 @@ pub mod tests {
             LaneManifestStatus {
                 lane: LaneId::SINGLE,
                 alias: "confidential".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::CommitmentOnly,
                 governance: None,
@@ -4155,17 +4861,20 @@ pub mod tests {
 
         let (validator_primary, primary_keypair) = gen_account_in("wonderland");
         let (validator_secondary, _secondary_keypair) = gen_account_in("wonderland");
+        let mut protected = BTreeSet::new();
+        protected.insert(Name::from_str("apps").expect("static namespace"));
 
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
             validators: vec![validator_primary.clone(), validator_secondary.clone()],
             quorum: Some(2),
+            protected_namespaces: protected,
             ..GovernanceRules::default()
         };
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "gov".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -4177,8 +4886,32 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator_primary,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let code_hash = iroha_crypto::Hash::new(b"demo");
+        let activate = InstructionBox::from(ActivateContractInstance {
+            contract_address: contract_address.clone(),
+            code_hash,
+        });
+
         // Without additional approvals the quorum rule must reject the transaction.
-        let tx = accepted_tx_by(validator_primary.clone(), &primary_keypair, &time_source);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+        let tx = accepted_tx_with(
+            validator_primary.clone(),
+            &primary_keypair,
+            &time_source,
+            vec![activate.clone()],
+            metadata,
+        );
         let err = queue
             .push(tx, state.view())
             .expect_err("quorum without approvals should reject");
@@ -4203,6 +4936,10 @@ pub mod tests {
         // Attach metadata listing the secondary validator so the quorum threshold is satisfied.
         let mut metadata = Metadata::default();
         metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+        metadata.insert(
             (*super::GOV_APPROVERS_METADATA_KEY).clone(),
             Json::new(vec![validator_secondary.to_string()]),
         );
@@ -4210,7 +4947,7 @@ pub mod tests {
             validator_primary.clone(),
             &primary_keypair,
             &time_source,
-            vec![sample_unregister_instruction()],
+            vec![activate],
             metadata,
         );
         queue
@@ -4229,6 +4966,90 @@ pub mod tests {
             metrics
                 .governance_manifest_admission_total
                 .with_label_values(&["allowed"])
+                .get(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn governance_manifest_rejects_non_validator_authority_for_protected_contract_ops() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        #[cfg(feature = "telemetry")]
+        let metrics = Arc::new(Metrics::default());
+        #[cfg(feature = "telemetry")]
+        let state = Arc::new(State::with_telemetry(
+            world_with_test_domains(),
+            kura.clone(),
+            query_handle.clone(),
+            StateTelemetry::new(metrics.clone(), true),
+        ));
+        #[cfg(not(feature = "telemetry"))]
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+
+        let (validator_id, _validator_keypair) = gen_account_in("wonderland");
+        let (other_id, other_keypair) = gen_account_in("wonderland");
+        let mut protected = BTreeSet::new();
+        protected.insert(Name::from_str("apps").expect("static namespace"));
+
+        let mut statuses = BTreeMap::new();
+        let rules = GovernanceRules {
+            validators: vec![validator_id.clone()],
+            protected_namespaces: protected,
+            ..GovernanceRules::default()
+        };
+        let status = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "gov".to_string(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("parliament".to_string()),
+            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        statuses.insert(LaneId::SINGLE, status);
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        queue.install_lane_manifests(&manifests);
+
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator_id,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let code_hash = iroha_crypto::Hash::new(b"demo");
+        let activate = InstructionBox::from(ActivateContractInstance {
+            contract_address: contract_address.clone(),
+            code_hash,
+        });
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
+        );
+
+        let tx = accepted_tx_with(
+            other_id.clone(),
+            &other_keypair,
+            &time_source,
+            vec![activate],
+            metadata,
+        );
+        let err = queue
+            .push(tx, state.view())
+            .expect_err("protected contract operations must still require validator authority");
+        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
+        #[cfg(feature = "telemetry")]
+        assert_eq!(
+            metrics
+                .governance_manifest_admission_total
+                .with_label_values(&["non_validator_authority"])
                 .get(),
             1
         );
@@ -4268,7 +5089,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "gov".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -4280,32 +5101,47 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
-        // Metadata referencing an unknown namespace must be rejected.
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            1,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let code_hash = iroha_crypto::Hash::new(b"demo");
+        let activate = InstructionBox::from(ActivateContractInstance {
+            contract_address: contract_address.clone(),
+            code_hash,
+        });
+
+        // Metadata with a governed contract address is accepted for protected contract ops.
         let mut metadata = Metadata::default();
         metadata.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("system"),
-        );
-        metadata.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
             &keypair,
             &time_source,
-            vec![sample_unregister_instruction()],
+            vec![activate.clone()],
             metadata,
         );
-        let err = queue
+        queue
             .push(tx, state.view())
-            .expect_err("namespace outside manifest must reject");
-        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
+            .expect("governed contract metadata should be accepted");
         #[cfg(feature = "telemetry")]
         assert_eq!(
             metrics
                 .governance_protected_namespace_total
-                .with_label_values(&["rejected"])
+                .with_label_values(&["allowed"])
                 .get(),
             1
         );
@@ -4315,20 +5151,16 @@ pub mod tests {
                 .governance_manifest_admission_total
                 .with_label_values(&["protected_namespace_rejected"])
                 .get(),
-            1
+            0
         );
 
-        // Namespace within the manifest but missing contract id must be rejected.
-        let mut metadata_missing_cid = Metadata::default();
-        metadata_missing_cid.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
+        // Missing governance contract address metadata must be rejected.
+        let metadata_missing_cid = Metadata::default();
         let tx = accepted_tx_with(
             validator.clone(),
             &keypair,
             &time_source,
-            vec![sample_unregister_instruction()],
+            vec![activate.clone()],
             metadata_missing_cid,
         );
         let err = queue
@@ -4341,7 +5173,7 @@ pub mod tests {
                 .governance_protected_namespace_total
                 .with_label_values(&["rejected"])
                 .get(),
-            2
+            1
         );
         #[cfg(feature = "telemetry")]
         assert_eq!(
@@ -4349,29 +5181,30 @@ pub mod tests {
                 .governance_manifest_admission_total
                 .with_label_values(&["protected_namespace_rejected"])
                 .get(),
-            2
+            1
         );
 
-        // Correct namespace metadata with contract id should be accepted.
+        // Mismatched contract-address hints must be rejected.
         let mut valid_metadata = Metadata::default();
         valid_metadata.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
         );
         valid_metadata.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(other_contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
             &keypair,
             &time_source,
-            vec![sample_unregister_instruction()],
+            vec![activate],
             valid_metadata,
         );
-        queue
+        let err = queue
             .push(tx, state.view())
-            .expect("protected namespace metadata satisfied");
+            .expect_err("mismatched contract-address metadata must reject");
+        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
         #[cfg(feature = "telemetry")]
         assert_eq!(
             metrics
@@ -4423,7 +5256,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "gov".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -4435,10 +5268,23 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            1,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
-            namespace: "apps".to_string(),
-            contract_id: "calc.v1".to_string(),
+            contract_address: contract_address.clone(),
             code_hash,
         });
 
@@ -4463,15 +5309,11 @@ pub mod tests {
             1
         );
 
-        // Metadata namespace present but contract_id mismatched should reject.
+        // Metadata contract address present but mismatched should reject.
         let mut metadata_mismatch = Metadata::default();
         metadata_mismatch.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
-        metadata_mismatch.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("other"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(other_contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4496,12 +5338,8 @@ pub mod tests {
         // Matching metadata should allow the transaction.
         let mut metadata_ok = Metadata::default();
         metadata_ok.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
-        metadata_ok.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4543,12 +5381,8 @@ pub mod tests {
 
         let mut metadata_bytes = Metadata::default();
         metadata_bytes.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
-        metadata_bytes.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4567,15 +5401,21 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut world = world_with_test_domains();
-        world.contract_instances.insert(
-            ("apps".to_string(), "calc.v1".to_string()),
-            Hash::new(b"demo"),
-        );
+        let (validator, keypair) = gen_account_in("wonderland");
+        let existing_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        world
+            .contract_instances
+            .insert(existing_contract_address.clone(), Hash::new(b"demo"));
         let state = Arc::new(State::new(world, kura.clone(), query_handle.clone()));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
-        let (validator, keypair) = gen_account_in("wonderland");
 
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
@@ -4590,7 +5430,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "gov".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -4603,20 +5443,23 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let code_hash = iroha_crypto::Hash::new(b"demo");
+        let instruction_contract_address =
+            iroha_data_model::smart_contract::ContractAddress::derive(
+                iroha_data_model::account::address::chain_discriminant(),
+                &validator,
+                8,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("contract address");
         let activate = InstructionBox::from(ActivateContractInstance {
-            namespace: "ops".to_string(),
-            contract_id: "calc.v1".to_string(),
+            contract_address: instruction_contract_address,
             code_hash,
         });
 
         let mut metadata = Metadata::default();
         metadata.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("ops"),
-        );
-        metadata.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(existing_contract_address.to_string()),
         );
 
         let tx = accepted_tx_with(
@@ -4668,7 +5511,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "upgrade".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -4749,7 +5592,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "upgrade".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -4894,6 +5737,9 @@ pub mod tests {
             iroha_data_model::transaction::Executable::Instructions(batch) => {
                 crate::gas::meter_instructions(batch.as_ref())
             }
+            iroha_data_model::transaction::Executable::ContractCall(_) => {
+                panic!("expected ISI transaction for gas test")
+            }
             iroha_data_model::transaction::Executable::Ivm(_) => {
                 panic!("expected ISI transaction for gas test")
             }
@@ -4964,7 +5810,7 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(tx.as_ref().encode());
+        let payload = Arc::new(ncore::to_bytes(tx.as_ref()).expect("encode signed transaction"));
 
         queue
             .push_with_gossip_payload(tx, state.view(), Some(Arc::clone(&payload)))
@@ -4995,7 +5841,7 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(tx.as_ref().encode());
+        let payload = Arc::new(ncore::to_bytes(tx.as_ref()).expect("encode signed transaction"));
         let state_view = state.view();
 
         queue
@@ -5016,7 +5862,7 @@ pub mod tests {
         let queue = Queue::test(config_factory(), &time_source);
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let payload = Arc::new(tx.as_ref().encode());
+        let payload = Arc::new(ncore::to_bytes(tx.as_ref()).expect("encode signed transaction"));
 
         queue
             .push_with_gossip_payload_with_state(tx, &state, Some(Arc::clone(&payload)))
@@ -5024,6 +5870,24 @@ pub mod tests {
 
         let stored_payload = queue.tx_gossip_payloads.get(&hash).expect("payload stored");
         assert_eq!(stored_payload.as_slice(), payload.as_slice());
+    }
+
+    #[test]
+    fn queue_generated_gossip_payload_uses_framed_signed_transaction_wire() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let expected_payload = ncore::to_bytes(tx.as_ref()).expect("encode signed transaction");
+
+        queue.push(tx, state.view()).expect("push tx");
+
+        let batch = queue.gossip_batch(1, &state.view());
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].payload.as_slice(), expected_payload.as_slice());
     }
 
     #[test]
@@ -5119,6 +5983,394 @@ pub mod tests {
     }
 
     #[test]
+    fn push_with_lane_with_state_rejects_missing_nexus_fee_asset_before_enqueue() {
+        let fixture = nexus_fee_fixture(None, None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("missing fee asset must be rejected before enqueue");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
+            assert!(
+                reason.contains("missing"),
+                "expected missing asset reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_insufficient_nexus_fee_balance_before_enqueue() {
+        let fixture = nexus_fee_fixture(Some(Numeric::zero()), None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("insufficient fee balance must be rejected before enqueue");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
+            assert!(
+                reason.contains("insufficient"),
+                "expected insufficient balance reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_accepts_funded_nexus_fee_payer() {
+        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("funded payer should be admitted");
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_unauthorized_fee_sponsor() {
+        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fee_sponsor".parse().expect("fee sponsor key"),
+            Json::new(fixture.sponsor_id.to_string()),
+        );
+        let tx = accepted_tx_with(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            vec![sample_unregister_instruction()],
+            metadata,
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("unauthorized sponsor must be rejected");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
+            assert!(
+                reason.contains("not authorized"),
+                "expected sponsor authorization reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_accepts_authorized_fee_sponsor_after_committed_grant() {
+        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(header);
+        let mut stx = block.transaction();
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: fixture.sponsor_id.clone(),
+            },
+            fixture.authority_id.clone(),
+        )
+        .execute(&fixture.sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+        stx.apply();
+        block.commit().expect("commit sponsor permission grant");
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fee_sponsor".parse().expect("fee sponsor key"),
+            Json::new(fixture.sponsor_id.to_string()),
+        );
+        let tx = accepted_tx_with(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            vec![sample_unregister_instruction()],
+            metadata,
+        );
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("authorized sponsor should be admitted");
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_accepts_external_settled_sponsor_without_local_fee_asset() {
+        let mut fixture = nexus_fee_fixture(None, None);
+        fixture
+            .state
+            .nexus
+            .get_mut()
+            .fees
+            .external_settlement_enabled = true;
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(header);
+        let mut stx = block.transaction();
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: fixture.sponsor_id.clone(),
+            },
+            fixture.authority_id.clone(),
+        )
+        .execute(&fixture.sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+        stx.apply();
+        block.commit().expect("commit sponsor permission grant");
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fee_sponsor".parse().expect("fee sponsor key"),
+            Json::new(fixture.sponsor_id.to_string()),
+        );
+        let tx = accepted_tx_with(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            vec![sample_unregister_instruction()],
+            metadata,
+        );
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("external-settled sponsor should not require local fee asset");
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
+    fn read_only_fee_sponsor_check_accepts_granted_permission() {
+        let fixture = nexus_fee_fixture(None, Some(Numeric::from(10_u32)));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(header);
+        let mut stx = block.transaction();
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: fixture.sponsor_id.clone(),
+            },
+            fixture.authority_id.clone(),
+        )
+        .execute(&fixture.sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+
+        assert!(
+            crate::executor::can_use_fee_sponsor_read_only(
+                &stx.world,
+                &fixture.authority_id,
+                &fixture.sponsor_id,
+            ),
+            "read-only sponsor check should honor granted permission"
+        );
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_raw_ivm_when_gas_limit_exceeds_fee_balance() {
+        let mut fixture = nexus_fee_fixture(Some(Numeric::from(50_u32)), None);
+        {
+            let nexus = fixture.state.nexus.get_mut();
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::from(1_u32);
+        }
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_ivm_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            5_000,
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("raw IVM fee bound should use gas_limit");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
+            assert!(
+                reason.contains("insufficient"),
+                "expected insufficient balance reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_fee_alias_that_expires_before_tx_deadline() {
+        let mut fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let fee_asset_alias: iroha_data_model::asset::AssetDefinitionAlias =
+            "xor#wonderland.universal".parse().expect("asset alias");
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = fixture.state.block(header);
+            let mut stx = block.transaction();
+            stx.world_mut_for_testing()
+                .bind_asset_definition_alias(
+                    &fixture.fee_asset_definition_id,
+                    fee_asset_alias.clone(),
+                    Some(500),
+                    Some(600),
+                    0,
+                )
+                .expect("bind short-lived fee asset alias");
+            stx.apply();
+            block.commit().expect("commit fee asset alias binding");
+        }
+        {
+            let nexus = fixture.state.nexus.get_mut();
+            nexus.fees.fee_asset_id = fee_asset_alias.to_string();
+        }
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_millis(1_000),
+                ..config_factory()
+            },
+            &time_source,
+        );
+        let tx = accepted_tx_with_ttl(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            Duration::from_millis(1_000),
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("fee alias should be rejected when it expires before the tx deadline");
+
+        assert!(matches!(
+            err.err,
+            Error::NexusFeeAdmissionConfigInvalid { .. }
+        ));
+        if let Error::NexusFeeAdmissionConfigInvalid { reason } = &err.err {
+            assert!(
+                reason.contains("invalid nexus fee asset id"),
+                "expected invalid fee asset config reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_gossip_payload_with_state_and_routing_rejects_fee_insolvent_transaction() {
+        let fixture = nexus_fee_fixture(None, None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        let err = queue
+            .push_with_gossip_payload_with_state_and_routing(
+                tx,
+                &fixture.state,
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                Some(Arc::new(vec![1_u8])),
+            )
+            .expect_err("fee-insolvent gossip should be rejected before enqueue");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn get_transactions_for_block_with_state_drops_transaction_that_loses_fee_balance() {
+        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut queue = Queue::test(config_factory(), &time_source);
+        let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
+        queue.events_sender = event_sender;
+        let queue = Arc::new(queue);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+        let tx_hash = tx.as_ref().hash();
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("funded payer should be admitted before the balance race");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(header);
+        let mut stx = block.transaction();
+        let removed = stx.world.remove_asset_and_metadata(&AssetId::of(
+            fixture.fee_asset_definition_id.clone(),
+            fixture.authority_id.clone(),
+        ));
+        assert!(removed.is_some(), "fee asset should exist before removal");
+        stx.apply();
+        block.commit().expect("commit fee asset removal");
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block_with_state(&fixture.state, nonzero!(1_usize), &mut guards);
+
+        assert!(
+            guards.is_empty(),
+            "balance-race tx must not reach proposal assembly"
+        );
+        assert_eq!(queue.queued_len(), 0);
+        let mut saw_rejected = false;
+        while let Ok(event) = event_receiver.try_recv() {
+            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
+                continue;
+            };
+            if event.hash != tx_hash {
+                continue;
+            }
+            let TransactionStatus::Rejected(reason) = &event.status else {
+                continue;
+            };
+            assert!(matches!(
+                reason.as_ref(),
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::NotPermitted(message)
+                ) if message.contains("fee asset")
+                    && message.contains(&fixture.fee_asset_definition_id.to_string())
+                    && message.contains(&fixture.authority_id.to_string())
+            ));
+            saw_rejected = true;
+            break;
+        }
+        assert!(
+            saw_rejected,
+            "expected rejected pipeline event for dropped tx"
+        );
+    }
+
+    #[test]
     fn contains_pending_hash_ignores_committed_entries() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -5192,7 +6444,7 @@ pub mod tests {
             LaneManifestStatus {
                 lane: LaneId::SINGLE,
                 alias: "default".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
                 governance: Some("parliament".to_string()),
@@ -5223,7 +6475,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn uaid_without_dataspace_binding_is_admitted() {
+    async fn uaid_without_dataspace_binding_is_rejected() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::missing-binding"));
         let dataspace = DataSpaceId::new(7);
         let (world, account_id, key_pair) = world_with_uaid_account(uaid, dataspace, false);
@@ -5246,10 +6498,11 @@ pub mod tests {
             lane: LaneId::SINGLE,
             dataspace,
         });
-        let queue = Arc::new(Queue::test_with_router(
+        let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
             router.clone(),
+            &[(LaneId::SINGLE, dataspace)],
         ));
 
         let mut statuses = BTreeMap::new();
@@ -5270,12 +6523,64 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
+        let result = queue.push(
+            accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+            state.view(),
+        );
+        match result {
+            Err(Failure {
+                err: Error::LaneComplianceDenied { reason, .. },
+                ..
+            }) => assert!(
+                reason.contains("not bound to dataspace"),
+                "expected missing dataspace binding rejection, got {reason}"
+            ),
+            other => panic!("expected missing dataspace binding rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn space_directory_manifest_publish_bypasses_uaid_binding_admission() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::manifest-publish"));
+        let manifest_dataspace = DataSpaceId::new(10);
+        let (world, account_id, key_pair) =
+            world_with_uaid_account(uaid, manifest_dataspace, false);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world, kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test_with_router(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+        );
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace: manifest_dataspace,
+            issued_ms: 1,
+            activation_epoch: 0,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let tx = accepted_tx_with(
+            account_id,
+            &key_pair,
+            &time_source,
+            vec![
+                iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest { manifest }
+                    .into(),
+            ],
+            Metadata::default(),
+        );
+
         queue
-            .push(
-                accepted_tx_by(account_id.clone(), &key_pair, &time_source),
-                state.view(),
-            )
-            .expect("UAID should route globally even without a dataspace binding");
+            .push(tx, state.view())
+            .expect("manifest publication creates the UAID dataspace binding");
     }
 
     #[tokio::test]
@@ -5302,10 +6607,11 @@ pub mod tests {
             lane: LaneId::SINGLE,
             dataspace,
         });
-        let queue = Arc::new(Queue::test_with_router(
+        let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
             router.clone(),
+            &[(LaneId::SINGLE, dataspace)],
         ));
 
         let mut statuses = BTreeMap::new();
@@ -5335,7 +6641,7 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn uaid_routing_allows_foreign_dataspace_without_binding() {
+    async fn uaid_routing_rejects_foreign_dataspace_without_binding() {
         let bound = DataSpaceId::new(42);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::rebind"));
         let (world, account_id, key_pair) = world_with_uaid_account(uaid, bound, true);
@@ -5344,7 +6650,7 @@ pub mod tests {
         let state = Arc::new(State::new(world, kura, query_handle));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let target = DataSpaceId::GLOBAL;
+        let target = DataSpaceId::UNIVERSAL;
         let queue = Queue::test_with_router(
             config_factory(),
             &time_source,
@@ -5354,12 +6660,20 @@ pub mod tests {
             }),
         );
 
-        queue
-            .push(
-                accepted_tx_by(account_id.clone(), &key_pair, &time_source),
-                state.view(),
-            )
-            .expect("global UAID routing should not require target dataspace binding");
+        let result = queue.push(
+            accepted_tx_by(account_id.clone(), &key_pair, &time_source),
+            state.view(),
+        );
+        match result {
+            Err(Failure {
+                err: Error::LaneComplianceDenied { reason, .. },
+                ..
+            }) => assert!(
+                reason.contains("not bound to dataspace"),
+                "expected missing dataspace binding rejection, got {reason}"
+            ),
+            other => panic!("expected missing dataspace binding rejection, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -5372,13 +6686,14 @@ pub mod tests {
         let state = Arc::new(State::new(world, kura, query_handle));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let queue = Queue::test_with_router(
+        let queue = Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
             Arc::new(StaticRouter {
                 lane: LaneId::SINGLE,
                 dataspace,
             }),
+            &[(LaneId::SINGLE, dataspace)],
         );
 
         queue
@@ -5414,13 +6729,14 @@ pub mod tests {
         let state = Arc::new(State::new(world, kura, query_handle));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let queue = Queue::test_with_router(
+        let queue = Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
             Arc::new(StaticRouter {
                 lane: LaneId::SINGLE,
                 dataspace,
             }),
+            &[(LaneId::SINGLE, dataspace)],
         );
 
         let result = queue.push(
@@ -5455,7 +6771,9 @@ pub mod tests {
 
     fn sample_unregister_instruction() -> InstructionBox {
         let domain_name = format!("dummy{}", rand::random::<u64>());
-        InstructionBox::from(Unregister::domain(domain_name.parse().unwrap()))
+        InstructionBox::from(Unregister::domain(
+            DomainId::try_new(&domain_name, "universal").unwrap(),
+        ))
     }
 
     const RUNTIME_UPGRADE_ALLOWED_ID: &str = "upgrade-q1";
@@ -5515,6 +6833,39 @@ pub mod tests {
         )
     }
 
+    fn accepted_tx_with_ttl(
+        account_id: AccountId,
+        key_pair: &KeyPair,
+        time_source: &TimeSource,
+        ttl: Duration,
+    ) -> AcceptedTransaction<'static> {
+        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let mut builder =
+            TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, time_source)
+                .with_instructions(vec![sample_unregister_instruction()]);
+        builder.set_ttl(ttl);
+        let tx = builder.sign(key_pair.private_key());
+        let default_limits = TransactionParameters::default();
+        let tx_limits = TransactionParameters::with_max_signatures(
+            nonzero!(16_u64),
+            nonzero!(4096_u64),
+            nonzero!(1024_u64),
+            default_limits.max_tx_bytes(),
+            default_limits.max_decompressed_bytes(),
+            default_limits.max_metadata_depth(),
+        );
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        AcceptedTransaction::accept_with_time_source(
+            tx,
+            &chain_id,
+            Duration::from_millis(10),
+            tx_limits,
+            &crypto_cfg,
+            time_source,
+        )
+        .expect("Failed to accept Transaction with TTL.")
+    }
+
     fn accepted_tx_with_attachments(
         account_id: AccountId,
         key_pair: &KeyPair,
@@ -5553,7 +6904,6 @@ pub mod tests {
         .expect("Failed to accept Transaction.")
     }
 
-    #[cfg(feature = "telemetry")]
     fn accepted_ivm_tx_by(
         account_id: AccountId,
         key_pair: &KeyPair,
@@ -5595,7 +6945,6 @@ pub mod tests {
         .expect("Failed to accept IVM transaction.")
     }
 
-    #[cfg(feature = "telemetry")]
     fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
         const IVM_MAGIC: [u8; 4] = *b"IVM\0";
         const HEADER_SUFFIX: [u8; 4] = [1, 0, 0, 4];
@@ -5611,11 +6960,83 @@ pub mod tests {
 
     /// Build a minimal world with a single domain and account for tests.
     pub fn world_with_test_domains() -> World {
-        let domain_id: DomainId = "wonderland".parse().expect("Valid");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let (account_id, _account_keypair) = gen_account_in("wonderland");
         let domain = Domain::new(domain_id.clone()).build(&account_id);
-        let account = Account::new(account_id.clone().to_account_id(domain_id)).build(&account_id);
+        let account = Account::new(account_id.clone()).build(&account_id);
         World::with([domain], [account], [])
+    }
+
+    struct NexusFeeFixture {
+        state: State,
+        authority_id: AccountId,
+        authority_keypair: KeyPair,
+        sponsor_id: AccountId,
+        fee_asset_definition_id: AssetDefinitionId,
+    }
+
+    fn nexus_fee_fixture(
+        authority_balance: Option<Numeric>,
+        sponsor_balance: Option<Numeric>,
+    ) -> NexusFeeFixture {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let fee_asset_id = AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("xor"));
+        let asset_definition = {
+            let __asset_definition_id = fee_asset_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&authority_id);
+        let mut assets = Vec::new();
+        if let Some(balance) = authority_balance {
+            assets.push(Asset::new(
+                AssetId::of(fee_asset_id.clone(), authority_id.clone()),
+                balance,
+            ));
+        }
+        if let Some(balance) = sponsor_balance {
+            assets.push(Asset::new(
+                AssetId::of(fee_asset_id.clone(), sponsor_id.clone()),
+                balance,
+            ));
+        }
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sponsor_account, sink_account],
+            [asset_definition],
+            assets,
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.sponsor_max_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = fee_asset_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+        NexusFeeFixture {
+            state,
+            authority_id,
+            authority_keypair,
+            sponsor_id,
+            fee_asset_definition_id: fee_asset_id,
+        }
     }
 
     #[test]
@@ -5636,10 +7057,11 @@ pub mod tests {
         assert_eq!(batch.len(), 1);
         let entry = &batch[0];
         assert_eq!(entry.tx.as_ref().hash(), hash);
-        let expected_payload = entry.tx.as_ref().encode();
+        let expected_payload =
+            ncore::to_bytes(entry.tx.as_ref()).expect("encode signed transaction");
         assert_eq!(entry.payload.as_slice(), expected_payload.as_slice());
         assert_eq!(entry.routing.lane_id, LaneId::SINGLE);
-        assert_eq!(entry.routing.dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(entry.routing.dataspace_id, DataSpaceId::UNIVERSAL);
     }
 
     #[test]
@@ -5650,7 +7072,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let expected_lane = LaneId::SINGLE;
-        let expected_dataspace = DataSpaceId::GLOBAL;
+        let expected_dataspace = DataSpaceId::UNIVERSAL;
         let queue = Queue::test_with_router(
             config_factory(),
             &time_source,
@@ -5695,7 +7117,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let expected_lane = LaneId::SINGLE;
-        let expected_dataspace = DataSpaceId::GLOBAL;
+        let expected_dataspace = DataSpaceId::UNIVERSAL;
         let queue = Queue::test_with_router(
             config_factory(),
             &time_source,
@@ -5748,7 +7170,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let expected_lane = LaneId::SINGLE;
-        let expected_dataspace = DataSpaceId::GLOBAL;
+        let expected_dataspace = DataSpaceId::UNIVERSAL;
         let queue = Queue::test_with_router(
             config_factory(),
             &time_source,
@@ -5806,7 +7228,7 @@ pub mod tests {
         queue.push(tx, state.view()).expect("push");
 
         let expected_lane = LaneId::SINGLE;
-        let expected_dataspace = DataSpaceId::GLOBAL;
+        let expected_dataspace = DataSpaceId::UNIVERSAL;
         let router: Arc<dyn LaneRouter> = Arc::new(ViewOnlyRouter {
             lane: expected_lane,
             dataspace: expected_dataspace,
@@ -5852,7 +7274,7 @@ pub mod tests {
             .push_with_gossip_payload_with_state_and_routing(
                 tx,
                 state.as_ref(),
-                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL),
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
                 Some(Arc::clone(&payload)),
             )
             .expect("push with precomputed routing should succeed");
@@ -5862,7 +7284,7 @@ pub mod tests {
             .get(&hash)
             .expect("routing decision should exist");
         assert_eq!(routing.lane_id, LaneId::SINGLE);
-        assert_eq!(routing.dataspace_id, DataSpaceId::GLOBAL);
+        assert_eq!(routing.dataspace_id, DataSpaceId::UNIVERSAL);
         let stored_payload = queue
             .tx_gossip_payloads
             .get(&hash)
@@ -5884,9 +7306,9 @@ pub mod tests {
         bind_manifest: bool,
     ) -> (World, AccountId, KeyPair) {
         let (account_id, key_pair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("Valid");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let domain = Domain::new(domain_id.clone()).build(&account_id);
-        let account = Account::new(account_id.clone().to_account_id(domain_id))
+        let account = Account::new(account_id.clone())
             .with_uaid(Some(uaid))
             .build(&account_id);
 
@@ -5951,7 +7373,12 @@ pub mod tests {
             dataspace: test_dataspace,
         });
         let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        let queue_inner = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[(test_lane, test_dataspace)],
+        );
         *queue_inner.nexus_limits.write() = QueueLimits {
             fallback: scheduling,
             per_lane: BTreeMap::from([(test_lane, scheduling)]),
@@ -6031,7 +7458,12 @@ pub mod tests {
             dataspace: test_dataspace,
         });
         let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        let queue_inner = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[(test_lane, test_dataspace)],
+        );
         *queue_inner.nexus_limits.write() = QueueLimits {
             fallback: scheduling,
             per_lane: BTreeMap::from([(test_lane, scheduling)]),
@@ -6116,7 +7548,12 @@ pub mod tests {
             ]),
         });
 
-        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        let queue_inner = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[(lane_a, dataspace_a), (lane_b, dataspace_b)],
+        );
         *queue_inner.nexus_limits.write() = QueueLimits {
             fallback: lane_b_bounds,
             per_lane: BTreeMap::from([(lane_a, lane_a_limits), (lane_b, lane_b_bounds)]),
@@ -6164,7 +7601,12 @@ pub mod tests {
             dataspace: test_dataspace,
         });
         let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        let queue_inner = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[(test_lane, test_dataspace)],
+        );
         *queue_inner.nexus_limits.write() = QueueLimits {
             fallback: scheduling,
             per_lane: BTreeMap::from([(test_lane, scheduling)]),
@@ -6221,7 +7663,12 @@ pub mod tests {
                 dataspace: test_dataspace,
             });
             let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-            let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+            let queue_inner = Queue::test_with_router_for_routes(
+                config_factory(),
+                &time_source,
+                router,
+                &[(test_lane, test_dataspace)],
+            );
             *queue_inner.nexus_limits.write() = QueueLimits {
                 fallback: scheduling,
                 per_lane: BTreeMap::from([(test_lane, scheduling)]),
@@ -6327,7 +7774,12 @@ pub mod tests {
             dataspace: test_dataspace,
         });
         let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        let queue_inner = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[(test_lane, test_dataspace)],
+        );
         *queue_inner.nexus_limits.write() = QueueLimits {
             fallback: scheduling,
             per_lane: BTreeMap::from([(test_lane, scheduling)]),
@@ -6436,7 +7888,12 @@ pub mod tests {
             dataspace: test_dataspace,
         });
         let scheduling = LaneSchedulingLimits::new(lane_capacity, 0);
-        let queue_inner = Queue::test_with_router(config_factory(), &time_source, router);
+        let queue_inner = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[(test_lane, test_dataspace)],
+        );
         *queue_inner.nexus_limits.write() = QueueLimits {
             fallback: scheduling,
             per_lane: BTreeMap::from([(test_lane, scheduling)]),
@@ -6500,21 +7957,23 @@ pub mod tests {
         let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
-        let (events_sender, _) = tokio::sync::broadcast::channel(8);
+        let test_lane = LaneId::new(7);
+        let test_dataspace = DataSpaceId::new(42);
         let router = Arc::new(StaticRouter {
-            lane: LaneId::new(7),
-            dataspace: DataSpaceId::new(42),
+            lane: test_lane,
+            dataspace: test_dataspace,
         });
-        let queue = Arc::new(Queue::from_config_with_router(
+        let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
-            events_sender,
+            &time_source,
             router,
+            &[(test_lane, test_dataspace)],
         ));
 
         let (account_id, key_pair) = gen_account_in("wonderland");
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let domain_name = format!("tagged{}", rand::random::<u64>());
-        let unregister = Unregister::domain(domain_name.parse().unwrap());
+        let unregister = Unregister::domain(DomainId::try_new(&domain_name, "universal").unwrap());
         let tx =
             TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, &time_source)
                 .with_instructions([unregister])
@@ -6546,8 +8005,8 @@ pub mod tests {
             .tx_teu
             .get(&hash)
             .expect("TEU info missing for routed transaction");
-        assert_eq!(teu_info.lane_id, LaneId::new(7));
-        assert_eq!(teu_info.dataspace_id, DataSpaceId::new(42));
+        assert_eq!(teu_info.lane_id, test_lane);
+        assert_eq!(teu_info.dataspace_id, test_dataspace);
     }
 
     #[cfg(feature = "telemetry")]
@@ -6596,13 +8055,14 @@ pub mod tests {
 
         let expected_lane = LaneId::new(5);
         let expected_dataspace = DataSpaceId::new(13);
-        let queue = Arc::new(Queue::test_with_router(
+        let queue = Arc::new(Queue::test_with_router_for_routes(
             config_factory(),
             &time_source,
             Arc::new(TaggedRouter {
                 lane: expected_lane,
                 dataspace: expected_dataspace,
             }),
+            &[(expected_lane, expected_dataspace)],
         ));
 
         let tx = accepted_tx_by_someone(&time_source);
@@ -6837,6 +8297,145 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn queue_pressure_snapshot_tracks_oldest_age_across_enqueue_and_dequeue() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("first push succeeds");
+        time_handle.advance(Duration::from_millis(10));
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("second push succeeds");
+
+        let initial = queue.pressure_snapshot();
+        assert_eq!(initial.tracked_tx_count, 2);
+        assert_eq!(initial.queued_tx_count, 2);
+        assert_eq!(initial.oldest_queued_tx_age_ms, 10);
+
+        let mut expired = Vec::new();
+        let guard = queue
+            .pop_from_queue(&state.view(), &mut expired)
+            .expect("transaction available");
+        let inflight = queue.pressure_snapshot();
+        assert_eq!(inflight.tracked_tx_count, 2);
+        assert_eq!(inflight.queued_tx_count, 1);
+        assert_eq!(inflight.oldest_queued_tx_age_ms, 0);
+
+        drop(guard);
+
+        let after_drop = queue.pressure_snapshot();
+        assert_eq!(after_drop.tracked_tx_count, 1);
+        assert_eq!(after_drop.queued_tx_count, 1);
+        assert_eq!(after_drop.oldest_queued_tx_age_ms, 0);
+    }
+
+    #[tokio::test]
+    async fn queue_pressure_snapshot_clears_oldest_age_after_expiry() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_millis(1),
+                expired_cull_interval: Duration::from_millis(1),
+                ..config_factory()
+            },
+            &time_source,
+        );
+
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+        assert_eq!(queue.pressure_snapshot().oldest_queued_tx_age_ms, 0);
+
+        time_handle.advance(Duration::from_millis(2));
+        assert_eq!(queue.cull_expired_entries_if_due(), 1);
+
+        let snapshot = queue.pressure_snapshot();
+        assert_eq!(snapshot.tracked_tx_count, 0);
+        assert_eq!(snapshot.queued_tx_count, 0);
+        assert_eq!(snapshot.oldest_queued_tx_age_ms, 0);
+    }
+
+    #[tokio::test]
+    async fn backpressure_state_saturates_on_oldest_queue_age() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        queue.set_pressure_age_budget_for_tests(Duration::from_millis(5));
+
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+        time_handle.advance(Duration::from_millis(6));
+
+        let snapshot = queue.pressure_snapshot();
+        assert!(!snapshot.saturated_by_count);
+        assert!(snapshot.saturated_by_age);
+        assert!(queue.current_backpressure().is_saturated());
+    }
+
+    #[tokio::test]
+    async fn backdate_queued_transactions_for_tests_updates_age_pressure() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(10));
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        queue.set_pressure_age_budget_for_tests(Duration::from_millis(5));
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+
+        let snapshot = queue.backdate_queued_transactions_for_tests(Duration::from_millis(6));
+
+        assert_eq!(snapshot.oldest_queued_tx_age_ms, 6);
+        assert!(snapshot.saturated_by_age);
+        assert!(queue.current_backpressure().is_saturated());
+    }
+
+    #[tokio::test]
+    async fn backpressure_state_excludes_inflight_transactions_from_age_and_depth() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        queue.set_pressure_age_budget_for_tests(Duration::from_millis(5));
+
+        queue
+            .push(accepted_tx_by_someone(&time_source), state.view())
+            .expect("push succeeds");
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(&state.view(), nonzero!(1_usize), &mut guards);
+        assert_eq!(guards.len(), 1, "queue should return an in-flight guard");
+
+        time_handle.advance(Duration::from_millis(6));
+        let snapshot = queue.pressure_snapshot();
+        assert_eq!(snapshot.tracked_tx_count, 1);
+        assert_eq!(snapshot.queued_tx_count, 0);
+        assert_eq!(snapshot.oldest_queued_tx_age_ms, 0);
+        assert!(!snapshot.saturated_by_age);
+        assert_eq!(queue.current_backpressure().queued(), 0);
+
+        drop(guards);
+        assert_eq!(queue.current_backpressure().queued(), 0);
+    }
+
+    #[tokio::test]
     async fn resync_rebuilds_hash_queue_when_empty() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -7030,7 +8629,7 @@ pub mod tests {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.as_ref().hash();
-        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
 
         queue
             .push_requeued_with_routing(tx, routing, &state)
@@ -7079,7 +8678,7 @@ pub mod tests {
             .insert_block_with_single_tx(tx.as_ref().hash(), block_height);
         state_block.commit().unwrap();
         let queue = Queue::test(config_factory(), &time_source);
-        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
+        let routing = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
 
         assert!(matches!(
             queue.push_requeued_with_routing(tx, routing, &state),
@@ -7295,7 +8894,7 @@ pub mod tests {
                 hash: tx_hash,
                 block_height: None,
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 status: TransactionStatus::Queued,
             }
             .into()
@@ -7317,7 +8916,7 @@ pub mod tests {
                 hash: tx_hash,
                 block_height: None,
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 status: TransactionStatus::Expired,
             }
             .into()
@@ -7612,11 +9211,10 @@ pub mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, bob_keypair) = gen_account_in("wonderland");
         let world = {
-            let domain_id: DomainId = "wonderland".parse().expect("Valid");
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
             let domain = Domain::new(domain_id.clone()).build(&alice_id);
-            let alice_account =
-                Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
-            let bob_account = Account::new(bob_id.clone().to_account_id(domain_id)).build(&bob_id);
+            let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+            let bob_account = Account::new(bob_id.clone()).build(&bob_id);
             World::with([domain], [alice_account, bob_account], [])
         };
         let query_handle = LiveQueryStore::start_test();

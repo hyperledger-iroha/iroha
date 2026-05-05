@@ -1,12 +1,14 @@
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
 ---
 lang: ar
 direction: rtl
 source: docs/source/isi_extension_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
-source_last_modified: "2026-01-03T18:07:57.214581+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 9648381ac7cc1716ffd3c48aca425ed17a6afe1ac73bdeff866ebbbd9147cf68
+source_last_modified: "2026-03-30T18:22:55.972718+00:00"
+translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---
 
@@ -34,17 +36,15 @@ translator: machine-google-reviewed
 - ينبعث `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` مع `AssetId` المتأثر.
 - تتطلب نفس رموز الإذن مثل تعديلات البيانات التعريفية للأصول الموجودة (مالك التعريف أو
   `CanModifyAssetMetadata` المنح على النمط).
-- قم بالإلغاء إذا كان سجل الأصول مفقودًا (لا يوجد إنشاء ضمني).
-
-### تدوير الحساب التوقيع
+- قم بالإلغاء إذا كان سجل الأصول مفقودًا (لا يوجد إنشاء ضمني).### تدوير الحساب التوقيع
 - المبادلة الذرية للموقع في `AccountId` مع الحفاظ على البيانات الوصفية للحساب وربطها
   الموارد (الأصول، المشغلات، الأدوار، الأذونات، الأحداث المعلقة).
 - التحقق من تطابق الموقع الحالي مع المتصل (أو السلطة المفوضة عبر رمز واضح).
-- ارفض إذا كان المفتاح العام الجديد يدعم بالفعل حسابًا آخر في نفس المجال.
+- ارفض إذا كان المفتاح العام الجديد يدعم بالفعل حسابًا أساسيًا آخر.
 - قم بتحديث جميع المفاتيح الأساسية التي تتضمن معرف الحساب وتبطل ذاكرة التخزين المؤقت قبل الالتزام.
 - قم بإصدار `AccountEvent::SignatoryRotated` مخصص مع المفاتيح القديمة/الجديدة لمسارات التدقيق.
-- سقالة الهجرة: قدم `AccountLabel` + `AccountRekeyRecord` (انظر `account::rekey`) لذا
-  يمكن تعيين الحسابات الحالية إلى تصنيفات مستقرة أثناء الترقية المستمرة دون فواصل التجزئة.
+- سقالة الهجرة: اعتمد على `AccountAlias` + `AccountRekeyRecord` (انظر `account::rekey`) لذا
+  يمكن للحسابات الحالية الاحتفاظ بروابط الاسم المستعار المستقرة أثناء الترقية المستمرة دون فواصل التجزئة.
 
 ### إلغاء تنشيطContractInstance
 - قم بإزالة رابط `(namespace, contract_id)` أو وضع علامة مميزة عليه مع الاحتفاظ ببيانات المصدر
@@ -72,14 +72,12 @@ translator: machine-google-reviewed
   أو القدرة الممنوحة) قبل طفرة الحالة.
 - يجب أن تقوم مجموعات الوصول الاستشارية بتوحيد كافة مفاتيح القراءة/الكتابة للحفاظ على صحة التزامن المتفائل.
 
-## سقالات التنفيذ
-
-- يحمل نموذج البيانات الآن سقالات `SetAssetKeyValue` / `RemoveAssetKeyValue` لبيانات تعريف التوازن
+## سقالات التنفيذ- يحمل نموذج البيانات الآن سقالات `SetAssetKeyValue` / `RemoveAssetKeyValue` لبيانات تعريف التوازن
   التعديلات (`transparent.rs`).
 - يعرض زوار المنفذ العناصر النائبة التي ستفتح الأذونات بمجرد وصول الأسلاك المضيفة
   (`default/mod.rs`).
 - توفر أنواع النماذج الأولية لإعادة المفتاح (`account::rekey`) منطقة هبوط لعمليات الترحيل المتدرجة.
-- تتضمن الحالة العالمية `account_rekey_records` بمفتاح بواسطة `AccountLabel` حتى نتمكن من تنظيم التسمية →
+- تتضمن الحالة العالمية `account_rekey_records` بمفتاح `AccountAlias` حتى نتمكن من تنظيم الاسم المستعار →
   هجرات الموقعين دون لمس الترميز التاريخي `AccountId`.
 
 ## IVM صياغة Syscall

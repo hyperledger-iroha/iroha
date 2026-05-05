@@ -178,7 +178,7 @@ address-manifest-<REVISION>/
     в один digest. Приостановите промо манифеста, запустите
     `scripts/address_local_toolkit.sh` для проверки маппинга digest и
     согласуйте с governance Nexus до переиздания записи.
-  - `AddressInvalidRatioSlo` — предупреждает, когда доля неверных I105/сжатых
+  - `AddressInvalidRatioSlo` — предупреждает, когда доля неверных i105/сжатых
     отправок (за исключением Local‑8/strict‑mode отказов) превышает 0,1 % SLO
     на протяжении 10 минут. Проверьте `torii_address_invalid_total` по контексту/причине
     и согласуйте с SDK‑командой до повторного включения strict‑mode.

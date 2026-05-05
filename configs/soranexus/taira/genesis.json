@@ -1,0 +1,334 @@
+{
+  "bls_domain": "bls-iroha2:npos-sumeragi:v1",
+  "chain": "809574f5-fee7-5e69-bfcf-52451e42d50f",
+  "chain_discriminant": 369,
+  "consensus_fingerprint": "0xc731aafd4ac091f98b789331c6a16bcb3afb3349651d33213745435e15a85dce",
+  "consensus_mode": "Npos",
+  "crypto": {
+    "allowed_curve_ids": [
+      1,
+      3,
+      4
+    ],
+    "allowed_signing": [
+      "ed25519",
+      "secp256k1",
+      "bls_normal"
+    ],
+    "default_hash": "blake2b-256",
+    "sm2_distid_default": "1234567812345678"
+  },
+  "executor": null,
+  "ivm_dir": ".",
+  "transactions": [
+    {
+      "instructions": [
+        {
+          "Register": {
+            "Domain": {
+              "id": "wonderland.universal",
+              "logo": null,
+              "metadata": {
+                "key": "value"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "metadata": {
+                "key": "value"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "testuﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+              "metadata": {
+                "key": "value"
+              }
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "metadata": {}
+            }
+          }
+        },
+        {
+          "Register": {
+            "AssetDefinition": {
+              "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+              "logo": null,
+              "metadata": {},
+              "mintable": "Infinitely",
+              "spec": {
+                "scale": null
+              },
+              "name": "rose"
+            }
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "garden_of_live_flowers.universal",
+              "logo": null,
+              "metadata": {}
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "testuﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
+              "metadata": {}
+            }
+          }
+        },
+        {
+          "Register": {
+            "AssetDefinition": {
+              "id": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
+              "logo": null,
+              "metadata": {},
+              "mintable": "Infinitely",
+              "spec": {
+                "scale": null
+              },
+              "name": "cabbage"
+            }
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "universal.universal",
+              "logo": null,
+              "metadata": {}
+            }
+          }
+        },
+        {
+          "Register": {
+            "AssetDefinition": {
+              "confidential_policy": {
+                "mode": "Convertible",
+                "pedersen_params_id": null,
+                "pending_transition": null,
+                "poseidon_params_id": null,
+                "vk_set_hash": null
+              },
+              "id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+              "logo": null,
+              "metadata": {},
+              "mintable": "Infinitely",
+              "spec": {
+                "scale": null
+              },
+              "name": "xor"
+            }
+          }
+        },
+        {
+          "SetAssetDefinitionAlias": {
+            "alias": "xor#universal",
+            "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+            "lease_expiry_ms": null
+          }
+        },
+        {
+          "Register": {
+            "Domain": {
+              "id": "sora.universal",
+              "logo": null,
+              "metadata": {}
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
+              "metadata": {}
+            }
+          }
+        },
+        {
+          "Register": {
+            "AssetDefinition": {
+              "id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
+              "logo": null,
+              "metadata": {},
+              "mintable": "Infinitely",
+              "spec": {
+                "scale": null
+              },
+              "name": "xor"
+            }
+          }
+        },
+        {
+          "SetAssetDefinitionAlias": {
+            "alias": "xor#sora",
+            "asset_definition_id": "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            "lease_expiry_ms": null
+          }
+        }
+      ],
+      "ivm_triggers": [],
+      "parameters": {
+        "block": {
+          "max_transactions": 512
+        },
+        "custom": {
+          "sumeragi_npos_parameters": {
+            "id": "sumeragi_npos_parameters",
+            "payload": {
+              "epoch_seed": "08499EEBF6BCDB2EBA26F335D47F5256F4E294E8BCF95D239870177FBEAE4FC2",
+              "k_aggregators": 3,
+              "redundant_send_r": 3,
+              "vrf_commit_window_blocks": 100,
+              "vrf_reveal_window_blocks": 40,
+              "max_validators": 128,
+              "min_self_bond": 1000,
+              "min_nomination_bond": 1,
+              "max_nominator_concentration_pct": 25,
+              "seat_band_pct": 5,
+              "max_entity_correlation_pct": 25,
+              "finality_margin_blocks": 8,
+              "evidence_horizon_blocks": 7200,
+              "activation_lag_blocks": 1,
+              "epoch_length_blocks": 3600,
+              "slashing_delay_blocks": 259200
+            }
+          }
+        },
+        "executor": {
+          "execution_depth": 3,
+          "fuel": 55000000,
+          "memory": 55000000
+        },
+        "smart_contract": {
+          "execution_depth": 3,
+          "fuel": 55000000,
+          "memory": 55000000
+        },
+        "sumeragi": {
+          "block_time_ms": 100,
+          "collectors_k": 3,
+          "collectors_redundant_send_r": 2,
+          "commit_time_ms": 100,
+          "da_enabled": true,
+          "max_clock_drift_ms": 1000,
+          "min_finality_ms": 100
+        },
+        "transaction": {
+          "ivm_bytecode_size": 4194304,
+          "max_instructions": 4096,
+          "max_signatures": 16
+        }
+      },
+      "topology": []
+    },
+    {
+      "instructions": [
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "object": "13"
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "object": "44"
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": "200000000000000000"
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "61CtjvNd9T3THAR65GsMVHr82Bjc#testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
+              "object": "250000000"
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "object": {
+                "name": "CanSetParameters"
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "object": {
+                "name": "CanRegisterDomain"
+              }
+            }
+          }
+        }
+      ],
+      "ivm_triggers": [],
+      "parameters": {
+        "custom": {
+          "ivm_gas_limit_per_block": {
+            "id": "ivm_gas_limit_per_block",
+            "payload": 1680000
+          },
+          "ivm_gas_accepted_assets": {
+            "id": "ivm_gas_accepted_assets",
+            "payload": [
+              "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            ]
+          },
+          "ivm_gas_units_per_gas": {
+            "id": "ivm_gas_units_per_gas",
+            "payload": [
+              {
+                "asset": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+                "units_per_gas": 0,
+                "twap_local_per_xor": "1",
+                "liquidity_profile": "tier1",
+                "volatility_class": "stable"
+              }
+            ]
+          }
+        },
+        "sumeragi": {
+          "block_time_ms": 100,
+          "commit_time_ms": 100,
+          "min_finality_ms": 100
+        }
+      },
+      "topology": []
+    }
+  ],
+  "wire_proto_versions": [
+    2
+  ]
+}

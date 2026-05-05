@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use iroha_crypto::Hash;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::{bigint::BigInt, numeric::Numeric};
 use iroha_schema::IntoSchema;
 
 use crate::{account::AccountId, asset::id::AssetDefinitionId};
@@ -88,6 +88,42 @@ impl TransferDeltaTranscript {
         self.to_merkle_proof = Some(to_proof);
         self
     }
+
+    /// Return the common decimal scale used to normalize this delta into FASTPQ witness units.
+    #[must_use]
+    pub fn normalized_scale(&self) -> u32 {
+        [
+            trimmed_scale(&self.amount),
+            trimmed_scale(&self.from_balance_before),
+            trimmed_scale(&self.from_balance_after),
+            trimmed_scale(&self.to_balance_before),
+            trimmed_scale(&self.to_balance_after),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+    }
+}
+
+fn trimmed_scale(value: &Numeric) -> u32 {
+    value.clone().trim_trailing_zeros().scale()
+}
+
+/// Normalize a numeric into deterministic integer witness units for FASTPQ.
+///
+/// The caller chooses the target decimal scale. Values are scaled up by powers of ten until they
+/// share that target scale, then converted into a non-negative `u64`.
+#[must_use]
+pub fn normalized_numeric_to_u64(value: &Numeric, target_scale: u32) -> Option<u64> {
+    let value = value.clone().trim_trailing_zeros();
+    if value.mantissa().is_negative() || value.scale() > target_scale {
+        return None;
+    }
+
+    let scale_delta = target_scale - value.scale();
+    let factor = BigInt::pow10(scale_delta)?;
+    let scaled = value.mantissa().checked_mul(&factor).ok()?;
+    scaled.to_string().parse::<u64>().ok()
 }
 
 /// Canonical FASTPQ transition batch recorded in execution witnesses.
@@ -251,7 +287,7 @@ mod tests {
 
     fn asset(label: &str) -> AssetDefinitionId {
         let name = Name::from_str(label).expect("valid asset name");
-        let domain = DomainId::from_str("wonderland").expect("valid domain id");
+        let domain = DomainId::try_new("wonderland", "universal").expect("valid domain id");
         AssetDefinitionId::new(domain, name)
     }
 
@@ -272,5 +308,57 @@ mod tests {
         let updated = delta.with_merkle_proofs(vec![1, 2, 3], vec![4, 5, 6]);
         assert_eq!(updated.from_merkle_proof.as_deref(), Some(&[1, 2, 3][..]));
         assert_eq!(updated.to_merkle_proof.as_deref(), Some(&[4, 5, 6][..]));
+    }
+
+    #[test]
+    fn transfer_delta_normalized_scale_uses_highest_numeric_scale() {
+        let delta = TransferDeltaTranscript {
+            from_account: account("alice"),
+            to_account: account("bob"),
+            asset_definition: asset("xor"),
+            amount: Numeric::new(5, 1),
+            from_balance_before: Numeric::new(1, 0),
+            from_balance_after: Numeric::new(5, 1),
+            to_balance_before: Numeric::new(0, 0),
+            to_balance_after: Numeric::new(5, 1),
+            from_merkle_proof: None,
+            to_merkle_proof: None,
+        };
+
+        assert_eq!(delta.normalized_scale(), 1);
+    }
+
+    #[test]
+    fn transfer_delta_normalized_scale_trims_trailing_zero_padding() {
+        let delta = TransferDeltaTranscript {
+            from_account: account("alice"),
+            to_account: account("bob"),
+            asset_definition: asset("xor"),
+            amount: Numeric::new(11, 3),
+            from_balance_before: Numeric::new(120_000_000_000_000_000_000_000_i128, 18),
+            from_balance_after: Numeric::new(119_999_989_000_000_000_000_000_i128, 18),
+            to_balance_before: Numeric::zero(),
+            to_balance_after: Numeric::new(11_000_000_000_000_000_i128, 18),
+            from_merkle_proof: None,
+            to_merkle_proof: None,
+        };
+
+        assert_eq!(delta.normalized_scale(), 3);
+    }
+
+    #[test]
+    fn normalized_numeric_to_u64_scales_to_requested_precision() {
+        let whole = Numeric::new(1, 0);
+        let fractional = Numeric::new(5, 1);
+
+        assert_eq!(normalized_numeric_to_u64(&whole, 1), Some(10));
+        assert_eq!(normalized_numeric_to_u64(&fractional, 1), Some(5));
+    }
+
+    #[test]
+    fn normalized_numeric_to_u64_accepts_trimmed_trailing_zero_scale() {
+        let padded = Numeric::new(120_000_000_000_000_000_000_000_i128, 18);
+
+        assert_eq!(normalized_numeric_to_u64(&padded, 3), Some(120_000_000));
     }
 }

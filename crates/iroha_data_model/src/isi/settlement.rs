@@ -398,6 +398,7 @@ impl crate::seal::Instruction for SettlementInstructionBox {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::DomainId;
 
     const ALICE_SIGNATORY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -408,21 +409,24 @@ mod tests {
         AccountId::new(signatory.parse().expect("public key"))
     }
 
-    fn asset(id: &str) -> AssetDefinitionId {
-        id.parse().expect("asset id")
+    fn asset(domain: &str, name: &str) -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new(domain, "universal").expect("domain"),
+            name.parse().expect("name"),
+        )
     }
 
     #[test]
     fn dvp_roundtrip_encodes_plan() {
         let settlement_id: SettlementId = "dvp_trade_1".parse().expect("settlement id");
         let delivery_leg = SettlementLeg::new(
-            asset("bond#wonderland"),
+            asset("wonderland", "bond"),
             1_000u32.into(),
             account(ALICE_SIGNATORY, "test"),
             account(BOB_SIGNATORY, "test"),
         );
         let payment_leg = SettlementLeg::new(
-            asset("usd#wonderland"),
+            asset("wonderland", "usd"),
             1_005u32.into(),
             account(BOB_SIGNATORY, "test"),
             account(ALICE_SIGNATORY, "test"),
@@ -455,13 +459,13 @@ mod tests {
     fn pvp_display_includes_identifier() {
         let settlement_id: SettlementId = "pvp_fx_1".parse().expect("settlement id");
         let primary_leg = SettlementLeg::new(
-            asset("usd#wonderland"),
+            asset("wonderland", "usd"),
             1_000u32.into(),
             account(ALICE_SIGNATORY, "test"),
             account(BOB_SIGNATORY, "test"),
         );
         let counter_leg = SettlementLeg::new(
-            asset("eur#wonderland"),
+            asset("wonderland", "eur"),
             920u32.into(),
             account(BOB_SIGNATORY, "test"),
             account(ALICE_SIGNATORY, "test"),

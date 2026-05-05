@@ -7,7 +7,9 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import okhttp3.Call;
 import okhttp3.Callback;
@@ -28,9 +30,20 @@ public final class OkHttpTransportExecutor
     implements HttpTransportExecutor, StreamingTransportExecutor {
 
   private final OkHttpClient client;
+  private final boolean ownsClient;
+  private final Set<Call> trackedCalls = ConcurrentHashMap.newKeySet();
 
   public OkHttpTransportExecutor(final OkHttpClient client) {
+    this(client, true);
+  }
+
+  static OkHttpTransportExecutor shared(final OkHttpClient client) {
+    return new OkHttpTransportExecutor(client, false);
+  }
+
+  private OkHttpTransportExecutor(final OkHttpClient client, final boolean ownsClient) {
     this.client = Objects.requireNonNull(client, "client");
+    this.ownsClient = ownsClient;
   }
 
   @Override
@@ -38,6 +51,7 @@ public final class OkHttpTransportExecutor
     Objects.requireNonNull(request, "request");
     final Request okRequest = buildRequest(request);
     final Call call = client.newCall(okRequest);
+    trackedCalls.add(call);
     final Duration timeout = request.timeout();
     if (timeout != null && !timeout.isZero() && !timeout.isNegative()) {
       call.timeout().timeout(Math.max(0L, timeout.toMillis()), TimeUnit.MILLISECONDS);
@@ -67,6 +81,7 @@ public final class OkHttpTransportExecutor
         });
     future.whenComplete(
         (ignored, throwable) -> {
+          trackedCalls.remove(call);
           if (future.isCancelled()) {
             call.cancel();
           }
@@ -79,6 +94,7 @@ public final class OkHttpTransportExecutor
     Objects.requireNonNull(request, "request");
     final Request okRequest = buildRequest(request);
     final Call call = client.newCall(okRequest);
+    trackedCalls.add(call);
     final java.time.Duration timeout = request.timeout();
     if (timeout != null && !timeout.isNegative()) {
       call.timeout().timeout(Math.max(0L, timeout.toMillis()), TimeUnit.MILLISECONDS);
@@ -89,6 +105,7 @@ public final class OkHttpTransportExecutor
         new Callback() {
           @Override
           public void onFailure(final Call call, final IOException e) {
+            trackedCalls.remove(call);
             future.completeExceptionally(e);
           }
 
@@ -105,6 +122,7 @@ public final class OkHttpTransportExecutor
                     response.message(),
                     response.headers().toMultimap(),
                     () -> {
+                      trackedCalls.remove(call);
                       response.close();
                       call.cancel();
                     });
@@ -114,6 +132,7 @@ public final class OkHttpTransportExecutor
     future.whenComplete(
         (ignored, throwable) -> {
           if (future.isCancelled()) {
+            trackedCalls.remove(call);
             call.cancel();
           }
         });
@@ -127,6 +146,13 @@ public final class OkHttpTransportExecutor
 
   @Override
   public void invalidateAndCancel() {
+    for (final Call call : trackedCalls) {
+      call.cancel();
+    }
+    trackedCalls.clear();
+    if (!ownsClient) {
+      return;
+    }
     client.dispatcher().cancelAll();
     client.connectionPool().evictAll();
     final var cache = client.cache();
@@ -162,10 +188,26 @@ public final class OkHttpTransportExecutor
     headers.forEach(
         (name, values) -> {
           for (final String value : values) {
-            headersBuilder.add(name, value);
+            if (requiresUnsafeNonAscii(value)) {
+              headersBuilder.addUnsafeNonAscii(name, value);
+            } else {
+              headersBuilder.add(name, value);
+            }
           }
         });
     builder.headers(headersBuilder.build());
+  }
+
+  private static boolean requiresUnsafeNonAscii(final String value) {
+    if (value == null) {
+      return false;
+    }
+    for (int index = 0; index < value.length(); index++) {
+      if (value.charAt(index) > 0x7E) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private static RequestBody buildRequestBody(final TransportRequest request) {

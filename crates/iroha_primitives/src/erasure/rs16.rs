@@ -302,6 +302,116 @@ pub fn symbols_from_chunk(symbol_count: usize, chunk: &[u8]) -> Vec<u16> {
     symbols
 }
 
+/// Convert RS16 symbols back into chunk bytes.
+///
+/// # Errors
+/// Returns `Rs16Error` if `byte_len` exceeds the symbol capacity.
+pub fn chunk_from_symbols(symbols: &[u16], byte_len: usize) -> Result<Vec<u8>, Rs16Error> {
+    let capacity = symbols.len().saturating_mul(2);
+    if byte_len > capacity {
+        return Err(Rs16Error);
+    }
+    let mut bytes = Vec::with_capacity(byte_len);
+    for symbol in symbols {
+        if bytes.len() == byte_len {
+            break;
+        }
+        let pair = symbol.to_le_bytes();
+        let remaining = byte_len.saturating_sub(bytes.len()).min(2);
+        bytes.extend_from_slice(&pair[..remaining]);
+    }
+    Ok(bytes)
+}
+
+fn generator_row(
+    data_shards: usize,
+    parity_shards: usize,
+    shard_idx: usize,
+) -> Result<Vec<u16>, Rs16Error> {
+    if shard_idx < data_shards {
+        let mut row = vec![0u16; data_shards];
+        row[shard_idx] = 1;
+        return Ok(row);
+    }
+    let parity_idx = shard_idx.checked_sub(data_shards).ok_or(Rs16Error)?;
+    let matrix = parity_matrix(data_shards, parity_shards)?;
+    matrix.rows.get(parity_idx).cloned().ok_or(Rs16Error)
+}
+
+/// Reconstruct a full RS16 stripe from any `data_shards` present shards.
+///
+/// The slice must contain exactly `data_shards + parity_shards` entries. Present
+/// entries must all use the same symbol width. Missing entries are filled with
+/// reconstructed data/parity rows when recovery succeeds.
+///
+/// # Errors
+/// Returns `Rs16Error` if too few shards are present, symbol widths differ, or
+/// the selected recovery matrix is singular.
+pub fn reconstruct_shards(
+    shards: &mut [Option<Vec<u16>>],
+    data_shards: usize,
+    parity_shards: usize,
+) -> Result<(), Rs16Error> {
+    if data_shards == 0 {
+        return Err(Rs16Error);
+    }
+    if shards.len() != data_shards.saturating_add(parity_shards) {
+        return Err(Rs16Error);
+    }
+
+    let mut selected = Vec::with_capacity(data_shards);
+    let mut symbol_count: Option<usize> = None;
+    for (idx, maybe_row) in shards.iter().enumerate() {
+        let Some(row) = maybe_row.as_ref() else {
+            continue;
+        };
+        match symbol_count {
+            Some(expected) if expected != row.len() => return Err(Rs16Error),
+            Some(_) => {}
+            None => {
+                symbol_count = Some(row.len());
+            }
+        }
+        selected.push((idx, row.clone()));
+        if selected.len() == data_shards {
+            break;
+        }
+    }
+    let symbol_count = symbol_count.ok_or(Rs16Error)?;
+    if selected.len() < data_shards {
+        return Err(Rs16Error);
+    }
+
+    let mut decode_matrix = Vec::with_capacity(data_shards);
+    let mut selected_rows = Vec::with_capacity(data_shards);
+    for (idx, row) in selected {
+        decode_matrix.push(generator_row(data_shards, parity_shards, idx)?);
+        selected_rows.push(row);
+    }
+    let inverse = invert_matrix(decode_matrix)?;
+
+    let mut data_rows = vec![vec![0u16; symbol_count]; data_shards];
+    for (data_idx, output_row) in data_rows.iter_mut().enumerate() {
+        for (selected_idx, input_row) in selected_rows.iter().enumerate() {
+            let coef = inverse[data_idx][selected_idx];
+            if coef == 0 {
+                continue;
+            }
+            mul_add_row_scalar(coef, input_row, output_row);
+        }
+    }
+    let parity_rows = encode_parity(&data_rows, parity_shards)?;
+
+    for (idx, slot) in shards.iter_mut().enumerate() {
+        *slot = Some(if idx < data_shards {
+            data_rows[idx].clone()
+        } else {
+            parity_rows[idx - data_shards].clone()
+        });
+    }
+    Ok(())
+}
+
 /// Compute the parity chunk offset for a given stripe/parity index.
 pub fn parity_offset(
     total_size: u64,
@@ -667,5 +777,29 @@ mod tests {
     fn parity_offset_matches_expected() {
         let offset = parity_offset(100, 2, 1, 3, 16).expect("offset");
         assert_eq!(offset, 100 + (2 * 3 + 1) as u64 * 16);
+    }
+
+    #[test]
+    fn chunk_from_symbols_respects_requested_length() {
+        let symbols = vec![0x0201, 0x0403];
+        let bytes = chunk_from_symbols(&symbols, 3).expect("bytes");
+        assert_eq!(bytes, vec![0x01, 0x02, 0x03]);
+        assert!(chunk_from_symbols(&symbols, 5).is_err());
+    }
+
+    #[test]
+    fn reconstruct_shards_restores_missing_data_and_parity() {
+        let data = sample_symbols(4, 8);
+        let expected_data = data[1].clone();
+        let parity = encode_parity(&data, 2).expect("parity");
+        let mut shards: Vec<Option<Vec<u16>>> =
+            data.into_iter().chain(parity.clone()).map(Some).collect();
+        shards[1] = None;
+        shards[4] = None;
+
+        reconstruct_shards(&mut shards, 4, 2).expect("reconstruct");
+
+        assert_eq!(shards[1].as_ref().expect("data shard"), &expected_data);
+        assert_eq!(shards[4].as_ref().expect("parity shard"), &parity[0]);
     }
 }

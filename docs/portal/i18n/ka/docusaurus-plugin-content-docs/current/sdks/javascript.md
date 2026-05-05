@@ -66,15 +66,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -162,84 +162,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## ოფლაინ შეღავათები და განაჩენის მეტამონაცემები
+## Offline V2 readiness
 
-ოფლაინ შემწეობის პასუხები ავლენს გამდიდრებულ წიგნში მეტამონაცემებს -
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex` და `remaining_amount` ბრუნდება ნედლეულთან ერთად
-ჩაწერეთ ისე, რომ დაფებს არ დასჭირდეთ ჩაშენებული Norito დატვირთვის გაშიფვრა. ახალი
-ათვლის დამხმარეები (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) მონიშნეთ შემდეგი ვადა (განახლება → პოლიტიკა
-→ სერთიფიკატი) ასე რომ, UI სამკერდე ნიშნებს შეუძლიათ გააფრთხილონ ოპერატორები, როცა შემწეობა აქვს
-<24 საათი დარჩა. SDK
-ასახავს `/v1/offline/allowances`-ის მიერ გამოვლენილ REST ფილტრებს:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` და
-`requireVerdict` / `onlyMissingVerdict` ლოგინები. არასწორი კომბინაციები (ამისთვის
-მაგალითად `onlyMissingVerdict` + `verdictIdHex`) ადგილობრივად უარყოფილია Torii-მდე
-ეწოდება.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## ოფლაინ შევსება (გამოცემა + რეგისტრაცია)
-
-გამოიყენეთ შევსების დამხმარეები, როდესაც გსურთ სერთიფიკატის გაცემა და დაუყოვნებლივ
-დაარეგისტრირეთ იგი წიგნში. SDK ამოწმებს გაცემულ და რეგისტრირებულ სერტიფიკატს
-ID-ები ემთხვევა დაბრუნებამდე და პასუხი მოიცავს ორივე დატვირთვას. არსებობს
-არ არის გამოყოფილი შევსების საბოლოო წერტილი; დამხმარე აკავშირებს საკითხს + დაარეგისტრირებს ზარებს. თუ
-თქვენ უკვე გაქვთ ხელმოწერილი სერთიფიკატი, დარეკეთ `registerOfflineAllowance` (ან
-`renewOfflineAllowance`) პირდაპირ.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii მოთხოვნები და ნაკადი (WebSockets)
 
 შეკითხვის დამხმარეები აჩვენებენ სტატუსს, Prometheus მეტრიკას, ტელემეტრიის კადრებს და მოვლენას
@@ -274,7 +221,7 @@ Explorer ტელემეტრია უზრუნველყოფს ა
 `/v1/explorer/accounts/{account_id}/qr` ბოლო წერტილებია, რათა დაფამ შეძლოს მისი ხელახლა დაკვრა
 იგივე კადრები, რომლებიც აძლიერებენ პორტალს. `getExplorerMetrics()` ახდენს ნორმალიზებას
 დატვირთვა და აბრუნებს `null`, როდესაც მარშრუტი გამორთულია. დააწყვილეთ იგი
-`getExplorerAccountQr()` როცა დაგჭირდებათ I105 (სასურველია)/სორა (მეორე საუკეთესო) ლიტერალები პლუს ინლაინ
+`getExplorerAccountQr()` როცა დაგჭირდებათ i105 (სასურველია)/სორა (მეორე საუკეთესო) ლიტერალები პლუს ინლაინ
 SVG გაზიარების ღილაკებისთვის.
 
 ```ts
@@ -289,7 +236,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -297,8 +244,8 @@ console.log(
 );
 ```
 
-`I105`-ის გავლა ასახავს Explorer-ის ნაგულისხმევ შეკუმშვას
-სელექტორები; გამოტოვეთ უგულებელყოფა სასურველი I105 გამომავალისთვის ან მოითხოვეთ `i105_qr`
+`i105`-ის გავლა ასახავს Explorer-ის ნაგულისხმევ შეკუმშვას
+სელექტორები; გამოტოვეთ უგულებელყოფა სასურველი i105 გამომავალისთვის ან მოითხოვეთ `i105_qr`
 როცა გჭირდებათ QR-უსაფრთხო ვარიანტი. შეკუმშული ლიტერალი მეორე საუკეთესოა
 მხოლოდ Sora-ის ვარიანტი UX-ისთვის. დამხმარე ყოველთვის აბრუნებს კანონიკურ იდენტიფიკატორს,
 არჩეული ლიტერალი და მეტამონაცემები (ქსელის პრეფიქსი, QR ვერსია/მოდულები, შეცდომა
@@ -517,7 +464,7 @@ Space Directory API-ები ასახავს უნივერსალ�
   აქტივების ქონების დაჯგუფება კანონიკური ანგარიშის ID-ების მიხედვით; გაფილტრეთ `assetId`
   პორტფელი ერთ აქტივამდე.
 - `getUaidBindings(uaid)` ჩამოთვლის ყველა მონაცემთა სივრცეს ↔ ანგარიშს
-  სავალდებულო (`I105` აბრუნებს `i105` ლიტერალებს).
+  სავალდებულო (`i105` აბრუნებს `i105` ლიტერალებს).
 - `getUaidManifests(uaid, { dataspaceId })` აბრუნებს თითოეულ შესაძლებლობის მანიფესტს,
   სასიცოცხლო ციკლის სტატუსი და შეკრული ანგარიშები აუდიტისთვის.ოპერატორის მტკიცებულების პაკეტებისთვის, მანიფესტის გამოქვეყნება/გაუქმება ნაკადები და SDK მიგრაცია
 მითითებები, მიჰყევით უნივერსალური ანგარიშის სახელმძღვანელოს (`docs/source/universal_accounts_guide.md`)
@@ -560,7 +507,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -570,7 +517,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

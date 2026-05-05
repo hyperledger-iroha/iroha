@@ -46,8 +46,8 @@ fn sample_descriptor() -> AxtDescriptor {
 
 #[test]
 fn tlv_account_id_structure() {
-    // "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"
-    let payload = b"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    // "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+    let payload = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".as_bytes();
     let tlv = make_tlv(0x0001, 1, payload);
     // type, version, len, payload, hash
     assert_eq!(tlv.len(), 2 + 1 + 4 + payload.len() + 32);
@@ -77,7 +77,7 @@ fn tlv_account_id_structure() {
 
 #[test]
 fn tlv_assetdef_structure() {
-    let payload = b"rose#wonderland";
+    let payload = b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let tlv = make_tlv(0x0002, 1, payload);
     assert_eq!(u16::from_be_bytes(tlv[0..2].try_into().unwrap()), 0x0002);
     assert_eq!(
@@ -194,7 +194,7 @@ fn tlv_asset_handle_roundtrip() {
     let handle = AssetHandle {
         scope: vec!["transfer".into(), "withdraw".into()],
         subject: HandleSubject {
-            account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             origin_dsid: Some(DataSpaceId::new(5)),
         },
         budget: HandleBudget {

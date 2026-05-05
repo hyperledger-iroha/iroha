@@ -1,8 +1,10 @@
 package org.hyperledger.iroha.android.governance;
 
 import java.math.BigInteger;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.model.instructions.CastPlainBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.CastZkBallotInstruction;
 import org.hyperledger.iroha.android.model.instructions.EnactReferendumInstruction;
@@ -18,8 +20,10 @@ public final class GovernanceInstructionBuilderTests {
 
   public static void main(final String[] args) {
     proposeDeployContractRoundTrip();
+    proposeDeployContractFromArgumentsRoundTrip();
+    proposeDeployContractRejectsAmbiguousTarget();
     castZkBallotRoundTrip();
-    castZkBallotRejectsDeprecatedPublicInputs();
+    castZkBallotRejectsUnsupportedPublicInputs();
     castZkBallotNormalizesPublicInputs();
     castZkBallotFromArgumentsNormalizesPublicInputs();
     castZkBallotRejectsIncompleteLockHints();
@@ -29,14 +33,14 @@ public final class GovernanceInstructionBuilderTests {
     enactReferendumRoundTrip();
     finalizeReferendumRoundTrip();
     persistCouncilRoundTrip();
+    persistCouncilRejectsNonVrfDerivation();
     System.out.println("[IrohaAndroid] GovernanceInstructionBuilderTests passed.");
   }
 
   private static void proposeDeployContractRoundTrip() {
     final ProposeDeployContractInstruction instruction =
         ProposeDeployContractInstruction.builder()
-            .setNamespace("apps")
-            .setContractId("demo.contract")
+            .setContractAlias("router::universal")
             .setCodeHashHex("a0".repeat(32))
             .setAbiHashHex("b1".repeat(32))
             .setAbiVersion("1")
@@ -44,12 +48,49 @@ public final class GovernanceInstructionBuilderTests {
             .setVotingMode(GovernanceInstructionUtils.VotingMode.PLAIN)
             .build();
     final Map<String, String> args = instruction.toArguments();
-    assert "apps".equals(args.get("namespace")) : "namespace mismatch";
+    assert "router::universal".equals(args.get("contract_alias")) : "contract_alias mismatch";
     assert "Plain".equals(args.get("mode")) : "mode mismatch";
-    assert "demo.contract".equals(instruction.contractId()) : "contract id mismatch";
+    assert "router::universal".equals(instruction.contractAlias()) : "contract alias mismatch";
+    assert instruction.contractAddress() == null : "contract address should be absent";
     assert instruction.window() != null : "window missing";
     assert instruction.window().lower() == 10 : "window lower mismatch";
     assert instruction.votingMode() == GovernanceInstructionUtils.VotingMode.PLAIN : "mode mismatch";
+  }
+
+  private static void proposeDeployContractFromArgumentsRoundTrip() {
+    final Map<String, String> args = new java.util.LinkedHashMap<>();
+    args.put("action", "ProposeDeployContract");
+    args.put(
+        "contract_address",
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7");
+    args.put("code_hash_hex", "a2".repeat(32));
+    args.put("abi_hash_hex", "b3".repeat(32));
+    args.put("abi_version", "1");
+
+    final ProposeDeployContractInstruction instruction =
+        ProposeDeployContractInstruction.fromArguments(args);
+
+    assert instruction.contractAlias() == null : "contract alias should be absent";
+    assert "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        .equals(instruction.contractAddress()) : "contract address mismatch";
+    assert instruction.toArguments().equals(args) : "arguments should round-trip";
+  }
+
+  private static void proposeDeployContractRejectsAmbiguousTarget() {
+    boolean failed = false;
+    try {
+      ProposeDeployContractInstruction.builder()
+          .setContractAlias("router::universal")
+          .setContractAddress(
+              "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7")
+          .setCodeHashHex("a4".repeat(32))
+          .setAbiHashHex("b5".repeat(32))
+          .setAbiVersion("1")
+          .build();
+    } catch (final IllegalStateException ex) {
+      failed = ex.getMessage().contains("Exactly one");
+    }
+    assert failed : "expected ambiguous selector rejection";
   }
 
   private static void castZkBallotRoundTrip() {
@@ -63,7 +104,7 @@ public final class GovernanceInstructionBuilderTests {
     assert "AQID".equals(instruction.proofBase64()) : "proof mismatch";
   }
 
-  private static void castZkBallotRejectsDeprecatedPublicInputs() {
+  private static void castZkBallotRejectsUnsupportedPublicInputs() {
     final String rootHint = "0x" + "Aa".repeat(32);
     final String nullifier = "blake2b32:" + "BB".repeat(32);
     boolean failed = false;
@@ -72,7 +113,7 @@ public final class GovernanceInstructionBuilderTests {
           .setElectionId("election-2")
           .setProofBase64("AQID")
           .setPublicInputsJson(
-              "{\"durationBlocks\":64,\"owner\":\"alice@wonderland\",\"amount\":\"100\","
+              "{\"durationBlocks\":64,\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\",\"amount\":\"100\","
                   + "\"rootHintHex\":\""
                   + rootHint
                   + "\",\"nullifierHex\":\""
@@ -82,7 +123,7 @@ public final class GovernanceInstructionBuilderTests {
     } catch (final IllegalArgumentException ex) {
       failed = ex.getMessage().contains("durationBlocks");
     }
-    assert failed : "expected deprecated alias rejection";
+    assert failed : "expected unsupported alias rejection";
   }
 
   private static void castZkBallotNormalizesPublicInputs() {
@@ -93,7 +134,7 @@ public final class GovernanceInstructionBuilderTests {
             .setElectionId("election-2b")
             .setProofBase64("AQID")
             .setPublicInputsJson(
-                "{\"owner\":\"alice@wonderland\",\"amount\":\"100\",\"duration_blocks\":64,"
+                "{\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\",\"amount\":\"100\",\"duration_blocks\":64,"
                     + "\"root_hint\":\""
                     + rootHint
                     + "\",\"nullifier\":\""
@@ -116,7 +157,7 @@ public final class GovernanceInstructionBuilderTests {
     args.put("proof_b64", "AQID");
     args.put(
         "public_inputs_json",
-        "{\"duration_blocks\":12,\"owner\":\"alice@wonderland\",\"amount\":\"100\","
+        "{\"duration_blocks\":12,\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\",\"amount\":\"100\","
             + "\"root_hint\":\"0x"
             + "Aa".repeat(32)
             + "\"}");
@@ -134,7 +175,7 @@ public final class GovernanceInstructionBuilderTests {
       CastZkBallotInstruction.builder()
           .setElectionId("election-3")
           .setProofBase64("AQID")
-          .setPublicInputsJson("{\"owner\":\"alice@wonderland\"}")
+          .setPublicInputsJson("{\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"}")
           .build();
     } catch (final IllegalArgumentException ex) {
       failed = ex.getMessage().contains("lock hints");
@@ -163,7 +204,7 @@ public final class GovernanceInstructionBuilderTests {
           .setElectionId("election-5")
           .setProofBase64("AQID")
           .setPublicInputsJson(
-              "{\"owner\":\"alice@wonderland\",\"amount\":\"100\",\"duration_blocks\":5,"
+              "{\"owner\":\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\",\"amount\":\"100\",\"duration_blocks\":5,"
                   + "\"root_hint\":\"not-hex\"}")
           .build();
     } catch (final IllegalArgumentException ex) {
@@ -173,15 +214,17 @@ public final class GovernanceInstructionBuilderTests {
   }
 
   private static void castPlainBallotRoundTrip() {
+    final String ownerAccountId = sampleI105(0x11);
     final CastPlainBallotInstruction instruction =
         CastPlainBallotInstruction.builder()
             .setReferendumId("ref-42")
-            .setOwnerAccountId("alice@sora")
+            .setOwnerAccountId(ownerAccountId)
             .setAmount(new BigInteger("125000"))
             .setDurationBlocks(512)
             .setDirection(1)
             .build();
     assert "ref-42".equals(instruction.referendumId()) : "referendum id mismatch";
+    assert ownerAccountId.equals(instruction.ownerAccountId()) : "owner mismatch";
     assert "125000".equals(instruction.amount()) : "amount mismatch";
     assert instruction.direction() == 1 : "direction mismatch";
   }
@@ -208,21 +251,45 @@ public final class GovernanceInstructionBuilderTests {
   }
 
   private static void persistCouncilRoundTrip() {
+    final String memberA = sampleI105(0x21);
+    final String memberB = sampleI105(0x22);
+    final String alternate = sampleI105(0x23);
     final PersistCouncilForEpochInstruction instruction =
         PersistCouncilForEpochInstruction.builder()
             .setEpoch(99)
-            .addMember("alice@sora")
-            .addMember("bob@sora")
-            .addAlternate("carol@sora")
+            .addMember(memberA)
+            .addMember(memberB)
+            .addAlternate(alternate)
             .setCandidatesCount(5)
             .setVerified(2)
             .setDerivedBy(GovernanceInstructionUtils.CouncilDerivationKind.VRF)
             .build();
-    assert instruction.members().equals(List.of("alice@sora", "bob@sora")) : "members mismatch";
-    assert instruction.alternates().equals(List.of("carol@sora")) : "alternates mismatch";
+    assert instruction.members().equals(List.of(memberA, memberB)) : "members mismatch";
+    assert instruction.alternates().equals(List.of(alternate)) : "alternates mismatch";
     assert instruction.candidatesCount() == 5 : "candidates mismatch";
     assert instruction.verified() == 2 : "verified mismatch";
     assert instruction.derivedBy() == GovernanceInstructionUtils.CouncilDerivationKind.VRF
         : "derived_by mismatch";
+  }
+
+  private static void persistCouncilRejectsNonVrfDerivation() {
+    boolean failed = false;
+    try {
+      GovernanceInstructionUtils.CouncilDerivationKind.parse("manual");
+    } catch (final IllegalArgumentException expected) {
+      failed = true;
+    }
+    assert failed : "non-VRF council derivation must be rejected";
+  }
+
+  private static String sampleI105(final int fill) {
+    try {
+      final byte[] publicKey = new byte[32];
+      Arrays.fill(publicKey, (byte) fill);
+      return AccountAddress.fromAccount(publicKey, "ed25519")
+          .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    } catch (final Exception ex) {
+      throw new IllegalStateException("failed to build canonical account fixture", ex);
+    }
   }
 }

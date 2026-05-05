@@ -108,17 +108,17 @@ Struct ReservedAssignmentRequestV1 {
 
 |エンドポイント |メトーデ |ペイロード |説明 |
 |----------|-----------|-----------|---------------|
-| `/v1/sns/registrations` |投稿 | `RegisterNameRequestV1` |登録者は名前を付けてください。優先順位の決定、支払い/統治の有効性、登録上のイベントの有効性。 |
-| `/v1/sns/registrations/{selector}/renew` |投稿 | `RenewNameRequestV1` |期間を延長します。レ・フェネトル・ド・グレース/償還デピュイ・ラ・ポリティックのアップリケ。 |
-| `/v1/sns/registrations/{selector}/transfer` |投稿 | `TransferNameRequestV1` |統治権の承認を譲渡します。 |
-| `/v1/sns/registrations/{selector}/controllers` |置く | `UpdateControllersRequestV1` |コントローラーのアンサンブルを置き換えます。有効な住所録署名者。 |
-| `/v1/sns/registrations/{selector}/freeze` |投稿 | `FreezeNameRequestV1` |ガーディアン/評議会を凍結します。 Exige とチケット保護者および管理書類の参照。 |
-| `/v1/sns/registrations/{selector}/freeze` |削除 | `GovernanceHookV1` |修復後に凍結を解除します。議会の登録を無効にすることを保証します。 |
+| `/v1/sns/names` |投稿 | `RegisterNameRequestV1` |登録者は名前を付けてください。優先順位の決定、支払い/統治の有効性、登録上のイベントの有効性。 |
+| `/v1/sns/names/{namespace}/{literal}/renew` |投稿 | `RenewNameRequestV1` |期間を延長します。レ・フェネトル・ド・グレース/償還デピュイ・ラ・ポリティックのアップリケ。 |
+| `/v1/sns/names/{namespace}/{literal}/transfer` |投稿 | `TransferNameRequestV1` |統治権の承認を譲渡します。 |
+| `/v1/sns/names/{namespace}/{literal}/controllers` |置く | `UpdateControllersRequestV1` |コントローラーのアンサンブルを置き換えます。有効な住所録署名者。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |投稿 | `FreezeNameRequestV1` |ガーディアン/評議会を凍結します。 Exige とチケット保護者および管理書類の参照。 |
+| `/v1/sns/names/{namespace}/{literal}/freeze` |削除 | `GovernanceHookV1` |修復後に凍結を解除します。議会の登録を無効にすることを保証します。 |
 | `/v1/sns/reserved/{selector}` |投稿 | `ReservedAssignmentRequestV1` |愛情の名前は、スチュワード/評議会の権限を留保します。 |
 | `/v1/sns/policies/{suffix_id}` |入手 | -- | Recupere le `SuffixPolicyV1` クーラント (キャッシュ可能)。 |
-| `/v1/sns/registrations/{selector}` |入手 | -- | Retourne le `NameRecordV1` courant + etat 効果 (アクティブ、グレースなど)。 |
+| `/v1/sns/names/{namespace}/{literal}` |入手 | -- | Retourne le `NameRecordV1` courant + etat 効果 (アクティブ、グレースなど)。 |
 
-**セレクターのエンコード:** ファイル セグメント `{selector}` は I105 を受け入れ、圧縮し、16 進数の正規セロン ADDR-5 を受け入れます。 Torii ファイルは、`NameSelectorV1` によって正規化されます。
+**セレクターのエンコード:** ファイル セグメント `{selector}` は i105 を受け入れ、圧縮し、16 進数の正規セロン ADDR-5 を受け入れます。 Torii ファイルは、`NameSelectorV1` によって正規化されます。
 
 **エラーのモデル:** エンドポイントの戻り値 Norito JSON 平均 `code`、`message`、`details`。コードには `sns_err_reserved`、`sns_err_payment_mismatch`、`sns_err_policy_violation`、`sns_err_governance_missing` が含まれます。
 
@@ -131,7 +131,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -156,7 +156,7 @@ Des aidesSupplementaires couvrent les renouvellements、転送およびアクシ
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -164,7 +164,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -177,7 +177,7 @@ iroha sns freeze \
 iroha sns unfreeze \
   --selector makoto.sora \
   --governance-json /path/to/unfreeze_hook.json
-````--governance-json` 登録の内容を実行します。 `GovernanceHookV1` 有効です (提案 ID、投票ハッシュ、署名スチュワード/保護者)。エンドポイント `/v1/sns/registrations/{selector}/...` の対応者は、ベータ版のレピーターの正確な表面のオペレーターを注ぎ、Torii SDK の申し立てを行います。
+````--governance-json` 登録の内容を実行します。 `GovernanceHookV1` 有効です (提案 ID、投票ハッシュ、署名スチュワード/保護者)。エンドポイント `/v1/sns/names/{namespace}/{literal}/...` の対応者は、ベータ版のレピーターの正確な表面のオペレーターを注ぎ、Torii SDK の申し立てを行います。
 
 ## 4. サービス gRPC
 
@@ -224,7 +224,7 @@ Les controles en echec renvoient `sns_err_governance_missing`。
 
 1. クライアントの質問 `/v1/sns/policies/{suffix_id}` は、優先順位の高い回復者と、責任のあるレベルの回復者を求めます。
 2. クライアントは `RegisterNameRequestV1` を構成します:
-   - `selector` は、ラベル I105 (優先) または圧縮 (2 番目の選択) を取得します。
+   - `selector` は、ラベル i105 (優先) または圧縮 (2 番目の選択) を取得します。
    - `term_years` 政治の限界。
    - `payment` スプリッタ トレゾレリー/スチュワードの転送参照。
 3. Torii 有効:
@@ -249,7 +249,7 @@ Les renouvellements ペンダント ラ グレース インクルエント ラ �
 
 1. ガーディアン スーメット `FreezeNameRequestV1` avec un ticket Referencant l'id d'incident。
 2. Torii は、`NameStatus::Frozen` のファイル レコードを置き換え、`NameFrozen` を置き換えます。
-3. 是正後、議会は優先を解除する。特使 DELETE `/v1/sns/registrations/{selector}/freeze` avec `GovernanceHookV1`。
+3. 是正後、議会は優先を解除する。特使 DELETE `/v1/sns/names/{namespace}/{literal}/freeze` avec `GovernanceHookV1`。
 4. Torii はオーバーライドを有効にし、`NameUnfrozen` を満たします。
 
 ## 7. 検証とエラーコード

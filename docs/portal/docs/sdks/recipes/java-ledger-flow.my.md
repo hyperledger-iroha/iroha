@@ -29,7 +29,7 @@ translator: machine-google-reviewed
 ## 1. ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက် (CLI) ကို မှတ်ပုံတင်ပါ။
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. အထောက်အထားများကို ထုတ်ယူပါ။
@@ -37,8 +37,8 @@ iroha --config defaults/client.toml asset definition register --id coffee#wonder
 ```bash
 # raw 32-byte Ed25519 private key in hex (without multicodec prefix)
 export ADMIN_PRIVATE_KEY_RAW="4f94...<64 hex chars>..."
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 > သင်ဆိုလျှင် `iroha_cli tools crypto private-key export --raw --private-key <multihash>` ကိုသုံးပါ။

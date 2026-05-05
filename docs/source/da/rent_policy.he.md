@@ -94,7 +94,7 @@ egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
 
 ### הפקת תוכניות פנקס שכר דירה
 
-הפעל את `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+הפעל את `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc`
 להמיר הצעת מחיר שכר דירה מתמשכת להעברות פנקס חשבונות ניתנות לביצוע. הפקודה
 מנתח את `ledger_projection` המוטבע, פולט הוראות Norito `Transfer`
 שגובים את דמי השכירות הבסיסיים לאוצר, מנתבים את השמורה/ספק

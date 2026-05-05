@@ -69,11 +69,11 @@ public final class UaidJsonParser {
           assets.add(
               new UaidPortfolioAsset(
                   asString(
-                      asset.get("asset_id"),
-                      "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].asset_id"),
+                      asset.get("asset"),
+                      "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].asset"),
                   asString(
-                      asset.get("asset_definition_id"),
-                      "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].asset_definition_id"),
+                      asset.get("scope"),
+                      "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].scope"),
                   asString(
                       asset.get("quantity"),
                       "uaid portfolio.dataspaces[" + i + "].accounts[" + j + "].assets[" + k + "].quantity")));

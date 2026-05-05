@@ -156,6 +156,105 @@ mod tests {
     }
 
     #[test]
+    fn domain_accessors_preserve_namespace_and_label() {
+        let custom = HkdfDomain::new("custom-namespace", "custom-label");
+        assert_eq!(custom.namespace(), "custom-namespace");
+        assert_eq!(custom.label(), "custom-label");
+
+        let soranet = HkdfDomain::soranet("KEM/2");
+        assert_eq!(soranet.namespace(), "soranet/pq");
+        assert_eq!(soranet.label(), "KEM/2");
+    }
+
+    #[test]
+    fn zero_length_output_is_allowed() {
+        let okm = derive_labeled_hkdf(
+            HkdfSuite::Sha3_256,
+            Some(&SALT),
+            &IKM,
+            HkdfDomain::soranet("empty-okm"),
+            b"context",
+            0,
+        )
+        .unwrap();
+
+        assert!(okm.is_empty());
+    }
+
+    #[test]
+    fn invalid_length_is_reported() {
+        let err = derive_labeled_hkdf(
+            HkdfSuite::Sha3_256,
+            Some(&SALT),
+            &IKM,
+            HkdfDomain::soranet("too-long-okm"),
+            b"context",
+            (255 * 32) + 1,
+        )
+        .expect_err("HKDF-SHA3-256 output is limited to 255 hash blocks");
+
+        assert!(err.to_string().contains("too large output"));
+    }
+
+    #[test]
+    fn salt_and_context_are_domain_separating() {
+        let base = derive_labeled_hkdf(
+            HkdfSuite::Sha3_512,
+            Some(&SALT),
+            &IKM,
+            HkdfDomain::soranet("KEM/final"),
+            b"context-a",
+            64,
+        )
+        .unwrap();
+        let different_context = derive_labeled_hkdf(
+            HkdfSuite::Sha3_512,
+            Some(&SALT),
+            &IKM,
+            HkdfDomain::soranet("KEM/final"),
+            b"context-b",
+            64,
+        )
+        .unwrap();
+        let different_salt = derive_labeled_hkdf(
+            HkdfSuite::Sha3_512,
+            Some(b"different salt"),
+            &IKM,
+            HkdfDomain::soranet("KEM/final"),
+            b"context-a",
+            64,
+        )
+        .unwrap();
+
+        assert_ne!(base.as_slice(), different_context.as_slice());
+        assert_ne!(base.as_slice(), different_salt.as_slice());
+    }
+
+    #[test]
+    fn hkdf_suite_choice_is_domain_separating() {
+        let sha3_256 = derive_labeled_hkdf(
+            HkdfSuite::Sha3_256,
+            Some(&SALT),
+            &IKM,
+            HkdfDomain::soranet("suite-choice"),
+            b"context",
+            32,
+        )
+        .unwrap();
+        let sha3_512 = derive_labeled_hkdf(
+            HkdfSuite::Sha3_512,
+            Some(&SALT),
+            &IKM,
+            HkdfDomain::soranet("suite-choice"),
+            b"context",
+            32,
+        )
+        .unwrap();
+
+        assert_ne!(sha3_256.as_slice(), sha3_512.as_slice());
+    }
+
+    #[test]
     fn derive_is_deterministic() {
         let first = derive_labeled_hkdf(
             HkdfSuite::Sha3_256,

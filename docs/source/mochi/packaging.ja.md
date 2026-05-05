@@ -59,7 +59,7 @@ cargo xtask mochi-bundle
 - `--stage <path>` – 完成バンドル（および生成されたアーカイブ）を staging
   ディレクトリへコピーし、マルチプラットフォームビルドの成果物集約に使う。
 
-このコマンドは `mochi-ui-egui`, `kagami`, `LICENSE`, サンプル設定、
+このコマンドは `mochi-ui`, `kagami`, `LICENSE`, サンプル設定、
 `mochi/BUNDLE_README.md` をバンドルへコピーする。バイナリ横に
 決定論的な `manifest.json` が生成され、CI ジョブはファイルハッシュと
 サイズを追跡できる。

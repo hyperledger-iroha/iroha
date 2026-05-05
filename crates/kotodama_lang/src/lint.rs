@@ -16,6 +16,7 @@ use iroha_data_model::{
 };
 
 use super::ast::{Block, Expr, Item, Pattern, Program, Statement};
+use crate::builtins::Builtin;
 use crate::i18n::{self, Language, Message as I18nMessage, StateShadowContext};
 use crate::pointer_abi::{self, PointerType};
 
@@ -26,12 +27,77 @@ pub struct LintWarning {
     pub code: &'static str,
     /// Structured, localizable lint message data.
     pub message: LintMessage,
+    /// Machine-readable severity for CLI/editor integrations.
+    pub severity: LintSeverity,
+    /// Broad lint family for coarse filtering.
+    pub category: LintCategory,
+    /// Optional source span for inline editor surfacing.
+    pub source: Option<LintSourceSpan>,
 }
 
 impl LintWarning {
+    fn new(code: &'static str, message: LintMessage) -> Self {
+        Self {
+            code,
+            message,
+            severity: LintSeverity::Warning,
+            category: lint_category(code),
+            source: None,
+        }
+    }
+
     /// Render the lint message in the requested language.
     pub fn localized_message(&self, lang: Language) -> String {
         self.message.translate(lang)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LintSeverity {
+    Warning,
+}
+
+impl LintSeverity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Warning => "warning",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LintCategory {
+    Correctness,
+    AccessHints,
+    PointerAbi,
+    Triggers,
+}
+
+impl LintCategory {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Correctness => "correctness",
+            Self::AccessHints => "access-hints",
+            Self::PointerAbi => "pointer-abi",
+            Self::Triggers => "triggers",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LintSourceSpan {
+    pub line: usize,
+    pub column: usize,
+}
+
+fn lint_category(code: &str) -> LintCategory {
+    match code {
+        "nonliteral-state-path" | "opaque-access-hints" | "nonliteral-state-map-key" => {
+            LintCategory::AccessHints
+        }
+        "duplicate-pointer-literal" | "unused-pointer-constructor" => LintCategory::PointerAbi,
+        "nonliteral-trigger-spec" => LintCategory::Triggers,
+        _ => LintCategory::Correctness,
     }
 }
 
@@ -114,6 +180,13 @@ pub fn lint_program(program: &Program) -> Vec<LintWarning> {
 const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     "register_asset",
     "create_new_asset",
+    "escrow_open_offer",
+    "escrow_accept",
+    "escrow_mark_payment_sent",
+    "escrow_release",
+    "escrow_cancel",
+    "escrow_open_dispute",
+    "escrow_resolve_dispute",
     "transfer_domain",
     "register_peer",
     "unregister_peer",
@@ -122,6 +195,7 @@ const OPAQUE_ACCESS_HINT_CALLS: &[&str] = &[
     "sc_execute_unshield",
     "subscription_bill",
     "subscription_record_usage",
+    "resolve_account_alias",
     "build_submit_ballot_inline",
     "build_unshield_inline",
     "axt_begin",
@@ -325,14 +399,14 @@ fn lint_state_path_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
                 && let Some(path) = args.first()
                 && !is_literal_state_path(path)
             {
-                warnings.push(LintWarning {
-                    code: "nonliteral-state-path",
-                    message: LintMessage::Custom {
+                warnings.push(LintWarning::new(
+                    "nonliteral-state-path",
+                    LintMessage::Custom {
                         message: format!(
                             "{name} uses a non-literal path; access hints will be skipped"
                         ),
                     },
-                });
+                ));
             }
             for arg in args {
                 lint_state_path_expr(arg, warnings);
@@ -454,14 +528,14 @@ fn lint_opaque_access_expr(expr: &Expr, warnings: &mut Vec<LintWarning>) {
                 OPAQUE_ACCESS_HINT_CALLS.contains(&name.as_str())
             };
             if warn {
-                warnings.push(LintWarning {
-                    code: "opaque-access-hints",
-                    message: LintMessage::Custom {
+                warnings.push(LintWarning::new(
+                    "opaque-access-hints",
+                    LintMessage::Custom {
                         message: format!(
                             "call to `{name}` uses opaque host access; access hints will fall back to conservative wildcard keys"
                         ),
                     },
-                });
+                ));
             }
             for arg in args {
                 lint_opaque_access_expr(arg, warnings);
@@ -572,14 +646,14 @@ fn lint_expr_map_keys(expr: &Expr, state_maps: &HashSet<String>, warnings: &mut 
                 && state_maps.contains(name)
                 && !is_literal_state_key(index)
             {
-                warnings.push(LintWarning {
-                    code: "nonliteral-state-map-key",
-                    message: LintMessage::Custom {
+                warnings.push(LintWarning::new(
+                    "nonliteral-state-map-key",
+                    LintMessage::Custom {
                         message: format!(
                             "state map `{name}` uses a non-literal key; access hints will be skipped"
                         ),
                     },
-                });
+                ));
             }
             lint_expr_map_keys(target, state_maps, warnings);
             lint_expr_map_keys(index, state_maps, warnings);
@@ -647,22 +721,17 @@ fn is_literal_state_key(expr: &Expr) -> bool {
 fn is_literal_state_path(expr: &Expr) -> bool {
     match expr {
         Expr::String(_) | Expr::Bytes(_) => true,
-        Expr::Call { name, args } => match name.as_str() {
-            "name" => {
+        Expr::Call { name, args } => match Builtin::from_name(name) {
+            None if name == "name" => {
                 args.len() == 1
                     && matches!(args.first(), Some(Expr::String(_)) | Some(Expr::Bytes(_)))
             }
-            "path_map_key" => {
+            Some(Builtin::Path) => {
                 if args.len() != 2 {
                     return false;
                 }
-                is_literal_state_path(&args[0]) && matches!(args[1], Expr::Number(_))
-            }
-            "path_map_key_norito" => {
-                if args.len() != 2 {
-                    return false;
-                }
-                is_literal_state_path(&args[0]) && is_literal_state_key(&args[1])
+                is_literal_state_path(&args[0])
+                    && (matches!(args[1], Expr::Number(_)) || is_literal_state_key(&args[1]))
             }
             _ => false,
         },
@@ -765,10 +834,10 @@ fn lint_unused_state(program: &Program, warnings: &mut Vec<LintWarning>) {
     }
     for name in state_names {
         if !used.contains(&name) {
-            warnings.push(LintWarning {
-                code: "unused-state",
-                message: LintMessage::UnusedState { name },
-            });
+            warnings.push(LintWarning::new(
+                "unused-state",
+                LintMessage::UnusedState { name },
+            ));
         }
     }
 }
@@ -791,14 +860,14 @@ fn lint_state_shadowing(program: &Program, warnings: &mut Vec<LintWarning>) {
             for param in &func.params {
                 let name = &param.name;
                 if state_names.contains(name) && !name.starts_with('_') {
-                    warnings.push(LintWarning {
-                        code: "state-shadowed",
-                        message: LintMessage::StateShadowed {
+                    warnings.push(LintWarning::new(
+                        "state-shadowed",
+                        LintMessage::StateShadowed {
                             func: func.name.clone(),
                             name: name.clone(),
                             context: StateShadowContext::Parameter,
                         },
-                    });
+                    ));
                 }
             }
             lint_statement_shadowing_block(&func.body, &state_names, warnings, &func.name);
@@ -829,14 +898,14 @@ fn lint_statement_state_shadowing(
             collect_pattern_names(pat, &mut bound_names);
             for name in bound_names {
                 if state_names.contains(name) && !name.starts_with('_') {
-                    warnings.push(LintWarning {
-                        code: "state-shadowed",
-                        message: LintMessage::StateShadowed {
+                    warnings.push(LintWarning::new(
+                        "state-shadowed",
+                        LintMessage::StateShadowed {
                             func: func_name.to_owned(),
                             name: name.to_owned(),
                             context: StateShadowContext::Binding,
                         },
-                    });
+                    ));
                 }
             }
         }
@@ -874,27 +943,27 @@ fn lint_statement_state_shadowing(
             key, value, body, ..
         } => {
             if state_names.contains(key) && !key.starts_with('_') {
-                warnings.push(LintWarning {
-                    code: "state-shadowed",
-                    message: LintMessage::StateShadowed {
+                warnings.push(LintWarning::new(
+                    "state-shadowed",
+                    LintMessage::StateShadowed {
                         func: func_name.to_owned(),
                         name: key.clone(),
                         context: StateShadowContext::MapBinding,
                     },
-                });
+                ));
             }
             if let Some(value_name) = value
                 && state_names.contains(value_name)
                 && !value_name.starts_with('_')
             {
-                warnings.push(LintWarning {
-                    code: "state-shadowed",
-                    message: LintMessage::StateShadowed {
+                warnings.push(LintWarning::new(
+                    "state-shadowed",
+                    LintMessage::StateShadowed {
                         func: func_name.to_owned(),
                         name: value_name.clone(),
                         context: StateShadowContext::MapBinding,
                     },
-                });
+                ));
             }
             lint_statement_shadowing_block(body, state_names, warnings, func_name);
         }
@@ -992,13 +1061,13 @@ fn lint_unused_parameters(program: &Program, warnings: &mut Vec<LintWarning>) {
             }
             for name in param_names {
                 if !used.contains(&name) {
-                    warnings.push(LintWarning {
-                        code: "unused-parameter",
-                        message: LintMessage::UnusedParameter {
+                    warnings.push(LintWarning::new(
+                        "unused-parameter",
+                        LintMessage::UnusedParameter {
                             func: func.name.clone(),
                             name,
                         },
-                    });
+                    ));
                 }
             }
         }
@@ -1014,12 +1083,12 @@ fn lint_unreachable_after_return(program: &Program, warnings: &mut Vec<LintWarni
                 let mut saw_return = false;
                 for stmt in &block.statements {
                     if saw_return {
-                        warnings.push(LintWarning {
-                            code: "unreachable-return",
-                            message: LintMessage::UnreachableAfterReturn {
+                        warnings.push(LintWarning::new(
+                            "unreachable-return",
+                            LintMessage::UnreachableAfterReturn {
                                 context: context.clone(),
                             },
-                        });
+                        ));
                         break;
                     }
                     match stmt {
@@ -1146,14 +1215,14 @@ fn lint_pointer_constructor_usage(program: &Program, warnings: &mut Vec<LintWarn
 
     for (literal, count) in literal_counts {
         if count > 1 {
-            warnings.push(LintWarning {
-                code: "duplicate-pointer-literal",
-                message: LintMessage::Custom {
+            warnings.push(LintWarning::new(
+                "duplicate-pointer-literal",
+                LintMessage::Custom {
                     message: format!(
                         "literal `{literal}` appears multiple times in pointer constructors; bind it once (for example, `let id = account!(\"{literal}\");`) and reuse the binding"
                     ),
                 },
-            });
+            ));
         }
     }
 }
@@ -1231,14 +1300,14 @@ fn lint_trigger_specs_in_expr(expr: &Expr, func_name: &str, warnings: &mut Vec<L
             if matches!(name.as_str(), "create_trigger" | "register_trigger") {
                 let literal = args.first().is_some_and(is_literal_trigger_spec);
                 if !literal {
-                    warnings.push(LintWarning {
-                        code: "nonliteral-trigger-spec",
-                        message: LintMessage::Custom {
+                    warnings.push(LintWarning::new(
+                        "nonliteral-trigger-spec",
+                        LintMessage::Custom {
                             message: format!(
                                 "trigger spec in `{func_name}` is non-literal; access hints may be skipped (use json!(...) or json(\"...\") for literals)"
                             ),
                         },
-                    });
+                    ));
                 }
             }
             for arg in args {
@@ -1474,14 +1543,14 @@ fn warn_if_unused_pointer_call(
         && constructors.contains(name.as_str())
         && matches!(args.first(), Some(Expr::String(_)))
     {
-        warnings.push(LintWarning {
-            code: "unused-pointer-constructor",
-            message: LintMessage::Custom {
+        warnings.push(LintWarning::new(
+            "unused-pointer-constructor",
+            LintMessage::Custom {
                 message: format!(
                     "result of `{name}` is unused in function `{func_name}`; assign it to a `let` binding or pass it to a syscall"
                 ),
             },
-        });
+        ));
     }
 }
 
@@ -1489,6 +1558,7 @@ fn warn_if_unused_pointer_call(
 mod tests {
     use super::*;
     use crate::{i18n::Language, parser::parse};
+    use iroha_data_model::DomainId;
 
     #[test]
     fn record_expr_idents_collects_only_states() {
@@ -1578,7 +1648,7 @@ mod tests {
     #[test]
     fn lint_duplicate_pointer_literals_warns() {
         let program = parse(
-            "fn main() { let a = account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"); let b = account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"); }",
+            "fn main() { let a = account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); let b = account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); }",
         )
         .unwrap();
         let warnings = lint_program(&program);
@@ -1591,9 +1661,10 @@ mod tests {
 
     #[test]
     fn lint_unused_pointer_constructor_warns() {
-        let program =
-            parse("fn main() { account_id(\"6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn\"); }")
-                .unwrap();
+        let program = parse(
+            "fn main() { account_id(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"); }",
+        )
+        .unwrap();
         let warnings = lint_program(&program);
         assert!(
             warnings
@@ -1706,7 +1777,7 @@ fn main() { subscription_bill(); }"#,
                 .expect("public key"),
         );
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, account);
@@ -1738,7 +1809,7 @@ fn main() { subscription_bill(); }"#,
                 .expect("public key"),
         );
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, account);

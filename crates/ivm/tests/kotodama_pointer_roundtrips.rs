@@ -17,8 +17,8 @@ fn roundtrip_nft_mint_asset() {
     let src = r#"
         fn main() {
           nft_mint_asset(
-            nft_id("rose:uuid:0123$wonderland"),
-            account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            nft_id("rose:uuid:0123$wonderland.universal"),
+            account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
           );
         }
     "#;
@@ -29,7 +29,7 @@ fn roundtrip_nft_mint_asset() {
 fn roundtrip_nft_set_metadata() {
     let src = r#"
         fn main() {
-          nft_set_metadata(nft_id("rose:uuid:ffff$wonderland"), json("{\"meta\":1}"));
+          nft_set_metadata(nft_id("rose:uuid:ffff$wonderland.universal"), json("{\"meta\":1}"));
         }
     "#;
     run_prog(src);
@@ -40,9 +40,9 @@ fn roundtrip_transfer_asset() {
     let src = r#"
         fn main() {
           transfer_asset(
-            account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
-            account_id("6cmzPVPX8dTmJWnCc8X5MpcZLb7UjrvR5Y1VdRmfj9pbb93hFbJfpLb"),
-            asset_definition("rose#wonderland"),
+            account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+            account_id("sorauﾛ1PｦﾔJdﾐww6ﾆfgｾ73xJkｺﾓｺﾀEｿGzQuﾄg3ﾐeﾕｳｶﾒﾚｻY1FC8K"),
+            asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
             1
           );
         }
@@ -54,7 +54,7 @@ fn roundtrip_transfer_asset() {
 fn roundtrip_nft_burn_asset() {
     let src = r#"
         fn main() {
-          nft_burn_asset(nft_id("rose:uuid:bead$wonderland"));
+          nft_burn_asset(nft_id("rose:uuid:bead$wonderland.universal"));
         }
     "#;
     run_prog(src);
@@ -64,9 +64,9 @@ fn roundtrip_nft_burn_asset() {
 fn roundtrip_nft_mint_asset_accepts_runtime_owner() {
     let src = r#"
         fn main() {
-          let owner = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+          let owner = account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
           nft_mint_asset(
-            nft_id("rose:uuid:0123$wonderland"),
+            nft_id("rose:uuid:0123$wonderland.universal"),
             owner
           );
         }
@@ -78,9 +78,9 @@ fn roundtrip_nft_mint_asset_accepts_runtime_owner() {
 fn roundtrip_nft_transfer_asset_accepts_runtime_from() {
     let src = r#"
         fn main() {
-          let from = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
-          let to = account_id("6cmzPVPX8dTmJWnCc8X5MpcZLb7UjrvR5Y1VdRmfj9pbb93hFbJfpLb");
-          let nft = nft_id("rose:uuid:bead$wonderland");
+          let from = account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+          let to = account_id("sorauﾛ1PｦﾔJdﾐww6ﾆfgｾ73xJkｺﾓｺﾀEｿGzQuﾄg3ﾐeﾕｳｶﾒﾚｻY1FC8K");
+          let nft = nft_id("rose:uuid:bead$wonderland.universal");
           nft_transfer_asset(from, nft, to);
         }
     "#;

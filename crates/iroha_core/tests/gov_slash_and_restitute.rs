@@ -29,18 +29,14 @@ fn governance_state_with_accounts(
     escrow_account: &iroha_data_model::account::AccountId,
     slash_account: &iroha_data_model::account::AccountId,
 ) -> State {
-    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(escrow_account);
     let alice_account =
-        iroha_data_model::account::Account::new(ALICE_ID.clone().to_account_id(domain_id.clone()))
-            .build(escrow_account);
-    let escrow = iroha_data_model::account::Account::new(
-        escrow_account.clone().to_account_id(domain_id.clone()),
-    )
-    .build(escrow_account);
+        iroha_data_model::account::Account::new(ALICE_ID.clone()).build(escrow_account);
+    let escrow =
+        iroha_data_model::account::Account::new(escrow_account.clone()).build(escrow_account);
     let slash =
-        iroha_data_model::account::Account::new(slash_account.clone().to_account_id(domain_id))
-            .build(escrow_account);
+        iroha_data_model::account::Account::new(slash_account.clone()).build(escrow_account);
     let asset_def = AssetDefinition::numeric(voting_asset_id.clone()).build(escrow_account);
     // Seed balances: Alice 1_000, escrow 0, slash 0.
     let alice_asset = Asset::new(
@@ -122,7 +118,7 @@ fn seed_slash_snapshot(
 #[allow(clippy::too_many_lines)]
 fn double_vote_slashes_plain_lock() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let (escrow_id, _) = gen_account_in("wonderland");
@@ -238,7 +234,7 @@ fn double_vote_slashes_plain_lock() {
 #[test]
 fn restitution_restores_slashed_balance() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let (escrow_id, _) = gen_account_in("wonderland");

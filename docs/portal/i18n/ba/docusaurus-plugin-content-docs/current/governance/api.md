@@ -2,125 +2,144 @@
 lang: ba
 direction: ltr
 source: docs/portal/docs/governance/api.md
-status: complete
+status: needs-update
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Governance App API — Endpoints (Draft)
 translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+translation_last_reviewed: 2026-04-05
+source_hash: 3983e71384a729b529151c230d8e3bcb570f7f12e8115c084fa74124355eb1c2
+source_last_modified: "2026-04-05T01:47:17.384511+00:00"
 ---
 
-Статус: идара итеүҙе тормошҡа ашырыу бурыстарын оҙатып барыу өсөн/эскиз. Ғәмәлгә ашырыу ваҡытында формалар үҙгәрергә мөмкин. Детерминизм һәм РБАК сәйәсәте норматив сикләүҙәр булып тора; Torii ҡул ҡуя ала/тапшырыу операциялары ҡасан I18NI0000000027X һәм I18NI000000028X, башҡа клиенттар төҙөү һәм тапшырыу I18NI000000029X.
+> Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-Обзор
-- Бөтә ос нөктәләре лә JSON ҡайтара. Транзакциялар етештереү өсөн ағымдар өсөн, яуаптар I18NI0000000030X — бер йәки бер нисә инструкция скелеттарының массивын үҙ эсенә ала:
-  - I18NI000000031X: тип инструкция өсөн реестр идентификаторы
-  - I18NI000000032X: I18NT00000000004X байт (гекс) .
-- Әгәр I18NI000000033X һәм `private_key` (йәки I18NI0000000035X бюллетендәр буйынса I18NI000000035X), I18NT000000011X билдәләре һәм операцияны тапшыра һәм һаман да I18NI000000036X ҡайтара.
-- Юғиһә, клиенттар үҙҙәренең вәкәләттәрен һәм сылбырын ҡулланып SignedTransacion йыя, һуңынан `/transaction`-ға ҡул ҡуйығыҙ һәм POST.
-- СДК ҡаплауы:
-- Python (I18NI0000000038X): I18NI00000000039X ҡайтарыуҙары I18NI0000000040X (нормализация статусы/фекерҙәр), I18NI0000000041X I18NI00000042 ҡайтарыу, I18NI000000043X ҡасып йөрөүҙәре I18NI0000000044X, I18NI000000000000045X 3-сө рентабелдәр I18NI00000000000046X, I18NI0000000000047X ҡайтарыуҙары I18NI0000000048X, һәм I18NI0000000049X регламенттары I18NI00000005000, тип ҡабул итеү, тип рөхсәт ителә, тип рөхсәт итеү. идара итеү өҫтө менән README ҡулланыу миҫалдары.
-- Python еңел клиент (I18NI0000000051X): I18NI00000000052Х һәм I18NI0000000053 X ҡайтарыу типтағы I18NI000000054X өйөмдәр (I18NNT00000012X скелет `tx_instructions`) JSON-дан ҡотолоу. скрипттарҙы анализлау Finalize/Anact ағымдарын төҙөгәндә.
-- JavaScript (I18NI000000056X): I18NI00000000057X өҫтөндә тәҡдимдәр өсөн тәҡдимдәр, референда, иҫәп, йоҙаҡтар, блокировканы асыу, һәм хәҙер I18NI000000058X плюс совет остары (`getGovernanceCouncilCurrent`, I18NI00000000000000000060. I18NI000000061X, `getGovernanceCouncilAudit`) шулай Nod
+Status: draft/sketch to accompany the governance implementation tasks. Shapes may change during implementation. Determinism and RBAC policy are normative constraints; Torii can sign/submit transactions when `authority` and `private_key` are provided, otherwise clients build and submit to `/transaction`.
 
-Анд нөктәләре
+Important: we do not ship a standing council or “default” governance roster. Out of the box, the council endpoints either return an empty/pending state or derive a deterministic fallback from the configured parameters (stake asset, term, committee size) when enabled. Operators must persist their own roster via the governance flows; there is no baked‑in multisig, secret key, or privileged council account in this repository.
 
-- ПОСТ I18NI000000064X
-  - Һорау (JSON):
-    { .
-      "исем киңлеге": "ҡушымталар".
-      "контракт_ид": "минең.контракт.v1", .
-      "код_хаш": "блейк2б32:..." | "...64 гекс",
-      "аби_хаш": "блейк2б32:..." | "...64 гекс",
-      "аби_версия": "1" .
-      "тәҙрә": { "түбән": 12345, "өҫкө": 12400 } .
-      "власть": "i105...?",
-      "Шәхси_кәй": "...?"
-    }.
-  - Яуап (JSON):
-    { "o ok": дөрөҫ, "тәҡдим_ид": "...64гекс", "tx_instions": [{ "wire_id": "...", "плагайт_гекс": "..." } } .
-  - Валидация: `abi_hash` канонлы төйөндәр өсөн бирелгән I18NI000000066XX өсөн һәм тап килмәүҙәрҙе кире ҡаға. `abi_version = "v1"` өсөн көтөлгән ҡиммәте I18NI000000068X XX.
+Overview
+- All endpoints return JSON. For transaction-producing flows, responses include `tx_instructions` — an array of one or more instruction skeletons:
+  - `wire_id`: registry identifier for the instruction type
+  - `payload_hex`: Norito payload bytes (hex)
+- If `authority` and `private_key` are provided (or `private_key` on ballot DTOs), Torii signs and submits the transaction and still returns `tx_instructions`.
+- Otherwise, clients assemble a SignedTransaction using their authority and chain_id, then sign and POST to `/transaction`.
+- SDK coverage:
+- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, and `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`.
+- Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
+- JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for proposals, referenda, tallies, locks, unlock stats, and the council endpoints (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`). `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror the Python helpers by always returning a structured draft (synthesising the empty skeleton when Torii responds with `204 No Content`), which keeps automation from branching on `null` before queueing transactions or triggers.
 
-АПИ контракттары (йота)
-- ПОСТ I18NI000000069X
-  - Запрос: { "власть": "i105...", "перват_яңғы": "...", "код_б64": "..." }.
-  - тәртибе: I18NI00000000070X I18NT00000000022 программа органы һәм I18NI0000000071X башынан I18NI0000000072X, һуңынан `RegisterSmartContractCode` (коммефест) һәм `RegisterSmartContractBytes` (тулы I18NI00000075 байт) I18NI000000076X исеменән.
-  - Яуап: { "ok": дөрөҫ, "код_хаш_гекс": "...", "аби_хаш_гекс": "..." }
-  - Ҡағылышлы:
-    - GET I18NI000000077X → һаҡланған манифест ҡайтарыуҙары
-    - I18NI0000078X → ҡайтарыу `{ code_b64 }` .
-- ПОСТ I18NI000000080X
-  - Запрос: { "власть": "i105...", "перват_яңғы": "...", "исеме киңлеге": "ҡушымталар", "контракт_id": "calc.v1", "code_b64": "..." }
-  - тәртибе: тәьмин ителгән байт-кодты һәм шунда уҡ I18NI000081X картаһын `ActivateContractInstance` аша әүҙемләштереү.
-  - Яуап: { "ok": дөрөҫ, "исеме киңлеге": "ҡушымталар", "контракт_id": "calc.v1", "код_хаш_гекс": "...", "аби_хаш_гекс": "..." }
+Endpoints
 
-псевдоним хеҙмәте
-- ПОСТ `/v1/aliases/voprf/evaluate`
-  - Һорау: { "һуҡыр_элемент_гекс": "..." }
-  - Яуап: { "баһалау_элемент_гекс": "...128 гекс", "бэкэнд": "блейк2б512-мөрөслө" }
-    - `backend` баһалаусы тормошҡа ашырыуҙы сағылдыра. Ағымдағы ҡиммәте: `blake2b512-mock`.
-  - Иҫкәрмәләр: Детерминистик макет баһалаусы, тип ҡулланыла Blake2b512 менән домен айырыу `iroha.alias.voprf.mock.v1`X. Һынау инструменттары өсөн тәғәйенләнгән тиклем етештереү VOPRF торба үткәргес аша проводка I18NT0000000009X.
-  - Хаталар: HTP I18NI000000087X дөрөҫ формалаштырылған гекс индереү буйынса. Torii ҡайтара I18NT000000005X I18NI000000088X конверт менән декодер хатаһы тураһында хәбәр.
-- ПОСТ I18NI000000089X
-  - Запрос: { "әсүәле": "GB82 WEST 1234 5698 7654 32" }
-  - Яуап: { "әсүберәк": "ГБ82ВЕСТ1234568765432", "иҫәп_ид": "i105...", "индекс": 0, "сығанаҡ": "изо_күп" }
-  - Иҫкәрмәләр: ISO күпере эшләү ваҡытын сәхнәләштереүҙе талап итә (I18NI000090X I18NI000000091X). I18NT000000014X нормализацияһы псевдонимы аҡ шыршы һәм өҫкө-ҡапҡас эҙләү алдынан өҙөп. Ҡайтарыу 404 ҡасан псевдоним булмаған һәм 503 ҡасан ISO күпер йөрөү ваҡыты өҙөлгән.
-- ПОСТ I18NI000000092X
-  - Запрос: { "индекс": 0 }.
-  - Яуап: { "индекс": 0, "осраҡлы": "ГБ82ВЕСТ1234568765432", "иҫәпкә_ид": "i105...", "сығанаҡ": "изо_күп" }
-  - Иҫкәрмәләр: псевдонимдар индекстары конфигурация тәртибенән детерминистик рәүештә тәғәйенләнә (0-нигеҙендә). Клиенттар кэш яуап офлайн кэшлай ала, аудит юлдарын төҙөү өсөн псевдоним аттестация саралары.
+- POST `/v1/gov/proposals/deploy-contract`
+  - Request (JSON):
+    {
+      "contract_alias": "router::universal"?,
+      "contract_address": "tairac1..."?,
+      "code_hash": "blake2b32:…" | "…64hex",
+      "abi_hash": "blake2b32:…" | "…64hex",
+      "abi_version": "1",
+      "window": { "lower": 12345, "upper": 12400 },
+      "mode": "Zk" | "Plain",
+      "limits": { … }?,
+      "manifest_provenance": { … }?,
+      "authority": "<i105-account-id>?",
+      "private_key": "…?"
+    }
+  - Response (JSON):
+    { "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
+  - Validation:
+    - exactly one of `contract_address` or `contract_alias` must be provided;
+    - aliases resolve to the current active canonical contract address before the proposal id is derived;
+    - `code_hash` and `abi_hash` are canonicalised to 32-byte lowercase hex;
+    - only `abi_version = "1"` is accepted, and `abi_hash` must equal the canonical ABI hash for that version (`hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`);
+    - `window.upper` must be `>= window.lower`; and
+    - `mode`, when supplied, must be `Zk` or `Plain`.
+  - Submission model: this endpoint is draft-first. `authority`/`private_key` are only accepted as a legacy pair and currently fail closed because governance server-side signing is disabled, so clients should consume `tx_instructions`, sign locally, and submit via `/transaction`.
 
-Код Размер Кап
-- Ҡулланыусылар параметры: I18NI000000093X (JSON u64)
-  - Сылбырлы килешелгән кодты һаҡлау өсөн рөхсәт ителгән максималь ҙурлыҡты (байттарҙа) идара итә.
-  - Ғәҙәттә: 16 Миб. 18-се һанлы I18NI0000094X төйөндәр кире ҡаға, ҡасан I18NI00000009555 һүрәт оҙонлоғо ҡапҡастан артып китә, ​​инвариант боҙоу хатаһы менән.
-  - Операторҙар `SetParameter(Custom)`X тапшырып көйләй ала, I18NI000000097X һәм һанлы файҙалы йөк менән.
+Contracts API (deploy)
+- POST `/v1/contracts/deploy`
+  - Request: { "authority": "<i105-account-id>", "private_key": "…", "code_b64": "…", "contract_alias": "router::universal", "lease_expiry_ms": 1735689600000? }
+  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy, derives a fresh immutable `contract_address` from `(chain_discriminant, authority, deploy_nonce, dataspace(contract_alias))`, then submits `RegisterSmartContractCode`, `RegisterSmartContractBytes`, `ActivateContractInstance`, `SetContractAlias::bind`, and the deploy-nonce bump on behalf of `authority`.
+  - Redeploying the same `contract_alias` is the public upgrade path: Torii clears the old alias binding, deactivates the retired address, binds the alias to the new address, and reports `previous_contract_address` plus `upgraded = true`.
+  - Response: `DeployContractBundleReceiptDto`; the single-contract shortcut returns the canonical bundle receipt with one entry in `contracts[]`.
+  - Related:
+    - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
+    - GET `/v1/contracts/code-bytes/{code_hash}` → returns `{ code_b64 }`
+  - Notes:
+    - this public shortcut is alias-first and is intended for public/unprotected dataspaces;
+    - runtime calls no longer resend bytecode or manifests on each invocation; once deployed, `/v1/contracts/call` references the active contract by address; and
+    - protected-namespace deployment remains governed by the proposal/metadata flow (`gov_contract_address`, enacted proposal tuple, quorum metadata) rather than by a separate public `/v1/contracts/instance*` shortcut.
+Alias Service
+- POST `/v1/aliases/voprf/evaluate`
+  - Request: { "blinded_element_hex": "…" }
+  - Response: { "evaluated_element_hex": "…128hex", "backend": "blake2b512-mock" }
+    - `backend` reflects the evaluator implementation. Current value: `blake2b512-mock`.
+  - Notes: Deterministic mock evaluator that applies Blake2b512 with domain separation `iroha.alias.voprf.mock.v1`. Meant for test tooling until the production VOPRF pipeline is wired through Iroha.
+  - Errors: HTTP `400` on malformed hex input. Torii returns a Norito `ValidationFail::QueryFailed::Conversion` envelope with the decoder error message.
+- POST `/v1/aliases/resolve`
+  - Request: { "alias": "GB82 WEST 1234 5698 7654 32" }
+  - Response: { "alias": "GB82WEST12345698765432", "account_id": "<i105-account-id>", "index": 0, "source": "iso_bridge" }
+  - Notes: Requires the ISO bridge runtime staging (`[iso_bridge.account_aliases]` in `iroha_config`). Torii normalises aliases by stripping whitespace and upper-casing before lookup. Returns 404 when the alias is absent and 503 when the ISO bridge runtime is disabled.
+- POST `/v1/aliases/resolve_index`
+  - Request: { "index": 0 }
+  - Response: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "<i105-account-id>", "source": "iso_bridge" }
+  - Notes: Alias indices are assigned deterministically from configuration order (0-based). Clients can cache responses offline to build audit trails for alias attestation events.
 
-- ПОСТ I18NI000000098X
-  - Запрос: { "власть": "i105...", "перват_яңғы": "...?", "сылбыр_ид": "...": "e1", "иҫбатлау_б64": "...", "публи": {...} .
-  - Яуап: { "ok": дөрөҫ, "ҡабул ителгән": дөрөҫ, "tx_instructions": [{{...}] }
-  - Иҫкәрмәләр:
-    - Ҡасан трасса’s йәмәғәт индереүҙәре I18NI000000000099XX, I18NI0000000000X, һәм `duration_blocks`, һәм иҫбатлау ҡаршы конфигурацияланған ВК, төйөн булдыра йәки I18NI00000102 өсөн идара итеү блокировкаһы менән был I18NI0000000003X. Йүнәлеш йәшерен ҡала (`unknown`); тик сумма/ваҡыт яңыртыла. Ҡабаттан тауыштар бер монотоник: сумма һәм срогы ғына арта (төйөн max(сумма, prev.baman) һәм max(срогы, prev.expiry) ҡулланыла).
-    - ZK яңынан тауыш биреүҙе, улар сумманы ҡыҫҡартырға йәки срогы ҡыҫҡартырға тырыша, сервер яғынан кире ҡағыла `BallotRejected` диагностикаһы.
-    - Контракт үтәү I18NI0000106X тип атау тейеш, `SubmitBallot`-ны ҡарау алдынан; хужалар бер атыу защелкиваниеһын үтәй.
+Code Size Cap
+- Custom parameter: `max_contract_code_bytes` (JSON u64)
+  - Controls the maximum allowed size (in bytes) for on-chain contract code storage.
+  - Default: 16 MiB. Nodes reject `RegisterSmartContractBytes` when the `.to` image length exceeds the cap with an invariant violation error.
+  - Operators can adjust by submitting `SetParameter(Custom)` with `id = "max_contract_code_bytes"` and a numeric payload.
 
-- ПОСТ `/v1/gov/ballots/plain`
-  - Запрос: { "авторлыҡ": "i105...", "перват_яңҡы": "...?", "сылбыр_ид": "...", "референдум_ид": "р1", "их58": "их58...", "ҡушымта": "1000", "ваҡыт blocks": 6000, "йүнәлеш": "Ай|Най|Абстан" }
-  - Яуап: { "ok": дөрөҫ, "ҡабул ителгән": дөрөҫ, "tx_instructions": [{{...}] }
-  - Иҫкәрмәләр: Ҡабат тауыштар ғына оҙайта — яңы бюллетень кәметә алмай, булған блокировка’s суммаһы йәки срогы. `owner` транзакция органына тигеҙ булырға тейеш. Минималь оҙайлылығы `conviction_step_blocks`.
+- POST `/v1/gov/ballots/zk`
+  - Request: { "authority": "<i105-account-id>", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
+  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Notes:
+    - When the circuit’s public inputs include `owner`, `amount`, and `duration_blocks`, and the proof verifies against the configured VK, the node creates or extends a governance lock for `election_id` with that `owner`. Direction remains hidden (`unknown`) unless hinted; only amount/expiry are updated. Re-votes are monotonic: amount and expiry only increase (the node applies max(amount, prev.amount) and max(expiry, prev.expiry)).
+    - When any lock hint is provided, the ballot must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required.
+    - ZK re-votes that attempt to shrink amount or expiry are rejected server-side with `BallotRejected` diagnostics.
+    - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` prior to enqueuing `SubmitBallot`; hosts enforce a one-shot latch.
 
-- ПОСТ `/v1/gov/finalize`
-  - Һорау: { "референдум_ид": "р1", "тәҡдим_ид": "...64гекс", "власть": "i105...?", "перват_яңғы": "...?" }.
-  - Яуап: { "ok": дөрөҫ, "тх_инструкциялар": [{ "wire_id": "...Финализация Референдум", "payload_hex": "..." } } .
-  - Сылбырлы эффект (ағымдағы скафандр): раҫланған таратыу тәҡдимен ҡабул итеү `ContractManifest` I18NI000000113X клавиатураһы минималь `abi_hash` менән көтөлгән һәм тәҡдимде билдәләй. Әгәр ҙә инде `code_hash` өсөн башҡаса I18NI000000116X менән башҡаса бар икән, ҡабул итеү кире ҡағыла.
-  - Иҫкәрмәләр:
-    - ЗК һайлауҙары өсөн контракт юлдары `ZK_VOTE_VERIFY_TALLY` I18NI000000118X-ты үтәүгә тиклем шылтыратырға тейеш; хужалар бер атыу защелкиваниеһын үтәй. `FinalizeReferendum` ZK референдане кире ҡаға, һайлауҙар иҫәбе асыҡланғанға тиклем.
-    - Авто-яҡын `h_end`-та Ябай референда өсөн генә раҫланған/кире ҡаҡшаған; ZK референдаһы ябылған ҡала, тик финаллаштырылған иҫәп тапшырылған һәм `FinalizeReferendum` башҡарыла.
-    - чектар чектар раҫлау+кире ҡулланыу ғына; тыйылыуы йыйылыуға иҫәпләнмәй.
+- POST `/v1/gov/ballots/plain`
+  - Request: { "authority": "<i105-account-id>", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+  - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing lock’s amount or expiry. The `owner` must equal the transaction authority. Minimum duration is `conviction_step_blocks`.
 
-- ПОСТ I18NI000000122Х
-  - Запрос: { "тәҡдим_ид": "...64hex", "прегож_хаш": "...64hex?", "тәҙрә": { "түбән": 0, "өҫкө": 0 }?, "власть": "i105...?", "перват_кейк": "...?" }.
-  - Яуап: { "ok": дөрөҫ, "тх_инструкциялар": [{ "wire_id": "...Энакт-Референдум", "Payload_hex": "..." } }.
-  - Иҫкәрмәләр: I18NT000000015X ҡул ҡуйылған операцияны тапшыра, ҡасан `authority`/I18NI000000124X XX; юғиһә ул клиенттар өсөн скелет ҡайтара, ҡул ҡуйырға һәм тапшырырға. Преизмитие факультатив һәм әлеге ваҡытта мәғлүмәт.
+- POST `/v1/gov/finalize`
+  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "<i105-account-id>?", "private_key": "…?" }
+  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
+  - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
+  - Notes:
+    - For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch. `FinalizeReferendum` rejects ZK referenda until the election tally is finalized.
+    - Auto-close at `h_end` emits Approved/Rejected only for Plain referenda; ZK referenda remain closed until a finalized tally is submitted and `FinalizeReferendum` is executed.
+    - Turnout checks use approve+reject only; abstain does not count toward turnout.
 
-- GET I18NI000000125X
-  - `{id}` юлы: тәҡдим id hex (64 шар)
-  - Яуап: { "табылған": ли, "тәҡдим": { ... }? }.
+- POST `/v1/gov/enact`
+  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "<i105-account-id>?", "private_key": "…?" }
+  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }
+  - Notes: Torii submits the signed transaction when `authority`/`private_key` are provided; otherwise it returns a skeleton for clients to sign and submit. The preimage is optional and currently informational.
 
-- GET I18NI000000127X
-  - I18NI000000128X юлы: референдум ид еп
-  - Яуап: { "табылған": ли, "референдум_ид": "ҡул", "блоктар": { ... }? }.
+- GET `/v1/gov/proposals/{id}`
+  - Path `{id}`: proposal id hex (64 chars)
+  - Response: { "found": bool, "proposal": { … }? }
 
-- GET I18NI000000129X
-  - Яуап: { "epoch": Н, "ағза": [{ "иҫәпкә_ид": "..." }, ...] }.
-  - Иҫкәрмәләр: Ҡайтарып, ныҡышмалы совет ҡасан бар; башҡаса детерминистик fallback ҡулланып, конфигурацияланған ставка активы һәм порогтары (көҙгөләр VRF spec тиклем тере VRF дәлилдәре сылбырҙа һаҡлана).- ПОСТ `/v1/gov/council/derive-vrf` (функция: go_vrf)
-  - Запрос: { "комитет_размеры": 21, "эпоха": 123? , "кандидаттар": [{ "иҫәпкә_ид": "...", "вариант": "Нормаль|Кәбелмәй", "пк_б64": "...", "иҫбатлау_b64": "..." }, ...] }.
-  - тәртибе: һәр кандидаттың VRF-сығыуын тикшерергә ҡаршы канон индереү I18NI000000131X, `epoch`, һәм һуңғы блок хеш-маягы; тай-брейкерҙар менән сығыш байттары буйынса сорттарға; ҡайтара өҫкө I18NI000000133X ағзалары. Һаҡланмай.
-  - Яуап: { "epoch": Н, "ағзалар": [{ "иҫәпкә_ид": "..." } ...], "тоталь_кандидат": М, "тикшерелгән": К }
-  - Иҫкәрмәләр: Ғәҙәти = pk G1-ҙә, G2-лә иҫбатлау (96 байт). Бәләкәй = pk G2, иҫбатлау G1 (48 байт). Инпуттар домен менән айырыла һәм `chain_id`X инә.
+- GET `/v1/gov/locks/{rid}`
+  - Path `{rid}`: referendum id string
+  - Response: { "found": bool, "referendum_id": "rid", "locks": { … }? }
 
-### Идара итеү ғәҙәттәгесә (iroha_config `gov.*`)
+- GET `/v1/gov/council/current`
+  - Response: { "epoch": N, "members": [{ "account_id": "…" }, …] }
+  - Notes: Returns the persisted council when present; otherwise derives a deterministic fallback using the configured stake asset and thresholds (mirrors the VRF spec until live VRF proofs are persisted on chain).
 
-I18NT000000016X тарафынан ҡулланылған совет fallback, ҡасан бер ниндәй ҙә һаҡланған исемлек бар, `iroha_config` аша параметрлаштырыла:
+- POST `/v1/gov/council/derive-vrf` (feature: gov_vrf)
+  - Request: { "committee_size": 21, "epoch": 123? , "candidates": [{ "account_id": "…", "variant": "Normal|Small", "pk_b64": "…", "proof_b64": "…" }, …] }
+  - Behavior: Verifies each candidate’s VRF proof against the canonical input derived from `chain_id`, `epoch`, and the latest block hash beacon; sorts by output bytes desc with tiebreakers; returns the top `committee_size` members. Does not persist.
+  - Response: { "epoch": N, "members": [{ "account_id": "…" } …], "total_candidates": M, "verified": K }
+  - Notes: Normal = pk in G1, proof in G2 (96 bytes). Small = pk in G2, proof in G1 (48 bytes). Inputs are domain-separated and include `chain_id`.
+
+### Governance defaults (iroha_config `gov.*`)
+
+The council fallback used by Torii when no persisted roster exists is parameterised via `iroha_config`:
 
 ```toml
 [gov]
@@ -134,233 +153,246 @@ I18NT000000016X тарафынан ҡулланылған совет fallback, �
   approval_q_num = 1
   approval_q_den = 2
   min_turnout = 0
+  voting_asset_id = "61CtjvNd9T3THAR65GsMVHr82Bjc"         # governance bond asset (Sora Nexus default)
+  min_bond_amount = 150                # smallest units of voting_asset_id
+  bond_escrow_account = "<i105-account-id>"
+  slash_receiver_account = "<i105-account-id>"
+  slash_double_vote_bps = 0            # percentage (basis points) to slash on double-vote attempts
+  slash_invalid_proof_bps = 0          # percentage (basis points) to slash on invalid ballot proofs
+  slash_ineligible_proof_bps = 0       # percentage (basis points) to slash on stale/invalid eligibility proofs
   parliament_committee_size = 21
   parliament_term_blocks = 43200
   parliament_min_stake = 1
-  parliament_eligibility_asset_id = "SORA#stake"
+  parliament_eligibility_asset_id = "79jULkZVMgnbzxBe6NvqeDxVEeEk"
 ```
 
-Эквивалентлы мөхит өҫтөнлөк итә:
+Equivalent environment overrides:
 
 ```
 GOV_VK_BACKEND=halo2/ipa
 GOV_VK_NAME=ballot_v1
+GOV_VOTING_ASSET_ID=61CtjvNd9T3THAR65GsMVHr82Bjc
+GOV_MIN_BOND_AMOUNT=150
+GOV_BOND_ESCROW_ACCOUNT=<i105-account-id>
+GOV_SLASH_RECEIVER_ACCOUNT=<i105-account-id>
+GOV_SLASH_DOUBLE_VOTE_BPS=2500
+GOV_SLASH_INVALID_PROOF_BPS=5000
+GOV_SLASH_INELIGIBLE_PROOF_BPS=1500
 GOV_PARLIAMENT_COMMITTEE_SIZE=21
 GOV_PARLIAMENT_TERM_BLOCKS=43200
 GOV_PARLIAMENT_MIN_STAKE=1
-GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID=SORA#stake
+GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID=79jULkZVMgnbzxBe6NvqeDxVEeEk
 GOV_ALIAS_TEU_MINIMUM=0
 GOV_ALIAS_FRONTIER_TELEMETRY=true
 ```
 
-I18NI000000137X ҡапҡастары һаны fallback ағзалары ҡайтарылған, ҡасан совет һаҡланмаған, `parliament_term_blocks` билдәләй, эпоха оҙонлоғо өсөн ҡулланылған орлоҡтар сығарылыш (`epoch = floor(height / term_blocks)`), I18NI0000140X үтәү минималь стака `parliament_eligibility_asset_id` һайлай, ниндәй активтар балансы сканерлау ҡасан төҙөү кандидат йыйылмаһы.
+Sora Nexus default: ballots lock `min_bond_amount` of `voting_asset_id` into the
+configured escrow account. Locks are created or extended when ballots land and
+released on expiry; bond lifecycle is emitted via `governance_bond_events_total`
+telemetry (lock_created|lock_extended|lock_unlocked|lock_slashed|lock_restituted).
 
-ВК-ның тикшерелеүе губляж юҡ: бюллетендәрҙе тикшерергә һәр ваҡыт рәттәге байттар менән асҡысты раҫлаусы I18NI0000142X талап итә, ә мөхиттәр тикшерергә генә таянырға тейеш түгел.
+`parliament_committee_size` caps the number of fallback members returned when no council has been persisted, `parliament_term_blocks` defines the epoch length used for seed derivation (`epoch = floor(height / term_blocks)`), `parliament_min_stake` enforces the minimum stake (in smallest units) on the eligibility asset, and `parliament_eligibility_asset_id` selects which asset balance is scanned when building the candidate set.
 
-РБАК
-- Сылбырлы башҡарыу рөхсәттәр талап итә:
-  - Тәҡдимдәр: `CanProposeContractDeployment{ contract_id }`
-  - Баллоттар: I18NI000000144X
-  - Ҡабул итеү: I18NI000000145X
-  - Совет идаралығы (киләсәк): `CanManageParliament`
+Governance VK verification has no bypass: ballot verification always requires an `Active` verifying key with inline bytes, and environments must not rely on test-only toggles to skip verification.
 
-Һаҡланған исемдәр киңлеге
-- I18NI0000147X (JSON ептәр массивы) ҡулланыусы параметры ҡабул итеү ҡапҡаһы өсөн исемлеккә индерелгән исемдәр киңлектәренә таратыу мөмкинлеген бирә.
-- Клиенттар транзакция метамағлүмәттәре асҡыстарын үҙ эсенә алырға тейеш, уларҙы таратыу өсөн һаҡланған исемдәр киңлектәрен таратыу өсөн:
-  - I18NI000000148X: маҡсатлы исемдәр киңлеге (мәҫәлән, `"apps"` X)
-  - `gov_contract_id`: логик контракт id исемдәр киңлеге эсендә
-- I18NI000000151X: өҫтәмә JSON массив валитатор иҫәбенә идентификаторҙар. Ҡасан һыҙат манифест иғлан итеү кворум ҙурыраҡ бер, ҡабул итеү транзакция органы талап итә плюс исемлеккә иҫәп яҙмалары ҡәнәғәтләндерергә манифест кворум.
-- Телеметрия `governance_manifest_admission_total{result}` аша бөтөнлөккә инеү иҫәпләүселәрен фашлай, шуға күрә операторҙар уңышлы ҡабул итеүҙәрҙе I18NI000000153X, `non_validator_authority`, I18NI00000000155X, I18NI000000156X һәм I18NI0000000157X юлдарынан айыра ала.
-- Телеметрия I18NI0000158X аша үтәү юлын үтә (`satisfied` ҡиммәттәре / `rejected`) шулай итеп, операторҙар раҫлауҙарҙы аудитлай ала.
-- Лейндар үҙҙәренең манифестарында баҫылған исемдәр киңлеген үтәй. `gov_namespace` ҡуйған теләһә ниндәй операция `gov_contract_id` тәьмин итергә тейеш, ә исемдәр киңлеге манифесттың `protected_namespaces` комплектында күренергә тейеш. I18NI000000164X был метамағлүмәттәрһеҙ тапшырыуҙар һаҡлау мөмкинлеге бирелгәндә кире ҡағыла.
-- Ҡабул итеү үтәй, тип ҡабул ителгән идара итеү тәҡдиме бар, кортеж I18NI000000165X; башҡаса раҫлау NotPermited хатаһы менән уңышһыҙлыҡҡа осрай.
+RBAC
+- On-chain execution requires permissions:
+  - Proposals: `CanProposeContractDeployment{ contract_address }`
+  - Ballots: `CanSubmitGovernanceBallot{ referendum_id }`
+  - Enactment: `CanEnactGovernance`
+  - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
+  - Council management (future): `CanManageParliament`
+- Slashing/appeals:
+  - Double-vote/invalid/ineligible ballots apply configured slash percentages against the bond escrow, moving funds into `slash_receiver_account`, updating the slashing ledger, and emitting typed `LockSlashed` events (reason + destination + note).
+  - Manual `SlashGovernanceLock`/`RestituteGovernanceLock` instructions support operator-driven penalties and appeals; restitution is capped by recorded slashes, restores funds to the bond escrow, updates the ledger, and emits `LockRestituted` while keeping the lock active until expiry.
 
-Яңыртыу ваҡыты Яңыртыу ҡармаҡтары
-- Лейн манифестары иғлан итә ала I18NI0000000166X ҡапҡаһы менән эшләү ваҡытын яңыртыу инструкциялары (I18NI000000167X, `ActivateRuntimeUpgrade`, I18NI000000169X).
-- Крючка баҫыуҙары:
-  - `allow` (ҡыт, `true` стандарт): ҡасан `false`, бөтә йөрөү ваҡыт яңыртыу күрһәтмәләре кире ҡағыла.
-  - I18NI000000173X (бол, `false` стандарт): I18NI000000175X тарафынан күрһәтелгән транзакция метамағлүмәттәре яҙмаһын талап итә.
-  - `metadata_key` (стринг): метамағлүмәттәр исеме ҡармаҡ менән нығытылған. `gov_upgrade_id` тиклем ғәҙәттәгесә, ҡасан метамағлүмәттәр кәрәк йәки рөхсәт исемлеге бар.
-  - `allowed_ids` (телдәр массивы): метамағлүмәттәр ҡиммәттәренең факультатив рөхсәт ҡағыҙы (өҫтәүҙән һуң). Отказ ҡасан бирелгән ҡиммәте исемлегенә инмәй.
-- Ҡасан ҡармаҡ булғанда, сиратҡа ҡабул итеү метамағлүмәттәр сәйәсәтен үтәй, операция сиратҡа ингәнсе. Юҡ метамағлүмәттәр, буш ҡиммәттәр, йәки ҡиммәттәрҙән ситтәге ҡиммәттәр етештерә детерминистик `NotPermitted` хатаһы.
-- Телеметрия `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}` аша үтәү һөҙөмтәләрен күҙәтә.
-- Ҡәнәғәтләндергән транзакциялар ҡармаҡ тейеш метамағлүмәттәр I18NI000000181X (йәки асыҡ билдәләнгән асҡыс) теләһә ниндәй валидатор раҫлауҙары менән бер рәттән, асыҡ кворум талап итә.
+Protected Namespaces
+- Custom parameter `gov_protected_namespaces` (JSON array of strings) enables admission gating for deploys into listed namespaces.
+- Clients must include transaction metadata key `gov_contract_address` for deploys targeting protected namespaces.
+- `gov_manifest_approvers`: optional JSON array of <i105-account-id> account IDs. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
+- Telemetry exposes holistic admission counters via `governance_manifest_admission_total{result}` so operators can distinguish successful admits from `missing_manifest`, `non_<i105-account-id>_authority`, `quorum_rejected`, `protected_namespace_rejected`, and `runtime_hook_rejected` paths.
+- Telemetry surfaces the enforcement path via `governance_manifest_quorum_total{outcome}` (values `satisfied` / `rejected`) so operators can audit missing approvals.
+- Lanes enforce the namespace allowlist published in their manifests. Any transaction that sets `gov_contract_address` must resolve into a protected dataspace alias present in the manifest's `protected_namespaces` set. `RegisterSmartContractCode` submissions without this metadata are rejected when protection is enabled.
+- Admission enforces that an Enacted governance proposal exists for the tuple `(contract_address, code_hash, abi_hash)`; otherwise validation fails with a NotPermitted error.
 
-Уңайлыҡ нөктәһе
-- POST `/v1/gov/protected-namespaces` — төйөнгә туранан-тура I18NI000000183X ҡулланыла.
-  - Запрос: { "исемдәре": ["apps", "система"] }
-  - Яуап: { "ok": дөрөҫ, "ҡулланылған": 1 }.
-  - Иҫкәрмәләр: Админ/тест үткәреү өсөн тәғәйенләнгән; әгәр конфигурацияланған API токен талап итә. Етештереүҙең өсөн `SetParameter(Custom)` менән ҡул ҡуйылған операция тапшырыуҙы өҫтөн күрә.
+Runtime Upgrade Hooks
+- Lane manifests may declare `hooks.runtime_upgrade` to gate runtime upgrade instructions (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`).
+- Hook fields:
+  - `allow` (bool, default `true`): when `false`, all runtime-upgrade instructions are rejected.
+  - `require_metadata` (bool, default `false`): require the transaction metadata entry specified by `metadata_key`.
+  - `metadata_key` (string): metadata name enforced by the hook. Defaults to `gov_upgrade_id` when metadata is required or an allowlist is present.
+  - `allowed_ids` (array of strings): optional allowlist of metadata values (after trimming). Rejects when the provided value is not listed.
+- When the hook is present, queue admission enforces the metadata policy before the transaction enters the queue. Missing metadata, blank values, or values outside the allowlist produce a deterministic `NotPermitted` error.
+- Telemetry tracks enforcement outcomes via `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}`.
+- Transactions satisfying the hook must include metadata `gov_upgrade_id=<value>` (or the manifest-defined key) alongside any <i105-account-id> approvals required by the manifest quorum.
 
-CLI Ярҙамсылар
-- I18NI000000185X
-  - Фетчтар исемдәр киңлеге өсөн инстанциялар менән эш итә һәм кросс-тикшерә, тип:
-    - I18NT000000017X магазиндары байт-код өсөн һәр I18NI0000000186X, ә уның Blake2b-32 digest I18NI000000187X тап килә.
-    - I18NI000000188X буйынса һаҡланған манифест I18NI000000189X һәм I18NI000000190X ҡиммәттәренә тап килгәнлеге тураһында хәбәр итә.
-    - I18NI000000191X өсөн идара итеү тәҡдиме бар, сөнки төйөндәрҙе ҡулланыуҙы шул уҡ тәҡдим-иид хешлау.
-  - JSON отчеты менән I18NI000000192X бер контракт (мәсьәләләр, асыҡ/код/тәҡдим резюмеһы) плюс бер юллыҡ резюме, әгәр баҫтырылмаһа (I18NI000000193X).
-  - Аудит өсөн файҙалы һаҡланған исемдәр киңлеге йәки тикшерергә идара итеү-контроль таратыу эш ағымы.
-- I18NI000000194X
-  - JSON метамағлүмәттәр скелетын һаҡланған исемдәр киңлектәренә таратыуҙы тапшырғанда ҡулланыла, шул иҫәптән опциональ I18NI0000000195X өсөн ҡәнәғәтләндерерлек асыҡ кворум ҡағиҙәләре.
-- I18NI0000000196X — блокировка кәңәштәре кәрәк, ҡасан I18NI0000000197X, һәм теләһә ниндәй тәьмин итеү комплекты I18NI000000198X, I18NI000000199X, һәм I18NI0000002000 X үҙ эсенә алырға тейеш.
-  - канонлы иҫәп ids раҫлай, канонлы 32-байт нюллификатор кәңәштәре, һәм һиҙеүҙәрҙе I18NI000000201X (өҫтәмә өҫтөнлөктәр өсөн I18NI0000202Х менән) берләштерә).
-  - Нулификатор иҫбатлау йөкләмәһенән (йәмәғәт индереү) плюс I18NI000000203X, `chain_id`, һәм `election_id` алынған; `--nullifier` ҡаршы раҫлана дәлилдәр ҡасан тәьмин итеү.
-  - Хәҙер бер юллыҡ резюме хәҙер детерминистик I18NI000000207X өҫкә сыға, улар ниндәй ҙә булһа дедрланған һиҙеүҙәр менән бергә I18NI0000000208X алынған (I18NI000000209X, `amount`, I18NI00000211111, `direction` ҡасан тәьмин ителә).
-  - CLI яуаптары аннотация I18NI000000213X менән I18NI00000000214X плюс декодный баҫыуҙар шулай аҫҡы инструменттарҙы раҫлай ала скелет ҡабаттан тормошҡа ашырыуһыҙ I18NT000000006X декод.
-  - Замок кәңәштәрен тәьмин итеү төйөнгә I18NI000000215X/I18NI0000000216X ваҡиғалары өсөн ZK бюллетендәре өсөн бер тапҡыр ҙа шул уҡ ҡиммәттәрҙе фашлай.
-- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
-  - `--owner` канонлы I105 литрҙар ҡабул итә; опциональ `@<domain>` ялғауҙары маршрутлаштырыу кәңәштәре генә.
-  - псевдонимдар паритеты өсөн ZK флагы исемдәрен көҙгөләй.
-  - Йәмғеһе сығыш көҙгөләре I18NI000000222X кодировкаланған инструкция бармаҡ эҙҙәрен һәм кеше уҡый торған бюллетень ятҡылыҡтарын (I18NI0000000223X, I18NI000000000224X, I18NI0000000225X, I18NI000000226X), скелетҡа ҡул ҡуйыу алдынан тиҙ раҫлауҙы тәьмин итеү.
+Convenience Endpoint
+- POST `/v1/gov/protected-namespaces` — applies `gov_protected_namespaces` directly on the node.
+  - Request: { "namespaces": ["apps", "system"] }
+  - Response: { "ok": true, "applied": 1 }
+  - Notes: Intended for admin/testing; requires API token if configured. For production, prefer submitting a signed transaction with `SetParameter(Custom)`.
 
-Инстанциялар исемлеге
-- GET I18NI0000227X — исемдәр киңлеге өсөн әүҙем контракт экземплярҙары исемлеге.
-  - Һорау парамдар:
-    - I18NI000000228X: I18NI000000229X X (осраҡ-һиҙгер) фильтр.
-    - I18NI000000230X: фильтр гекс префиксы `code_hash_hex` (түбәнгес)
-    - I18NI000000232X (0000000000233Х ```toml
-[gov]
-  vk_ballot.backend = "halo2/ipa"
-  vk_ballot.name    = "ballot_v1"
-  vk_tally.backend  = "halo2/ipa"
-  vk_tally.name     = "tally_v1"
-  plain_voting_enabled = false
-  conviction_step_blocks = 100
-  max_conviction = 6
-  approval_q_num = 1
-  approval_q_den = 2
-  min_turnout = 0
-  parliament_committee_size = 21
-  parliament_term_blocks = 43200
-  parliament_min_stake = 1
-  parliament_eligibility_asset_id = "SORA#stake"
-``` (100-сө ғәҙәттәгесә, max 10_000)
-    - I18NI000000234X: I18NI000000235X (поручка), I18NI0000000236X, I18NI000000237X, I18NI00000000238X.
-  - Яуап: { "исем киңлеге": "нс", "осраҡтары": [{ "килешеп_ид": "...", "код_хаш_гекс": "..." }, ...], "тоталь": Н, "офсет": н, "лимит": м }
-  - SDK ярҙамсыһы: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) йәки `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
+CLI Helpers
+- `iroha --output-format text app gov deploy audit --contract-address tairac1...`
+  - Fetches the active binding for the governed contract address and cross-checks that:
+    - Torii stores bytecode for the active `code_hash`, and its Blake2b-32 digest matches the `code_hash`.
+    - The manifest stored under `/v1/contracts/code/{code_hash}` reports matching `code_hash` and `abi_hash` values.
+    - An enacted governance proposal exists for `(contract_address, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
+- `iroha app gov deploy meta --contract-address tairac1... [--approver <i105-account-id> --approver <i105-account-id>]`
+  - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including `gov_contract_address` and optional `gov_manifest_approvers` for satisfying manifest quorum rules.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner <i105-account-id> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+  - Validates canonical I105 account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
+  - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
+  - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
+  - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
+  - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
+- `iroha app gov vote --mode plain --referendum-id <id> --owner <i105-account-id> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+  - `--owner` accepts canonical I105 literals; Pass domain context through the surrounding scoped interface when required.
+  - Aliases `--lock-amount`/`--lock-duration-blocks` mirror the ZK flag names for scripting parity.
+  - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
 
-Блокировканы асыу (оператор/Аудит)
+Governed Contract Lookup
+- GET `/v1/gov/contracts/{contract_address}` — returns the active governance binding for a canonical contract address.
+  - Response: { "found": bool, "contract_address": "tairac1...", "dataspace": "universal", "code_hash_hex": "…" ? }
+
+Unlock Sweep (Operator/Audit)
 - GET `/v1/gov/unlocks/stats`
-  - Яуап: { "бейек_ток": Х, "өҙөлгән_locks_now": н, "референда_ менән_өҙөлгән": м, "һуңғы_ swep_all": С }
-  - Иҫкәрмәләр: `last_sweep_height` иң һуңғы блок бейеклеген сағылдыра, унда ваҡыты үткән йоҙаҡтар һыпыртылған һәм һаҡланған. I18NI000000243X I18NI000000244X менән сканерлау йоҙаҡ рекордтары менән иҫәпләнә.
-- ПОСТ I18NI000000245X
-  - Һорау (v1-стиль ДТО):
-    { .
-      "власть": "i105...".
-      "сылбыр_ид": "0000000-0000-0000-00000000000000000000000000".
-      "шәхси_кәй": "...?",
-      "Һайлау_ид": "реф-1",
-      "бэкэнд": "halo2/ipa",
+  - Response: { "height_current": H, "expired_locks_now": n, "referenda_with_expired": m, "last_sweep_height": S }
+  - Notes: `last_sweep_height` reflects the most recent block height where expired locks were swept and persisted. `expired_locks_now` is computed by scanning lock records with `expiry_height <= height_current`.
+- POST `/v1/gov/ballots/zk-v1`
+  - Request (v1-style DTO):
+    {
+      "authority": "<i105-account-id>",
+      "chain_id": "00000000-0000-0000-0000-000000000000",
+      "private_key": "…?",
+      "election_id": "ref-1",
+      "backend": "halo2/ipa",
       "envelope_b64": "AAECAwQ=",
-      "тамыр_кросс": "0х...64гекс?",
-      "хужа": "i105...????", // канонлы иҫәпИд (I105 туранан-тура)
-      "мунса": "100?",
-      "ваҡыт_блоктар": 6000?,
-      "йүнәлеш": "Ай|Най|Абстан?"
-      "нулификатор": "блейк2б32:...64гекс?"
-    }.
-  - Яуап: { "ok": дөрөҫ, "ҡабул ителгән": дөрөҫ, "tx_instructions": [{{...}] }- ПОСТ `/v1/gov/ballots/zk-v1/ballot-proof` (функция: I18NI000000247X)
-  - `BallotProof` JSON туранан-тура ҡабул итә һәм `CastZkBallot` скелетын ҡайтара.
-  - Һорау:
-    { .
-      "власть": "i105...".
-      "сылбыр_ид": "0000000-0000-0000-00000000000000000000000000".
-      "шәхси_кәй": "...?",
-      "Һайлау_ид": "реф-1",
-      "Бальон": { .
-        "бэкэнд": "halo2/ipa",
-        "конверт_байт": "AAECAwQ=", // base64 ZK1 йәки H2* контейнер
-        "тамыр_клинт": нуль, // өҫтәмә 32 байтлы гекс еп (яуаплылыҡ тамыры)
-        "хужа": нуль, // опциональ канонлы иҫәпИК (I105 тура килә)
-        "нулификатор": нуль, // өҫтәмә 32 байтлы гекс стрингы (юҡлылыҡ һиҙеүе)
-        "сумма": "100", // опциональ йоҙаҡ суммаһы һиҙелә (ун унарлы еп)
-        "ваҡыт_блоктар": 6000, // опциональ йоҙаҡ оҙайлылығы тураһында кәңәш
-        "Йүнәлеш": "Айе" // өҫтәмә йүнәлеш кәңәше
-      }.
-    }.
-  - Яуап:
-    { .
-      "ок": дөрөҫ,
-      "ҡабул ителгән": дөрөҫ,
-      "аҡыл": "төҙөү транзакция скелеты",
-      "тх_инструкциялар": [ .
-        { "wire_id": "CastZkBallot", "Payload_hex": "..." }
-      ].
-    }.
-  - Иҫкәрмәләр:
+      "root_hint": "0x…64hex?",
+      "owner": "i105…",          // canonical AccountId (domainless encoded literal; no @domain suffix)
+      "amount": "100?",
+      "duration_blocks": 6000?,
+      "direction": "Aye|Nay|Abstain?",
+      "nullifier": "blake2b32:…64hex?"
+    }
+  - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
+
+- POST `/v1/gov/ballots/zk-v1/ballot-proof` (feature: `zk-ballot`)
+  - Accepts a `BallotProof` JSON directly and returns a `CastZkBallot` skeleton.
+  - Request:
+    {
+      "authority": "<i105-account-id>",
+      "chain_id": "00000000-0000-0000-0000-000000000000",
+      "private_key": "…?",
+      "election_id": "ref-1",
+      "ballot": {
+        "backend": "halo2/ipa",
+        "envelope_bytes": "AAECAwQ=",   // base64 of ZK1 or H2* container
+        "root_hint": null,                // optional 32-byte hex string (eligibility root)
+        "owner": null,                    // optional canonical AccountId (domainless encoded literal; no @domain suffix)
+        "nullifier": null,                // optional 32-byte hex string (nullifier hint)
+        "amount": "100",                  // optional lock amount hint (decimal string)
+        "duration_blocks": 6000,          // optional lock duration hint
+        "direction": "Aye"                // optional direction hint
+      }
+    }
+  - Response:
+    {
+      "ok": true,
+      "accepted": true,
+      "reason": "build transaction skeleton",
+      "tx_instructions": [
+        { "wire_id": "CastZkBallot", "payload_hex": "…" }
+      ]
+    }
+  - Notes:
+    - When `private_key` is provided, Torii submits the signed transaction and sets `reason` to `submitted transaction`.
     - The server maps optional `root_hint`/`owner`/`amount`/`duration_blocks`/`direction`/`nullifier` from the ballot to `public_inputs_json` for `CastZkBallot`.
-    - Конверт байттары инструкция файҙалы йөк өсөн base64 тип яңынан кодлана.
-    - Яуап I18NI000000258X `submitted transaction` XX үҙгәрә, ҡасан I18NT000000018X бюллетень тапшыра.
-    - Был ос нөктәһе I18NI000000260X функцияһы өҫтөндә булғанда ғына мөмкин.
+    - The envelope bytes are re-encoded as base64 for the instruction payload.
+    - This endpoint is only available when the `zk-ballot` feature is enabled.
 
-CastZkBallot тикшерергә юл
-- `CastZkBallot` тәьмин итеү base64 иҫбатлау һәм буш йәки дөрөҫ формалаштырылған файҙалы йөктәрҙе кире ҡаға (`BallotRejected` менән I18NI000000263X).
-- Әгәр `public_inputs_json` тәьмин ителһә, ул JSON объекты булырға тейеш; object булмаған файҙалы йөктәр кире ҡағыла.
-- Хозяйка референдумдан (I18NI0000265X) йәки идара итеү ғәҙәттән тыш хәлдәрҙән бюллетендәрҙе раҫлау асҡысын хәл итә һәм рекордты йәшәү өсөн талап итә, `Active`X һәм рәт-байттарҙы йөрөтә.
-- Һаҡланған раҫлау-ключ байттары `hash_vk` менән яңынан хеша; ниндәй ҙә булһа йөкләмә тап килмәүе аборт үтәү алдынан тикшерелгән һаҡланған реестр яҙмалары (`BallotRejected` менән `verifying key commitment mismatch`).
-- Дәлил байттар `zk::verify_backend` аша теркәлгән бекэндҡа ебәрелә; дөрөҫ булмаған транскрипттар `BallotRejected` тип I18NI0000000272Х менән өҫкә сыға һәм инструкция детерминистик яҡтан уңышһыҙлыҡҡа осрай.
-- Дәлил йәмәғәт индереүҙәре булараҡ тауыш биреүҙе һәм хоҡуҡ тамырын фашларға тейеш; тамыр тап килергә тейеш һайлау’I18NI000000273X, һәм алынған нулификатор теләһә ниндәй бирелгән кәңәштәр тура килергә тейеш.
-- Уңышлы дәлилдәр `BallotAccepted` сыға; дубликаты нульфираторҙары, иҫке хоҡуҡ тамырҙары, йәки блокировка регрессиялары был документта элек һүрәтләнгән ғәмәлдәге кире ҡағыу сәбәптәрен етештереүҙе дауам итә.
+CastZkBallot Verification Path
+- `CastZkBallot` decodes the supplied base64 proof and rejects empty or malformed payloads (`BallotRejected` with `invalid or empty proof`).
+- If `public_inputs_json` is supplied, it must be a JSON object; non-object payloads are rejected.
+- The host resolves the ballot verifying key from the referendum (`vk_ballot`) or governance defaults and requires the record to exist, be `Active`, and carry inline bytes.
+- Stored verifying-key bytes are re-hashed with `hash_vk`; any commitment mismatch aborts execution before verification to guard against tampered registry entries (`BallotRejected` with `verifying key commitment mismatch`).
+- Proof bytes are dispatched to the registered backend via `zk::verify_backend`; invalid transcripts surface as `BallotRejected` with `invalid proof` and the instruction fails deterministically.
+- The proof must expose a ballot commitment and eligibility root as public inputs; the root must match the election’s `eligible_root`, and the derived nullifier must match any provided hint.
+- Successful proofs emit `BallotAccepted`; duplicate nullifiers, stale eligibility roots, or lock regressions continue to produce the existing rejection reasons described earlier in this document.
 
-## Валидатор Misbehavior & берлектәге консенсус
+## Validator Misbehaviour & Joint Consensus
 
-### Слэшлау һәм төрмәлә эшләү эш ағымы
+### Slashing and Jailing Workflow
 
-Консенсус Norito-кодланған I18NI000000275X сығара, ҡасан да булһа протоколды боҙа. Һәр файҙалы йөк ергә төшөрөлгән хәтерҙә I18NI000000276X һәм, әгәр күренмәһә, WSV ярҙамында I18NI000002777X картаһына матдилаштырыла. `sumeragi.npos.reconfig.evidence_horizon_blocks` йәштән өлкән яҙмалар (`7 200` блоктары буйынса ғәҙәттәгесә) кире ҡағыла, шуға күрә архив ҡала сикләнгән, әммә кире ҡағыу операторҙар өсөн теркәлә. 1990 йылдарҙа был йүнәлештәге эшмәкәрлекте үҫтереүҙең төп йүнәлештәре булып тора улар ғариза биргәнсе штрафтарҙы юҡҡа сығара.
+Consensus emits Norito-encoded `Evidence` whenever a <i105-account-id> violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Records older than `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) are rejected so the archive remains bounded, but the rejection is logged for operators. Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties before they apply.
 
-Танылған енәйәттәр картаһы бер-береһенән I18NI000000285X; дискриминанттар мәғлүмәттәр моделе менән тотороҡло һәм үтәлә:
+Recognised offences map one-to-one to `EvidenceKind`; the discriminants are stable and enforced by the data model:
 
-I18NF000000025X
+```rust
+use iroha_data_model::block::consensus::EvidenceKind;
 
-- **Дүбәс Превит/Двойнойкоммит** — валидатор ҡул ҡуйған ҡапма-ҡаршылыҡлы хештар өсөн шул уҡ I18NI000000286X кортеж.
-- **InvalidQc** — агрегатор ғәйбәт ҡылған йөкләмә сертификаты, уның формаһы детерминистик тикшерелгән етешһеҙлектәре (мәҫәлән, буш ҡул ҡуйыусы битмап).
-- **InvalidPosal** — етәксе структур раҫлауҙы етешһеҙлектәргә дусар иткән блок тәҡдим итте (мәҫәлән, бикле сылбырлы ҡағиҙәне боҙа).
-- **Цензорлыҡ** — ҡул ҡуйылған тапшырыу квитанциялары операция күрһәтә, ул бер ҡасан да тәҡдим ителмәгән/коммитированный.
+let offences = [
+    EvidenceKind::DoublePrepare,
+    EvidenceKind::DoubleCommit,
+    EvidenceKind::InvalidQc,
+    EvidenceKind::InvalidProposal,
+    EvidenceKind::Censorship,
+];
 
-VRF штрафтары автоматик рәүештә үтәлә I18NI000000287X (накантсылар төрмәгә ултыртыла). Консенсус ҡырҡыу I18NI000000288X тәҙрәһенән һуң ғына ҡулланыла, әгәр ҙә идара итеү штрафты юҡҡа сыҡмаһа.
+for (expected, kind) in offences.iter().enumerate() {
+    assert_eq!(*kind as u16, expected as u16);
+}
+```
 
-Операторҙар һәм инструменттар тикшерергә һәм яңынан киң коммуналь файҙалы йөктәр аша тикшерергә мөмкин:
+- **DoublePrepare/DoubleCommit** — the <i105-account-id> signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
+- **InvalidQc** — an aggregator gossiped a commit QC whose shape fails deterministic checks (e.g., empty signer bitmap).
+- **InvalidProposal** — a leader proposed a block that fails structural validation (e.g., breaks the locked-chain rule).
+- **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
 
-- I18NT000000019X: I18NI000000289X һәм `GET /v1/sumeragi/evidence/count`.
-- CLI: `iroha ops sumeragi evidence list`, I18NI00000292Х, һәм `… submit --evidence-hex <payload>`.
+VRF penalties are enforced automatically after `activation_lag_blocks` (offenders are jailed). Consensus slashing is applied only after the `slashing_delay_blocks` window unless governance cancels the penalty.
 
-Идара итеү дәлилдәр байттарҙы канонлы иҫбатлау тип ҡарарға тейеш:
+Operators and tooling can inspect and re-broadcast payloads through:
 
-1. **Файҙалы йөктө йыйып алыу**, ул ҡартайғансы. Архив сеймал I18NT000000008X байт менән бер рәттән бейеклек/ҡараш метамағлүмәттәр.
-2. **Осратка кәрәк булһа, кәрәк** `CancelConsensusEvidencePenalty` тапшырып, дәлилдәр файҙалы йөкләмәһе менән I18NI000002955X аша үткән; рекорд `penalty_cancelled` һәм I18NI000000297X тип билдәләнә, ә ҡырҡҡыс ҡағылмай.
-3. **Штраф ** стадияһында файҙалы йөкләмәне референдум йәки sudo инструкцияға индереү (мәҫәлән, I18NI000002988X). Башҡарыу файҙалы йөктө раҫлай; дөрөҫ формалашҡан һәм иҫке дәлилдәр детерминистик рәүештә кире ҡағыла.
-4. **Теҙлек топологияһын планлаштырыу** шулай итеп, рәнйеткес валитатор шунда уҡ ҡабаттан ҡушыла алмай. Типик ағымдар сираты I18NI000000299X һәм I18NI000000000000 X яңыртылған исемлек менән.
-5. **Авизия һөҙөмтәләре** I18NI000000301X һәм I18NI000000302X аша дәлилдәрҙе тәьмин итеү өсөн алдынғы һәм идара итеү ҡабул итеүҙе тәьмин итеү.
+- Torii: `GET /v1/sumeragi/evidence` and `GET /v1/sumeragi/evidence/count`.
+- CLI: `iroha ops sumeragi evidence list`, `… count`, and `… submit --evidence-hex <payload>`.
 
-### Берлектәге-консенсус секвенирование
+Governance must treat the evidence bytes as canonical proof:
 
-Ҡушма консенсус гарантия бирә, тип, сығыу валитатор йыйылмаһы сик блокын тамамлай, яңы комплект тәҡдим итә башлағансы. Йүгереү ваҡыты парлы параметрҙар аша ҡағиҙә үтәй:
+1. **Collect the payload** before it ages out. Archive the raw Norito bytes alongside height/view metadata.
+2. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload before `slashing_delay_blocks` elapses; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, and no slashing applies.
+3. **Stage the penalty** by embedding the payload in a referendum or sudo instruction (e.g., `Unregister::peer`). Execution re-validates the payload; malformed nor stale evidence is rejected deterministically.
+4. **Schedule the follow-up topology** so the offending <i105-account-id> cannot immediately rejoin. Typical flows queue `SetParameter(Sumeragi::NextMode)` and `SetParameter(Sumeragi::ModeActivationHeight)` with the updated roster.
+5. **Audit results** via `/v1/sumeragi/evidence` and `/v1/sumeragi/status` to ensure the evidence counter advanced and governance enacted the removal.
 
-- I18NI000000303X һәм I18NI000000304X **бер үк блок**. I18NI000000305X ҡәтғи ҙурыраҡ булырға тейеш, блок бейеклегенән, тип йөрөтә яңыртыу, кәмендә бер блок лаг тәьмин итеү.
-- I18NI000000306X (I18NI000000307X) — конфигурация һаҡсыһы, ул нуль-лаг ҡул-оффына ҡамасаулай:
-- I18NI000000308X ( default I18NI000000309X) тотҡарлыҡтар консенсус ҡырҡыу, шуға күрә идара итеү штрафтарҙы юҡҡа сығара ала, улар ғариза биргәнсе.
+### Joint-Consensus Sequencing
+
+Joint consensus guarantees that the outgoing <i105-account-id> set finalises the boundary block before the new set starts proposing. The runtime enforces the rule via paired parameters:
+
+- `SumeragiParameter::NextMode` and `SumeragiParameter::ModeActivationHeight` must be committed in the **same block**. `mode_activation_height` must be strictly greater than the block height that carried the update, providing at least one-block lag.
+- `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) is the configuration guard that prevents zero-lag hand-offs:
+- `sumeragi.npos.reconfig.slashing_delay_blocks` (default `259200`) delays consensus slashing so governance can cancel penalties before they apply.
 
 ```rust
 use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS;
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- I18NI000000310X һәм `iroha --output-format text ops sumeragi params` аша эшләү ваҡыты һәм CLI спектакле параметрҙарын фашланы, шуға күрә операторҙар әүҙемләштереү бейеклеген һәм валидатор исемлеген раҫлай ала.
-- Идара итеү автоматлаштырыу һәр ваҡыт тейеш:
-  1. Финал дәлилдәр-ярҙам алып ташланған (йәки тергеҙеү) ҡарар.
-  2. I18NI000000312X менән эҙмә-эҙлекле үҙгәртеп ҡороу.
-  3. Монитор I18NI000000313X тиклем I18NI000000314X көтөлгән бейеклектә flips.
+- The runtime and CLI expose staged parameters through `/v1/sumeragi/params` and `iroha sumeragi params --summary`, so operators can confirm activation heights and <i105-account-id> rosters.
+- Governance automation should always:
+  1. Finalise the evidence-backed removal (or reinstatement) decision.
+  2. Queue a follow-up reconfiguration with `mode_activation_height = h_current + activation_lag_blocks`.
+  3. Monitor `/v1/sumeragi/status` until `effective_consensus_mode` flips at the expected height.
 
-Теләһә ниндәй скрипт, тип әйләндерә валидаторҙар йәки ҡулланыу ** тейеш түгел ** тырышлыҡ нуль-лаг активацияһы йәки ҡул-ҡул параметрҙарын төшөрөп ҡалдырырға; бындай транзакциялар кире ҡағыла һәм селтәрҙе алдағы режимда ҡалдыра.
+Any script that rotates <i105-account-id>s or applies slashing **must not** attempt zero-lag activation or omit the hand-off parameters; such transactions are rejected and leave the network in the previous mode.
 
-## Телеметрия өҫтө
+## Telemetry surfaces
 
-- I18NT00000000000000 метрикаһы экспорт менән идара итеү эшмәкәрлеге:
-  - I18NI000000315X (габарит) статус буйынса тәҡдим иҫәпләнә.
-  - I18NI000000316X (счетчик) өҫтәүҙәр ҡасан һаҡланған исемдәр киңлеге ҡабул итеү мөмкинлеге бирә йәки кире ҡаға таратыу.
-  - `governance_manifest_activations_total{event}` (концерн) яҙмалары күрһәтмәләрен күрһәтә (I18NI000000318X) һәм исемдәр киңлеге бәйләүҙәре (I18NI000000319X).
-- I18NI000000320X үҙ эсенә `governance` объекты тәҡдим һандарын көҙгөләй, отчет һаҡлау исемдәр киңлеге дөйөм, һәм һуңғы һуңғы асыҡ активацияларҙы исемлеккә (исем киңлеге, контракт id, код/АБИ хеш, блок бейеклеге, активация ваҡыты штампы). Операторҙар был өлкәлә һорау алыу мөмкин, тип раҫлай, тип ҡабул итеү яңыртылған манифест һәм һаҡланған исемдәр киңлеге ҡапҡалары үтәлгән.
-- I18NT000000003X шаблон (I18NI000000322X) һәм
-  телеметрия runbook I18NI0000000323X-та, нисек йәбешкән өсөн сым сигнализацияларын күрһәтә
-  тәҡдимдәр, юҡ асыҡ активациялар, йәки көтөлмәгән һаҡланған-исем киңлеге
-  эшләү ваҡытында яңыртыу ваҡытында кире ҡағыуҙар.
+- Prometheus metrics export governance activity:
+  - `governance_proposals_status{status}` (gauge) tracks proposal counts by status.
+  - `governance_protected_namespace_total{outcome}` (counter) increments when protected namespace admission allows or rejects a deploy.
+  - `governance_manifest_activations_total{event}` (counter) records manifest insertions (`event="manifest_inserted"`) and namespace bindings (`event="instance_bound"`).
+- `/status` includes a `governance` object mirroring the proposal counts, reporting protected namespace totals, and listing recent manifest activations (namespace, contract id, code/ABI hash, block height, activation timestamp). Operators can poll this field to confirm that enactments updated manifests and that protected namespace gates are enforced.
+- A Grafana template (`docs/source/grafana_governance_constraints.json`) and the
+  telemetry runbook in `telemetry.md` show how to wire alarms for stuck
+  proposals, missing manifest activations, or unexpected protected-namespace
+  rejections during runtime upgrades.

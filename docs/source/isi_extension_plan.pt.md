@@ -1,12 +1,14 @@
+<!-- Auto-generated stub for Portuguese (pt) translation. Replace this content with the full translation. -->
+
 ---
 lang: pt
 direction: ltr
 source: docs/source/isi_extension_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
-source_last_modified: "2026-01-03T18:07:57.214581+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 9648381ac7cc1716ffd3c48aca425ed17a6afe1ac73bdeff866ebbbd9147cf68
+source_last_modified: "2026-03-30T18:22:55.972718+00:00"
+translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---
 
@@ -34,17 +36,15 @@ primeiro o risco de segurança e operabilidade, depois o rendimento de UX.
 - Emitir `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` com o `AssetId` afetado.
 - Exigir os mesmos tokens de permissão que as edições de metadados de ativos existentes (proprietário da definição OU
   Subsídios estilo `CanModifyAssetMetadata`).
-- Abortar se o registro do ativo estiver faltando (sem criação implícita).
-
-### RotateAccountSignatory
+- Abortar se o registro do ativo estiver faltando (sem criação implícita).### RotateAccountSignatory
 - Troca atômica do signatário em `AccountId` preservando os metadados da conta e vinculados
   recursos (ativos, gatilhos, funções, permissões, eventos pendentes).
 - Verifique se o signatário atual corresponde ao chamador (ou autoridade delegada por meio de token explícito).
-- Rejeite se a nova chave pública já respalda outra conta no mesmo domínio.
+- Rejeite se a nova chave pública já respalda outra conta canônica.
 - Atualize todas as chaves canônicas que incorporam o ID da conta e invalidam os caches antes do commit.
 - Emita um `AccountEvent::SignatoryRotated` dedicado com chaves antigas/novas para trilhas de auditoria.
-- Andaime de migração: introduza `AccountLabel` + `AccountRekeyRecord` (consulte `account::rekey`) para que
-  contas existentes podem ser mapeadas para rótulos estáveis durante uma atualização contínua sem quebras de hash.
+- Estrutura de migração: conte com `AccountAlias` + `AccountRekeyRecord` (consulte `account::rekey`) para
+  as contas existentes podem manter ligações de alias estáveis durante uma atualização contínua sem quebras de hash.
 
 ### DesativarContractInstance
 - Remover ou marcar para exclusão a ligação `(namespace, contract_id)` enquanto persiste os dados de proveniência
@@ -72,14 +72,12 @@ primeiro o risco de segurança e operabilidade, depois o rendimento de UX.
   ou capacidade concedida) antes da mutação do estado.
 - Os conjuntos de acesso consultivos devem unir todas as chaves de leitura/gravação para manter a simultaneidade otimista correta.
 
-## Andaime de implementação
-
-- O modelo de dados agora carrega estruturas `SetAssetKeyValue`/`RemoveAssetKeyValue` para metadados de equilíbrio
+## Andaime de implementação- O modelo de dados agora carrega estruturas `SetAssetKeyValue`/`RemoveAssetKeyValue` para metadados de equilíbrio
   edições (`transparent.rs`).
 - Os visitantes do executor expõem espaços reservados que bloquearão as permissões assim que a fiação do host chegar
   (`default/mod.rs`).
 - Os tipos de protótipo Rekey (`account::rekey`) fornecem uma zona de destino para migrações contínuas.
-- O estado mundial inclui `account_rekey_records` codificado por `AccountLabel` para que possamos preparar o rótulo →
+- O estado mundial inclui `account_rekey_records` codificado por `AccountAlias` para que possamos preparar o alias →
   migrações de signatários sem tocar na codificação histórica `AccountId`.
 
 ## IVM Elaboração de Syscall

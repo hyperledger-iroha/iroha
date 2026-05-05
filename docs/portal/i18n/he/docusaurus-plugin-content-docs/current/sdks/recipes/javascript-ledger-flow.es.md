@@ -37,8 +37,8 @@ Esta receta usa los paquetes de Node.js `@iroha2/torii-client` y `@iroha2/crypto
 
 ```bash
 npm install @iroha2/torii-client @iroha2/crypto-target-node
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
@@ -62,7 +62,7 @@ const tx = buildTransaction({
   chain: '00000000-0000-0000-0000-000000000000',
   authority: adminAccount,
   instructions: [
-    {Register: {assetDefinition: {numeric: {id: 'coffee#wonderland'}}}},
+    {Register: {assetDefinition: {numeric: {id: '7Sp2j6zDvJFnMoscAiMaWbWHRDBZ'}}}},
     {Mint: {asset: {id: `norito:4e52543000000002`}, value: {quantity: '250'}}},
     {Transfer: {
       asset: {id: `norito:4e52543000000002`},
@@ -79,7 +79,7 @@ console.log('Submitted tx', txHash);
 
 const balances = await client.listAccountAssets(receiverAccount, {limit: 10});
 for (const asset of balances.items) {
-  if (asset.id.definition === 'coffee#wonderland') {
+  if (asset.id.definition === '7Sp2j6zDvJFnMoscAiMaWbWHRDBZ') {
     console.log('Receiver holds', asset.value, 'units of', asset.id.definition);
   }
 }

@@ -5,6 +5,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(not(target_os = "windows"))]
+fn append_if_cuda_driver_dir(paths: &mut Vec<PathBuf>, dir: PathBuf) {
+    let has_cuda_soname = ["libcuda.so", "libcuda.so.1", "libcuda.so.1.1"]
+        .iter()
+        .any(|name| dir.join(name).is_file());
+    if has_cuda_soname && !paths.iter().any(|existing| existing == &dir) {
+        paths.push(dir);
+    }
+}
+
 pub fn include_cuda() {
     if env::var("DOCS_RS").is_err() && !cfg!(doc) {
         let paths = find_cuda_lib_dirs();
@@ -218,6 +228,21 @@ pub fn find_cuda_lib_dirs() -> Vec<PathBuf> {
             continue;
         }
     }
+
+    // Driver-only hosts (for example WSL GPU passthrough) may expose `libcuda.so`
+    // without a full toolkit root such as `/usr/local/cuda`.
+    for dir in [
+        PathBuf::from("/usr/lib/wsl/lib"),
+        PathBuf::from("/usr/lib64"),
+        PathBuf::from("/usr/lib/x86_64-linux-gnu"),
+        PathBuf::from("/usr/lib"),
+        PathBuf::from("/lib64"),
+        PathBuf::from("/lib/x86_64-linux-gnu"),
+        PathBuf::from("/lib"),
+    ] {
+        append_if_cuda_driver_dir(&mut valid_paths, dir);
+    }
+
     valid_paths
 }
 
@@ -339,6 +364,24 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn appends_driver_dir_when_cuda_soname_exists() {
+        let temp_root = TempDriverLibDir::new();
+        let mut paths = Vec::new();
+        append_if_cuda_driver_dir(&mut paths, temp_root.path().to_path_buf());
+        assert_eq!(paths, vec![temp_root.path().to_path_buf()]);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn skips_driver_dir_without_cuda_soname() {
+        let temp_root = TempEmptyDir::new();
+        let mut paths = Vec::new();
+        append_if_cuda_driver_dir(&mut paths, temp_root.path().to_path_buf());
+        assert!(paths.is_empty());
+    }
+
     struct TempCudaRoot {
         path: PathBuf,
     }
@@ -367,6 +410,69 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.path);
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    struct TempDriverLibDir {
+        path: PathBuf,
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    impl TempDriverLibDir {
+        fn new() -> Self {
+            let path = temp_dir("driver");
+            fs::write(path.join("libcuda.so.1"), "").expect("failed to create libcuda stub");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    impl Drop for TempDriverLibDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    struct TempEmptyDir {
+        path: PathBuf,
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    impl TempEmptyDir {
+        fn new() -> Self {
+            Self {
+                path: temp_dir("empty"),
+            }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    impl Drop for TempEmptyDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn temp_dir(tag: &str) -> PathBuf {
+        let mut base = env::temp_dir();
+        let nonce = NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        base.push(format!("find_cuda_helper_test_{tag}_{ts}_{nonce}"));
+        fs::create_dir_all(&base).expect("failed to create temp dir");
+        base
     }
 
     struct EnvVarGuard {

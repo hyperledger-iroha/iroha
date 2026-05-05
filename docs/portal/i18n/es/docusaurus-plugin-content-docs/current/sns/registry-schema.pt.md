@@ -120,7 +120,7 @@ Enum AuctionKind {
 | `suffix` | `AsciiString` | Por ejemplo, `sora`. |
 | `steward` | `AccountId` | Steward no ha definido una carta de gobierno. |
 | `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | Identificador de ativo de asentamiento por padrao (por ejemplo `xor#sora`). |
+| `payment_asset_id` | `AsciiString` | Identificador de ativo de asentamiento por padrao (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `pricing` | `Vec<PriceTierV1>` | Coeficientes de preco por tiers e regras de duracao. |
 | `min_term_years` | `u8` | Piso para o termo comprado independientemente de anulaciones de nivel. |
 | `grace_period_days` | `u16` | Predeterminado 30. |
@@ -225,7 +225,7 @@ Todas las chaves serializan usando tuplas Norito para mantener o hash determiní
 Puertas de enlace asignadas `RegistryEventV1` y sincronizadas DNS/SoraFS ao:
 
 1. Buscar o ultimo `NameRecordV1` referenciado pela secuencia de eventos.
-2. Regenerar plantillas de resolución (enderecos I105 preferidos + comprimidos (`sora`) como segunda opción, registros de texto).
+2. Regenerar plantillas de resolución (enderecos i105 preferidos + comprimidos (`sora`) como segunda opción, registros de texto).
 3. Pincer los datos de zona actualizados a través del flujo SoraDNS descrito en [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 Garantías de entrega de eventos:
@@ -245,7 +245,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "i105...",
+    owner: "<i105-account-id>",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -272,9 +272,9 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "i105...",
+    steward: "<i105-account-id>",
     status: Active,
-    payment_asset_id: "xor#sora",
+    payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc",
     pricing: [
         PriceTierV1 { tier_id:0, label_regex:"^[a-z0-9]{3,}$", base_price:"120 XOR", auction_kind:VickreyCommitReveal, dutch_floor:None, min_duration_years:1, max_duration_years:5 },
         PriceTierV1 { tier_id:1, label_regex:"^[a-z]{1,2}$", base_price:"10_000 XOR", auction_kind:DutchReopen, dutch_floor:Some("1_000 XOR"), min_duration_years:1, max_duration_years:3 }
@@ -285,10 +285,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("i105..."), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("<i105-account-id>"), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "i105...",
+    fund_splitter_account: "<i105-account-id>",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

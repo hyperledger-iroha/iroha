@@ -132,7 +132,7 @@ authority (private keys travel only in-memory inside Torii’s secure handler):
 - `GET /v1/accounts/{uaid}/portfolio` —
   Norito-backed aggregator that mirrors `ToriiClient.getUaidPortfolio` so wallets
   can render universal holdings without scraping per-dataspace state. Pass
-  `asset_id=<asset#definition::owner>` to filter the snapshot down to one asset.
+  `asset_id=<canonical_base58_asset_definition_id>` to filter the snapshot down to one asset.
 - `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` — fetch the
   canonical manifest JSON, lifecycle metadata, and manifest hash for audits.
 - `POST /v1/space-directory/manifests` — submit new or replacement manifests

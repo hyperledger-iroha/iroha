@@ -2,18 +2,22 @@ package org.hyperledger.iroha.android.client.okhttp;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import okhttp3.OkHttpClient;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
+import org.hyperledger.iroha.android.client.HttpTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.junit.Test;
@@ -75,5 +79,63 @@ public final class OkHttpTransportExecutorTests {
     final OkHttpTransportExecutor executor = new OkHttpTransportExecutor(client);
     executor.invalidateAndCancel();
     assertTrue(client.dispatcher().executorService().isShutdown());
+  }
+
+  @Test
+  public void defaultFactoryInvalidationDoesNotShutdownSharedDispatcher() {
+    final OkHttpClient client = new OkHttpClient();
+    OkHttpClientProvider.installForTests(client);
+    try {
+      OkHttpTransportExecutorFactory.createDefault().invalidateAndCancel();
+      assertFalse(client.dispatcher().executorService().isShutdown());
+    } finally {
+      client.dispatcher().executorService().shutdownNow();
+      OkHttpClientProvider.resetForTests();
+    }
+  }
+
+  @Test
+  public void defaultFactoryInvalidationCancelsOnlyExecutorCalls() throws Exception {
+    try (MockWebServer server = new MockWebServer()) {
+      server.enqueue(new MockResponse().setBody("slow").setBodyDelay(5, TimeUnit.SECONDS));
+      server.start();
+
+      final OkHttpClient client = new OkHttpClient();
+      OkHttpClientProvider.installForTests(client);
+      try {
+        final HttpTransportExecutor executor = OkHttpTransportExecutorFactory.createDefault();
+        final TransportRequest request =
+            TransportRequest.builder()
+                .setMethod("GET")
+                .setUri(server.url("/slow").uri())
+                .build();
+
+        final CompletableFuture<TransportResponse> future = executor.execute(request);
+        executor.invalidateAndCancel();
+
+        final ExecutionException error =
+            assertThrows(ExecutionException.class, () -> future.get(2, TimeUnit.SECONDS));
+        assertNotNull(error.getCause());
+        assertFalse(client.dispatcher().executorService().isShutdown());
+      } finally {
+        client.dispatcher().executorService().shutdownNow();
+        OkHttpClientProvider.resetForTests();
+      }
+    }
+  }
+
+  @Test
+  public void sharedProviderReplacesShutdownClient() {
+    final OkHttpClient client = new OkHttpClient();
+    OkHttpClientProvider.installForTests(client);
+    client.dispatcher().executorService().shutdown();
+    try {
+      final OkHttpClient replacement = OkHttpClientProvider.shared();
+      assertNotSame(client, replacement);
+      assertFalse(replacement.dispatcher().executorService().isShutdown());
+      replacement.dispatcher().executorService().shutdownNow();
+    } finally {
+      OkHttpClientProvider.resetForTests();
+    }
   }
 }

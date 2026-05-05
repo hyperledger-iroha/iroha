@@ -220,11 +220,14 @@ pub fn max_instruction_cost() -> u64 {
         .unwrap_or(0)
 }
 
-/// Compute gas cost considering vector length and HTM retries.
-#[allow(dead_code)]
-pub fn cost_of_with_params(instr: u32, vector_len: usize, htm_retries: u32) -> Option<u64> {
-    let mut cost = cost_of(instr)?;
-    let wide_op = wide::opcode(instr);
+/// Compute gas cost when the base cost and opcode were already extracted.
+pub(crate) fn cost_from_parts(
+    base_cost: Option<u64>,
+    wide_op: u8,
+    vector_len: usize,
+    htm_retries: u32,
+) -> Option<u64> {
+    let mut cost = base_cost?;
     if matches!(
         wide_op,
         wide::crypto::VADD32
@@ -238,6 +241,13 @@ pub fn cost_of_with_params(instr: u32, vector_len: usize, htm_retries: u32) -> O
         cost = (cost * lanes as u64).div_ceil(VECTOR_BASE_LANES as u64);
     }
     Some(cost.saturating_mul(htm_retries as u64 + 1))
+}
+
+/// Compute gas cost considering vector length and HTM retries.
+#[allow(dead_code)]
+pub fn cost_of_with_params(instr: u32, vector_len: usize, htm_retries: u32) -> Option<u64> {
+    let wide_op = wide::opcode(instr);
+    cost_from_parts(cost_of(instr), wide_op, vector_len, htm_retries)
 }
 
 /// Deterministic digest of the canonical gas schedule.
@@ -255,4 +265,25 @@ pub fn schedule_hash() -> Hash {
         buf.extend_from_slice(&cost.to_le_bytes());
     }
     Hash::new(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cost_from_parts_matches_full_cost_path() {
+        for &op in SCHEDULE_OPCODES {
+            let instr = u32::from(op) << 24;
+            for vector_len in [0, 1, 2, 4, 16] {
+                for htm_retries in [0, 1, 3] {
+                    assert_eq!(
+                        cost_from_parts(cost_of(instr), op, vector_len, htm_retries),
+                        cost_of_with_params(instr, vector_len, htm_retries),
+                        "op=0x{op:02x} vector_len={vector_len} htm_retries={htm_retries}",
+                    );
+                }
+            }
+        }
+    }
 }

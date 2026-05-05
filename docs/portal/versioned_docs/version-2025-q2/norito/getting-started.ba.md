@@ -86,7 +86,7 @@ I18NI000000042X миҫалы сәләмләү һәм `SET_ACCOUNT_DETAIL` syscal
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority i105... \
+  --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

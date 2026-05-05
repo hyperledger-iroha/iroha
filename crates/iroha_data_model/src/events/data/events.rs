@@ -64,6 +64,8 @@ mod model {
         Peer(peer::PeerEvent),
         /// Domain event
         Domain(domain::DomainEvent),
+        /// Asset-definition event whose origin does not map to a domain event.
+        AssetDefinitionStandalone(asset::StandaloneAssetDefinitionEvent),
         /// Trigger event
         Trigger(trigger::TriggerEvent),
         /// Role event
@@ -87,9 +89,11 @@ mod model {
         /// `SoraFS` gateway compliance events
         Sorafs(super::sorafs::SorafsGatewayEvent),
         /// Offline settlement lifecycle events
-        Offline(super::offline::OfflineTransferEvent),
+        Offline(super::offline::OfflineNoteEvent),
         /// Space Directory manifest lifecycle events
         SpaceDirectory(super::space_directory::SpaceDirectoryEvent),
+        /// Native asset escrow lifecycle events
+        Escrow(super::escrow::EscrowEvent),
         /// Oracle feed aggregation lifecycle events
         Oracle(super::oracle::OracleEvent),
         #[cfg(feature = "governance")]
@@ -476,6 +480,17 @@ mod asset {
             /// Account that performed the mint.
             pub authority: AccountId,
         }
+
+        /// Wrapper for asset-definition events that cannot be grouped under a domain event.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[repr(transparent)]
+        pub struct StandaloneAssetDefinitionEvent {
+            /// Asset-definition event payload.
+            pub event: AssetDefinitionEvent,
+        }
     }
 }
 
@@ -556,6 +571,155 @@ mod nft {
 
 #[cfg(feature = "json")]
 impl_json_via_norito_bytes!(NftOwnerChanged);
+
+mod rwa {
+    //! This module contains `RwaEvent` and its impls.
+
+    use iroha_data_model_derive::model;
+
+    pub use self::model::*;
+    use super::*;
+
+    /// Metadata change captured for a specific RWA lot.
+    type RwaMetadataChanged = MetadataChanged<RwaId>;
+
+    data_event! {
+        #[has_origin(origin = Rwa)]
+        /// Event describing lifecycle changes for a single RWA lot.
+        pub enum RwaEvent {
+            #[has_origin(rwa => rwa.id())]
+            /// Lot was created.
+            Created(Rwa),
+            #[has_origin(metadata_changed => &metadata_changed.target)]
+            /// Metadata entry was inserted or updated.
+            MetadataInserted(RwaMetadataChanged),
+            #[has_origin(metadata_changed => &metadata_changed.target)]
+            /// Metadata entry was removed.
+            MetadataRemoved(RwaMetadataChanged),
+            #[has_origin(owner_changed => &owner_changed.rwa)]
+            /// Full-lot ownership changed in place.
+            OwnerChanged(RwaOwnerChanged),
+            #[has_origin(split => &split.source)]
+            /// A partial transfer split quantity out of the source lot.
+            Split(RwaSplit),
+            #[has_origin(merged => &merged.child)]
+            /// A new derived lot was created from parent lots.
+            Merged(RwaMerged),
+            #[has_origin(quantity_changed => &quantity_changed.rwa)]
+            /// Quantity was redeemed from the lot.
+            Redeemed(RwaQuantityChanged),
+            #[has_origin(id => id)]
+            /// Lot was frozen.
+            Frozen(RwaId),
+            #[has_origin(id => id)]
+            /// Lot was unfrozen.
+            Unfrozen(RwaId),
+            #[has_origin(hold_changed => &hold_changed.rwa)]
+            /// Quantity was placed on hold.
+            Held(RwaHoldChanged),
+            #[has_origin(hold_changed => &hold_changed.rwa)]
+            /// Held quantity was released.
+            Released(RwaHoldChanged),
+            #[has_origin(force_transfer => &force_transfer.source)]
+            /// Controller-driven transfer split quantity out of the source lot.
+            ForceTransferred(RwaSplit),
+            #[has_origin(controls_changed => &controls_changed.rwa)]
+            /// Control policy changed.
+            ControlsChanged(RwaControlsChanged),
+        }
+    }
+
+    #[model]
+    mod model {
+        use super::*;
+
+        /// Event emitted when full-lot ownership changes in place.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct RwaOwnerChanged {
+            /// Lot whose owner changed.
+            pub rwa: RwaId,
+            /// New owner of the lot.
+            pub new_owner: AccountId,
+        }
+
+        /// Event emitted when quantity is split out of a source lot into a child lot.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct RwaSplit {
+            /// Source lot reduced in place.
+            pub source: RwaId,
+            /// New child lot receiving the transferred quantity.
+            pub child: RwaId,
+            /// Quantity moved into the child lot.
+            pub quantity: Numeric,
+            /// Owner of the child lot.
+            pub new_owner: AccountId,
+        }
+
+        /// Event emitted when a derived lot is created from parent contributions.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct RwaMerged {
+            /// Child lot created by the merge.
+            pub child: RwaId,
+            /// Quantitative parent contributions.
+            pub parents: Vec<RwaParentRef>,
+        }
+
+        /// Event emitted when lot quantity changes due to redemption.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct RwaQuantityChanged {
+            /// Lot whose quantity changed.
+            pub rwa: RwaId,
+            /// Quantity affected by the operation.
+            pub quantity: Numeric,
+        }
+
+        /// Event emitted when held quantity changes.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct RwaHoldChanged {
+            /// Lot whose held quantity changed.
+            pub rwa: RwaId,
+            /// Quantity affected by the hold or release.
+            pub quantity: Numeric,
+        }
+
+        /// Event emitted when a lot's control policy changes.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        pub struct RwaControlsChanged {
+            /// Lot whose controls changed.
+            pub rwa: RwaId,
+            /// Full replacement control policy.
+            pub controls: RwaControlPolicy,
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl_json_via_norito_bytes!(
+    RwaOwnerChanged,
+    RwaSplit,
+    RwaMerged,
+    RwaQuantityChanged,
+    RwaHoldChanged,
+    RwaControlsChanged
+);
 
 mod peer {
     //! This module contains `PeerEvent` and its impls
@@ -657,6 +821,9 @@ mod account {
             #[has_origin(asset_event => &asset_event.origin().account)]
             /// Nested asset event scoped to this account.
             Asset(AssetEvent),
+            #[has_origin(controller_replaced => &controller_replaced.account)]
+            /// Account controller was replaced while preserving linked state.
+            ControllerReplaced(AccountControllerReplaced),
             #[has_origin(permission_changed => &permission_changed.account)]
             /// Permission was granted to the account.
             PermissionAdded(AccountPermissionChanged),
@@ -675,9 +842,37 @@ mod account {
             #[has_origin(metadata_changed => &metadata_changed.target)]
             /// Metadata entry was removed.
             MetadataRemoved(AccountMetadataChanged),
+            #[has_origin(recovery_event => recovery_event.origin())]
+            /// Social recovery lifecycle event scoped to this account.
+            Recovery(AccountRecoveryEvent),
             #[has_origin(repo_event => repo_event.origin())]
             /// Repo agreement lifecycle event scoped to this account.
             Repo(RepoAccountEvent),
+        }
+    }
+
+    data_event! {
+        #[has_origin(origin = Account)]
+        /// Account social-recovery lifecycle event.
+        pub enum AccountRecoveryEvent {
+            #[has_origin(event => &event.account)]
+            /// Recovery policy was set or replaced.
+            PolicySet(AccountRecoveryPolicySet),
+            #[has_origin(event => &event.account)]
+            /// Recovery policy was cleared.
+            PolicyCleared(AccountRecoveryPolicyCleared),
+            #[has_origin(event => &event.account)]
+            /// Recovery request was proposed.
+            Proposed(AccountRecoveryProposed),
+            #[has_origin(event => &event.account)]
+            /// Recovery request approval was recorded.
+            Approved(AccountRecoveryApproved),
+            #[has_origin(event => &event.account)]
+            /// Recovery request was cancelled.
+            Cancelled(AccountRecoveryCancelled),
+            #[has_origin(event => &event.account)]
+            /// Recovery request was finalized.
+            Finalized(AccountRecoveryFinalized),
         }
     }
 
@@ -704,6 +899,20 @@ mod account {
             pub permission: Permission,
         }
 
+        /// Payload emitted when an account controller is replaced.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct AccountControllerReplaced {
+            /// New canonical account identifier after replacement.
+            pub account: AccountId,
+            /// Previous canonical account identifier before replacement.
+            pub previous_account: AccountId,
+            /// Previous controller attached to the account.
+            pub previous_controller: crate::account::AccountController,
+            /// New controller attached to the account.
+            pub new_controller: crate::account::AccountController,
+        }
+
         /// Depending on the wrapping event, [`AccountRoleChanged`] represents the granted or revoked role
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -712,6 +921,87 @@ mod account {
         pub struct AccountRoleChanged {
             pub account: AccountId,
             pub role: RoleId,
+        }
+
+        /// Recovery-policy update payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        pub struct AccountRecoveryPolicySet {
+            /// Account whose stable alias policy was updated.
+            pub account: AccountId,
+            /// Stable alias targeted by the policy.
+            pub alias: crate::account::AccountAlias,
+            /// Recovery policy that was persisted.
+            pub policy: crate::account::AccountRecoveryPolicy,
+        }
+
+        /// Recovery-policy removal payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct AccountRecoveryPolicyCleared {
+            /// Account whose stable alias policy was cleared.
+            pub account: AccountId,
+            /// Stable alias whose policy was removed.
+            pub alias: crate::account::AccountAlias,
+        }
+
+        /// Recovery-request proposal payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        pub struct AccountRecoveryProposed {
+            /// Account currently active behind the alias.
+            pub account: AccountId,
+            /// Stable alias targeted by the request.
+            pub alias: crate::account::AccountAlias,
+            /// Request persisted in world state.
+            pub request: crate::account::AccountRecoveryRequest,
+        }
+
+        /// Recovery-request approval payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        pub struct AccountRecoveryApproved {
+            /// Account currently active behind the alias.
+            pub account: AccountId,
+            /// Stable alias targeted by the request.
+            pub alias: crate::account::AccountAlias,
+            /// Guardian that recorded the approval.
+            pub approver: AccountId,
+            /// Updated request after approval was recorded.
+            pub request: crate::account::AccountRecoveryRequest,
+        }
+
+        /// Recovery-request cancellation payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        pub struct AccountRecoveryCancelled {
+            /// Account currently active behind the alias.
+            pub account: AccountId,
+            /// Stable alias targeted by the request.
+            pub alias: crate::account::AccountAlias,
+            /// Authority that cancelled the request.
+            pub cancelled_by: AccountId,
+            /// Updated request after cancellation.
+            pub request: crate::account::AccountRecoveryRequest,
+        }
+
+        /// Recovery-request finalization payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        pub struct AccountRecoveryFinalized {
+            /// New account active behind the alias after finalization.
+            pub account: AccountId,
+            /// Previous account active behind the alias before finalization.
+            pub previous_account: AccountId,
+            /// Stable alias targeted by the request.
+            pub alias: crate::account::AccountAlias,
+            /// Finalized request snapshot.
+            pub request: crate::account::AccountRecoveryRequest,
         }
     }
 
@@ -746,17 +1036,59 @@ mod account {
         pub fn origin_domain(&self) -> &DomainId {
             match self {
                 Self::Created(created) => &created.domain,
-                Self::Asset(asset_event) => asset_event.origin().definition.domain(),
+                Self::Asset(asset_event) => asset_event
+                    .origin()
+                    .definition
+                    .try_domain()
+                    .expect("domain event requires a domain-scoped asset definition id"),
                 other => {
                     panic!("domain context is not embedded in account event variant {other:?}")
                 }
             }
         }
     }
+
+    impl AssetDefinitionEvent {
+        /// Return the domain context when the asset-definition origin is still domain-scoped.
+        #[must_use]
+        pub fn try_origin_domain(&self) -> Option<&DomainId> {
+            match self {
+                Self::Created(asset_definition) => asset_definition.id().try_domain(),
+                Self::Deleted(asset_definition_id)
+                | Self::MintabilityChanged(asset_definition_id) => asset_definition_id.try_domain(),
+                Self::MetadataInserted(metadata_changed)
+                | Self::MetadataRemoved(metadata_changed) => metadata_changed.target.try_domain(),
+                Self::MintabilityChangedDetailed(mintability_changed) => {
+                    mintability_changed.asset_definition.try_domain()
+                }
+                Self::TotalQuantityChanged(total_quantity_changed) => {
+                    total_quantity_changed.asset_definition.try_domain()
+                }
+                Self::OwnerChanged(owner_changed) => owner_changed.asset_definition.try_domain(),
+            }
+        }
+
+        /// Return the domain context required by [`DomainEvent::AssetDefinition`].
+        #[must_use]
+        pub fn origin_domain(&self) -> &DomainId {
+            self.try_origin_domain()
+                .expect("domain event requires a domain-scoped asset definition id")
+        }
+    }
 }
 
 #[cfg(feature = "json")]
-impl_json_via_norito_bytes!(AccountPermissionChanged, AccountRoleChanged);
+impl_json_via_norito_bytes!(
+    AccountPermissionChanged,
+    AccountRoleChanged,
+    AccountControllerReplaced,
+    AccountRecoveryPolicySet,
+    AccountRecoveryPolicyCleared,
+    AccountRecoveryProposed,
+    AccountRecoveryApproved,
+    AccountRecoveryCancelled,
+    AccountRecoveryFinalized
+);
 
 mod repo_account {
     //! Repo lifecycle events scoped to individual accounts.
@@ -951,12 +1283,15 @@ mod domain {
             Created(Domain),
             /// Domain was deleted.
             Deleted(DomainId),
-            #[has_origin(asset_definition_event => asset_definition_event.origin().domain())]
+            #[has_origin(asset_definition_event => asset_definition_event.origin_domain())]
             /// Asset-definition event occurred in the domain scope.
             AssetDefinition(AssetDefinitionEvent),
             #[has_origin(nft_event => &nft_event.origin().domain)]
             /// NFT event occurred in the domain scope.
             Nft(NftEvent),
+            #[has_origin(rwa_event => &rwa_event.origin().domain)]
+            /// RWA event occurred in the domain scope.
+            Rwa(RwaEvent),
             #[has_origin(account_event => account_event.origin_domain())]
             /// Account event occurred in the domain scope.
             Account(AccountEvent),
@@ -2093,7 +2428,11 @@ impl From<AccountEvent> for DataEvent {
 
 impl From<AssetDefinitionEvent> for DataEvent {
     fn from(value: AssetDefinitionEvent) -> Self {
-        DomainEvent::AssetDefinition(value).into()
+        if value.try_origin_domain().is_some() {
+            DomainEvent::AssetDefinition(value).into()
+        } else {
+            Self::AssetDefinitionStandalone(asset::StandaloneAssetDefinitionEvent { event: value })
+        }
     }
 }
 
@@ -2109,15 +2448,59 @@ impl From<NftEvent> for DataEvent {
     }
 }
 
+impl From<RwaEvent> for DataEvent {
+    fn from(value: RwaEvent) -> Self {
+        DomainEvent::Rwa(value).into()
+    }
+}
+
 impl DataEvent {
     /// Return the domain id of [`DataEvent`]
     pub fn domain(&self) -> Option<&DomainId> {
         match self {
             Self::Domain(event) => Some(event.origin()),
+            Self::AssetDefinitionStandalone(event) => event.event.try_origin_domain(),
             #[cfg(feature = "governance")]
             Self::Governance(_) => None,
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod event_routing_tests {
+    use super::{
+        DataEvent,
+        asset::{AssetDefinitionEvent, StandaloneAssetDefinitionEvent},
+        domain::DomainEvent,
+    };
+    use crate::{asset::AssetDefinitionId, domain::DomainId};
+
+    #[test]
+    fn opaque_asset_definition_events_route_without_domain_wrapper() {
+        let domain_id: DomainId = DomainId::try_new("reward", "universal").expect("domain");
+        let scoped_definition =
+            AssetDefinitionId::new(domain_id.clone(), "fee".parse().expect("asset name"));
+        let opaque_definition: AssetDefinitionId = scoped_definition
+            .to_string()
+            .parse()
+            .expect("opaque canonical asset definition id");
+
+        let opaque_event = AssetDefinitionEvent::Deleted(opaque_definition.clone());
+        assert!(opaque_event.try_origin_domain().is_none());
+        assert!(matches!(
+            DataEvent::from(opaque_event.clone()),
+            DataEvent::AssetDefinitionStandalone(StandaloneAssetDefinitionEvent {
+                event: AssetDefinitionEvent::Deleted(id),
+            }) if id == opaque_definition
+        ));
+        assert!(DataEvent::from(opaque_event).domain().is_none());
+
+        let scoped_event = AssetDefinitionEvent::Deleted(scoped_definition);
+        assert!(matches!(
+            DataEvent::from(scoped_event),
+            DataEvent::Domain(DomainEvent::AssetDefinition(_))
+        ));
     }
 }
 
@@ -2130,7 +2513,7 @@ mod tests {
     #[test]
     fn metadata_changed_json_roundtrip() {
         let changed = MetadataChanged {
-            target: "default".parse().expect("valid domain"),
+            target: DomainId::try_new("default", "universal").expect("valid domain"),
             key: "metadata_key".parse().expect("valid name"),
             value: Json::from("metadata_value"),
         };
@@ -2146,7 +2529,10 @@ pub mod prelude {
     pub use super::{
         DataEvent, HasOrigin, MetadataChanged,
         account::{
-            AccountCreated, AccountEvent, AccountEventSet, AccountPermissionChanged,
+            AccountControllerReplaced, AccountCreated, AccountEvent, AccountEventSet,
+            AccountPermissionChanged, AccountRecoveryApproved, AccountRecoveryCancelled,
+            AccountRecoveryEvent, AccountRecoveryEventSet, AccountRecoveryFinalized,
+            AccountRecoveryPolicyCleared, AccountRecoveryPolicySet, AccountRecoveryProposed,
             AccountRoleChanged,
         },
         asset::{
@@ -2176,6 +2562,10 @@ pub mod prelude {
             RepoAccountRole, RepoAccountSettled,
         },
         role::{RoleEvent, RoleEventSet, RolePermissionChanged},
+        rwa::{
+            RwaControlsChanged, RwaEvent, RwaEventSet, RwaHoldChanged, RwaMerged, RwaOwnerChanged,
+            RwaQuantityChanged, RwaSplit,
+        },
         trigger::{TriggerEvent, TriggerEventSet, TriggerNumberOfExecutionsChanged},
     };
     pub use crate::{DataSpaceId, LaneId};

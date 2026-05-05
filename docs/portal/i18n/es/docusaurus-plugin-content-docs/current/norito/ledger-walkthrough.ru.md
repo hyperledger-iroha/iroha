@@ -29,8 +29,8 @@ Para todas las instrucciones, coloque `$ADMIN_ACCOUNT` e `$RECEIVER_ACCOUNT` en 
 ID аккаунтов. En el paquete de software que contiene esta segunda cuenta, puede utilizar el programa de demostración:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Подтвердите значения, выведя первые аккаунты:
@@ -49,7 +49,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts внутри wonderland (увеличьте --limit при необходимости)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions, которые уже существуют
@@ -63,7 +63,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI muestra esta transmisión automática (por ejemplo, `0x5f…`). Сохраните его, чтобы
@@ -72,7 +72,7 @@ CLI muestra esta transmisión automática (por ejemplo, `0x5f…`). Сохран
 ## 3. Замитьте единицы на операторский аккаунт
 
 La acción del colector está activada según el párrafo `(asset definition, account)`. Замитьте 250
-Edición `coffee#wonderland` en `$ADMIN_ACCOUNT`:
+Edición `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` en `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

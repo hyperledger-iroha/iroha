@@ -117,7 +117,7 @@ seiyaku Name {
 Semantika
 - `meta { ... }` sahələri emissiya edilmiş IVM başlığı üçün tərtibçi defoltlarını ləğv edir: `abi_version`, `vector_length` (0 təyin olunmamış deməkdir), `max_cycles` (0, kompilyatorun defolt-başlığı deməkdir)030 xüsusiyyət bitləri (ZK izləmə, vektor elanı). Kompilyator `max_cycles: 0`-ə “standart istifadə” kimi yanaşır və qəbul tələblərini ödəmək üçün konfiqurasiya edilmiş sıfırdan fərqli defolt emissiya edir. Dəstəklənməyən xüsusiyyətlər xəbərdarlıqla nəzərə alınmır. `meta {}` buraxıldıqda, kompilyator `abi_version = 1` yayır və qalan başlıq sahələri üçün standart parametrlərdən istifadə edir.
 - `features: ["zk", "simd"]` (ləqəblər: `"vector"`) açıq şəkildə müvafiq başlıq bitlərini tələb edir. Naməlum xüsusiyyət sətirləri indi göz ardı edilmək əvəzinə təhlilçi xətası yaradır.
-- `state` davamlı müqavilə dəyişənlərini elan edir. Kompilyator `STATE_GET/STATE_SET/STATE_DEL` sistem çağırışlarına girişləri azaldır və host onları hər bir əməliyyatın üst-üstə düşməsində (yoxlama nöqtəsi/bərpa geri qaytarma, WSV-də yerinə yetirməkdə yuyunma) mərhələləşdirir. Hərfi vəziyyət yolları üçün giriş göstərişləri verilir; dinamik açarlar yenidən xəritə səviyyəli münaqişə açarlarına düşür. Açıq host tərəfindən dəstəklənən oxu/yazmalar üçün `state_get/state_set/state_del` və `get_or_insert_default` xəritə köməkçilərindən istifadə edin; bu marşrutu Norito TLV-ləri vasitəsilə keçin və adları/sahə sırasını sabit saxlayın.
+- `state` davamlı müqavilə dəyişənlərini elan edir. Kompilyator `STATE_GET/STATE_SET/STATE_DEL` sistem çağırışlarına girişləri azaldır və host onları hər bir əməliyyatın üst-üstə düşməsində (yoxlama nöqtəsi/bərpa geri qaytarma, WSV-də yerinə yetirməkdə yuyunma) mərhələləşdirir. Hərfi vəziyyət yolları üçün giriş göstərişləri verilir; dinamik açarlar yenidən xəritə səviyyəli münaqişə açarlarına düşür. Açıq host tərəfindən dəstəklənən oxu/yazmalar üçün `state_get/state_set/state_del` və `map.ensure(...)` xəritə köməkçilərindən istifadə edin; bu marşrutu Norito TLV-ləri vasitəsilə keçin və adları/sahə sırasını sabit saxlayın.
 - Dövlət identifikatorları qorunur; `state` adını parametrlərdə və ya `let` bağlamalarında kölgə salmaq rədd edilir (`E_STATE_SHADOWED`).
 - Dövlət xəritəsi dəyərləri birinci dərəcəli deyil: xəritə əməliyyatları və iterasiya üçün dövlət identifikatorundan birbaşa istifadə edin. Dövlət xəritələrinin istifadəçi tərəfindən müəyyən edilmiş funksiyalara bağlanması və ya ötürülməsi rədd edilir (`E_STATE_MAP_ALIAS`).
 - Davamlı vəziyyət xəritələri hazırda yalnız `int` və göstərici-ABI açar növlərini dəstəkləyir; digər açar növləri tərtib zamanı rədd edilir.
@@ -146,7 +146,7 @@ register_trigger wake {
   call run;
   on time pre_commit;
   repeats 2;
-  authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+  authority "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
   metadata { tag: "alpha"; count: 1; enabled: true; }
 }
 ```
@@ -227,8 +227,8 @@ Göstərici konstruktorları (INPUT-a Norito TLV buraxın və yazılmış göst�
 - `axt_descriptor(string|0xhex) -> AxtDescriptor*`
 - `asset_handle(string|0xhex) -> AssetHandle*`
 - `proof_blob(string|0xhex) -> ProofBlob*`Müqəddimə makroları bu konstruktorlar üçün daha qısa ləqəblər və daxili doğrulama təmin edir:
-- `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
+- `account!("<i105-account-id>")`, `account_id!("<i105-account-id>")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` və ya `json!{ hello: "world" }` kimi strukturlaşdırılmış hərflər

@@ -1,80 +1,73 @@
 ---
-lang: my
-direction: ltr
-source: docs/portal/docs/reference/address-safety.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: d19690fde1b9e3c6f072cf1ac5ad89fb82578eb1b21e4d8dbc82d399518b4d42
-source_last_modified: "2026-01-28T17:11:30.641899+00:00"
-translation_last_reviewed: 2026-02-07
 title: Address Safety & Accessibility
 description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
-translator: machine-google-reviewed
 ---
 
-ဤစာမျက်နှာသည် ပေးပို့နိုင်သော ADDR-6c စာရွက်စာတမ်းကို ဖမ်းယူထားသည်။ ဒါတွေကို အသုံးချပါ။
-ပိုက်ဆံအိတ်များ၊ စူးစမ်းလေ့လာသူများ၊ SDK ကိရိယာတန်ဆာပလာများနှင့် ၎င်းကို မည်သည့် portal ပေါ်တွင်မဆို ကန့်သတ်ထားသည်။
-လူမျက်နှာ လိပ်စာများကို တင်ဆက်ပေးသည် သို့မဟုတ် လက်ခံသည်။ Canonical data model သည် နေထိုင်သည်။
-`docs/account_structure.md`; အောက်ပါ checklist သည် ၎င်းတို့ကို မည်သို့ဖော်ထုတ်ရမည်ကို ရှင်းပြထားသည်။
-ဘေးကင်းမှု သို့မဟုတ် ဝင်ရောက်နိုင်မှုကို အလျှော့မပေးဘဲ ဖော်မတ်များ။
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
-## ဘေးကင်းသောမျှဝေခြင်းစီးဆင်းမှု
+## Safe sharing flows
 
-- I105 လိပ်စာသို့ မိတ္တူ/မျှဝေခြင်း လုပ်ဆောင်ချက်တိုင်းကို ပုံသေလုပ်ပါ။ ဖြေရှင်းပြီးကြောင်းပြသပါ။
-  domain သည် ဆက်စပ်အကြောင်းအရာအဖြစ် ပံ့ပိုးပေးသောကြောင့် checksummed string သည် ရှေ့နှင့် အလယ်တွင် ရှိနေသည်။
-- ရိုးရှင်းသောစာသားလိပ်စာအပြည့်အစုံနှင့် QR တို့ကို စုစည်းထားသည့် "မျှဝေရန်" ထောက်ပံ့ကြေးကို ကမ်းလှမ်းပါ။
-  တူညီသော payload မှဆင်းသက်လာသောကုဒ်။ ကျူးလွန်ခြင်းမပြုမီ အသုံးပြုသူများအား နှစ်ခုစလုံးကို စစ်ဆေးခွင့်ပြုပါ။
-- အာကာသဖြတ်တောက်ခြင်း (ကတ်အသေးစားများ၊ အသိပေးချက်များ) လိုအပ်သောအခါတွင် ဦးဆောင်မှုကို ထားပါ။
-  လူသားဖတ်နိုင်သော ရှေ့ဆက်၊ ellipses ပြပြီး နောက်ဆုံး စာလုံး 4-6 လုံးကို ထိန်းသိမ်းပါ။
-  checksum ကျောက်ဆူးသည် အသက်ရှင်နေပါသည်။ အပြည့်အစုံကို ကူးယူရန် နှိပ်/ကီးဘုတ် ဖြတ်လမ်းကို ပေးပါ။
-  ဖြတ်တောက်ခြင်းမရှိဘဲ ကြိုးတန်း။
-- အစမ်းကြည့်ရှုသည့် အတည်ပြုဆန္ဒပြုချက်ကို ထုတ်လွှတ်ခြင်းဖြင့် ကလစ်ဘုတ်မှ ကွဲထွက်ခြင်းကို တားဆီးပါ။
-  ကူးယူထားသော I105 စာကြောင်းအတိအကျ။ တယ်လီမီတာ ရရှိနိုင်ပါက မိတ္တူကို ရေတွက်ပါ။
-  လုပ်ဆောင်ချက်များနှင့် မျှဝေရန် ကြိုးပမ်းမှုများကြောင့် UX ဆုတ်ယုတ်မှုများ လျင်မြန်စွာ ပေါ်လာသည်။
+- Default every copy/share action to the canonical I105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-## IME နှင့် ထည့်သွင်းခြင်း အကာအကွယ်များ
+## IME & input safeguards
 
-- လိပ်စာအကွက်များတွင် ASCII မဟုတ်သော ထည့်သွင်းမှုကို ငြင်းပယ်ပါ။ IME ဖွဲ့စည်းမှုအနုပညာပစ္စည်းများ (အပြည့်အစုံ
-  width, Kana, tone marks) ပေါ်လာပြီး ရှင်းပြထားသည့် inline သတိပေးချက်တစ်ခုပေါ်လာသည်။
-  ထပ်မကြိုးစားမီ ကီးဘုတ်ကို လက်တင်ထည့်သွင်းမှုသို့ ပြောင်းရန်။
-- အမှတ်အသားများကို ပေါင်းစပ်ပြီး အစားထိုးခြင်းများကို ဖယ်ထုတ်သည့် ရိုးရိုးစာသား paste ဇုန်ကို ပေးပါ။
-  အတည်ပြုခြင်းမပြုမီ ASCII နေရာလွတ်များနှင့်အတူ အဖြူကွက်များ။ ဒါက သုံးစွဲသူတွေကို မဆုံးရှုံးစေပါဘူး။
-  ၎င်းတို့၏ IME အလယ်အလတ်စီးဆင်းမှုကို ပိတ်သောအခါတွင် တိုးတက်သည်။
-- အနံသုညအချိတ်အဆက်များ၊ ကွဲလွဲမှုရွေးချယ်သူများနှင့် အခြားအရာများကို ခိုင်မာစေပါ။
-  ကိုယ်ပျောက် Unicode ကုဒ်အမှတ်များ။ ပယ်ချထားသော ကုဒ်အမှတ် အမျိုးအစားကို စာရင်းသွင်းပါ။
-  အစုံလိုက် telemetry ကိုတင်သွင်းနိုင်သည်။
+- Validate account-id fields as canonical I105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-## အထောက်အကူပြုနည်းပညာမျှော်လင့်ချက်
+## Assistive technology expectations
 
-- လိပ်စာတုံးတိုင်းကို `aria-label` သို့မဟုတ် `aria-describedby` ဖြင့် မှတ်သားပါ။
-  လူသားဖတ်နိုင်သော ရှေ့ဆက်ကို စာလုံးပေါင်းပြီး payload ကို အက္ခရာ 4-8 လုံးဖြင့် အပိုင်းပိုင်းပါ။
-  အုပ်စုများ (“ih dash b three two…”)။ ၎င်းသည် စခရင်ဖတ်သူများကို ထုတ်လုပ်ခြင်းမှ ရပ်တန့်စေသည်။
-  နားမလည်နိုင်သော ဇာတ်ကောင်များ၏ စီးကြောင်း။
-- ယဉ်ကျေးသောတိုက်ရိုက်ထုတ်လွှဒေသအပ်ဒိတ်မှတစ်ဆင့် အောင်မြင်သောဖြစ်ရပ်များကို ကူးယူ/မျှဝေကြောင်း ကြေညာပါ။ ပါဝင်ပါတယ်။
-  ဦးတည်ရာ (ကလစ်ဘုတ်၊ မျှဝေသည့်စာရွက်၊ QR) လုပ်ဆောင်ချက်ကို အသုံးပြုသူသိစေရန်
-  အာရုံမရွေ့ဘဲ ပြီးသွားသည်။
-- QR အစမ်းကြည့်ရှုခြင်းအတွက် ဖော်ပြချက် `alt` စာသား (ဥပမာ၊ “I105 လိပ်စာအတွက်
-  `<account>` ကွင်းဆက် `0x1234`”)။ "လိပ်စာကို စာသားအဖြစ် ကူးယူပါ" ပေးပါ။
-  အမြင်အာရုံနည်းသော သုံးစွဲသူများအတွက် QR ပတ္တူနှင့်ကပ်လျက် ဆုတ်ခွာ။
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## Sora သီးသန့်ချုံ့ထားသောလိပ်စာများ
+## Single-format policy
 
-- Gating- တိကျသေချာသော အတည်ပြုချက်နောက်ကွယ်တွင် `i105` ဖိသိပ်ထားသော စာကြောင်းကို ဝှက်ထားပါ။
-  ဖောင်ပုံစံသည် Sora Nexus ကြိုးများပေါ်တွင်သာ အလုပ်လုပ်ကြောင်း အတည်ပြုချက်တွင် ထပ်လောင်းပြောကြားခဲ့သည်။
-- တံဆိပ်ခတ်ခြင်း- ဖြစ်ပျက်မှုတိုင်းတွင် မြင်နိုင်သော "Sora-only" တံဆိပ်နှင့် a တို့ ပါဝင်ရပါမည်။
-  အခြားကွန်ရက်များ အဘယ်ကြောင့် I105 ဖောင်ကို လိုအပ်ကြောင်း ဖော်ပြသည့် ကိရိယာအကြံပြုချက်။
-- Guardrails- တက်ကြွသောကွင်းဆက်ခွဲခြားမှုမှာ Nexus ခွဲဝေမှုမဟုတ်ပါက၊
-  ချုံ့ထားသော လိပ်စာကို လုံးလုံးလျားလျား ထုတ်လုပ်ရန် ငြင်းဆန်ပြီး အသုံးပြုသူကို ပြန်ညွှန်ကြားသည်။
-  I105
-- Telemetry: ချုံ့ထားသောပုံစံကို မည်မျှကြာကြာ တောင်းဆိုပြီး ကူးယူသည်ကို မှတ်တမ်းတင်ပါ။
-  အခင်းဖြစ်ပွားသည့် ပလေးစာအုပ်သည် မတော်တဆမျှဝေမှု တိုးလာခြင်းများကို သိရှိနိုင်သည်။
+- Keep canonical I105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-## အရည်အသွေးတံခါးများ
+## Quality gates
 
-- ထိုလိပ်စာကိုအတည်ပြုရန် အလိုအလျောက် UI စမ်းသပ်မှုများ (သို့မဟုတ် storybook a11y suites) ကို တိုးချဲ့ပါ
-  အစိတ်အပိုင်းများသည် လိုအပ်သော ARIA မက်တာဒေတာနှင့် IME ငြင်းပယ်ခြင်းမက်ဆေ့ချ်များကို ဖော်ထုတ်သည်။
-  ပေါ်လာသည်။
-- IME ထည့်သွင်းခြင်း (kana၊ pinyin)၊ ဖန်သားပြင်စာဖတ်သူ pass အတွက် manual QA ဇာတ်လမ်းများ ထည့်သွင်းပါ
-  (VoiceOver/NVDA) နှင့် QR ကော်ပီကို မထုတ်မီ ခြားနားမှုမြင့်မားသည့် အပြင်အဆင်များပေါ်တွင်
-- I105 parity စမ်းသပ်မှုများနှင့်အတူ ထုတ်ပြန်ထားသော စစ်ဆေးစာရင်းများတွင် ဤစစ်ဆေးမှုများကို ကြည့်ပါ။
-  ထို့ကြောင့် ပြုပြင်မွမ်းမံသည့်အချိန်အထိ ဆုတ်ယုတ်မှုများကို ပိတ်ဆို့ထားဆဲဖြစ်သည်။
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

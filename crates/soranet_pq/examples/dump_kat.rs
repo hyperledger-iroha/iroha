@@ -1,7 +1,8 @@
 //! Dump deterministic `SoraNet` PQ fixtures for manual inspection.
 
 use soranet_pq::{
-    MlDsaSuite, MlKemSuite, generate_mldsa_keypair, generate_mlkem_keypair, sign_mldsa,
+    HedgedRngSeed, MlDsaSuite, MlKemSuite, generate_mldsa_keypair, generate_mlkem_keypair,
+    hedged_chacha20_rng, sign_mldsa,
 };
 
 fn main() {
@@ -15,8 +16,17 @@ fn dump_mlkem() {
         MlKemSuite::MlKem768,
         MlKemSuite::MlKem1024,
     ] {
-        let keys = generate_mlkem_keypair(suite);
-        let (shared, ct) = soranet_pq::encapsulate_mlkem(suite, keys.public_key()).unwrap();
+        let mut key_rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([suite.kem_id(); 32]),
+            b"dump-kat:mlkem:keypair",
+        );
+        let mut enc_rng = hedged_chacha20_rng(
+            HedgedRngSeed::from_entropy([suite.kem_id().wrapping_add(1); 32]),
+            b"dump-kat:mlkem:encapsulate",
+        );
+        let keys = generate_mlkem_keypair(suite, &mut key_rng);
+        let (shared, ct) =
+            soranet_pq::encapsulate_mlkem(suite, keys.public_key(), &mut enc_rng).unwrap();
         println!("mlkem suite={suite:?}");
         println!("  pk={}", to_hex(keys.public_key()));
         println!("  sk={}", to_hex(keys.secret_key()));
@@ -26,8 +36,16 @@ fn dump_mlkem() {
 }
 
 fn dump_ml_dsa_suite(suite: MlDsaSuite, message: &[u8]) {
-    let keys = generate_mldsa_keypair(suite).expect("keypair");
-    let sig = sign_mldsa(suite, keys.secret_key(), message).expect("sign");
+    let mut key_rng = hedged_chacha20_rng(
+        HedgedRngSeed::from_entropy([suite.suite_id(); 32]),
+        b"dump-kat:mldsa:keypair",
+    );
+    let mut sign_rng = hedged_chacha20_rng(
+        HedgedRngSeed::from_entropy([suite.suite_id().wrapping_add(1); 32]),
+        b"dump-kat:mldsa:sign",
+    );
+    let keys = generate_mldsa_keypair(suite, &mut key_rng).expect("keypair");
+    let sig = sign_mldsa(suite, keys.secret_key(), &[], message, &mut sign_rng).expect("sign");
     println!("mldsa suite={suite:?}");
     println!("  pk={}", to_hex(keys.public_key()));
     println!("  sk={}", to_hex(keys.secret_key()));

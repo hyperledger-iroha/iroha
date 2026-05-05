@@ -140,6 +140,8 @@ fn trust_config(
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        debug_packet_loss_inbound_percent: 0,
+        debug_packet_loss_outbound_percent: 0,
         trust_gossip,
         prefer_ws_fallback: false,
         p2p_proxy: None,
@@ -276,6 +278,8 @@ async fn network_create() {
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        debug_packet_loss_inbound_percent: 0,
+        debug_packet_loss_outbound_percent: 0,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         prefer_ws_fallback: false,
         p2p_proxy: None,
@@ -714,7 +718,9 @@ async fn ws_fallback_connects_and_handshakes() {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
             p2p_proxy: None,
             p2p_proxy_required: false,
@@ -980,7 +986,9 @@ async fn ws_fallback_connects_and_handshakes() {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: true,
             p2p_proxy: None,
             p2p_proxy_required: false,
@@ -1231,6 +1239,8 @@ async fn two_networks() {
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        debug_packet_loss_inbound_percent: 0,
+        debug_packet_loss_outbound_percent: 0,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         prefer_ws_fallback: false,
         p2p_proxy: None,
@@ -1366,6 +1376,8 @@ async fn two_networks() {
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        debug_packet_loss_inbound_percent: 0,
+        debug_packet_loss_outbound_percent: 0,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         prefer_ws_fallback: false,
         p2p_proxy: None,
@@ -1592,7 +1604,9 @@ async fn update_peers_triggers_immediate_connect() {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
             p2p_proxy: None,
             p2p_proxy_required: false,
@@ -1726,7 +1740,9 @@ async fn update_peers_triggers_immediate_connect() {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
             p2p_proxy: None,
             p2p_proxy_required: false,
@@ -1905,7 +1921,9 @@ async fn happy_eyeballs_parallel_dials() {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
             p2p_proxy: None,
             p2p_proxy_required: false,
@@ -2040,7 +2058,9 @@ async fn happy_eyeballs_parallel_dials() {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
             p2p_proxy: None,
             p2p_proxy_required: false,
@@ -2216,7 +2236,9 @@ async fn low_topics_do_not_starve_each_other() {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
             p2p_proxy: None,
             p2p_proxy_required: false,
@@ -2351,7 +2373,9 @@ async fn low_topics_do_not_starve_each_other() {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
             p2p_proxy: None,
             p2p_proxy_required: false,
@@ -2584,7 +2608,9 @@ async fn relay_hub_routes_consensus_between_spokes() {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
             p2p_proxy: None,
             p2p_proxy_required: false,
@@ -2771,6 +2797,9 @@ async fn relay_hub_routes_consensus_between_spokes() {
     .await
     .expect("connection deadline exceeded");
 
+    // Give relay hub selection and subscriber wiring a moment to settle under parallel test load.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
     let payload = ConsensusMessage(7);
     spoke1_net.post(Post {
         data: payload.clone(),
@@ -2847,7 +2876,9 @@ async fn relay_hub_routes_consensus_between_spoke_and_assist() {
                 trust_penalty_unknown_peer:
                     iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
                 trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-                trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+                debug_packet_loss_inbound_percent: 0,
+                debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
                 prefer_ws_fallback: false,
                 p2p_proxy: None,
                 p2p_proxy_required: false,
@@ -3183,6 +3214,8 @@ async fn start_network(
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        debug_packet_loss_inbound_percent: 0,
+        debug_packet_loss_outbound_percent: 0,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         prefer_ws_fallback: false,
         p2p_proxy: None,
@@ -3393,6 +3426,8 @@ async fn tls_inbound_listener_smoke() {
         trust_penalty_unknown_peer:
             iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
         trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
+        debug_packet_loss_inbound_percent: 0,
+        debug_packet_loss_outbound_percent: 0,
         trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
         prefer_ws_fallback: false,
         p2p_proxy: None,
@@ -3536,7 +3571,9 @@ async fn tls_inbound_listener_smoke() {
             trust_penalty_unknown_peer:
                 iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             prefer_ws_fallback: false,
             p2p_proxy: None,
             p2p_proxy_required: false,

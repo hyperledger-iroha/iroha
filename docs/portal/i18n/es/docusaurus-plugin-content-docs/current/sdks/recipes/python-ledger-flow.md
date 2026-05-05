@@ -23,8 +23,8 @@ Este fragmento de Python refleja el [recorrido del libro mayor de la CLI](../../
 
 ```bash
 pip install iroha-python
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
@@ -55,8 +55,8 @@ client = ToriiClient(
     torii_url="http://127.0.0.1:8080",
 )
 
-# 1) Register coffee#wonderland if absent
-asset_def = AssetDefinitionId.from_str("coffee#wonderland")
+# 1) Register 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ if absent
+asset_def = AssetDefinitionId.from_str("7Sp2j6zDvJFnMoscAiMaWbWHRDBZ")
 register_instruction = Instruction.register_asset_definition_numeric(asset_def)
 
 # 2) Mint 250 units into admin

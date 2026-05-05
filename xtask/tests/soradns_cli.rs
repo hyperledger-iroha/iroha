@@ -3,7 +3,10 @@ use std::{fs, path::PathBuf};
 use assert_cmd::cargo::cargo_bin_cmd;
 use blake3::hash as blake3_hash;
 use data_encoding::BASE32_NOPAD;
-use iroha_primitives::soradns::{GatewayHostBindings, derive_gateway_hosts};
+use iroha_primitives::soradns::{
+    GatewayHostBindings, GatewayHostProfile, derive_gateway_hosts,
+    derive_gateway_hosts_with_profile,
+};
 use norito::json::{self as serde_json, Value};
 use tempfile::TempDir;
 
@@ -58,6 +61,42 @@ fn soradns_hosts_reports_expected_derivations() {
     assert_eq!(
         entry["canonical_wildcard"].as_str(),
         Some(GatewayHostBindings::canonical_wildcard())
+    );
+}
+
+#[test]
+fn soradns_hosts_supports_taira_mon_pretty_suffix() {
+    let temp = TempDir::new().expect("temp dir");
+    let output_path = temp.path().join("hosts.json");
+
+    let mut cmd = cargo_bin_cmd!("xtask");
+    cmd.current_dir(workspace_root());
+    cmd.args([
+        "soradns-hosts",
+        "--name",
+        "solswap-indexer.sora",
+        "--pretty-suffix",
+        "mon.taira.sora.net",
+        "--json-out",
+        output_path.to_str().expect("utf8 path"),
+    ]);
+    cmd.assert().success();
+
+    let raw = fs::read_to_string(&output_path).expect("host summary output");
+    let parsed: Value = serde_json::from_str(&raw).expect("host summary json");
+    let entries = parsed
+        .as_array()
+        .expect("soradns-hosts should render an array");
+    let entry = entries[0]
+        .as_object()
+        .expect("each entry should be a JSON object");
+    let bindings =
+        derive_gateway_hosts_with_profile("solswap-indexer.sora", GatewayHostProfile::taira_mon())
+            .expect("derive gateway hosts");
+    assert_eq!(entry["pretty_host"].as_str(), Some(bindings.pretty_host()));
+    assert_eq!(
+        entry["pretty_host"].as_str(),
+        Some("solswap-indexer.sora.mon.taira.sora.net")
     );
 }
 
@@ -468,10 +507,55 @@ fn soradns_acme_plan_covers_canonical_and_pretty_hosts() {
         "pretty host certs should support tls-alpn-01 and http-01"
     );
     assert!(
-        pretty["dns_challenge_labels"]
-            .as_array()
-            .expect("dns label array for pretty entry")
-            .is_empty(),
+        pretty
+            .get("dns_challenge_labels")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty),
         "pretty host plans should omit dns-01 labels"
+    );
+}
+
+#[test]
+fn soradns_acme_plan_supports_taira_mon_pretty_suffix() {
+    let temp = TempDir::new().expect("temp dir");
+    let output_path = temp.path().join("acme_plan.json");
+
+    let mut cmd = cargo_bin_cmd!("xtask");
+    cmd.current_dir(workspace_root());
+    cmd.args([
+        "soradns-acme-plan",
+        "--name",
+        "solswap-indexer.sora",
+        "--pretty-suffix",
+        "mon.taira.sora.net",
+        "--json-out",
+        output_path.to_str().expect("utf8 path"),
+    ]);
+    cmd.assert().success();
+
+    let raw = fs::read_to_string(&output_path).expect("acme plan output");
+    let plan: Value = serde_json::from_str(&raw).expect("acme plan json");
+    let hosts = plan["hosts"].as_array().expect("hosts array should exist");
+    let entry = hosts[0].as_object().expect("host entry");
+    assert_eq!(
+        entry["pretty_host"].as_str(),
+        Some("solswap-indexer.sora.mon.taira.sora.net")
+    );
+    let certificates = entry["certificates"]
+        .as_array()
+        .expect("certificate plans must be an array");
+    let pretty = certificates
+        .iter()
+        .find(|entry| entry["kind"].as_str() == Some("pretty_host"))
+        .expect("pretty certificate");
+    let pretty_san_values: Vec<&str> = pretty["san"]
+        .as_array()
+        .expect("pretty SAN array")
+        .iter()
+        .map(|value| value.as_str().expect("SAN entries are strings"))
+        .collect();
+    assert_eq!(
+        pretty_san_values,
+        vec!["solswap-indexer.sora.mon.taira.sora.net"]
     );
 }

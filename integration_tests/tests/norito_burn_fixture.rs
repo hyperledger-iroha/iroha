@@ -3,6 +3,7 @@
 
 use std::{fs, path::PathBuf, str::FromStr};
 
+use iroha_data_model::DomainId;
 use iroha_data_model::prelude::{
     AccountId, AssetDefinitionId, AssetId, Burn, InstructionBox, Mint, Numeric, TriggerId,
 };
@@ -17,7 +18,7 @@ fn fixture_asset_id() -> AssetId {
         .expect("valid fixture public key");
     let account = AccountId::new(public_key);
     let definition: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().expect("valid asset definition"),
+        DomainId::try_new("wonderland", "universal").expect("valid asset definition"),
         "rose".parse().expect("valid asset definition"),
     );
     AssetId::new(definition, account)

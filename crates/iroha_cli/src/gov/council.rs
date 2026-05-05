@@ -119,8 +119,8 @@ pub struct GenVrfArgs {
     /// Seed prefix used when deriving deterministic candidate account keys.
     #[arg(long, default_value = "node")]
     pub account_prefix: String,
-    /// Domain used in generated account ids
-    #[arg(long, default_value = "wonderland")]
+    /// Alias suffix used in generated account labels (`dataspace` or `domain.dataspace`).
+    #[arg(long, default_value = "wonderland.universal")]
     pub domain: String,
     /// Output path; if omitted, prints JSON to stdout
     #[arg(long)]
@@ -215,12 +215,9 @@ impl GenVrfArgs {
 
     fn generate_candidates(&self, seed: &[u8; 64]) -> Result<Vec<norito::json::Value>> {
         let chain_bytes = self.chain_id.as_bytes();
-        let domain_id: DomainId = self
-            .domain
-            .parse()
-            .map_err(|_| eyre!("invalid --domain value"))?;
+        let domain_literal = normalize_candidate_alias_suffix(&self.domain)?;
         (0..self.count)
-            .map(|index| self.build_candidate(seed, chain_bytes, index, &domain_id))
+            .map(|index| self.build_candidate(seed, chain_bytes, index, &domain_literal))
             .collect()
     }
 
@@ -229,9 +226,9 @@ impl GenVrfArgs {
         seed: &[u8; 64],
         chain_bytes: &[u8],
         index: usize,
-        _domain_id: &DomainId,
+        domain_literal: &str,
     ) -> Result<norito::json::Value> {
-        let alias = format!("{}{}@{}", self.account_prefix, index, self.domain);
+        let alias = format!("{}{}@{domain_literal}", self.account_prefix, index);
         let account_seed = iroha_crypto::Hash::new(alias.as_bytes());
         let account_keypair = iroha_crypto::KeyPair::from_seed(
             account_seed.as_ref().to_vec(),
@@ -689,6 +686,26 @@ fn canonicalize_candidate_accounts(value: &mut norito::json::Value, label: &str)
     Ok(())
 }
 
+fn normalize_candidate_alias_suffix(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(eyre!("invalid --domain value: alias suffix must not be empty"));
+    }
+    if trimmed.contains('@') {
+        return Err(eyre!(
+            "invalid --domain value: pass only the alias suffix, without an account label"
+        ));
+    }
+    if trimmed.contains('.') {
+        return DomainId::parse_fully_qualified(trimmed)
+            .map(|domain| domain.to_string())
+            .map_err(|err| eyre!("invalid --domain value: {err}"));
+    }
+    DomainId::try_new(trimmed, "universal")
+        .map_err(|err| eyre!("invalid --domain value: {err}"))?;
+    Ok(trimmed.to_owned())
+}
+
 fn parse_candidate_flag(s: &str) -> Result<VrfCandidateArg, String> {
     // Format: account_id,variant,pk_b64,proof_b64
     let parts: Vec<&str> = s.split(',').collect();
@@ -884,7 +901,7 @@ mod tests {
         let key_pair = KeyPair::from_seed(vec![0x42; 32], Algorithm::Ed25519);
         AccountId::new(key_pair.public_key().clone())
             .canonical_i105()
-            .expect("canonical i105")
+            .expect("canonical I105")
     }
 
     #[test]
@@ -915,6 +932,29 @@ mod tests {
         assert!(
             err.contains("invalid account_id"),
             "expected account_id error, got {err}"
+        );
+    }
+
+    #[test]
+    fn normalize_candidate_alias_suffix_accepts_dataspace_root() {
+        let suffix = normalize_candidate_alias_suffix("wonderland").expect("dataspace root suffix");
+        assert_eq!(suffix, "wonderland");
+    }
+
+    #[test]
+    fn normalize_candidate_alias_suffix_accepts_fully_qualified_domain() {
+        let suffix =
+            normalize_candidate_alias_suffix("wonderland.universal").expect("domain suffix");
+        assert_eq!(suffix, "wonderland.universal");
+    }
+
+    #[test]
+    fn normalize_candidate_alias_suffix_rejects_account_label() {
+        let err = normalize_candidate_alias_suffix("node0@wonderland")
+            .expect_err("account label should be rejected");
+        assert!(
+            err.to_string().contains("without an account label"),
+            "expected account label error, got {err}"
         );
     }
 }

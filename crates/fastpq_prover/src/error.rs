@@ -39,6 +39,12 @@ pub enum Error {
         /// Version advertised by the proof artifact.
         actual: u16,
     },
+    /// A claimed `PublicIO` field does not match the batch reconstructed by the verifier.
+    #[error("public_io field `{field}` mismatch")]
+    PublicIoMismatch {
+        /// Name of the mismatched field.
+        field: &'static str,
+    },
     /// Ordering hash mismatch detected during verification.
     #[error("ordering hash mismatch")]
     OrderingHashMismatch,
@@ -57,6 +63,46 @@ pub enum Error {
     /// Lookup grand-product does not match the recomputed accumulator.
     #[error("lookup grand product mismatch")]
     LookupGrandProductMismatch,
+    /// AIR trace Merkle root mismatch detected during verification.
+    #[error("AIR trace root mismatch")]
+    AirTraceRootMismatch,
+    /// AIR composition Merkle root mismatch detected during verification.
+    #[error("AIR composition root mismatch")]
+    AirCompositionRootMismatch,
+    /// AIR opening count mismatch between proof and verifier transcript.
+    #[error("AIR opening count mismatch: expected {expected}, got {actual}")]
+    AirOpeningCountMismatch {
+        /// Expected number of openings.
+        expected: usize,
+        /// Actual number of openings in the proof.
+        actual: usize,
+    },
+    /// AIR composition challenge count does not match the V1 transcript shape.
+    #[error("AIR challenge count mismatch: expected {expected}, got {actual}")]
+    AirChallengeCountMismatch {
+        /// Expected number of transcript challenges.
+        expected: usize,
+        /// Actual number advertised by the proof.
+        actual: usize,
+    },
+    /// AIR row or composition opening did not match the sampled statement.
+    #[error("AIR opening mismatch at position {index}")]
+    AirOpeningMismatch {
+        /// Position of the failing query.
+        index: usize,
+    },
+    /// AIR Merkle authentication path did not resolve to the advertised root.
+    #[error("AIR Merkle path mismatch at position {index}")]
+    AirMerklePathMismatch {
+        /// Position of the failing query.
+        index: usize,
+    },
+    /// AIR sampled constraint did not evaluate to zero.
+    #[error("AIR constraint mismatch at position {index}")]
+    AirConstraintMismatch {
+        /// Position of the failing query.
+        index: usize,
+    },
     /// FRI layer vector length differs from the recomputed transcript.
     #[error("FRI layer length mismatch: expected {expected}, got {actual}")]
     FriLayerLengthMismatch {
@@ -98,6 +144,22 @@ pub enum Error {
     QueryMismatch {
         /// Position of the failing query.
         index: usize,
+    },
+    /// Query Merkle authentication path did not resolve to the lookup root.
+    #[error("query Merkle path mismatch at position {index}")]
+    QueryMerklePathMismatch {
+        /// Position of the failing query.
+        index: usize,
+    },
+    /// FASTPQ replay verifier input exceeded a configured limit.
+    #[error("FASTPQ verifier limit `{limit}` exceeded: {actual} > {max}")]
+    VerifierLimitExceeded {
+        /// Name of the rejected limit.
+        limit: &'static str,
+        /// Observed value.
+        actual: usize,
+        /// Maximum permitted value.
+        max: usize,
     },
     /// Trace length exceeded the supported 32-bit representation.
     #[error("trace length {rows} exceeds 32-bit bound")]
@@ -185,8 +247,8 @@ pub enum Error {
         /// Version identifier contained in the proof payload.
         version: u16,
     },
-    /// Numeric value referenced by the transfer gadget exceeds the supported width.
-    #[error("transfer gadget numeric `{field}` exceeds 64-bit bounds")]
+    /// Numeric value referenced by the transfer gadget cannot be normalized into witness units.
+    #[error("transfer gadget numeric `{field}` cannot be normalized into 64-bit witness units")]
     TransferNumericBounds {
         /// Field reporting the overflow.
         field: &'static str,
@@ -194,6 +256,12 @@ pub enum Error {
     /// Transfer gadget invariant was violated while validating transcripts.
     #[error("transfer gadget invariant violated: {details}")]
     TransferInvariant {
+        /// Human-readable description of the violation.
+        details: String,
+    },
+    /// Structured AXT FASTPQ binding was malformed.
+    #[error("invalid AXT FASTPQ binding: {details}")]
+    InvalidAxtBinding {
         /// Human-readable description of the violation.
         details: String,
     },

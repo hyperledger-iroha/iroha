@@ -7,8 +7,16 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import org.hyperledger.iroha.android.crypto.Ed25519Signer;
+import org.hyperledger.iroha.android.crypto.MlDsaPrivateKey;
+import org.hyperledger.iroha.android.crypto.MlDsaPublicKey;
+import org.hyperledger.iroha.android.crypto.MlDsaSigner;
+import org.hyperledger.iroha.android.crypto.NativeSigningPrivateKey;
+import org.hyperledger.iroha.android.crypto.NativeSigningPublicKey;
+import org.hyperledger.iroha.android.crypto.NativeSigningSigner;
+import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
+import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.crypto.export.KeyExportBundle;
 import org.hyperledger.iroha.android.crypto.export.KeyExportException;
@@ -27,9 +35,8 @@ import org.hyperledger.iroha.android.telemetry.KeystoreTelemetryEmitter;
  * Coordinates key generation and lookup for Iroha Android clients.
  *
  * <p>The manager accepts one or more {@link KeyProvider} implementations and
- * routes requests according to the supplied {@link KeySecurityPreference}. When
- * a hardware-backed provider is unavailable, the manager falls back to software
- * providers so developers can continue testing on emulators and desktop JVMs.
+ * routes requests according to the supplied {@link KeySecurityPreference}. Callers choose the
+ * provider set explicitly, including software-only providers for emulators and desktop JVMs.
  *
  * <p>Future revisions will supply Android Keystore/StrongBox backed providers.
  */
@@ -43,35 +50,62 @@ public final class IrohaKeyManager {
 
   private final List<KeyProvider> providers;
   private final KeystoreTelemetryEmitter keystoreTelemetry;
+  private final SigningAlgorithm signingAlgorithm;
 
   private IrohaKeyManager(
-      final List<KeyProvider> providers, final KeystoreTelemetryEmitter keystoreTelemetry) {
+      final List<KeyProvider> providers,
+      final KeystoreTelemetryEmitter keystoreTelemetry,
+      final SigningAlgorithm signingAlgorithm) {
     if (providers.isEmpty()) {
       throw new IllegalArgumentException("At least one KeyProvider is required");
     }
     this.providers = List.copyOf(providers);
     this.keystoreTelemetry =
         keystoreTelemetry == null ? KeystoreTelemetryEmitter.noop() : keystoreTelemetry;
+    this.signingAlgorithm =
+        signingAlgorithm == null ? SigningAlgorithm.ED25519 : signingAlgorithm;
   }
 
   private IrohaKeyManager(final List<KeyProvider> providers) {
-    this(providers, KeystoreTelemetryEmitter.noop());
+    this(providers, KeystoreTelemetryEmitter.noop(), SigningAlgorithm.ED25519);
   }
 
   /** Creates a manager that uses the provided providers in priority order. */
   public static IrohaKeyManager fromProviders(final List<KeyProvider> providers) {
-    return new IrohaKeyManager(providers);
+    return fromProviders(providers, SigningAlgorithm.ED25519);
+  }
+
+  /** Creates a manager that uses the provided providers in priority order. */
+  public static IrohaKeyManager fromProviders(
+      final List<KeyProvider> providers, final SigningAlgorithm signingAlgorithm) {
+    return new IrohaKeyManager(providers, KeystoreTelemetryEmitter.noop(), signingAlgorithm);
   }
 
   /** Creates a manager with explicit keystore telemetry configuration. */
   public static IrohaKeyManager fromProviders(
       final List<KeyProvider> providers, final KeystoreTelemetryEmitter telemetry) {
-    return new IrohaKeyManager(providers, telemetry);
+    return new IrohaKeyManager(providers, telemetry, SigningAlgorithm.ED25519);
   }
 
-  /** Creates a manager with a software fallback provider only (desktop/emulator friendly). */
-  public static IrohaKeyManager withSoftwareFallback() {
-    return new IrohaKeyManager(List.of(new SoftwareKeyProvider()));
+  /** Creates a manager with explicit keystore telemetry configuration. */
+  public static IrohaKeyManager fromProviders(
+      final List<KeyProvider> providers,
+      final KeystoreTelemetryEmitter telemetry,
+      final SigningAlgorithm signingAlgorithm) {
+    return new IrohaKeyManager(providers, telemetry, signingAlgorithm);
+  }
+
+  /** Creates a manager with a software provider only (desktop/emulator friendly). */
+  public static IrohaKeyManager withSoftwareProvider() {
+    return withSoftwareProvider(SigningAlgorithm.ED25519);
+  }
+
+  /** Creates a manager with a software provider only (desktop/emulator friendly). */
+  public static IrohaKeyManager withSoftwareProvider(final SigningAlgorithm signingAlgorithm) {
+    return new IrohaKeyManager(
+        List.of(new SoftwareKeyProvider(signingAlgorithm)),
+        KeystoreTelemetryEmitter.noop(),
+        signingAlgorithm);
   }
 
   /**
@@ -80,6 +114,18 @@ public final class IrohaKeyManager {
    */
   public static IrohaKeyManager withExportableSoftwareKeys(
       final KeyExportStore exportStore, final KeyPassphraseProvider passphraseProvider) {
+    return withExportableSoftwareKeys(
+        exportStore, passphraseProvider, SigningAlgorithm.ED25519);
+  }
+
+  /**
+   * Creates a manager backed by an exportable software provider that persists deterministic key
+   * exports using {@code exportStore}.
+   */
+  public static IrohaKeyManager withExportableSoftwareKeys(
+      final KeyExportStore exportStore,
+      final KeyPassphraseProvider passphraseProvider,
+      final SigningAlgorithm signingAlgorithm) {
     Objects.requireNonNull(exportStore, "exportStore");
     Objects.requireNonNull(passphraseProvider, "passphraseProvider");
     return new IrohaKeyManager(
@@ -87,43 +133,53 @@ public final class IrohaKeyManager {
             new SoftwareKeyProvider(
                 SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_REQUIRED,
                 exportStore,
-                passphraseProvider)));
+                passphraseProvider,
+                signingAlgorithm)),
+        KeystoreTelemetryEmitter.noop(),
+        signingAlgorithm);
   }
 
   /**
-   * Creates a manager that attempts to use hardware-backed keystore providers (when available) and
-   * falls back to the software provider for emulators/desktop JVMs.
+   * Creates a manager with the detected hardware-backed keystore provider.
    */
   public static IrohaKeyManager withDefaultProviders() {
     return withDefaultProviders(KeyGenParameters.builder().build());
   }
 
-  /**
-   * Creates a manager that attempts to use hardware-backed keystore providers with the supplied
-   * generation parameters and falls back to a software provider.
-   */
-  public static IrohaKeyManager withDefaultProviders(final KeyGenParameters keyGenParameters) {
-    final List<KeyProvider> providers = new ArrayList<>();
-    KeystoreKeyProvider.maybeCreate(keyGenParameters).ifPresent(providers::add);
-    providers.add(new SoftwareKeyProvider());
-    return new IrohaKeyManager(providers);
+  /** Creates a manager that uses the supplied app-level signing algorithm. */
+  public static IrohaKeyManager withDefaultProviders(final SigningAlgorithm signingAlgorithm) {
+    return withDefaultProviders(
+        KeyGenParameters.builder().setSigningAlgorithm(signingAlgorithm).build());
   }
 
   /**
-   * Creates a manager that attempts to use hardware-backed keystore providers with telemetry and
-   * falls back to a software provider.
+   * Creates a manager with the detected hardware-backed keystore provider.
+   */
+  public static IrohaKeyManager withDefaultProviders(final KeyGenParameters keyGenParameters) {
+    final SigningAlgorithm signingAlgorithm = keyGenParameters.signingAlgorithm();
+    final List<KeyProvider> providers = new ArrayList<>();
+    if (signingAlgorithm.supportsHardwareBackedKeys()) {
+      KeystoreKeyProvider.maybeCreate(keyGenParameters).ifPresent(providers::add);
+    }
+    return new IrohaKeyManager(providers, KeystoreTelemetryEmitter.noop(), signingAlgorithm);
+  }
+
+  /**
+   * Creates a manager with the detected hardware-backed keystore provider and telemetry.
    */
   public static IrohaKeyManager withDefaultProviders(
       final KeyGenParameters keyGenParameters, final KeystoreTelemetryEmitter telemetry) {
+    final SigningAlgorithm signingAlgorithm = keyGenParameters.signingAlgorithm();
     final List<KeyProvider> providers = new ArrayList<>();
-    KeystoreKeyProvider.maybeCreate(keyGenParameters).ifPresent(providers::add);
-    providers.add(new SoftwareKeyProvider());
-    return new IrohaKeyManager(providers, telemetry);
+    if (signingAlgorithm.supportsHardwareBackedKeys()) {
+      KeystoreKeyProvider.maybeCreate(keyGenParameters).ifPresent(providers::add);
+    }
+    return new IrohaKeyManager(providers, telemetry, signingAlgorithm);
   }
 
   /** Returns a copy of this manager that emits keystore telemetry through {@code telemetry}. */
   public IrohaKeyManager withTelemetry(final KeystoreTelemetryEmitter telemetry) {
-    return new IrohaKeyManager(this.providers, telemetry);
+    return new IrohaKeyManager(this.providers, telemetry, signingAlgorithm);
   }
 
   /**
@@ -139,39 +195,29 @@ public final class IrohaKeyManager {
     if (alias.isBlank()) {
       throw new IllegalArgumentException("alias must not be blank");
     }
+    enforceAlgorithmPreference(preference);
 
     final List<KeyProvider> ordered = orderedProviders(preference);
-    KeyManagementException lastError = null;
+    if (ordered.isEmpty()) {
+      throw new KeyManagementException("No key providers available for alias=" + alias);
+    }
     for (final KeyProvider provider : ordered) {
-      try {
-        final Optional<KeyPair> existing = provider.load(alias);
-        if (existing.isPresent()) {
-          ensureEd25519KeyPair(
-              alias, preference, existing.get(), provider.metadata(), "load");
-          return existing.get();
-        }
-      } catch (final KeyManagementException e) {
-        lastError = e;
+      final Optional<KeyPair> existing = provider.load(alias);
+      if (existing.isPresent()) {
+        ensureExpectedKeyPair(
+            alias, preference, existing.get(), provider.metadata(), "load");
+        return existing.get();
       }
     }
 
-    for (final KeyProvider provider : ordered) {
-      try {
-        final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome =
-            provider.generateWithOutcome(alias, preference);
-        ensureEd25519KeyPair(
-            alias, preference, outcome.keyPair(), provider.metadata(), "generate");
-        enforcePreference(preference, provider.metadata(), outcome);
-        recordKeyGenerationTelemetry(alias, preference, provider.metadata(), outcome);
-        return outcome.keyPair();
-      } catch (final KeyManagementException e) {
-        lastError = e;
-      }
-    }
-    if (lastError != null) {
-      throw lastError;
-    }
-    throw new KeyManagementException("No key providers available for alias=" + alias);
+    final KeyProvider provider = ordered.get(0);
+    final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome =
+        provider.generateWithOutcome(alias, preference);
+    ensureExpectedKeyPair(
+        alias, preference, outcome.keyPair(), provider.metadata(), "generate");
+    enforcePreference(preference, provider.metadata(), outcome);
+    recordKeyGenerationTelemetry(alias, preference, provider.metadata(), outcome);
+    return outcome.keyPair();
   }
 
   private void enforcePreference(
@@ -196,32 +242,50 @@ public final class IrohaKeyManager {
     }
   }
 
+  private void enforceAlgorithmPreference(final KeySecurityPreference preference)
+      throws KeyManagementException {
+    if (signingAlgorithm.supportsHardwareBackedKeys()) {
+      return;
+    }
+    if (preference != KeySecurityPreference.SOFTWARE_ONLY) {
+      throw new KeyManagementException(
+          signingAlgorithm.providerName() + " signing keys currently support SOFTWARE_ONLY");
+    }
+  }
+
   private void recordKeyGenerationTelemetry(
       final String alias,
       final KeySecurityPreference preference,
       final KeyProviderMetadata metadata,
       final org.hyperledger.iroha.android.crypto.KeyGenerationOutcome outcome) {
-    final boolean fallback =
+    final boolean routeDowngraded =
         (preference == KeySecurityPreference.STRONGBOX_REQUIRED
                 || preference == KeySecurityPreference.STRONGBOX_PREFERRED)
             && outcome.route()
                 != org.hyperledger.iroha.android.crypto.KeyGenerationOutcome.Route.STRONGBOX;
-    keystoreTelemetry.recordKeyGeneration(alias, preference, metadata, outcome.route(), fallback);
+    keystoreTelemetry.recordKeyGeneration(
+        alias, preference, metadata, outcome.route(), routeDowngraded);
   }
 
-  private void ensureEd25519KeyPair(
+  private void ensureExpectedKeyPair(
       final String alias,
       final KeySecurityPreference preference,
       final KeyPair keyPair,
       final KeyProviderMetadata metadata,
       final String phase)
       throws KeyManagementException {
-    final Ed25519SpkiValidation validation = validateEd25519KeyPair(keyPair);
+    final KeyMaterialValidation validation = validateKeyPair(signingAlgorithm, keyPair);
     if (!validation.valid) {
       recordKeyValidationFailure(alias, preference, metadata, phase, validation);
       final String provider = metadata == null ? "unknown" : metadata.name();
       throw new KeyManagementException(
-          "Provider " + provider + " returned non-Ed25519 key material (" + validation.detail() + ")");
+          "Provider "
+              + provider
+              + " returned unexpected "
+              + signingAlgorithm.providerName()
+              + " key material ("
+              + validation.detail()
+              + ")");
     }
   }
 
@@ -230,7 +294,7 @@ public final class IrohaKeyManager {
       final KeySecurityPreference preference,
       final KeyProviderMetadata metadata,
       final String phase,
-      final Ed25519SpkiValidation validation) {
+      final KeyMaterialValidation validation) {
     keystoreTelemetry.recordKeyValidationFailure(
         alias,
         preference,
@@ -238,33 +302,126 @@ public final class IrohaKeyManager {
         phase,
         validation.reason,
         validation.length,
-        ED25519_SPKI_SIZE,
+        validation.expectedLength,
         validation.prefixHex);
   }
 
-  private static Ed25519SpkiValidation validateEd25519KeyPair(final KeyPair keyPair) {
+  private static KeyMaterialValidation validateKeyPair(
+      final SigningAlgorithm signingAlgorithm, final KeyPair keyPair) {
+    return switch (signingAlgorithm) {
+      case ED25519 -> validateEd25519KeyPair(keyPair);
+      case ML_DSA -> validateMlDsaKeyPair(keyPair);
+      default -> validateNativeSigningKeyPair(signingAlgorithm, keyPair);
+    };
+  }
+
+  private static KeyMaterialValidation validateEd25519KeyPair(final KeyPair keyPair) {
     if (keyPair == null || keyPair.getPublic() == null) {
-      return Ed25519SpkiValidation.invalid(0, "", "public_key_missing");
+      return KeyMaterialValidation.invalid(0, ED25519_SPKI_SIZE, "", "public_key_missing");
     }
     return validateEd25519Spki(keyPair.getPublic().getEncoded());
   }
 
-  private static Ed25519SpkiValidation validateEd25519Spki(final byte[] encoded) {
+  private static KeyMaterialValidation validateEd25519Spki(final byte[] encoded) {
     if (encoded == null || encoded.length == 0) {
-      return Ed25519SpkiValidation.invalid(0, "", "spki_missing");
+      return KeyMaterialValidation.invalid(0, ED25519_SPKI_SIZE, "", "spki_missing");
     }
     final int length = encoded.length;
     final int prefixLen = Math.min(ED25519_SPKI_PREFIX.length, length);
     final String prefixHex = toHex(encoded, prefixLen);
     if (length != ED25519_SPKI_SIZE) {
-      return Ed25519SpkiValidation.invalid(length, prefixHex, "length_mismatch");
+      return KeyMaterialValidation.invalid(length, ED25519_SPKI_SIZE, prefixHex, "length_mismatch");
     }
     for (int i = 0; i < ED25519_SPKI_PREFIX.length; i++) {
       if (encoded[i] != ED25519_SPKI_PREFIX[i]) {
-        return Ed25519SpkiValidation.invalid(length, prefixHex, "prefix_mismatch");
+        return KeyMaterialValidation.invalid(length, ED25519_SPKI_SIZE, prefixHex, "prefix_mismatch");
       }
     }
-    return Ed25519SpkiValidation.valid(length, prefixHex);
+    return KeyMaterialValidation.valid(length, ED25519_SPKI_SIZE, prefixHex);
+  }
+
+  private static KeyMaterialValidation validateMlDsaKeyPair(final KeyPair keyPair) {
+    if (keyPair == null || !(keyPair.getPublic() instanceof MlDsaPublicKey)) {
+      return KeyMaterialValidation.invalid(0, 0, "", "mldsa_public_key_missing");
+    }
+    if (!(keyPair.getPrivate() instanceof MlDsaPrivateKey)) {
+      final byte[] publicBytes = keyPair.getPublic().getEncoded();
+      final int length = publicBytes == null ? 0 : publicBytes.length;
+      return KeyMaterialValidation.invalid(
+          length,
+          length,
+          toHex(publicBytes, Math.min(12, length)),
+          "mldsa_private_key_missing");
+    }
+    final byte[] encodedPublic = keyPair.getPublic().getEncoded();
+    final byte[] expected;
+    try {
+      expected =
+          NativeSignerBridge.publicKeyFromPrivate(
+              SigningAlgorithm.ML_DSA, keyPair.getPrivate().getEncoded());
+    } catch (final RuntimeException ex) {
+      return KeyMaterialValidation.invalid(
+          encodedPublic.length,
+          encodedPublic.length,
+          toHex(encodedPublic, Math.min(12, encodedPublic.length)),
+          "mldsa_public_key_derivation_failed");
+    }
+    if (!java.util.Arrays.equals(expected, encodedPublic)) {
+      return KeyMaterialValidation.invalid(
+          encodedPublic.length,
+          expected.length,
+          toHex(encodedPublic, Math.min(12, encodedPublic.length)),
+          "mldsa_public_key_mismatch");
+    }
+    return KeyMaterialValidation.valid(
+        encodedPublic.length,
+        expected.length,
+        toHex(encodedPublic, Math.min(12, encodedPublic.length)));
+  }
+
+  private static KeyMaterialValidation validateNativeSigningKeyPair(
+      final SigningAlgorithm signingAlgorithm, final KeyPair keyPair) {
+    if (keyPair == null
+        || !(keyPair.getPublic() instanceof NativeSigningPublicKey)
+        || ((NativeSigningPublicKey) keyPair.getPublic()).signingAlgorithm() != signingAlgorithm) {
+      return KeyMaterialValidation.invalid(
+          0, 0, "", signingAlgorithm.wireName() + "_public_key_missing");
+    }
+    if (!(keyPair.getPrivate() instanceof NativeSigningPrivateKey)
+        || ((NativeSigningPrivateKey) keyPair.getPrivate()).signingAlgorithm()
+            != signingAlgorithm) {
+      final byte[] publicBytes = keyPair.getPublic().getEncoded();
+      final int length = publicBytes == null ? 0 : publicBytes.length;
+      return KeyMaterialValidation.invalid(
+          length,
+          length,
+          toHex(publicBytes, Math.min(12, length)),
+          signingAlgorithm.wireName() + "_private_key_missing");
+    }
+    final byte[] encodedPublic = keyPair.getPublic().getEncoded();
+    final byte[] expected;
+    try {
+      expected =
+          NativeSignerBridge.publicKeyFromPrivate(
+              signingAlgorithm, keyPair.getPrivate().getEncoded());
+    } catch (final RuntimeException ex) {
+      return KeyMaterialValidation.invalid(
+          encodedPublic.length,
+          encodedPublic.length,
+          toHex(encodedPublic, Math.min(12, encodedPublic.length)),
+          signingAlgorithm.wireName() + "_public_key_derivation_failed");
+    }
+    if (!java.util.Arrays.equals(expected, encodedPublic)) {
+      return KeyMaterialValidation.invalid(
+          encodedPublic.length,
+          expected.length,
+          toHex(encodedPublic, Math.min(12, encodedPublic.length)),
+          signingAlgorithm.wireName() + "_public_key_mismatch");
+    }
+    return KeyMaterialValidation.valid(
+        encodedPublic.length,
+        expected.length,
+        toHex(encodedPublic, Math.min(12, encodedPublic.length)));
   }
 
   private static String toHex(final byte[] bytes, final int length) {
@@ -279,33 +436,40 @@ public final class IrohaKeyManager {
     return builder.toString();
   }
 
-  private static final class Ed25519SpkiValidation {
+  private static final class KeyMaterialValidation {
     private final boolean valid;
     private final int length;
+    private final int expectedLength;
     private final String prefixHex;
     private final String reason;
 
-    private Ed25519SpkiValidation(
-        final boolean valid, final int length, final String prefixHex, final String reason) {
+    private KeyMaterialValidation(
+        final boolean valid,
+        final int length,
+        final int expectedLength,
+        final String prefixHex,
+        final String reason) {
       this.valid = valid;
       this.length = length;
+      this.expectedLength = expectedLength;
       this.prefixHex = prefixHex == null ? "" : prefixHex;
       this.reason = reason == null ? "unknown" : reason;
     }
 
-    private static Ed25519SpkiValidation valid(final int length, final String prefixHex) {
-      return new Ed25519SpkiValidation(true, length, prefixHex, "ok");
+    private static KeyMaterialValidation valid(
+        final int length, final int expectedLength, final String prefixHex) {
+      return new KeyMaterialValidation(true, length, expectedLength, prefixHex, "ok");
     }
 
-    private static Ed25519SpkiValidation invalid(
-        final int length, final String prefixHex, final String reason) {
-      return new Ed25519SpkiValidation(false, length, prefixHex, reason);
+    private static KeyMaterialValidation invalid(
+        final int length, final int expectedLength, final String prefixHex, final String reason) {
+      return new KeyMaterialValidation(false, length, expectedLength, prefixHex, reason);
     }
 
     private String detail() {
       return "reason=" + reason
-          + ", spki_len=" + length
-          + ", expected_len=" + ED25519_SPKI_SIZE
+          + ", key_len=" + length
+          + ", expected_len=" + expectedLength
           + ", prefix=" + (prefixHex.isEmpty() ? "unknown" : prefixHex);
     }
   }
@@ -317,20 +481,10 @@ public final class IrohaKeyManager {
    * when hardware-backed providers are present to avoid exhausting secure hardware key slots.
    */
   public KeyPair generateEphemeral() throws KeyManagementException {
-    KeyManagementException lastError = null;
-    for (final KeyProvider provider : providers) {
-      try {
-        final KeyPair keyPair = provider.generateEphemeral();
-        ensureEd25519KeyPair(null, null, keyPair, provider.metadata(), "ephemeral");
-        return keyPair;
-      } catch (final KeyManagementException e) {
-        lastError = e;
-      }
-    }
-    if (lastError != null) {
-      throw lastError;
-    }
-    throw new KeyManagementException("No key providers available for ephemeral keys");
+    final KeyProvider provider = providers.get(0);
+    final KeyPair keyPair = provider.generateEphemeral();
+    ensureExpectedKeyPair(null, null, keyPair, provider.metadata(), "ephemeral");
+    return keyPair;
   }
 
   /**
@@ -340,7 +494,38 @@ public final class IrohaKeyManager {
   public Signer signerForAlias(final String alias, final KeySecurityPreference preference)
       throws KeyManagementException, SigningException {
     final KeyPair keyPair = generateOrLoad(alias, preference);
-    return new Ed25519Signer(keyPair.getPrivate(), keyPair.getPublic());
+    return switch (signingAlgorithm) {
+      case ED25519 -> new Ed25519Signer(keyPair.getPrivate(), keyPair.getPublic());
+      case ML_DSA -> {
+        if (!(keyPair.getPrivate() instanceof MlDsaPrivateKey)) {
+          throw new SigningException("Expected an ML-DSA private key for alias=" + alias);
+        }
+        if (!(keyPair.getPublic() instanceof MlDsaPublicKey)) {
+          throw new SigningException("Expected an ML-DSA public key for alias=" + alias);
+        }
+        yield new MlDsaSigner(
+            (MlDsaPrivateKey) keyPair.getPrivate(), (MlDsaPublicKey) keyPair.getPublic());
+      }
+      default -> {
+        if (!(keyPair.getPrivate() instanceof NativeSigningPrivateKey)) {
+          throw new SigningException(
+              "Expected a " + signingAlgorithm.providerName() + " private key for alias=" + alias);
+        }
+        if (!(keyPair.getPublic() instanceof NativeSigningPublicKey)) {
+          throw new SigningException(
+              "Expected a " + signingAlgorithm.providerName() + " public key for alias=" + alias);
+        }
+        yield new NativeSigningSigner(
+            signingAlgorithm,
+            (NativeSigningPrivateKey) keyPair.getPrivate(),
+            (NativeSigningPublicKey) keyPair.getPublic());
+      }
+    };
+  }
+
+  /** Returns the algorithm selected for app-level transaction and offline signing. */
+  public SigningAlgorithm signingAlgorithm() {
+    return signingAlgorithm;
   }
 
   /** Returns metadata for each configured key provider in priority order. */
@@ -442,8 +627,7 @@ public final class IrohaKeyManager {
   }
 
   /**
-   * Requests fresh attestation material for {@code alias}. Providers that do not support
-   * attestation generation return {@link Optional#empty()}.
+   * Requests fresh attestation material for {@code alias} from the selected provider.
    *
    * @param alias alias to attest
    * @param challenge attestation challenge (may be {@code null} if provider does not require it)
@@ -464,24 +648,14 @@ public final class IrohaKeyManager {
                 right.metadata().supportsAttestationCertificates(),
                 left.metadata().supportsAttestationCertificates()));
 
-    KeyManagementException lastError = null;
-    for (final KeyProvider provider : ordered) {
-      try {
-        final byte[] clonedChallenge = challenge == null ? null : challenge.clone();
-        final Optional<KeyAttestation> attestation =
-            provider.generateAttestation(alias, clonedChallenge);
-        if (attestation.isPresent()) {
-          return attestation;
-        }
-      } catch (final KeyManagementException e) {
-        keystoreTelemetry.recordFailure(alias, provider.metadata(), e.getMessage());
-        lastError = e;
-      }
+    final KeyProvider provider = ordered.get(0);
+    try {
+      final byte[] clonedChallenge = challenge == null ? null : challenge.clone();
+      return provider.generateAttestation(alias, clonedChallenge);
+    } catch (final KeyManagementException e) {
+      keystoreTelemetry.recordFailure(alias, provider.metadata(), e.getMessage());
+      throw e;
     }
-    if (lastError != null) {
-      throw lastError;
-    }
-    return Optional.empty();
   }
 
   private List<KeyProvider> orderedProviders(final KeySecurityPreference preference) {
@@ -546,7 +720,7 @@ public final class IrohaKeyManager {
   /**
    * Implemented by actors that can generate, store, and retrieve signing keys.
    *
-   * <p>Providers may wrap the Android Keystore, StrongBox secure elements, or software fallbacks. A
+   * <p>Providers may wrap the Android Keystore, StrongBox secure elements, or software storage. A
    * provider can choose to ignore {@code alias} when generating ephemeral keys.
    */
   public interface KeyProvider {
@@ -567,7 +741,7 @@ public final class IrohaKeyManager {
     /**
      * Generates and stores a key pair honouring the requested security preference when possible.
      *
-     * <p>The default implementation falls back to {@link #generate(String)}. Providers that can
+     * <p>The default implementation delegates to {@link #generate(String)}. Providers that can
      * route generation to specific hardware classes (StrongBox vs TEE) should override this method.
      *
      * @throws KeyManagementException if generation fails
@@ -581,7 +755,7 @@ public final class IrohaKeyManager {
      * Generates a key pair and reports the hardware route used.
      *
      * <p>The default implementation derives the route from provider metadata; providers that can
-     * detect StrongBox fallback should override this method to surface the actual path used.
+     * detect the selected StrongBox/TEE/software route should override this method.
      *
      * @throws KeyManagementException if generation fails
      */

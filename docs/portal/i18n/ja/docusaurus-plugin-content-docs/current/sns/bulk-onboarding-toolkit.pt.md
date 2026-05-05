@@ -38,7 +38,7 @@ O parser exige a seguinte linha de cabecalho (a ordem e flexivel):
 | `suffix_id` |シム |接尾辞の識別子 (10 進数または `0x` 16 進数)。 |
 | `owner` |シム | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` |シム |インテイロ `1..=255`。 |
-| `payment_asset_id` |シム |決済処理 (`xor#sora` の例)。 |
+| `payment_asset_id` |シム |決済処理 (`61CtjvNd9T3THAR65GsMVHr82Bjc` の例)。 |
 | `payment_gross` / `payment_net` |シム | Interos sem sinal representando unidades nativas do ativo. |
 | `settlement_tx` |シム | Valor JSON または文字列リテラルの説明、トランザクションのパガメント、ハッシュ。 |
 | `payment_payer` |シム | AccountId は自動更新されます。 |
@@ -77,18 +77,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -114,7 +114,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -134,9 +134,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- O ヘルパーは、`POST /v1/sns/registrations` 要求と中止のプライムロを発行します
+- O ヘルパーは、`POST /v1/sns/names` 要求と中止のプライムロを発行します
   HTTPエラーです。 as respostas sao anexadas ao log como registros NDJSON。
-- `--poll-status` reconsulta `/v1/sns/registrations/{selector}` apos cada envio
+- `--poll-status` reconsulta `/v1/sns/names/{namespace}/{literal}` apos cada envio
   (ate `--poll-attempts`、デフォルトは 5) 登録情報を確認します。
   Forneca `--suffix-map` (`suffix_id` パラメータ「サフィックス」の JSON) パラメータ
   フェラメンタは、`{label}.{suffix}` パラオポーリングを派生します。
@@ -222,7 +222,7 @@ OS のワークフローは、アーキバムとリリースの共同作業を�
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -246,7 +246,7 @@ CSV を実行します。
   CSV のローカル情報を参照して解決策を参照します。メタデータ
   正しいオブジェクトを作成し、検証します。
 - **コントローラー:** セルラス エム ブランコ レスペイタム `--default-controllers`。フォルネカ
-  listas明示的 (例`i105...;i105...`) 所有者パラアトレスのデレガー。
+  listas明示的 (例`<i105-account-id>;<i105-account-id>`) 所有者パラアトレスのデレガー。
 
 Falhas sao reportadas com numeros de linha contextuais (por exemplo)
 `error: row 12 term_years must be between 1 and 255`)。 O script sai com codigo

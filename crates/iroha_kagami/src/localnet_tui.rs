@@ -88,7 +88,7 @@ fn consensus_mode_prompt(
     }
     ConsensusModePrompt {
         choices: vec![ConsensusModeChoice::Permissioned, ConsensusModeChoice::Npos],
-        default_index: 1,
+        default_index: 0,
         locked: false,
     }
 }
@@ -173,7 +173,7 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             for i in 0..count {
                 let default_id =
                     canonical_asset_definition_literal("wonderland", &format!("asset{i}"));
-                let id = Text::new("Asset definition id (aid:<32-lower-hex>)")
+                let id = Text::new("Asset definition id (Base58)")
                     .with_default(&default_id)
                     .prompt()?;
                 let name = Text::new("Asset display name")
@@ -194,9 +194,9 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
                 assets.push(AssetSpec {
                     id,
                     name,
-                    mint_to: ALICE_ID
-                        .clone()
-                        .to_account_id("wonderland".parse().expect("valid domain")),
+                    alias: None,
+                    owned_by: ALICE_ID.clone(),
+                    mint_to: ALICE_ID.clone(),
                     quantity: qty,
                 });
             }
@@ -257,6 +257,6 @@ mod tests {
             prompt.choices,
             vec![ConsensusModeChoice::Permissioned, ConsensusModeChoice::Npos]
         );
-        assert_eq!(prompt.default_index, 1);
+        assert_eq!(prompt.default_index, 0);
     }
 }

@@ -1385,7 +1385,7 @@ mod defaults {
         }
         pub const fn max_instructions() -> NonZeroU64 {
             // Keep in sync with iroha_config defaults::transaction::max_instructions.
-            nonzero!(50_000_u64)
+            nonzero!(100_000_u64)
         }
         pub const fn ivm_bytecode_size() -> NonZeroU64 {
             nonzero!(4 * 2_u64.pow(20))

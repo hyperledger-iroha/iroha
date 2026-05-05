@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, fs,
     io::{BufWriter, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
 };
 
@@ -27,8 +27,8 @@ pub enum Profile {
     Iroha2,
     /// Sora Nexus (mainnet).
     Nexus,
-    /// Sora Testus (testnet).
-    Testus,
+    /// Sora Taira (testnet).
+    Taira,
 }
 
 impl fmt::Display for Profile {
@@ -36,7 +36,7 @@ impl fmt::Display for Profile {
         match self {
             Profile::Iroha2 => write!(f, "Iroha2 (single lane)"),
             Profile::Nexus => write!(f, "Sora Nexus (mainnet)"),
-            Profile::Testus => write!(f, "Sora Testus (testnet)"),
+            Profile::Taira => write!(f, "Sora Taira (testnet)"),
         }
     }
 }
@@ -56,6 +56,24 @@ pub struct Args {
     /// Override the default chain identifier.
     #[arg(long, value_name = "CHAIN")]
     pub chain_id: Option<String>,
+    /// Override the public P2P host/IP advertised for this peer.
+    #[arg(long, value_name = "HOST")]
+    pub p2p_host: Option<String>,
+    /// Override the public P2P port for this peer.
+    #[arg(long, value_name = "PORT")]
+    pub p2p_port: Option<u16>,
+    /// Override the Torii host/IP advertised for this peer.
+    #[arg(long, value_name = "HOST")]
+    pub torii_host: Option<String>,
+    /// Override the Torii port for this peer.
+    #[arg(long, value_name = "PORT")]
+    pub torii_port: Option<u16>,
+    /// Override the relay mode instead of prompting interactively.
+    #[arg(long, value_enum)]
+    pub relay_mode: Option<RelayMode>,
+    /// Relay hub addresses (`host:port`), repeat once per hub when relay mode uses them.
+    #[arg(long = "relay-hub-address", value_name = "HOST:PORT")]
+    pub relay_hub_addresses: Vec<String>,
     /// Override the bootstrap peer (`pubkey@host:port`). Comma-separated for multiple entries.
     #[arg(long, value_name = "PEERS")]
     pub trusted_peers: Option<String>,
@@ -78,8 +96,8 @@ struct Answers {
     output_dir: PathBuf,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RelayMode {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum RelayMode {
     Disabled,
     Hub,
     Spoke,
@@ -125,22 +143,23 @@ impl ProfileDefaults {
                 p2p_port: 1337,
                 torii_port: 8080,
                 host: "nexus.mof2.sora.org",
-                trusted_peers: &[
-                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@nexus.mof2.sora.org:1337",
-                ],
+                trusted_peers: &[concat!(
+                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@",
+                    "nexus.mof2.sora.org:1337"
+                )],
                 config_template: Some("configs/soranexus/nexus/config.toml"),
                 genesis_template: "configs/soranexus/nexus/genesis.json",
             },
-            Profile::Testus => Self {
+            Profile::Taira => Self {
                 chain: "809574f5-fee7-5e69-bfcf-52451e42d50f",
                 p2p_port: 1337,
                 torii_port: 18080,
-                host: "testus.mof3.sora.org",
+                host: "taira-validator-1.sora.org",
                 trusted_peers: &[
-                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@testus.mof3.sora.org:1337",
+                    "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2@taira-validator-1.sora.org:1337",
                 ],
-                config_template: Some("configs/soranexus/testus/config.toml"),
-                genesis_template: "configs/soranexus/testus/genesis.json",
+                config_template: Some("configs/soranexus/taira/config.toml"),
+                genesis_template: "configs/soranexus/taira/genesis.json",
             },
         }
     }
@@ -165,7 +184,7 @@ impl<T: Write> RunArgs<T> for Args {
         let genesis_path = answers.output_dir.join("genesis.json");
 
         let sorafs_dir = answers.output_dir.join("sorafs_admission");
-        if matches!(answers.profile, Profile::Nexus | Profile::Testus) {
+        if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
             fs::create_dir_all(&sorafs_dir)
                 .wrap_err("failed to create sorafs admission directory")?;
         }
@@ -191,7 +210,7 @@ impl<T: Write> RunArgs<T> for Args {
 #
 # # TLS-over-TCP to peers (requires iroha_p2p/p2p_tls):
 # tls_enabled = false
-# tls_fallback_to_plain = true
+# tls_fallback_to_plain = false
 # tls_listen_address = "addr:0.0.0.0:1337"
 # tls_inbound_only = false
 #
@@ -208,27 +227,42 @@ impl<T: Write> RunArgs<T> for Args {
             .wrap_err("failed to serialise genesis after wizard updates")?;
         fs::write(&genesis_path, genesis_payload)
             .wrap_err_with(|| format!("failed to write genesis to {}", genesis_path.display()))?;
-
-        tui::success(format!(
-            "Config and genesis ready under {}",
-            answers.output_dir.display()
-        ));
-        writeln!(writer, "config: {}", config_path.display())?;
-        writeln!(writer, "genesis: {}", genesis_path.display())?;
-        if matches!(answers.profile, Profile::Nexus | Profile::Testus) {
-            writeln!(writer, "sora profile: pass --sora when starting irohad")?;
-        }
-        writeln!(
-            writer,
-            "next: irohad {} --config {} --genesis-manifest-json {}",
-            if matches!(answers.profile, Profile::Nexus | Profile::Testus) {
-                "--sora"
+        let guide_path = answers.output_dir.join("README.md");
+        let next_command = format!(
+            "cd {} && irohad {}--config {} --genesis-manifest-json {}",
+            answers.output_dir.display(),
+            if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
+                "--sora "
             } else {
                 ""
             },
             config_path.display(),
             genesis_path.display()
+        );
+        write_wizard_readme(
+            &guide_path,
+            answers.profile,
+            &answers.chain,
+            keypair.public_key(),
+            &config_path,
+            &genesis_path,
+            &next_command,
         )?;
+
+        tui::success(format!(
+            "Config and genesis ready under {}",
+            answers.output_dir.display()
+        ));
+        writeln!(writer, "profile: {}", answers.profile)?;
+        writeln!(writer, "chain_id: {}", answers.chain)?;
+        writeln!(writer, "generated_public_key: {}", keypair.public_key())?;
+        writeln!(writer, "config: {}", config_path.display())?;
+        writeln!(writer, "genesis: {}", genesis_path.display())?;
+        writeln!(writer, "guide: {}", guide_path.display())?;
+        if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
+            writeln!(writer, "sora profile: pass --sora when starting irohad")?;
+        }
+        writeln!(writer, "next: {next_command}")?;
         Ok(())
     }
 }
@@ -245,32 +279,46 @@ fn gather_answers(args: &Args) -> Result<Answers> {
     )?;
     let p2p_host = resolve_text(
         "Trusted peer public host",
-        None,
+        args.p2p_host.clone(),
         defaults.host.to_string(),
         args.non_interactive,
     )?;
-    let p2p_port = resolve_number("P2P port", defaults.p2p_port, args.non_interactive)?;
+    let p2p_port = resolve_number(
+        "P2P port",
+        args.p2p_port,
+        defaults.p2p_port,
+        args.non_interactive,
+    )?;
     let torii_host = resolve_text(
         "Trusted peer Torii host",
-        None,
+        args.torii_host.clone(),
         defaults.host.to_string(),
         args.non_interactive,
     )?;
-    let torii_port = resolve_number("Torii port", defaults.torii_port, args.non_interactive)?;
+    let torii_port = resolve_number(
+        "Torii port",
+        args.torii_port,
+        defaults.torii_port,
+        args.non_interactive,
+    )?;
 
-    let relay_mode = resolve_relay_mode(args.non_interactive)?;
+    let relay_mode = resolve_relay_mode(args.relay_mode, args.non_interactive)?;
     let relay_hub_addresses = if matches!(relay_mode, RelayMode::Spoke | RelayMode::Assist) {
-        let raw = resolve_text(
-            "Relay hub addresses (comma separated host:port)",
-            None,
-            format!("{}:{}", defaults.host, defaults.p2p_port),
-            args.non_interactive,
-        )?;
-        raw.split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>()
+        if args.relay_hub_addresses.is_empty() {
+            let raw = resolve_text(
+                "Relay hub addresses (comma separated host:port)",
+                None,
+                format!("{}:{}", defaults.host, defaults.p2p_port),
+                args.non_interactive,
+            )?;
+            raw.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        } else {
+            args.relay_hub_addresses.clone()
+        }
     } else {
         Vec::new()
     };
@@ -281,7 +329,7 @@ fn gather_answers(args: &Args) -> Result<Answers> {
         .as_deref()
         .unwrap_or(default_trusted.as_str());
     let trusted_prompt = resolve_text(
-        "Trusted peers (comma separated pubkey@host:port; PoP required)",
+        "Trusted peers (comma separated pubkey@host:port; PoPs mark validators)",
         args.trusted_peers.clone(),
         trusted_default.to_string(),
         args.non_interactive,
@@ -356,12 +404,7 @@ fn resolve_trusted_peers_pop(
         .filter(|pk| !pops.contains_key(*pk))
         .cloned()
         .collect();
-    if !missing.is_empty() {
-        if args.non_interactive {
-            return Err(eyre!(
-                "trusted_peers_pop missing PoPs for peers: {missing:?}"
-            ));
-        }
+    if !missing.is_empty() && !args.non_interactive {
         for pk in missing {
             let pop = prompt_pop_for_peer(&pk)?;
             pops.insert(pk, pop);
@@ -375,7 +418,9 @@ fn parse_trusted_peer_ids(peers: &[String]) -> Result<Vec<PeerId>> {
     peers
         .iter()
         .map(|entry| {
-            PeerId::from_str(entry).wrap_err_with(|| format!("invalid trusted peer entry: {entry}"))
+            let public_key = entry.split_once('@').map_or(entry.as_str(), |(pk, _)| pk);
+            PeerId::from_str(public_key)
+                .wrap_err_with(|| format!("invalid trusted peer entry: {entry}"))
         })
         .collect()
 }
@@ -477,13 +522,16 @@ fn resolve_profile(args: &Args) -> Result<Profile> {
 
     Select::new(
         "Which profile do you want to set up?",
-        vec![Profile::Iroha2, Profile::Nexus, Profile::Testus],
+        vec![Profile::Iroha2, Profile::Nexus, Profile::Taira],
     )
     .prompt()
     .wrap_err("failed to read profile selection")
 }
 
-fn resolve_relay_mode(non_interactive: bool) -> Result<RelayMode> {
+fn resolve_relay_mode(cli_value: Option<RelayMode>, non_interactive: bool) -> Result<RelayMode> {
+    if let Some(mode) = cli_value {
+        return Ok(mode);
+    }
     if non_interactive {
         return Ok(RelayMode::Disabled);
     }
@@ -518,7 +566,15 @@ fn resolve_text(
         .wrap_err_with(|| format!("{prompt} prompt failed"))
 }
 
-fn resolve_number(prompt: &str, default: u16, non_interactive: bool) -> Result<u16> {
+fn resolve_number(
+    prompt: &str,
+    cli_value: Option<u16>,
+    default: u16,
+    non_interactive: bool,
+) -> Result<u16> {
+    if let Some(value) = cli_value {
+        return Ok(value);
+    }
     if non_interactive {
         return Ok(default);
     }
@@ -528,6 +584,39 @@ fn resolve_number(prompt: &str, default: u16, non_interactive: bool) -> Result<u
         .wrap_err_with(|| format!("{prompt} prompt failed"))?;
     text.parse::<u16>()
         .wrap_err_with(|| format!("{prompt} must be a u16 port"))
+}
+
+fn write_wizard_readme(
+    path: &Path,
+    profile: Profile,
+    chain_id: &str,
+    public_key: &PublicKey,
+    config_path: &Path,
+    genesis_path: &Path,
+    next_command: &str,
+) -> Result<()> {
+    let rendered = format!(
+        concat!(
+            "# Kagami Wizard Output\n\n",
+            "- Profile: `{profile}`\n",
+            "- Chain ID: `{chain_id}`\n",
+            "- Generated public key: `{public_key}`\n",
+            "- Config: `{config}`\n",
+            "- Genesis: `{genesis}`\n\n",
+            "## Next step\n\n",
+            "```bash\n",
+            "{next_command}\n",
+            "```\n",
+        ),
+        profile = profile,
+        chain_id = chain_id,
+        public_key = public_key,
+        config = config_path.display(),
+        genesis = genesis_path.display(),
+        next_command = next_command,
+    );
+    fs::write(path, rendered)
+        .wrap_err_with(|| format!("failed to write wizard guide to {}", path.display()))
 }
 
 fn load_config_template(
@@ -676,7 +765,7 @@ fn apply_overrides(
         )),
     );
 
-    if matches!(answers.profile, Profile::Nexus | Profile::Testus) {
+    if matches!(answers.profile, Profile::Nexus | Profile::Taira) {
         let mut sorafs = table(config, "torii.sorafs");
         sorafs.insert(
             "admission_envelopes_dir".into(),
@@ -985,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn trusted_peers_pop_missing_non_interactive_fails() {
+    fn trusted_peers_pop_missing_non_interactive_marks_peer_observer() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let other = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let answers = Answers {
@@ -1005,10 +1094,120 @@ mod tests {
             output_dir: PathBuf::from("out"),
             non_interactive: true,
             chain_id: None,
+            p2p_host: None,
+            p2p_port: None,
+            torii_host: None,
+            torii_port: None,
+            relay_mode: None,
+            relay_hub_addresses: Vec::new(),
             trusted_peers: None,
             trusted_peers_pop: None,
         };
         let result = resolve_trusted_peers_pop(&args, &answers, &keypair);
-        assert!(result.is_err());
+        let pops =
+            result.expect("missing remote PoPs should leave peers as non-validator trusted peers");
+        assert!(
+            pops.contains_key(keypair.public_key()),
+            "local validator PoP should be generated"
+        );
+        assert!(
+            !pops.contains_key(other.public_key()),
+            "remote trusted peer without PoP should not be promoted into the validator roster"
+        );
+    }
+
+    #[test]
+    fn public_taira_bundle_uses_expected_network_identity() {
+        const EXPECTED_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+        const EXPECTED_TAIRA_CHAIN_DISCRIMINANT: i64 = 369;
+
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+
+        let config_path = repo_root.join("configs/soranexus/taira/config.toml");
+        let config_text = fs::read_to_string(&config_path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", config_path.display()));
+        let config: TomlValue = toml::from_str(&config_text)
+            .unwrap_or_else(|err| panic!("parse {}: {err}", config_path.display()));
+        assert_eq!(
+            config.get("chain").and_then(TomlValue::as_str),
+            Some(EXPECTED_TAIRA_CHAIN_ID),
+            "public Taira config.toml must keep the shipped live chain id"
+        );
+        assert_eq!(
+            config
+                .get("chain_discriminant")
+                .and_then(TomlValue::as_integer),
+            Some(EXPECTED_TAIRA_CHAIN_DISCRIMINANT),
+            "public Taira config.toml must keep the shipped address discriminant"
+        );
+
+        let genesis_path = repo_root.join("configs/soranexus/taira/genesis.json");
+        let genesis_text = fs::read_to_string(&genesis_path)
+            .unwrap_or_else(|err| panic!("read {}: {err}", genesis_path.display()));
+        let genesis: JsonValue = json::from_str(&genesis_text)
+            .unwrap_or_else(|err| panic!("parse {}: {err}", genesis_path.display()));
+        assert_eq!(
+            genesis.get("chain").and_then(JsonValue::as_str),
+            Some(EXPECTED_TAIRA_CHAIN_ID),
+            "public Taira genesis.json must match the shipped live chain id"
+        );
+        assert!(
+            config_text.contains("testu"),
+            "public Taira config.toml must render testnet i105 literals"
+        );
+        assert!(
+            !config_text.contains("sorau"),
+            "public Taira config.toml must not leak mainnet i105 literals"
+        );
+        assert!(
+            genesis_text.contains("testu"),
+            "public Taira genesis.json must render testnet i105 literals"
+        );
+        assert!(
+            !genesis_text.contains("sorau"),
+            "public Taira genesis.json must not leak mainnet i105 literals"
+        );
+        let first_tx_instructions = genesis
+            .get("transactions")
+            .and_then(JsonValue::as_array)
+            .and_then(|items| items.first())
+            .and_then(|tx| tx.get("instructions"))
+            .and_then(JsonValue::as_array)
+            .expect("public Taira genesis.json must include bootstrap instructions");
+        let xor_asset_definition_id = first_tx_instructions
+            .iter()
+            .find(|instruction| {
+                instruction
+                    .get("SetAssetDefinitionAlias")
+                    .and_then(|binding| binding.get("alias"))
+                    .and_then(JsonValue::as_str)
+                    == Some("xor#universal")
+            })
+            .and_then(|instruction| instruction.get("SetAssetDefinitionAlias"))
+            .and_then(|binding| binding.get("asset_definition_id"))
+            .and_then(JsonValue::as_str)
+            .expect("public Taira genesis.json must bind xor#universal");
+        let xor_universal = first_tx_instructions
+            .iter()
+            .find(|instruction| {
+                instruction
+                    .get("Register")
+                    .and_then(|register| register.get("AssetDefinition"))
+                    .and_then(|asset| asset.get("id"))
+                    .and_then(JsonValue::as_str)
+                    == Some(xor_asset_definition_id)
+            })
+            .expect("public Taira genesis.json must register the canonical xor asset");
+        let confidential_mode = xor_universal
+            .get("Register")
+            .and_then(|register| register.get("AssetDefinition"))
+            .and_then(|asset| asset.get("confidential_policy"))
+            .and_then(|policy| policy.get("mode"))
+            .and_then(JsonValue::as_str);
+        assert_eq!(
+            confidential_mode,
+            Some("Convertible"),
+            "public Taira genesis.json must keep xor#universal shield-capable for wallet shielding"
+        );
     }
 }

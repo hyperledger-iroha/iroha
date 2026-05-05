@@ -1,18 +1,20 @@
 use std::{
     env,
     error::Error,
-    fs::{self, File},
+    fs,
     path::{Path, PathBuf},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use flate2::{Compression, write::GzEncoder};
 use norito::json::{self, Map, Value};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use crate::workspace_root;
+
+const MOCHI_UI_MANIFEST_REL: &str = "mochi/mochi-ui-egui/Cargo.toml";
+const MOCHI_BIN_NAME: &str = "mochi";
 
 #[derive(Debug, Clone)]
 pub(crate) struct MochiBundleResult {
@@ -287,13 +289,20 @@ fn build_mochi_ui(profile: &str) -> Result<(), Box<dyn Error>> {
     } else if profile != "debug" {
         command.args(["--profile", profile]);
     }
-    command.args(["-p", "mochi-ui-egui"]);
+    command
+        .arg("--manifest-path")
+        .arg(mochi_ui_manifest_path())
+        .args(["--bin", MOCHI_BIN_NAME]);
     command.current_dir(workspace_root());
     let status = command.status()?;
     if !status.success() {
-        return Err("cargo build -p mochi-ui-egui failed".into());
+        return Err(format!("cargo build --manifest-path {MOCHI_UI_MANIFEST_REL} failed").into());
     }
     Ok(())
+}
+
+fn mochi_ui_manifest_path() -> PathBuf {
+    workspace_root().join(MOCHI_UI_MANIFEST_REL)
 }
 
 fn build_kagami(profile: &str) -> Result<(), Box<dyn Error>> {
@@ -452,11 +461,95 @@ fn create_archive(
         fs::remove_file(&archive_path)?;
     }
 
-    let file = File::create(&archive_path)?;
-    let encoder = GzEncoder::new(file, Compression::default());
-    let mut builder = tar::Builder::new(encoder);
-    builder.append_dir_all(bundle_name, bundle_root)?;
-    let encoder = builder.into_inner()?;
-    encoder.finish()?;
+    let bundle_parent = bundle_root.parent().ok_or_else(|| {
+        format!(
+            "bundle root `{}` does not have a parent directory",
+            bundle_root.display()
+        )
+    })?;
+    if bundle_parent != output_root {
+        return Err(format!(
+            "bundle root `{}` must live under output root `{}`",
+            bundle_root.display(),
+            output_root.display()
+        )
+        .into());
+    }
+
+    let status = Command::new("tar")
+        .arg("-czf")
+        .arg(&archive_path)
+        .arg("-C")
+        .arg(output_root)
+        .arg(bundle_name)
+        .status()?;
+    if !status.success() {
+        return Err(format!(
+            "`tar -czf {}` exited with status {:?}",
+            archive_path.display(),
+            status
+        )
+        .into());
+    }
     Ok(archive_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MOCHI_BIN_NAME, MOCHI_UI_MANIFEST_REL, create_archive, mochi_ui_manifest_path};
+    use std::{fs, process::Command};
+
+    use tempfile::tempdir;
+
+    #[test]
+    fn mochi_ui_manifest_path_declares_packaged_binary() {
+        let manifest_path = mochi_ui_manifest_path();
+
+        assert!(
+            manifest_path.ends_with(MOCHI_UI_MANIFEST_REL),
+            "unexpected MOCHI UI manifest path: {}",
+            manifest_path.display()
+        );
+
+        let manifest = fs::read_to_string(&manifest_path)
+            .unwrap_or_else(|_| panic!("missing manifest {}", manifest_path.display()));
+        assert!(
+            manifest.contains("[[bin]]")
+                && manifest.contains(&format!("name = \"{MOCHI_BIN_NAME}\"")),
+            "MOCHI UI manifest must declare the packaged `{MOCHI_BIN_NAME}` binary"
+        );
+    }
+
+    #[test]
+    fn create_archive_packages_bundle_directory() {
+        let tempdir = tempdir().expect("tempdir");
+        let output_root = tempdir.path();
+        let bundle_name = "mochi-test-bundle";
+        let bundle_root = output_root.join(bundle_name);
+        fs::create_dir_all(bundle_root.join("bin")).expect("bundle dir");
+        fs::write(bundle_root.join("bin").join("mochi"), b"binary").expect("bundle file");
+
+        let archive_path =
+            create_archive(output_root, bundle_name, &bundle_root).expect("archive builds");
+
+        assert!(archive_path.exists(), "archive should exist");
+
+        let listing = Command::new("tar")
+            .arg("-tzf")
+            .arg(&archive_path)
+            .output()
+            .expect("archive listing");
+        assert!(
+            listing.status.success(),
+            "archive listing should succeed: {:?}",
+            listing.status
+        );
+        let stdout = String::from_utf8(listing.stdout).expect("utf8 listing");
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line == format!("{bundle_name}/bin/mochi")),
+            "archive listing did not include bundle payload: {stdout}"
+        );
+    }
 }

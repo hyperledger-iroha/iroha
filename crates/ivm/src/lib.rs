@@ -32,6 +32,7 @@ pub mod axt;
 pub mod bn254_vec;
 mod branch_predictor;
 mod byte_merkle_tree;
+pub mod contract_artifact;
 mod core_host;
 mod cuda;
 mod decoder;
@@ -101,7 +102,16 @@ pub use crate::gpu_manager::GpuManager;
 // Re-export stable mode bits so tests/users can import `ivm::ivm_mode::*`.
 pub use crate::metadata::mode as ivm_mode;
 // Re-export the canonical Merkle tree from iroha_crypto for general use.
-pub use crate::metadata::{MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX};
+pub use crate::contract_artifact::{
+    ContractArtifactError, VerifiedContractArtifact, verify_contract_artifact,
+};
+pub use crate::metadata::{
+    CONTRACT_DEBUG_SECTION_MAGIC, CONTRACT_FEATURE_BIT_VECTOR, CONTRACT_FEATURE_BIT_ZK,
+    CONTRACT_FEATURE_KNOWN_BITS, EmbeddedContractDebugInfoV1, EmbeddedContractInterfaceV1,
+    EmbeddedEntrypointDescriptor, EmbeddedFunctionBudgetReportV1, EmbeddedSourceLocation,
+    EmbeddedSourceMapEntryV1, EmbeddedStateFieldDescriptor, EmbeddedStateType,
+    MAGIC as METADATA_MAGIC, ProgramMetadata, VECTOR_LENGTH_MAX,
+};
 pub use crate::{
     aes::{
         aes128_decrypt_many, aes128_encrypt_many, aes128_expand_key, aesdec, aesdec_impl,
@@ -110,20 +120,27 @@ pub use crate::{
     branch_predictor::BranchPredictor,
     byte_merkle_tree::ByteMerkleTree,
     cuda::{
-        aesdec_cuda, aesenc_cuda, bn254_add_cuda, bn254_mul_cuda, bn254_sub_cuda, cuda_available,
+        aesdec_batch_cuda, aesdec_cuda, aesdec_rounds_batch_cuda, aesenc_batch_cuda, aesenc_cuda,
+        aesenc_rounds_batch_cuda, bitonic_sort_pairs, bn254_add_batch_cuda, bn254_add_cuda,
+        bn254_mul_batch_cuda, bn254_mul_cuda, bn254_sub_batch_cuda, bn254_sub_cuda, cuda_available,
         cuda_disabled, cuda_last_error_message, ed25519_verify_batch_cuda, ed25519_verify_cuda,
         keccak_f1600_cuda, poseidon2_cuda, poseidon2_cuda_many, poseidon6_cuda,
-        poseidon6_cuda_many, reset_cuda_backend_for_tests, sha256_compress_cuda, vector_add_f32,
+        poseidon6_cuda_many, reset_cuda_backend_for_tests, sha256_compress_cuda,
+        sha256_leaves_cuda, sha256_pairs_reduce_cuda, vadd32_cuda, vadd64_cuda, vand_cuda,
+        vector_add_f32, vor_cuda, vxor_cuda,
     },
     decoder::decode,
     ec::{
         ec_add, ec_add_truncated, ec_mul, ec_mul_truncated, pairing_check, pairing_check_truncated,
     },
-    error::{Perm, VMError},
+    error::{
+        Perm, VMError, VmBudgetSnapshot, VmExecutionContext, VmExecutionDiagnostic,
+        VmSourceLocation, VmTrapKind,
+    },
     field_dispatch::{Avx2Field, Avx512Field, FieldArithmetic, NeonField, ScalarField, Sse2Field},
     host::IVMHost,
     iso20022::*,
-    ivm::{IVM, set_banner_enabled},
+    ivm::{IVM, TraceMode, set_banner_enabled},
     ivm_cache::{
         CacheStats, DecodedOp, IvmCache, global_cache, global_counters, global_get_with_meta,
         global_stats,
@@ -141,21 +158,14 @@ pub use crate::{
     sha3::{keccak_f1600, sha3_absorb_block},
     zk_poseidon::{pair_hash_bytes, pair_hash_u64},
 };
-
 pub use iroha_crypto::{MerkleProof, MerkleTree};
 /// Syscall policy determined by `ProgramMetadata.abi_version`.
 pub use ivm_abi::SyscallPolicy;
 
 pub use crate::signature::{Ed25519BatchItem, verify_ed25519_batch_items};
-#[cfg(target_os = "macos")]
-pub use crate::vector::{
-    bit_pipe_compile_count, metal_available, metal_disabled, release_metal_state,
-    reset_metal_backend_for_tests,
-};
 pub use crate::{
     mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken,
-        ScopedAccountId, WsvHost,
+        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
     },
     registers::Registers,
     segmented_memory::{Memory as SegmentedMemory, Segment},
@@ -164,10 +174,12 @@ pub use crate::{
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
     tx_parallel::{PostRunPhase, Transaction, execute_transactions_parallel},
     vector::{
-        SimdChoice, clear_forced_simd, clear_thread_forced_simd, forced_simd_test_lock,
-        set_forced_simd, set_thread_forced_simd, sha256_compress, simd_backend, simd_bits,
-        simd_choice, simd_lanes, vadd32, vadd32_auto, vadd64, vadd64_auto, vand, vand_auto,
-        vector_supported, vor, vor_auto, vrot32, vrot32_auto, vxor, vxor_auto, zero_vector,
+        SimdChoice, bit_pipe_compile_count, clear_forced_simd, clear_thread_forced_simd,
+        forced_simd_test_lock, metal_available, metal_disabled, release_metal_state,
+        reset_metal_backend_for_tests, set_forced_simd, set_thread_forced_simd, sha256_compress,
+        simd_backend, simd_bits, simd_choice, simd_lanes, vadd32, vadd32_auto, vadd64, vadd64_auto,
+        vand, vand_auto, vector_supported, vor, vor_auto, vrot32, vrot32_auto, vxor, vxor_auto,
+        zero_vector,
     },
     zk::{MemEvent, RegEvent, RegisterState},
 };
@@ -508,8 +520,12 @@ pub fn apply_stack_sizes(
 ) -> StackSizeOutcome {
     let sched = scheduler_bytes.clamp(MIN_STACK_BYTES, MAX_STACK_BYTES);
     let prover = prover_bytes.clamp(MIN_STACK_BYTES, MAX_STACK_BYTES);
-    let guest = guest_bytes.clamp(MIN_STACK_BYTES as u64, MAX_STACK_BYTES as u64);
-    let budget = budget_bytes.clamp(MIN_STACK_BYTES as u64, MAX_STACK_BYTES as u64);
+    let guest = crate::memory::Memory::align_stack_bytes(
+        guest_bytes.clamp(MIN_STACK_BYTES as u64, MAX_STACK_BYTES as u64),
+    );
+    let budget = crate::memory::Memory::align_stack_bytes(
+        budget_bytes.clamp(MIN_STACK_BYTES as u64, MAX_STACK_BYTES as u64),
+    );
     let outcome = StackSizeOutcome {
         requested_scheduler_bytes: scheduler_bytes,
         requested_prover_bytes: prover_bytes,
@@ -581,7 +597,21 @@ mod tests {
             assert_eq!(errors.simd.as_deref(), Some("simd unsupported on hardware"));
         }
         assert!(errors.metal.is_none());
-        assert!(errors.cuda.is_none());
+        #[cfg(feature = "cuda")]
+        {
+            if status.cuda.available {
+                assert!(errors.cuda.is_none());
+            } else {
+                assert!(
+                    errors.cuda.is_some(),
+                    "expected a CUDA disable/unavailable reason when the CUDA feature is enabled"
+                );
+            }
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            assert!(errors.cuda.is_none());
+        }
     }
 
     #[test]
@@ -672,11 +702,47 @@ mod tests {
     }
 
     #[test]
+    fn apply_stack_sizes_aligns_guest_and_budget_limits() {
+        let prev_guest = guest_stack_limit();
+        let prev_budget = crate::memory::Memory::stack_budget_limit();
+        let outcome = apply_stack_sizes(32 * 1024 * 1024, 32 * 1024 * 1024, 0x60a04, 0x60a04);
+
+        assert_eq!(
+            outcome.guest_bytes % crate::memory::Memory::STACK_ALIGNMENT,
+            0
+        );
+        assert_eq!(
+            outcome.budget_bytes % crate::memory::Memory::STACK_ALIGNMENT,
+            0
+        );
+        assert_eq!(guest_stack_limit(), outcome.guest_bytes);
+        assert_eq!(
+            crate::memory::Memory::stack_budget_limit(),
+            outcome.budget_bytes
+        );
+
+        set_guest_stack_limit(prev_guest);
+        crate::memory::Memory::set_stack_budget_limit(prev_budget);
+    }
+
+    #[test]
     fn stack_limits_are_clamped() {
         apply_stack_sizes(1, usize::MAX, u64::MAX, u64::MAX);
         assert!(guest_stack_limit() <= 1024 * 1024 * 1024);
         assert!(guest_stack_limit() >= 64 * 1024);
         assert!(crate::memory::Memory::stack_budget_limit() <= 1024 * 1024 * 1024);
         assert!(crate::memory::Memory::stack_budget_limit() >= 64 * 1024);
+    }
+
+    #[test]
+    fn metal_api_exports_are_available_on_all_targets() {
+        release_metal_state();
+        reset_metal_backend_for_tests();
+        assert_eq!(metal_available(), crate::vector::metal_available());
+        assert_eq!(metal_disabled(), crate::vector::metal_disabled());
+        assert_eq!(
+            bit_pipe_compile_count(),
+            crate::vector::bit_pipe_compile_count()
+        );
     }
 }

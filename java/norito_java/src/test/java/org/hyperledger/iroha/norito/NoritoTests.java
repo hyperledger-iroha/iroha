@@ -25,6 +25,7 @@ public final class NoritoTests {
     testSchemaHashCanonicalPath();
     testEncodeDecodeUInt();
     testEncodeDecodeString();
+    testTransparentAdapterDelegatesWithoutFieldFrame();
     testEncodeDecodeSequence();
     testSequenceAdapterEncoding();
     testByteVecAdapterRoundtrip();
@@ -202,6 +203,25 @@ public final class NoritoTests {
     assert decoded.equals("こんにちは");
   }
 
+  private static void testTransparentAdapterDelegatesWithoutFieldFrame() {
+    TypeAdapter<WrappedString> adapter =
+        NoritoAdapters.transparent(
+            NoritoAdapters.stringAdapter(), WrappedString::value, WrappedString::new);
+    NoritoEncoder encoder = new NoritoEncoder(NoritoHeader.COMPACT_LEN);
+    adapter.encode(encoder, new WrappedString("mibank"));
+
+    byte[] encoded = encoder.toByteArray();
+    NoritoDecoder rawDecoder = new NoritoDecoder(encoded, NoritoHeader.COMPACT_LEN);
+    String raw = NoritoAdapters.stringAdapter().decode(rawDecoder);
+    assert raw.equals("mibank") : "transparent adapter must encode exactly like the inner type";
+    assert rawDecoder.remaining() == 0 : "transparent adapter must not add a field frame";
+
+    NoritoDecoder wrappedDecoder = new NoritoDecoder(encoded, NoritoHeader.COMPACT_LEN);
+    WrappedString decoded = adapter.decode(wrappedDecoder);
+    assert decoded.value().equals("mibank") : "transparent adapter must wrap decoded inner value";
+    assert wrappedDecoder.remaining() == 0 : "transparent adapter must consume the inner payload";
+  }
+
   private static void testEncodeDecodeSequence() {
     TypeAdapter<List<Long>> adapter = NoritoAdapters.sequence(NoritoAdapters.uint(32));
     List<Long> values = List.of(1L, 2L, 3L, 4L);
@@ -217,9 +237,9 @@ public final class NoritoTests {
     byte[] encoded = encoding.payload();
     byte[] expected = new byte[] {
         0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04,
         0x01, 0x00, 0x00, 0x00,
-        0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04,
         0x02, 0x00, 0x00, 0x00
     };
     assert Arrays.equals(encoded, expected) : "sequence encoding mismatch";
@@ -236,8 +256,8 @@ public final class NoritoTests {
     byte[] encoded = encoding.payload();
     byte[] expected = new byte[] {
         0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02
+        0x01, 0x01,
+        0x01, 0x02
     };
     assert Arrays.equals(encoded, expected) : "byte vec encoding mismatch";
     NoritoDecoder decoder = new NoritoDecoder(encoded, encoding.flags(), NoritoHeader.MINOR_VERSION);
@@ -295,7 +315,7 @@ public final class NoritoTests {
     TypeAdapter<List<byte[]>> adapter = NoritoAdapters.sequence(NoritoAdapters.bytesAdapter());
     List<byte[]> decoded = adapter.decode(decoder);
     assert decoded.isEmpty() : "Expected empty sequence";
-    assert decoder.remaining() == 0 : "Decoder should consume compat tail";
+    assert decoder.remaining() == 0 : "Decoder should consume canonical empty packed tail";
   }
 
   private static void testSequenceAcceptsEmptyPackedTailWithFollowingData() {
@@ -972,7 +992,7 @@ public final class NoritoTests {
     NoritoStreaming.StreamingTicket ticket =
         new NoritoStreaming.StreamingTicket(
             fill(0x33, NoritoStreaming.HASH_LEN),
-            "alice@wonderland",
+            "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             42,
             3,
             7,
@@ -1196,6 +1216,8 @@ public final class NoritoTests {
       return observed;
     }
   }
+
+  private record WrappedString(String value) {}
 
   private static String toHex(byte[] data) {
     StringBuilder sb = new StringBuilder(data.length * 2);

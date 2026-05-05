@@ -41,7 +41,7 @@ MOCHI нь CLI хоёртын хувилбаруудыг ашигладаг. Т�
 Хадгалах сангийн үндэсээс:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 Энэ тушаал нь `mochi-core` болон egui frontend-ийг хоёуланг нь бүтээдэг. Түгээх боломжтой багц үүсгэхийн тулд дараахыг ажиллуулна уу:
@@ -57,7 +57,7 @@ cargo xtask mochi-bundle
 UI-г ачаанаас шууд ажиллуул:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 Өгөгдмөлөөр MOCHI нь түр зуурын өгөгдлийн санд нэг үет урьдчилан тохируулгыг үүсгэдэг:
@@ -69,7 +69,7 @@ cargo run -p mochi-ui-egui
 Эхлүүлэх үед өгөгдмөл тохиргоог хүчингүй болгохын тулд CLI тугуудыг ашиглана уу:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ SoraFS пин манифестууд ба үүрэг өгөх, хүчингүй 
 ./ci/check_mochi.sh
 ```
 
-Туслагч нь `cargo check`/`cargo test`-г `mochi-core`, `mochi-ui-egui` болон
+Туслагч нь `cargo check`/`cargo test`-г `mochi-core`, `mochi-ui` болон
 `mochi-integration`, энэ нь бэхэлгээний шилжилт (каноник блок/үйл явдлын зураг авалт) болон egui бэхэлгээг барьдаг.
 нэг удаагийн регресс. Хэрэв скрипт нь хуучирсан бэхэлгээний талаар мэдээлсэн бол үл тоомсорлож буй нөхөн сэргээх туршилтуудыг дахин ажиллуулна уу.
 жишээ нь:

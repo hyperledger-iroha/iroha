@@ -1,8 +1,15 @@
 //! Constant values used in Torii that might be re-used by client libraries as well.
+use iroha_data_model::{
+    account::{AccountAlias, AccountId, OpaqueAccountId},
+    nexus::UniversalAccountId,
+    transaction::error::TransactionRejectionReason,
+};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 
 /// Shared data-availability helpers (sampling, assignment).
 pub mod da;
+/// Shared QR Code encoder used by Torii and CLI offline flows.
+pub mod qr;
 
 /// Latest Torii API version advertised by default (`major.minor`).
 pub const API_VERSION_DEFAULT: &str = "1.1";
@@ -23,6 +30,8 @@ pub mod uri {
     pub const QUERY: &str = "/query";
     /// Transaction URI is used to handle incoming ISI requests.
     pub const TRANSACTION: &str = "/transaction";
+    /// Batched transaction URI is used to handle multiple signed transaction submissions.
+    pub const TRANSACTIONS_BATCH: &str = "/transactions/batch";
     /// Health URI is used to handle incoming Healthcheck requests.
     pub const HEALTH: &str = "/health";
     /// URI used to fetch a window of block headers (newest first, optional `from`/`limit`).
@@ -66,6 +75,12 @@ pub mod uri {
     pub const PROFILE: &str = "/debug/pprof/profile";
     /// Base path for governance API endpoints
     pub const GOV_BASE: &str = "/v1/gov";
+    /// Base path for Ministry API endpoints.
+    pub const MINISTRY_BASE: &str = "/v1/ministry";
+    /// Ministry: build a draft agenda proposal transaction for local signing.
+    pub const MINISTRY_AGENDA_PROPOSAL_DRAFT: &str = "/v1/ministry/agenda/proposals/draft";
+    /// Ministry: fetch a submitted agenda proposal by proposal id.
+    pub const MINISTRY_AGENDA_PROPOSAL_GET: &str = "/v1/ministry/agenda/proposals/{proposal_id}";
     /// Governance: create a proposal to deploy IVM bytecode (.to)
     pub const GOV_PROPOSE_DEPLOY: &str = "/v1/gov/proposals/deploy-contract";
     /// Governance: submit a ZK ballot (default mode)
@@ -78,6 +93,10 @@ pub mod uri {
     pub const GOV_ENACT: &str = "/v1/gov/enact";
     /// Governance: query the current sortition council
     pub const GOV_COUNCIL_CURRENT: &str = "/v1/gov/council/current";
+    /// Governance: query exact citizenship registry count
+    pub const GOV_CITIZENS_COUNT: &str = "/v1/gov/citizens";
+    /// Governance: query citizenship status for an account
+    pub const GOV_CITIZEN_STATUS: &str = "/v1/gov/citizens/{account_id}";
     /// Governance: persist a VRF-derived council for an epoch (app API)
     pub const GOV_COUNCIL_PERSIST: &str = "/v1/gov/council/persist";
     /// Governance: replace a council member using the next alternate
@@ -94,10 +113,24 @@ pub mod uri {
     pub const GOV_TALLY_GET: &str = "/v1/gov/tally/{id}";
     /// Governance: convenience endpoint to apply protected namespaces parameter
     pub const GOV_PROTECTED_SET: &str = "/v1/gov/protected-namespaces";
-    /// Governance: list active contract instances for a namespace
-    pub const GOV_INSTANCES_BY_NS: &str = "/v1/gov/instances/{ns}";
+    /// Governance: read the active binding for a canonical contract address
+    pub const GOV_CONTRACT_GET: &str = "/v1/gov/contracts/{contract_address}";
     /// Node: capabilities advert (runtime ABI version, etc.)
     pub const NODE_CAPABILITIES: &str = "/v1/node/capabilities";
+    /// Node: latest persisted query projection checkpoint descriptor
+    pub const NODE_QUERY_PROJECTION_CHECKPOINT: &str = "/v1/node/query/projection/checkpoint";
+    /// Node: validate uploaded shard refs and preview a rebuilt projection checkpoint
+    pub const NODE_QUERY_PROJECTION_CHECKPOINT_PLAN: &str =
+        "/v1/node/query/projection/checkpoint/plan";
+    /// Node: rebuild uploaded shard refs and persist the resulting projection checkpoint
+    pub const NODE_QUERY_PROJECTION_CHECKPOINT_PUBLISH: &str =
+        "/v1/node/query/projection/checkpoint/publish";
+    /// Node: enumerate the canonical live query projection shard catalog for one resource family
+    pub const NODE_QUERY_PROJECTION_SHARD_CATALOG: &str =
+        "/v1/node/query/projection/catalog/{resource}";
+    /// Node: export one canonical query projection shard archive
+    pub const NODE_QUERY_PROJECTION_SHARD_EXPORT: &str =
+        "/v1/node/query/projection/shards/{resource}/{partition_id}";
     /// Runtime: get the active ABI version
     pub const RUNTIME_ABI_ACTIVE: &str = "/v1/runtime/abi/active";
     /// Runtime: get canonical ABI hash for the node's active policy
@@ -219,9 +252,73 @@ pub struct ProofRetentionStatus {
     pub backends: Vec<ProofRetentionBackendStatus>,
 }
 
+/// Typed status payload returned by `/v1/pipeline/transactions/status`.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct PipelineTransactionStatusResponse {
+    /// Canonical signed transaction hash (hex, lowercase).
+    pub hash: String,
+    /// Current pipeline status details.
+    pub status: PipelineTransactionStatus,
+    /// Read scope applied by Torii (`local`, `auto`, `global`).
+    pub scope: String,
+    /// Source used to resolve the status (`cache`, `queue`, `state`).
+    pub resolved_from: String,
+}
+
+/// Status details embedded in [`PipelineTransactionStatusResponse`].
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct PipelineTransactionStatus {
+    /// Stable pipeline status kind (`Queued`, `Approved`, `Committed`, `Applied`, `Rejected`, `Expired`).
+    pub kind: String,
+    /// Block height reported for the status when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub block_height: Option<u64>,
+    /// Structured rejection reason for rejected transactions.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub rejection_reason: Option<TransactionRejectionReason>,
+}
+
+/// Canonical account-read payload returned by `GET /v1/accounts/{account_id}`.
+#[derive(
+    JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
+)]
+pub struct AccountReadResponse {
+    /// Canonical account identifier (domainless I105 literal).
+    pub account_id: AccountId,
+    /// Stable account label when assigned.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub label: Option<AccountAlias>,
+    /// Universal account identifier bound to this account when registered in Nexus.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub uaid: Option<UniversalAccountId>,
+    /// Opaque identifiers mapped to the account UAID.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Vec::is_empty")]
+    pub opaque_ids: Vec<OpaqueAccountId>,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ErrorEnvelope, QueueErrorEnvelope, QueueErrorSnapshot};
+    use iroha_data_model::{
+        ValidationFail,
+        account::{AccountAlias, AccountAliasDomain, AccountId},
+        name::Name,
+        nexus::DataSpaceId,
+        transaction::error::TransactionRejectionReason,
+    };
+
+    use super::{
+        AccountReadResponse, ErrorEnvelope, PipelineTransactionStatus,
+        PipelineTransactionStatusResponse, QueueErrorEnvelope, QueueErrorSnapshot,
+    };
 
     #[test]
     fn error_envelope_new_sets_fields() {
@@ -253,6 +350,49 @@ mod tests {
         assert_eq!(decoded.queue.capacity, 24);
         assert!(decoded.queue.saturated);
         assert_eq!(decoded.retry_after_seconds, Some(1));
+    }
+
+    #[test]
+    fn pipeline_transaction_status_roundtrip_preserves_typed_rejection_reason() {
+        let payload = PipelineTransactionStatusResponse {
+            hash: "ab".repeat(32),
+            status: PipelineTransactionStatus {
+                kind: "Rejected".to_owned(),
+                block_height: Some(42),
+                rejection_reason: Some(TransactionRejectionReason::Validation(
+                    ValidationFail::NotPermitted("denied".to_owned()),
+                )),
+            },
+            scope: "auto".to_owned(),
+            resolved_from: "state".to_owned(),
+        };
+
+        let encoded = norito::to_bytes(&payload).expect("encode status payload");
+        let decoded: PipelineTransactionStatusResponse =
+            norito::decode_from_bytes(&encoded).expect("decode status payload");
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn account_read_response_roundtrip_preserves_subject_metadata() {
+        let key_pair = iroha_crypto::KeyPair::random();
+        let response = AccountReadResponse {
+            account_id: AccountId::new(key_pair.public_key().clone()),
+            label: Some(AccountAlias::new(
+                "alice".parse::<Name>().expect("valid label"),
+                Some(AccountAliasDomain::new(
+                    "wonderland".parse::<Name>().expect("valid alias domain"),
+                )),
+                DataSpaceId::UNIVERSAL,
+            )),
+            uaid: None,
+            opaque_ids: Vec::new(),
+        };
+
+        let encoded = norito::to_bytes(&response).expect("encode account response");
+        let decoded: AccountReadResponse =
+            norito::decode_from_bytes(&encoded).expect("decode account response");
+        assert_eq!(decoded, response);
     }
 }
 

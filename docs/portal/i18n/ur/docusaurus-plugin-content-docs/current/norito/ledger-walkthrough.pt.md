@@ -30,8 +30,8 @@ translation_last_reviewed: 2026-02-07
 ڈیمو کیز:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 پہلے اکاؤنٹس کی فہرست دے کر مقدار کی تصدیق کریں:
@@ -50,7 +50,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dentro de wonderland (substitua --limit por um numero maior se necessario)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions que ja existem
@@ -66,7 +66,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI بھیجے گئے ٹرانزیکشن کی ہیش پرنٹ کرتا ہے (مثال کے طور پر ، `0x5f...`)۔ اس کے لئے محفوظ کریں
@@ -75,7 +75,7 @@ CLI بھیجے گئے ٹرانزیکشن کی ہیش پرنٹ کرتا ہے (م�
 ## 3. آپریٹر کے اکاؤنٹ میں ٹکسال یونٹ
 
 اثاثوں کی مقدار جوڑی `(asset definition, account)` کے تحت رہتی ہے۔ ٹکسال 250
-`coffee#wonderland` سے `$ADMIN_ACCOUNT` تک یونٹ:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` سے `$ADMIN_ACCOUNT` تک یونٹ:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

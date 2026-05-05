@@ -3,7 +3,7 @@
 use std::{format, string::String, vec, vec::Vec};
 
 pub use events::{DataEvent, confidential};
-pub use filters::{DataEventFilter, OfflineTransferEventFilter};
+pub use filters::{DataEventFilter, EscrowEventFilter, OfflineNoteEventFilter};
 use iroha_macro::FromVariant;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -13,6 +13,7 @@ use norito::codec::{Decode, Encode};
 use super::EventFilter;
 pub use crate::Registered;
 use crate::prelude::*;
+pub mod escrow;
 mod events;
 mod filters;
 #[cfg(feature = "governance")]
@@ -32,6 +33,7 @@ pub mod verifying_keys;
 pub mod prelude {
     pub use super::{
         confidential::prelude::*,
+        escrow::prelude::*,
         events::prelude::*,
         filters::prelude::*,
         offline::prelude::*,

@@ -3,7 +3,7 @@
 
 //! Contract tests for SoraFS repair worker endpoints.
 
-use std::{num::NonZeroU64, str::FromStr, sync::Arc};
+use std::{num::NonZeroU64, sync::Arc};
 
 use axum::{
     Router,
@@ -52,7 +52,7 @@ fn repair_report(
     RepairReportV1 {
         version: REPAIR_REPORT_VERSION_V1,
         ticket_id: RepairTicketId(ticket.to_string()),
-        auditor_account: "auditor#sora".to_string(),
+        auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_string(),
         submitted_at_unix,
         evidence: RepairEvidenceV1 {
             version: REPAIR_EVIDENCE_VERSION_V1,
@@ -91,7 +91,7 @@ fn sign_worker_action(
 }
 
 fn seed_worker_permission(state: &Arc<State>, worker_id: &AccountId, provider_id: [u8; 32]) {
-    let domain_id = DomainId::from_str("sora").expect("domain id");
+    let domain_id = DomainId::try_new("sora", "universal").expect("domain id");
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("height should be non-zero"),
         None,
@@ -105,7 +105,7 @@ fn seed_worker_permission(state: &Arc<State>, worker_id: &AccountId, provider_id
     Register::domain(Domain::new(domain_id.clone()))
         .execute(worker_id, &mut tx)
         .expect("register domain");
-    Register::account(Account::new(worker_id.clone().to_account_id(domain_id)))
+    Register::account(Account::new(worker_id.clone()))
         .execute(worker_id, &mut tx)
         .expect("register account");
     let permission = Permission::from(CanOperateSorafsRepair {

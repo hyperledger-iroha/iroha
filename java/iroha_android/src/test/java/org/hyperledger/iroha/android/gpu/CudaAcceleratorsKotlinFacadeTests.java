@@ -30,6 +30,15 @@ public final class CudaAcceleratorsKotlinFacadeTests {
     assert CudaAcceleratorsKotlin.bn254AddOrNull(new long[] {1, 0, 0, 0}, new long[] {2, 0, 0, 0}) == null;
     assert CudaAcceleratorsKotlin.bn254SubOrNull(new long[] {3, 0, 0, 0}, new long[] {1, 0, 0, 0}) == null;
     assert CudaAcceleratorsKotlin.bn254MulOrNull(new long[] {3, 0, 0, 0}, new long[] {7, 0, 0, 0}) == null;
+    assert CudaAcceleratorsKotlin.bn254AddBatchOrNull(
+            new long[][] {{1, 0, 0, 0}}, new long[][] {{2, 0, 0, 0}})
+        == null;
+    assert CudaAcceleratorsKotlin.bn254SubBatchOrNull(
+            new long[][] {{3, 0, 0, 0}}, new long[][] {{1, 0, 0, 0}})
+        == null;
+    assert CudaAcceleratorsKotlin.bn254MulBatchOrNull(
+            new long[][] {{3, 0, 0, 0}}, new long[][] {{7, 0, 0, 0}})
+        == null;
   }
 
   private void propagatesValidationErrors() {
@@ -71,6 +80,24 @@ public final class CudaAcceleratorsKotlinFacadeTests {
         new long[] {5L, 6L, 7L, 8L},
         CudaAcceleratorsKotlin.bn254MulOrNull(new long[] {5, 6, 7, 8}, new long[] {1, 1, 1, 1}),
         "bn254Mul");
+    assertArrayEquals(
+        new long[] {1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L},
+        CudaAcceleratorsKotlin.bn254AddBatchOrNull(
+            new long[][] {{1, 1, 1, 1}, {2, 2, 2, 2}},
+            new long[][] {{0, 1, 2, 3}, {3, 2, 1, 0}}),
+        "bn254AddBatch");
+    assertArrayEquals(
+        new long[] {10L, 9L, 8L, 7L, 6L, 5L, 4L, 3L},
+        CudaAcceleratorsKotlin.bn254SubBatchOrNull(
+            new long[][] {{11, 10, 9, 8}, {7, 6, 5, 4}},
+            new long[][] {{1, 1, 1, 1}, {1, 1, 1, 1}}),
+        "bn254SubBatch");
+    assertArrayEquals(
+        new long[] {5L, 6L, 7L, 8L, 9L, 10L, 11L, 12L},
+        CudaAcceleratorsKotlin.bn254MulBatchOrNull(
+            new long[][] {{5, 6, 7, 8}, {9, 10, 11, 12}},
+            new long[][] {{1, 1, 1, 1}, {1, 1, 1, 1}}),
+        "bn254MulBatch");
   }
 
   private void assertEquals(final long expected, final Long actual, final String context) {
@@ -143,6 +170,48 @@ public final class CudaAcceleratorsKotlinFacadeTests {
     @Override
     public Optional<long[]> bn254Mul(final long[] a, final long[] b) {
       return Optional.of(new long[] {5L, 6L, 7L, 8L});
+    }
+
+    @Override
+    public Optional<long[]> bn254AddBatch(
+        final long[] flattenedLhs, final long[] flattenedRhs, final int batchSize) {
+      long[] out = new long[batchSize * 4];
+      for (int i = 0; i < batchSize; i++) {
+        int base = i * 4;
+        out[base] = 1L + base;
+        out[base + 1] = 2L + base;
+        out[base + 2] = 3L + base;
+        out[base + 3] = 4L + base;
+      }
+      return Optional.of(out);
+    }
+
+    @Override
+    public Optional<long[]> bn254SubBatch(
+        final long[] flattenedLhs, final long[] flattenedRhs, final int batchSize) {
+      long[] out = new long[batchSize * 4];
+      for (int i = 0; i < batchSize; i++) {
+        int base = i * 4;
+        out[base] = 10L - base;
+        out[base + 1] = 9L - base;
+        out[base + 2] = 8L - base;
+        out[base + 3] = 7L - base;
+      }
+      return Optional.of(out);
+    }
+
+    @Override
+    public Optional<long[]> bn254MulBatch(
+        final long[] flattenedLhs, final long[] flattenedRhs, final int batchSize) {
+      long[] out = new long[batchSize * 4];
+      for (int i = 0; i < batchSize; i++) {
+        int base = i * 4;
+        out[base] = 5L + base;
+        out[base + 1] = 6L + base;
+        out[base + 2] = 7L + base;
+        out[base + 3] = 8L + base;
+      }
+      return Optional.of(out);
     }
   }
 }

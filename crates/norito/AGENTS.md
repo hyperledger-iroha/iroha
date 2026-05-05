@@ -12,6 +12,7 @@ These guidelines apply to the `crates/norito` crate (Iroha serialization codec).
   - Roundtrip tests (encode→decode→equal) for affected types.
   - Golden vector tests: verify bytes against saved fixtures for multiple versions if applicable.
   - Versioning notes and migration guidance when wire format changes.
+- Keep the maintained bindings aligned: Rust Norito changes must be reflected in `python/norito_py`, `java/norito_java`, and `kotlin/core-jvm` when they touch shared codec behaviour or fixtures.
 - Add unit tests for new or modified functions and error paths; prefer property tests where feasible.
 - Test: `cargo test -p norito`.
 - Follow root/crates `AGENTS.md` for formatting, linting, and dependency policy.

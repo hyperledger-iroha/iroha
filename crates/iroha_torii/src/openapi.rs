@@ -22,7 +22,7 @@ fn info_section(license: Value) -> Value {
     info.insert(
         "description".into(),
         Value::String(
-            "HTTP surface for Torii. App endpoints accept optional canonical signing headers X-Iroha-Account/X-Iroha-Signature."
+            "HTTP surface for Torii. App endpoints accept optional canonical signing headers X-Iroha-Account/X-Iroha-Signature/X-Iroha-Timestamp-Ms/X-Iroha-Nonce."
                 .to_owned(),
         ),
     );
@@ -84,9 +84,7 @@ fn tags_section() -> Value {
     offline.insert("name".into(), Value::String("Offline".to_owned()));
     offline.insert(
         "description".into(),
-        Value::String(
-            "Offline wallet, audit, and settlement endpoints under `/v1/offline/*`.".to_owned(),
-        ),
+        Value::String("Offline V2 readiness endpoint under `/v1/offline/v2/readiness`.".to_owned()),
     );
 
     let mut bridge = Map::new();
@@ -152,6 +150,15 @@ fn tags_section() -> Value {
         Value::String("Contract deployment, instances, and execution helpers.".to_owned()),
     );
 
+    let mut multisig = Map::new();
+    multisig.insert("name".into(), Value::String("Multisig".to_owned()));
+    multisig.insert(
+        "description".into(),
+        Value::String(
+            "Alias-aware multisig propose, approve, spec, and proposal lookup helpers.".to_owned(),
+        ),
+    );
+
     let mut zk = Map::new();
     zk.insert("name".into(), Value::String("ZK".to_owned()));
     zk.insert(
@@ -192,6 +199,24 @@ fn tags_section() -> Value {
     accounts.insert(
         "description".into(),
         Value::String("Account listing and account-scoped query helpers.".to_owned()),
+    );
+
+    let mut ram_lfe = Map::new();
+    ram_lfe.insert("name".into(), Value::String("RamLfe".to_owned()));
+    ram_lfe.insert(
+        "description".into(),
+        Value::String(
+            "Generic RAM-LFE program-policy, execute, and receipt-verification helpers.".to_owned(),
+        ),
+    );
+
+    let mut identifiers = Map::new();
+    identifiers.insert("name".into(), Value::String("Identifiers".to_owned()));
+    identifiers.insert(
+        "description".into(),
+        Value::String(
+            "Identifier-policy listing, resolution, and claim-receipt helpers.".to_owned(),
+        ),
     );
 
     let mut domains = Map::new();
@@ -241,6 +266,13 @@ fn tags_section() -> Value {
     connect.insert(
         "description".into(),
         Value::String("Iroha Connect session and relay endpoints.".to_owned()),
+    );
+
+    let mut vpn = Map::new();
+    vpn.insert("name".into(), Value::String("VPN".to_owned()));
+    vpn.insert(
+        "description".into(),
+        Value::String("Sora VPN profile, session, and receipt endpoints.".to_owned()),
     );
 
     let mut mcp = Map::new();
@@ -329,12 +361,15 @@ fn tags_section() -> Value {
         Value::Object(queries),
         Value::Object(streams),
         Value::Object(contracts),
+        Value::Object(multisig),
         Value::Object(zk),
         Value::Object(proofs),
         Value::Object(governance),
         Value::Object(runtime),
         Value::Object(settlement),
         Value::Object(accounts),
+        Value::Object(ram_lfe),
+        Value::Object(identifiers),
         Value::Object(domains),
         Value::Object(assets),
         Value::Object(nfts),
@@ -342,6 +377,7 @@ fn tags_section() -> Value {
         Value::Object(parameters),
         Value::Object(explorer),
         Value::Object(connect),
+        Value::Object(vpn),
         Value::Object(mcp),
         Value::Object(push),
         Value::Object(webhooks),
@@ -464,6 +500,10 @@ fn alias_paths() -> Map {
     paths.insert(
         "/v1/aliases/resolve_index".to_owned(),
         Value::Object(alias_resolve_index_operation()),
+    );
+    paths.insert(
+        "/v1/aliases/by_account".to_owned(),
+        Value::Object(alias_lookup_by_account_operation()),
     );
     paths.insert(
         "/v1/assets/aliases/resolve".to_owned(),
@@ -603,906 +643,16 @@ fn da_paths() -> Map {
 fn offline_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/offline/allowances".to_owned(),
-        Value::Object(offline_allowances_operation()),
-    );
-    paths.insert(
-        "/v1/offline/allowances/{certificate_id_hex}".to_owned(),
-        Value::Object(offline_allowance_detail_operation()),
-    );
-    paths.insert(
-        "/v1/offline/allowances/{certificate_id_hex}/renew".to_owned(),
-        Value::Object(offline_allowance_renew_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates".to_owned(),
-        Value::Object(offline_allowances_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates/issue".to_owned(),
-        Value::Object(offline_certificate_issue_operation()),
-    );
-    paths.insert(
-        "/v1/offline/build-claims/issue".to_owned(),
-        Value::Object(offline_build_claim_issue_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates/{certificate_id_hex}".to_owned(),
-        Value::Object(offline_allowance_detail_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates/{certificate_id_hex}/renew".to_owned(),
-        Value::Object(offline_allowance_renew_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates/{certificate_id_hex}/renew/issue".to_owned(),
-        Value::Object(offline_certificate_renew_issue_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates/revoke".to_owned(),
-        Value::Object(offline_certificates_revoke_operation()),
-    );
-    paths.insert(
-        "/v1/offline/allowances/query".to_owned(),
-        Value::Object(offline_allowances_query_operation()),
-    );
-    paths.insert(
-        "/v1/offline/certificates/query".to_owned(),
-        Value::Object(offline_allowances_query_operation()),
-    );
-    paths.insert(
-        "/v1/offline/receipts".to_owned(),
-        Value::Object(offline_receipts_operation()),
-    );
-    paths.insert(
-        "/v1/offline/receipts/query".to_owned(),
-        Value::Object(offline_receipts_query_operation()),
-    );
-    paths.insert(
-        "/v1/offline/revocations".to_owned(),
+        "/v1/offline/v2/readiness".to_owned(),
         Value::Object(json_get_operation(
             "Offline",
-            "List offline revocations.",
-            "Return the latest offline revocation entries.",
+            "Report Offline V2 feature readiness.",
+            "Returns V2 readiness signals for device-bound one-use notes and Fountain QR transport.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
-    );
-    paths.insert(
-        "/v1/offline/revocations/query".to_owned(),
-        Value::Object(json_post_operation(
-            "Offline",
-            "Query offline revocations via JSON envelope.",
-            "Submit a QueryEnvelope to filter offline revocations.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/offline/transfers".to_owned(),
-        Value::Object(offline_transfers_operation()),
-    );
-    paths.insert(
-        "/v1/offline/transfers/{bundle_id_hex}".to_owned(),
-        Value::Object(offline_transfer_detail_operation()),
-    );
-    paths.insert(
-        "/v1/offline/transfers/query".to_owned(),
-        Value::Object(offline_transfers_query_operation()),
-    );
-    paths.insert(
-        "/v1/offline/transfers/proof".to_owned(),
-        Value::Object(json_post_operation(
-            "Offline",
-            "Build offline transfer proof requests.",
-            "Generate FASTPQ witness payloads from a transfer payload.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/offline/settlements".to_owned(),
-        Value::Object(offline_settlements_operation()),
-    );
-    paths.insert(
-        "/v1/offline/settlements/{bundle_id_hex}".to_owned(),
-        Value::Object(offline_transfer_detail_operation()),
-    );
-    paths.insert(
-        "/v1/offline/settlements/query".to_owned(),
-        Value::Object(offline_transfers_query_operation()),
-    );
-    paths.insert(
-        "/v1/offline/spend-receipts".to_owned(),
-        Value::Object(offline_spend_receipts_operation()),
-    );
-    paths.insert(
-        "/v1/offline/state".to_owned(),
-        Value::Object(offline_state_operation()),
-    );
-    paths.insert(
-        "/v1/offline/bundle/proof_status".to_owned(),
-        Value::Object(offline_bundle_proof_status_operation()),
-    );
-    paths.insert(
-        "/v1/offline/rejections".to_owned(),
-        Value::Object(offline_rejections_operation()),
-    );
-    paths.insert(
-        "/v1/offline/summaries".to_owned(),
-        Value::Object(offline_summaries_operation()),
-    );
-    paths.insert(
-        "/v1/offline/summaries/query".to_owned(),
-        Value::Object(offline_summaries_query_operation()),
     );
     paths
-}
-
-fn offline_allowances_operation() -> Map {
-    let mut get_op = Map::new();
-    get_op.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    get_op.insert(
-        "summary".into(),
-        Value::String("List registered offline allowances.".to_owned()),
-    );
-    get_op.insert(
-        "description".into(),
-        Value::String(
-            "Returns operator-issued offline wallet certificates plus ledger-maintained \
-             counter checkpoints. Supports optional filter, pagination, and sort \
-             parameters encoded as query arguments."
-                .to_owned(),
-        ),
-    );
-    get_op.insert(
-        "operationId".into(),
-        Value::String("offlineAllowancesList".to_owned()),
-    );
-    let mut params = list_filter_query_parameters();
-    params.extend(offline_allowance_query_parameters());
-    get_op.insert("parameters".into(), Value::Array(params));
-    get_op.insert(
-        "responses".into(),
-        Value::Object(offline_allowances_responses()),
-    );
-
-    let mut post_op = Map::new();
-    post_op.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    post_op.insert(
-        "summary".into(),
-        Value::String("Register a new offline allowance certificate.".to_owned()),
-    );
-    post_op.insert(
-        "description".into(),
-        Value::String(
-            "Accepts an operator-signed OfflineWalletCertificate and enqueues a \
-             `RegisterOfflineAllowance` transaction."
-                .to_owned(),
-        ),
-    );
-    post_op.insert(
-        "operationId".into(),
-        Value::String("offlineAllowancesIssue".to_owned()),
-    );
-    post_op.insert("requestBody".into(), offline_allowance_issue_request_body());
-    post_op.insert(
-        "responses".into(),
-        Value::Object(offline_allowance_issue_responses()),
-    );
-
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(get_op));
-    methods.insert("post".to_owned(), Value::Object(post_op));
-    methods
-}
-
-fn offline_allowances_query_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Query offline allowances with a JSON envelope.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Accepts the Norito `QueryEnvelope` structure so clients can submit complex \
-             filters, selectors, and pagination hints when listing allowances."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineAllowancesQuery".to_owned()),
-    );
-    operation.insert("requestBody".into(), offline_query_request_body());
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_allowances_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_allowance_detail_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Fetch a specific offline allowance.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns the on-ledger OfflineAllowanceRecord for the provided certificate id."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineAllowanceGet".to_owned()),
-    );
-    operation.insert(
-        "parameters".into(),
-        Value::Array(vec![path_param(
-            "certificate_id_hex",
-            "Deterministic certificate id rendered as hex.",
-        )]),
-    );
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_allowance_detail_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_allowance_renew_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Renew an offline allowance certificate.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Accepts a new OfflineWalletCertificate and enqueues a RegisterOfflineAllowance \
-             transaction, scoped to an existing certificate id."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineAllowanceRenew".to_owned()),
-    );
-    operation.insert(
-        "parameters".into(),
-        Value::Array(vec![path_param(
-            "certificate_id_hex",
-            "Deterministic certificate id rendered as hex.",
-        )]),
-    );
-    operation.insert(
-        "requestBody".into(),
-        offline_certificate_renew_request_body(),
-    );
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_certificate_renew_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_certificate_issue_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Issue an offline wallet certificate.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Accepts an unsigned OfflineWalletCertificate draft and returns the operator-signed \
-             certificate payload without registering it on-ledger. Torii derives `operator` from \
-             its configured offline issuer keypair; client-supplied draft `operator` values are \
-             optional and ignored."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineCertificateIssue".to_owned()),
-    );
-    operation.insert(
-        "requestBody".into(),
-        offline_certificate_issue_request_body(),
-    );
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_certificate_issue_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_build_claim_issue_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Issue an offline build claim.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Signs an OfflineBuildClaim bound to a receipt tx id using Torii's configured \
-             offline issuer key."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineBuildClaimIssue".to_owned()),
-    );
-    operation.insert(
-        "requestBody".into(),
-        offline_build_claim_issue_request_body(),
-    );
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_build_claim_issue_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_certificate_renew_issue_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Issue a renewed offline certificate.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Signs a refreshed OfflineWalletCertificate draft after confirming the referenced \
-             allowance exists on-ledger. Torii derives `operator` from its configured offline \
-             issuer keypair; client-supplied draft `operator` values are optional and ignored."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineCertificateRenewIssue".to_owned()),
-    );
-    operation.insert(
-        "parameters".into(),
-        Value::Array(vec![path_param(
-            "certificate_id_hex",
-            "Deterministic certificate id rendered as hex.",
-        )]),
-    );
-    operation.insert(
-        "requestBody".into(),
-        offline_certificate_issue_request_body(),
-    );
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_certificate_issue_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_certificates_revoke_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Revoke an offline certificate verdict.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Enqueues a RegisterOfflineVerdictRevocation transaction referencing the \
-             attestation verdict tied to the supplied certificate id."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineCertificateRevoke".to_owned()),
-    );
-    operation.insert(
-        "requestBody".into(),
-        offline_certificate_revoke_request_body(),
-    );
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_certificate_revoke_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_settlements_operation() -> Map {
-    let mut get_op = Map::new();
-    get_op.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    get_op.insert(
-        "summary".into(),
-        Value::String("List offline settlement bundles.".to_owned()),
-    );
-    get_op.insert(
-        "description".into(),
-        Value::String("Alias of `/v1/offline/transfers` for settlement audit readers.".to_owned()),
-    );
-    get_op.insert(
-        "operationId".into(),
-        Value::String("offlineSettlementsList".to_owned()),
-    );
-    let mut params = list_filter_query_parameters();
-    params.extend(offline_transfer_query_parameters());
-    get_op.insert("parameters".into(), Value::Array(params));
-    get_op.insert(
-        "responses".into(),
-        Value::Object(offline_transfers_responses()),
-    );
-
-    let mut post_op = Map::new();
-    post_op.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    post_op.insert(
-        "summary".into(),
-        Value::String("Submit an offline settlement bundle.".to_owned()),
-    );
-    post_op.insert(
-        "description".into(),
-        Value::String(
-            "Enqueues a `SubmitOfflineToOnlineTransfer` transaction carrying the provided \
-             OfflineToOnlineTransfer bundle. When `torii.offline_issuer` is configured, Torii \
-             auto-issues missing receipt `build_claim` entries before submission. Use \
-             `build_claim_overrides[]` for per-receipt app/build/window overrides; set \
-             `repair_existing_build_claims=true` to re-issue existing claims."
-                .to_owned(),
-        ),
-    );
-    post_op.insert(
-        "operationId".into(),
-        Value::String("offlineSettlementsSubmit".to_owned()),
-    );
-    post_op.insert(
-        "requestBody".into(),
-        offline_settlement_submit_request_body(),
-    );
-    post_op.insert(
-        "responses".into(),
-        Value::Object(offline_settlement_submit_responses()),
-    );
-
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(get_op));
-    methods.insert("post".to_owned(), Value::Object(post_op));
-    methods
-}
-
-fn offline_spend_receipts_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Validate offline spend receipts.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Validates receipt signatures and returns their Poseidon merkle root.".to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineSpendReceiptsSubmit".to_owned()),
-    );
-    operation.insert("requestBody".into(), offline_spend_receipts_request_body());
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_spend_receipts_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_state_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Fetch an offline state snapshot.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns registered allowances, settlement bundles, counter summaries, \
-             and verdict revocations for wallet sync."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineStateGet".to_owned()),
-    );
-    operation.insert("responses".into(), Value::Object(offline_state_responses()));
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_bundle_proof_status_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Fetch lightweight offline bundle proof status.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Computes the Poseidon receipts root for the stored bundle, compares it to the \
-             receipts root advertised by the optional aggregate proof envelope, and returns a \
-             concise status payload without streaming full receipts."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineBundleProofStatus".to_owned()),
-    );
-    let mut params = Vec::new();
-    params.push(Value::Object({
-        let mut param = Map::new();
-        param.insert("name".into(), Value::String("bundle_id_hex".to_owned()));
-        param.insert("in".into(), Value::String("query".to_owned()));
-        param.insert("required".into(), Value::Bool(true));
-        param.insert(
-            "description".into(),
-            Value::String("Deterministic bundle identifier (hex).".to_owned()),
-        );
-        let mut schema = Map::new();
-        schema.insert("type".into(), Value::String("string".to_owned()));
-        param.insert("schema".into(), Value::Object(schema));
-        param
-    }));
-    operation.insert("parameters".into(), Value::Array(params));
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_bundle_proof_status_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_transfers_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("List pending offline-to-online transfer bundles.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns bundles with their receiver/deposit accounts, receipts, and \
-             balance proofs for audit or settlement dashboards."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineTransfersList".to_owned()),
-    );
-    let mut params = list_filter_query_parameters();
-    params.extend(offline_transfer_query_parameters());
-    operation.insert("parameters".into(), Value::Array(params));
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_transfers_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_transfer_detail_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Fetch a specific offline transfer bundle.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns the same enriched transfer payload as `/v1/offline/transfers`, scoped to a \
-             single `bundle_id_hex`."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineTransferGet".to_owned()),
-    );
-    operation.insert(
-        "parameters".into(),
-        Value::Array(vec![path_param(
-            "bundle_id_hex",
-            "Deterministic bundle identifier rendered as hex.",
-        )]),
-    );
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_transfer_detail_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_transfers_query_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Query offline transfer bundles via JSON envelope.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Supports the Norito `QueryEnvelope` body to paginate and filter bundle \
-             records, enabling regulator views or PSP dashboards."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineTransfersQuery".to_owned()),
-    );
-    operation.insert("requestBody".into(), offline_query_request_body());
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_transfers_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_receipts_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("List flattened offline spend receipts.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns individual spend receipts extracted from offline-to-online transfer \
-             bundles, suitable for audit dashboards."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineReceiptsList".to_owned()),
-    );
-    let mut params = list_filter_query_parameters();
-    params.extend(offline_receipt_query_parameters());
-    operation.insert("parameters".into(), Value::Array(params));
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_receipts_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_receipts_query_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Query flattened offline receipts via JSON envelope.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Supports the Norito QueryEnvelope body to paginate and filter receipts \
-             extracted from settlement bundles."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineReceiptsQuery".to_owned()),
-    );
-    operation.insert("requestBody".into(), offline_query_request_body());
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_receipts_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_rejections_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Report offline transfer rejection counters.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns aggregated counts grouped by platform and rejection reason so \
-             operators can monitor App Attest and KeyMint validation failures."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineRejections".to_owned()),
-    );
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_rejections_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_summaries_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("List hardware counter summaries for offline allowances.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns controller-facing summaries of the latest App Attest and Android \
-             marker counters observed for each allowance certificate."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineSummariesList".to_owned()),
-    );
-    operation.insert(
-        "parameters".into(),
-        Value::Array(list_filter_query_parameters()),
-    );
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_summaries_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("get".to_owned(), Value::Object(operation));
-    methods
-}
-
-fn offline_summaries_query_operation() -> Map {
-    let mut operation = Map::new();
-    operation.insert(
-        "tags".into(),
-        Value::Array(vec![Value::String("Offline".to_owned())]),
-    );
-    operation.insert(
-        "summary".into(),
-        Value::String("Query offline counter summaries with a JSON envelope.".to_owned()),
-    );
-    operation.insert(
-        "description".into(),
-        Value::String(
-            "Accepts the Norito `QueryEnvelope` structure so operators can fetch counter \
-             checkpoints with complex filters, selectors, and pagination hints."
-                .to_owned(),
-        ),
-    );
-    operation.insert(
-        "operationId".into(),
-        Value::String("offlineSummariesQuery".to_owned()),
-    );
-    operation.insert("requestBody".into(), offline_query_request_body());
-    operation.insert(
-        "responses".into(),
-        Value::Object(offline_summaries_responses()),
-    );
-    let mut methods = Map::new();
-    methods.insert("post".to_owned(), Value::Object(operation));
-    methods
 }
 
 fn list_filter_query_parameters() -> Vec<Value> {
@@ -1553,15 +703,15 @@ fn explorer_assets_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "owned_by",
-        "Filter assets by account owner (accepts canonical I105 account literals).",
+        "Filter assets by account owner (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
     ));
     params.push(string_query_param(
         "definition",
-        "Filter assets by asset definition identifier.",
+        "Filter assets by asset definition selector (canonical Base58 asset definition id or on-chain alias `name#domain.dataspace` / `name#dataspace`).",
     ));
     params.push(string_query_param(
         "asset_id",
-        "Filter assets by asset identifier.",
+        "Filter assets by canonical Base58 asset id.",
     ));
     params
 }
@@ -1570,7 +720,7 @@ fn explorer_transactions_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "authority",
-        "Filter transactions by authority account (accepts canonical I105 account literals).",
+        "Filter transactions by authority account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
     ));
     params.push(integer_query_param(
         "block",
@@ -1583,7 +733,7 @@ fn explorer_transactions_query_parameters() -> Vec<Value> {
     ));
     params.push(string_query_param(
         "asset_id",
-        "Filter transactions by asset identifier.",
+        "Filter transactions by canonical Base58 asset id.",
     ));
     params
 }
@@ -1592,11 +742,11 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
     let mut params = explorer_pagination_query_parameters();
     params.push(string_query_param(
         "authority",
-        "Filter instructions by authority account (accepts canonical I105 account literals).",
+        "Filter instructions by authority account (accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
     ));
     params.push(string_query_param(
         "account",
-        "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical I105 account literals).",
+        "Filter instructions by referenced account (transfer participants, asset-owner scoped mint/burn/asset-metadata updates, multisig accounts, and public-lane reward assets; accepts canonical I105 account literals or on-chain aliases `name@domain.dataspace` / `name@dataspace`).",
     ));
     params.push(string_query_param(
         "transaction_hash",
@@ -1617,7 +767,7 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
     ));
     params.push(string_query_param(
         "asset_id",
-        "Filter instructions by asset identifier.",
+        "Filter instructions by canonical Base58 asset id.",
     ));
     params
 }
@@ -1625,8 +775,12 @@ fn explorer_instructions_query_parameters() -> Vec<Value> {
 fn account_assets_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
     params.push(string_query_param(
-        "asset_id",
-        "Filter assets by asset identifier.",
+        "asset",
+        "Filter assets by asset definition selector.",
+    ));
+    params.push(string_query_param(
+        "scope",
+        "Filter assets by balance scope (`global` or `dataspace:<id>`).",
     ));
     params
 }
@@ -1635,173 +789,154 @@ fn account_transactions_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
     params.push(string_query_param(
         "asset_id",
-        "Filter transactions by asset identifier.",
+        "Filter transactions by canonical Base58 asset id.",
     ));
     params
+}
+
+fn contract_activity_list_query_parameters() -> Vec<Value> {
+    let mut params = pagination_query_parameters();
+    params.push(string_query_param(
+        "authority",
+        "Filter by canonical I105 authority.",
+    ));
+    params.push(string_query_param(
+        "contract_address",
+        "Filter by contract address.",
+    ));
+    params.push(string_query_param(
+        "contract_alias",
+        "Filter by deployed contract alias.",
+    ));
+    params.push(string_query_param(
+        "contract_entrypoint",
+        "Filter by contract entrypoint name.",
+    ));
+    params.push(integer_query_param(
+        "since_timestamp_ms",
+        "Filter items whose timestamp is greater than or equal to this value.",
+        Some("uint64"),
+    ));
+    params.push(integer_query_param(
+        "until_timestamp_ms",
+        "Filter items whose timestamp is less than or equal to this value.",
+        Some("uint64"),
+    ));
+    params.push(bool_query_param(
+        "result_ok",
+        "Filter by execution outcome.",
+    ));
+    params
+}
+
+fn contract_event_list_query_parameters() -> Vec<Value> {
+    let mut params = pagination_query_parameters();
+    params.push(string_query_param(
+        "authority",
+        "Filter by canonical I105 authority.",
+    ));
+    params.push(string_query_param(
+        "contract_address",
+        "Filter by contract address.",
+    ));
+    params.push(string_query_param(
+        "contract_alias",
+        "Filter by deployed contract alias.",
+    ));
+    params.push(string_query_param(
+        "module",
+        "Filter by derived module identifier.",
+    ));
+    params.push(string_query_param(
+        "event_kind",
+        "Filter by generic contract event kind.",
+    ));
+    params.push(string_query_param(
+        "participant",
+        "Filter by participant account/account-alias-like references.",
+    ));
+    params.push(string_query_param(
+        "asset_id",
+        "Filter by referenced asset identifier.",
+    ));
+    params.push(string_query_param(
+        "provenance",
+        "Filter by event provenance (`emitted` or `derived`).",
+    ));
+    params.push(integer_query_param(
+        "since_timestamp_ms",
+        "Filter items whose timestamp is greater than or equal to this value.",
+        Some("uint64"),
+    ));
+    params.push(integer_query_param(
+        "until_timestamp_ms",
+        "Filter items whose timestamp is less than or equal to this value.",
+        Some("uint64"),
+    ));
+    params.push(bool_query_param(
+        "result_ok",
+        "Filter by execution outcome.",
+    ));
+    params
+}
+
+fn contract_rollup_swaps_fills_query_parameters() -> Vec<Value> {
+    let mut params = pagination_query_parameters();
+    params.push(required_string_query_param(
+        "authority",
+        "Trader authority whose swap fills should be returned.",
+    ));
+    params.push(string_query_param(
+        "contract_address",
+        "Optional canonical contract address for the router.",
+    ));
+    params.push(string_query_param(
+        "contract_alias",
+        "Optional contract alias for the router.",
+    ));
+    params.push(integer_query_param(
+        "scan_limit",
+        "Optional scan limit for walking the router mirror history.",
+        Some("uint64"),
+    ));
+    params
+}
+
+fn contract_rollup_swaps_candles_query_parameters() -> Vec<Value> {
+    let mut params = contract_rollup_swaps_fills_query_parameters();
+    params.push(integer_query_param(
+        "bucket_ms",
+        "Optional candle bucket width in milliseconds.",
+        Some("uint64"),
+    ));
+    params
+}
+
+fn trader_account_rollup_query_parameters() -> Vec<Value> {
+    vec![
+        required_string_query_param(
+            "authority",
+            "Trader authority whose account summary should be returned.",
+        ),
+        integer_query_param(
+            "scan_limit",
+            "Optional scan limit for walking router history and event history.",
+            Some("uint64"),
+        ),
+    ]
 }
 
 fn asset_holders_list_query_parameters() -> Vec<Value> {
     let mut params = pagination_query_parameters();
     params.push(string_query_param(
-        "asset_id",
-        "Filter holders by asset identifier.",
+        "account_id",
+        "Filter holders by canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+    ));
+    params.push(string_query_param(
+        "scope",
+        "Filter holders by balance scope (`global` or `dataspace:<id>`).",
     ));
     params
-}
-
-fn offline_allowance_query_parameters() -> Vec<Value> {
-    vec![
-        string_query_param(
-            "controller_id",
-            "Filter allowances by controller account (accepts canonical I105 account literals).",
-        ),
-        string_query_param("asset_id", "Filter allowances by asset identifier."),
-        integer_query_param(
-            "certificate_expires_before_ms",
-            "Only include allowances whose certificate expiry is at or before this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "certificate_expires_after_ms",
-            "Only include allowances whose certificate expiry is at or after this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "policy_expires_before_ms",
-            "Only include allowances whose issuer policy expiry is at or before this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "policy_expires_after_ms",
-            "Only include allowances whose issuer policy expiry is at or after this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "refresh_before_ms",
-            "Filter to allowances whose attestation refresh deadline is at or before this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "refresh_after_ms",
-            "Filter to allowances whose attestation refresh deadline is at or after this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        string_query_param(
-            "verdict_id_hex",
-            "Match allowances whose cached attestation verdict id (hex) equals the provided value (case-insensitive).",
-        ),
-        string_query_param(
-            "attestation_nonce_hex",
-            "Match allowances whose attestation nonce (hex) equals the provided value (case-insensitive).",
-        ),
-        bool_query_param(
-            "require_verdict",
-            "When true, only allowances that already have attestation verdict metadata are returned.",
-        ),
-        bool_query_param(
-            "only_missing_verdict",
-            "When true, only allowances that are missing attestation verdict metadata are returned.",
-        ),
-        bool_query_param(
-            "include_expired",
-            "Include certificates/policies/refresh windows that have already expired (defaults to false).",
-        ),
-    ]
-}
-
-fn offline_transfer_query_parameters() -> Vec<Value> {
-    vec![
-        string_query_param(
-            "controller_id",
-            "Filter bundles by originating controller account (accepts canonical I105 account literals).",
-        ),
-        string_query_param(
-            "receiver_id",
-            "Filter bundles by receiver account (accepts canonical I105 account literals).",
-        ),
-        string_query_param(
-            "deposit_account_id",
-            "Filter bundles by deposit account (accepts canonical I105 account literals).",
-        ),
-        string_query_param("asset_id", "Filter bundles by asset identifier."),
-        string_query_param(
-            "certificate_id_hex",
-            "Match bundles whose originating certificate id (hex) equals the provided value (case-insensitive).",
-        ),
-        integer_query_param(
-            "certificate_expires_before_ms",
-            "Only include bundles whose originating certificate expiry is at or before this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "certificate_expires_after_ms",
-            "Only include bundles whose originating certificate expiry is at or after this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "policy_expires_before_ms",
-            "Only include bundles whose policy expiry is at or before this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "policy_expires_after_ms",
-            "Only include bundles whose policy expiry is at or after this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "refresh_before_ms",
-            "Filter to bundles whose attestation refresh deadline is at or before this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        integer_query_param(
-            "refresh_after_ms",
-            "Filter to bundles whose attestation refresh deadline is at or after this unix timestamp (ms).",
-            Some("uint64"),
-        ),
-        string_query_param(
-            "verdict_id_hex",
-            "Match bundles whose attestation verdict id (hex) equals the provided value (case-insensitive).",
-        ),
-        string_query_param(
-            "attestation_nonce_hex",
-            "Match bundles whose attestation nonce (hex) equals the provided value (case-insensitive).",
-        ),
-        string_query_param(
-            "platform_policy",
-            "Restrict settled bundles to a specific Android attestation policy (use `play_integrity` or `hms_safety_detect`).",
-        ),
-        bool_query_param(
-            "require_verdict",
-            "When true, only bundles that already have attestation verdict metadata are returned.",
-        ),
-        bool_query_param(
-            "only_missing_verdict",
-            "When true, only bundles missing attestation verdict metadata are returned.",
-        ),
-    ]
-}
-
-fn offline_receipt_query_parameters() -> Vec<Value> {
-    vec![
-        string_query_param(
-            "controller_id",
-            "Filter receipts by sender/controller account (accepts canonical I105 account literals).",
-        ),
-        string_query_param(
-            "receiver_id",
-            "Filter receipts by receiver account (accepts canonical I105 account literals).",
-        ),
-        string_query_param(
-            "bundle_id_hex",
-            "Restrict receipts to a specific bundle identifier (hex, case-insensitive).",
-        ),
-        string_query_param(
-            "certificate_id_hex",
-            "Restrict receipts to a specific certificate identifier (hex, case-insensitive).",
-        ),
-        string_query_param("invoice_id", "Filter receipts by invoice identifier."),
-        string_query_param("asset_id", "Filter receipts by asset identifier."),
-    ]
 }
 
 fn string_query_param(name: &str, description: &str) -> Value {
@@ -1862,494 +997,6 @@ fn path_param(name: &str, description: &str) -> Value {
     param.insert("schema".into(), Value::Object(schema));
     Value::Object(param)
 }
-
-fn offline_query_request_body() -> Value {
-    let mut media = Map::new();
-    media.insert(
-        "application/json".into(),
-        Value::Object({
-            let mut schema = Map::new();
-            schema.insert("schema".into(), schema_ref("OfflineQueryEnvelope"));
-            schema
-        }),
-    );
-    let mut body = Map::new();
-    body.insert("required".into(), Value::Bool(true));
-    body.insert("content".into(), Value::Object(media));
-    Value::Object(body)
-}
-
-fn offline_allowances_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline allowances retrieved.",
-            schema_ref("OfflineAllowanceListResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid filter or pagination parameters.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_allowance_issue_request_body() -> Value {
-    let mut media = Map::new();
-    media.insert(
-        "application/json".into(),
-        Value::Object({
-            let mut schema = Map::new();
-            schema.insert("schema".into(), schema_ref("OfflineAllowanceIssueRequest"));
-            schema
-        }),
-    );
-    let mut body = Map::new();
-    body.insert("required".into(), Value::Bool(true));
-    body.insert("content".into(), Value::Object(media));
-    Value::Object(body)
-}
-
-fn offline_allowance_issue_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline allowance registration enqueued.",
-            schema_ref("OfflineAllowanceIssueResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid allowance payload.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_certificate_issue_request_body() -> Value {
-    let mut media = Map::new();
-    media.insert(
-        "application/json".into(),
-        Value::Object({
-            let mut schema = Map::new();
-            schema.insert(
-                "schema".into(),
-                schema_ref("OfflineCertificateIssueRequest"),
-            );
-            schema
-        }),
-    );
-    let mut body = Map::new();
-    body.insert("required".into(), Value::Bool(true));
-    body.insert("content".into(), Value::Object(media));
-    Value::Object(body)
-}
-
-fn offline_certificate_issue_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline certificate issued.",
-            schema_ref("OfflineCertificateIssueResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid certificate payload.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_build_claim_issue_request_body() -> Value {
-    let mut media = Map::new();
-    media.insert(
-        "application/json".into(),
-        Value::Object({
-            let mut schema = Map::new();
-            schema.insert("schema".into(), schema_ref("OfflineBuildClaimIssueRequest"));
-            schema
-        }),
-    );
-    let mut body = Map::new();
-    body.insert("required".into(), Value::Bool(true));
-    body.insert("content".into(), Value::Object(media));
-    Value::Object(body)
-}
-
-fn offline_build_claim_issue_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline build claim issued.",
-            schema_ref("OfflineBuildClaimIssueResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid build-claim payload.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_allowance_detail_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline allowance retrieved.",
-            schema_ref("OfflineAllowanceItem"),
-        ),
-    );
-    responses.insert(
-        "404".to_owned(),
-        json_response_with_headers(
-            "Offline allowance not found.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_certificate_renew_request_body() -> Value {
-    let mut media = Map::new();
-    media.insert(
-        "application/json".into(),
-        Value::Object({
-            let mut schema = Map::new();
-            schema.insert(
-                "schema".into(),
-                schema_ref("OfflineCertificateRenewRequest"),
-            );
-            schema
-        }),
-    );
-    let mut body = Map::new();
-    body.insert("required".into(), Value::Bool(true));
-    body.insert("content".into(), Value::Object(media));
-    Value::Object(body)
-}
-
-fn offline_certificate_renew_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline allowance renewal enqueued.",
-            schema_ref("OfflineCertificateRenewResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid renewal payload.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_certificate_revoke_request_body() -> Value {
-    let mut media = Map::new();
-    media.insert(
-        "application/json".into(),
-        Value::Object({
-            let mut schema = Map::new();
-            schema.insert(
-                "schema".into(),
-                schema_ref("OfflineCertificateRevokeRequest"),
-            );
-            schema
-        }),
-    );
-    let mut body = Map::new();
-    body.insert("required".into(), Value::Bool(true));
-    body.insert("content".into(), Value::Object(media));
-    Value::Object(body)
-}
-
-fn offline_certificate_revoke_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline verdict revocation enqueued.",
-            schema_ref("OfflineCertificateRevokeResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid revocation payload.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_settlement_submit_request_body() -> Value {
-    let mut media = Map::new();
-    media.insert(
-        "application/json".into(),
-        Value::Object({
-            let mut schema = Map::new();
-            schema.insert(
-                "schema".into(),
-                schema_ref("OfflineSettlementSubmitRequest"),
-            );
-            schema
-        }),
-    );
-    let mut body = Map::new();
-    body.insert("required".into(), Value::Bool(true));
-    body.insert("content".into(), Value::Object(media));
-    Value::Object(body)
-}
-
-fn offline_settlement_submit_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline settlement submission enqueued.",
-            schema_ref("OfflineSettlementSubmitResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid settlement payload.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_spend_receipts_request_body() -> Value {
-    let mut media = Map::new();
-    media.insert(
-        "application/json".into(),
-        Value::Object({
-            let mut schema = Map::new();
-            schema.insert(
-                "schema".into(),
-                schema_ref("OfflineSpendReceiptsSubmitRequest"),
-            );
-            schema
-        }),
-    );
-    let mut body = Map::new();
-    body.insert("required".into(), Value::Bool(true));
-    body.insert("content".into(), Value::Object(media));
-    Value::Object(body)
-}
-
-fn offline_spend_receipts_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline receipts validated.",
-            schema_ref("OfflineSpendReceiptsSubmitResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid receipt payload.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_state_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline state snapshot retrieved.",
-            schema_ref("OfflineStateResponse"),
-        ),
-    );
-    responses
-}
-
-fn offline_bundle_proof_status_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline bundle proof status retrieved.",
-            schema_ref("OfflineBundleProofStatusResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid bundle id.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses.insert(
-        "404".to_owned(),
-        json_response_with_headers(
-            "Offline bundle not found.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_receipts_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline receipts retrieved.",
-            schema_ref("OfflineReceiptListResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid filter or pagination parameters.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_transfers_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline transfer bundles retrieved.",
-            schema_ref("OfflineTransferListResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid filter or pagination parameters.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_transfer_detail_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline transfer bundle retrieved.",
-            schema_ref("OfflineTransferItem"),
-        ),
-    );
-    responses.insert(
-        "404".to_owned(),
-        json_response_with_headers(
-            "Offline transfer bundle not found.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_rejections_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline rejection counters retrieved.",
-            schema_ref("OfflineRejectionListResponse"),
-        ),
-    );
-    responses.insert(
-        "403".to_owned(),
-        json_response_with_headers(
-            "Telemetry profile forbids exposing metrics.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-fn offline_summaries_responses() -> Map {
-    let mut responses = Map::new();
-    responses.insert(
-        "200".to_owned(),
-        json_response(
-            "Offline counter summaries retrieved.",
-            schema_ref("OfflineSummaryListResponse"),
-        ),
-    );
-    responses.insert(
-        "400".to_owned(),
-        json_response_with_headers(
-            "Invalid filter or pagination parameters.",
-            error_schema_reference(),
-            offline_reject_headers(),
-        ),
-    );
-    responses
-}
-
-#[cfg(test)]
-mod offline_header_tests {
-    use super::*;
-
-    #[test]
-    fn offline_error_responses_advertise_reject_code_header() {
-        let responses = offline_allowances_responses();
-        let response = responses
-            .get("400")
-            .expect("offline allowances responses should define 400 response")
-            .as_object()
-            .expect("response should be an object");
-        let headers = response
-            .get("headers")
-            .expect("offline error response should include headers")
-            .as_object()
-            .expect("headers should be an object");
-        assert!(
-            headers.contains_key("x-iroha-reject-code"),
-            "offline error responses should advertise x-iroha-reject-code"
-        );
-    }
-}
-
 fn system_paths() -> Map {
     let mut paths = Map::new();
     paths.insert("/health".to_owned(), Value::Object(health_operation()));
@@ -2575,16 +1222,16 @@ fn transaction_paths() -> Map {
         "/transaction".to_owned(),
         Value::Object(binary_post_operation(
             "Transactions",
-            "Submit a signed transaction.",
-            "Submit a SignedTransaction encoded as Norito bytes.",
+            "Submit a versioned signed transaction.",
+            "Submit a versioned SignedTransaction encoded as Norito bytes. Internal TransactionEntrypoint envelopes are not accepted on this public route.",
             "#/components/schemas/JsonValue",
         )),
     );
     let mut pipeline_status = json_get_operation(
         "Transactions",
         "Fetch pipeline transaction status.",
-        "Return the latest pipeline status for a signed transaction hash.",
-        "#/components/schemas/JsonValue",
+        "Return the latest typed pipeline status for a signed transaction hash. Defaults to JSON when Accept is omitted or */*; application/x-norito returns the same typed payload encoded as Norito.",
+        "#/components/schemas/PipelineTransactionStatusResponse",
         vec![
             required_string_query_param("hash", "Transaction hash (hex)."),
             string_query_param(
@@ -2595,6 +1242,15 @@ fn transaction_paths() -> Map {
     );
     if let Some(Value::Object(get_op)) = pipeline_status.get_mut("get") {
         if let Some(Value::Object(responses)) = get_op.get_mut("responses") {
+            responses.insert(
+                "200".to_owned(),
+                Value::Object(single_dual_format_response(
+                    "#/components/schemas/PipelineTransactionStatusResponse",
+                ))
+                .get("200")
+                .cloned()
+                .expect("200 response present"),
+            );
             responses.insert(
                 "404".to_owned(),
                 json_response(
@@ -2607,6 +1263,76 @@ fn transaction_paths() -> Map {
     paths.insert(
         "/v1/pipeline/transactions/status".to_owned(),
         Value::Object(pipeline_status),
+    );
+    paths.insert(
+        "/v1/transactions/history".to_owned(),
+        Value::Object(json_get_operation(
+            "Transactions",
+            "List transaction history entries.",
+            "Return the app-facing transaction history view for the active query filters.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/activity".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "List contract activity entries.",
+            "Return committed contract-call activity derived from transaction metadata, with pagination and contract-specific filtering.",
+            "#/components/schemas/JsonValue",
+            contract_activity_list_query_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/events".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "List generic contract events.",
+            "Return the indexed generic contract-event envelope derived from committed contract-call metadata, with pagination and contract-specific filtering.",
+            "#/components/schemas/JsonValue",
+            contract_event_list_query_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/rollups/swaps/fills".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "List stitched trader swap fills.",
+            "Load the router mirror history for one trader authority, stitch it to indexed swap events, and return a paginated fills rollup.",
+            "#/components/schemas/JsonValue",
+            contract_rollup_swaps_fills_query_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/rollups/swaps/candles".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "List stitched trader swap candles.",
+            "Bucket the trader swap fills rollup into OHLC candles for one authority and return the paginated time buckets.",
+            "#/components/schemas/JsonValue",
+            contract_rollup_swaps_candles_query_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/rollups/trader/activity".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "List trader activity cards.",
+            "Return the trader-facing activity stream derived from indexed contract events across the supported product modules.",
+            "#/components/schemas/JsonValue",
+            contract_event_list_query_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/rollups/trader/account".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "Fetch trader account summary.",
+            "Combine the stitched swap fills rollup with supported trader activity modules into one account summary response.",
+            "#/components/schemas/JsonValue",
+            trader_account_rollup_query_parameters(),
+        )),
     );
     paths.insert(
         "/v1/iso20022/pacs008".to_owned(),
@@ -2668,6 +1394,14 @@ fn stream_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/contracts/events/sse".to_owned(),
+        Value::Object(event_stream_get_operation(
+            "Streams",
+            "Subscribe to contract event stream.",
+            "Stream generic contract events via Server-Sent Events.",
+        )),
+    );
+    paths.insert(
         "/events".to_owned(),
         Value::Object(text_get_operation(
             "Streams",
@@ -2715,9 +1449,16 @@ fn connect_paths() -> Map {
         Value::Object(json_delete_operation(
             "Connect",
             "Close a Connect session.",
-            "Terminate a Connect session by session id.",
+            "Terminate a Connect session by session id. Requires `Authorization: Bearer <token_management>` from session creation.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("sid", "Connect session id.")],
+            vec![
+                string_path_param("sid", "Connect session id."),
+                string_header_param(
+                    "Authorization",
+                    "Bearer management token returned by `/v1/connect/session`.",
+                    true,
+                ),
+            ],
         )),
     );
     paths.insert(
@@ -2734,7 +1475,77 @@ fn connect_paths() -> Map {
         Value::Object(json_get_operation(
             "Connect",
             "Fetch Connect status.",
-            "Return Connect relay status information.",
+            "Return redacted aggregate Connect relay status. Add `sid` with `Authorization: Bearer <token_management>` for per-session status.",
+            "#/components/schemas/JsonValue",
+            vec![
+                string_query_param("sid", "Optional Connect session id for token-gated per-session status."),
+                string_header_param(
+                    "Authorization",
+                    "Bearer management token required when `sid` is supplied.",
+                    false,
+                ),
+            ],
+        )),
+    );
+    paths
+}
+
+fn vpn_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/vpn/profile".to_owned(),
+        Value::Object(json_get_operation(
+            "VPN",
+            "Fetch the public VPN profile.",
+            "Return the wallet-facing Sora VPN profile advertised by this node.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/vpn/sessions".to_owned(),
+        Value::Object(json_post_operation(
+            "VPN",
+            "Create a VPN session.",
+            "Create a signed Sora VPN session for the active wallet account.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/vpn/sessions/{session_id}".to_owned(),
+        Value::Object({
+            let get_op = json_get_operation(
+                "VPN",
+                "Fetch a VPN session.",
+                "Return the current status of a signed Sora VPN session.",
+                "#/components/schemas/JsonValue",
+                vec![string_path_param("session_id", "VPN session identifier.")],
+            );
+            let delete_op = json_delete_operation(
+                "VPN",
+                "Delete a VPN session.",
+                "Tear down a signed Sora VPN session and return the canonical receipt.",
+                "#/components/schemas/JsonValue",
+                vec![string_path_param("session_id", "VPN session identifier.")],
+            );
+            let mut methods = Map::new();
+            if let Some(get_value) = get_op.get("get") {
+                methods.insert("get".to_owned(), get_value.clone());
+            }
+            if let Some(delete_value) = delete_op.get("delete") {
+                methods.insert("delete".to_owned(), delete_value.clone());
+            }
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/vpn/receipts".to_owned(),
+        Value::Object(json_get_operation(
+            "VPN",
+            "List VPN receipts.",
+            "List canonical Sora VPN receipts for the active wallet account.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -2840,17 +1651,6 @@ fn proof_paths() -> Map {
 fn contracts_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/contracts/code".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Register contract code.",
-            "Submit contract bytecode for registration.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/contracts/code/{code_hash}".to_owned(),
         Value::Object(json_get_operation(
             "Contracts",
@@ -2874,30 +1674,8 @@ fn contracts_paths() -> Map {
         "/v1/contracts/deploy".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
-            "Deploy a contract.",
-            "Deploy contract code to a namespace.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/contracts/instance".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Create a contract instance.",
-            "Create a contract instance from registered code.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/contracts/instance/activate".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Activate a contract instance.",
-            "Activate a previously created contract instance.",
+            "Deploy a public contract.",
+            "Deploy contract bytecode, derive a canonical contract address, activate it in the target dataspace (default `universal`), and return the canonical deploy-bundle receipt with one contract entry.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2907,8 +1685,63 @@ fn contracts_paths() -> Map {
         "/v1/contracts/call".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
-            "Call a contract instance.",
-            "Invoke a contract instance entrypoint.",
+            "Call a deployed contract.",
+            "Invoke a contract entrypoint by canonical contract address or by on-chain contract alias.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/call/simulate".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Simulate a deployed contract call.",
+            "Execute a public contract entrypoint locally using canonical contract address or on-chain contract alias targeting and return normalized payload, gas usage, queued instructions, and diagnostics.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/view".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Execute a read-only contract view.",
+            "Execute a manifest-validated read-only contract view entrypoint and return its decoded result.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/view/batch".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Execute multiple read-only contract views.",
+            "Execute a batch of manifest-validated read-only contract view entrypoints and return one normalized item per request.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/aliases/resolve".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Resolve a contract alias.",
+            "Resolve an on-chain contract alias to its canonical contract address and current lease status.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/aliases".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Bind or clear a contract alias.",
+            "Bind, update, or clear the on-chain alias for a deployed contract instance.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2922,6 +1755,14 @@ fn contracts_paths() -> Map {
             "Read smart contract state by exact path, path list, or prefix.",
             "#/components/schemas/JsonValue",
             vec![
+                string_query_param(
+                    "contract_address",
+                    "Optional contract address used to scope logical state paths.",
+                ),
+                string_query_param(
+                    "contract_alias",
+                    "Optional contract alias used to scope logical state paths.",
+                ),
                 string_query_param("path", "Exact state key path (Name)."),
                 string_query_param("paths", "Comma-separated list of state key paths (Names)."),
                 string_query_param("prefix", "Prefix for state key paths (Name)."),
@@ -2938,22 +1779,178 @@ fn contracts_paths() -> Map {
             ],
         )),
     );
+    paths
+}
+
+fn multisig_post_operation(
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+    response_schema_ref: &str,
+    not_found_description: &str,
+) -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Multisig".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body(request_schema_ref)),
+    );
+    let mut responses = single_json_response(response_schema_ref);
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Invalid multisig selector or payload.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response(not_found_description, error_schema_reference()),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn multisig_paths() -> Map {
+    let mut paths = Map::new();
     paths.insert(
-        "/v1/contracts/instances/{ns}".to_owned(),
-        Value::Object(json_get_operation(
-            "Contracts",
-            "List contract instances by namespace.",
-            "Return active contract instances for a namespace.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("ns", "Contract namespace identifier.")],
+        "/v1/multisig/propose".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Propose a multisig instruction batch.",
+            "Resolve a multisig selector, wrap an instruction batch in a multisig proposal envelope, and optionally submit it.",
+            "#/components/schemas/MultisigProposeRequest",
+            "#/components/schemas/MultisigResponse",
+            "Multisig alias not found.",
         )),
     );
     paths.insert(
-        "/v1/confidential/derive-keyset".to_owned(),
+        "/v1/multisig/approve".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Approve a multisig proposal.",
+            "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
+            "#/components/schemas/MultisigApproveRequest",
+            "#/components/schemas/MultisigResponse",
+            "Multisig alias or referenced proposal not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/call/multisig/propose".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Propose a multisig contract call.",
+            "Resolve a multisig selector, wrap a contract call in a multisig proposal envelope, and optionally submit it.",
+            "#/components/schemas/MultisigContractCallProposeRequest",
+            "#/components/schemas/MultisigContractCallResponse",
+            "Multisig alias or referenced contract instance not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/call/multisig/approve".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Approve a multisig contract call proposal.",
+            "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
+            "#/components/schemas/MultisigContractCallApproveRequest",
+            "#/components/schemas/MultisigContractCallResponse",
+            "Multisig alias or referenced proposal not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/cancel".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Cancel a multisig proposal.",
+            "Resolve a multisig selector, target an active proposal by `proposal_id` or `instructions_hash`, and either propose or approve the corresponding cancel action.",
+            "#/components/schemas/MultisigCancelRequest",
+            "#/components/schemas/MultisigCancelResponse",
+            "Multisig alias or referenced proposal not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/spec".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Fetch the active multisig spec.",
+            "Resolve a multisig selector and return the current active concrete authority plus its multisig specification.",
+            "#/components/schemas/MultisigSpecRequest",
+            "#/components/schemas/MultisigSpecResponse",
+            "Multisig alias not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/proposals/list".to_owned(),
+        Value::Object(multisig_post_operation(
+            "List active multisig proposals.",
+            "Resolve a multisig selector and list nonterminal proposals for the active concrete multisig authority.",
+            "#/components/schemas/MultisigProposalsListRequest",
+            "#/components/schemas/MultisigProposalsListResponse",
+            "Multisig alias not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/proposals/get".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Fetch a multisig proposal.",
+            "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
+            "#/components/schemas/MultisigProposalsGetRequest",
+            "#/components/schemas/MultisigProposalGetResponse",
+            "Multisig alias or proposal not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/list".to_owned(),
+        Value::Object(multisig_post_operation(
+            "List multisig approvals.",
+            "Resolve a multisig selector and list approvals recorded for the active concrete multisig authority.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            "Multisig alias not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/get".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Fetch a multisig approval.",
+            "Resolve a multisig selector and fetch a recorded approval by proposal selector.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            "Multisig alias or approval not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/list_for_authority".to_owned(),
+        Value::Object(multisig_post_operation(
+            "List caller-authority multisig approvals.",
+            "List multisig approvals visible to the authenticated caller authority using the signatory index.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            "Caller authority is not allowed to view the requested approvals.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/get_for_authority".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Fetch a caller-authority multisig approval.",
+            "Fetch a multisig approval visible to the authenticated caller authority by proposal selector.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            "Caller authority is not allowed to view the requested approval.",
+        )),
+    );
+    paths
+}
+
+fn controls_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/controls/asset-transfer/get".to_owned(),
         Value::Object(json_post_operation(
-            "Contracts",
-            "Derive a confidential keyset.",
-            "Derive a confidential compute keyset for a lane.",
+            "Controls",
+            "Fetch asset-transfer control state.",
+            "Resolve an asset-transfer control request and return the current control snapshot.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3118,28 +2115,6 @@ fn zk_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/zk/vk/register".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
-            "Register a verification key.",
-            "Register a verification key for a ZK backend.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/zk/vk/update".to_owned(),
-        Value::Object(json_post_operation(
-            "ZK",
-            "Update a verification key.",
-            "Update a verification key entry.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/zk/vk/{backend}/{name}".to_owned(),
         Value::Object(json_get_operation(
             "ZK",
@@ -3214,11 +2189,35 @@ fn zk_paths() -> Map {
 fn governance_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
+        "/v1/ministry/agenda/proposals/draft".to_owned(),
+        Value::Object(json_post_operation(
+            "Ministry",
+            "Draft a Ministry agenda proposal submission.",
+            "Build a detached-signature-ready Ministry agenda proposal transaction and return the canonical payload bytes for Connect signing.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/ministry/agenda/proposals/{proposal_id}".to_owned(),
+        Value::Object(json_get_operation(
+            "Ministry",
+            "Fetch a submitted Ministry agenda proposal.",
+            "Fetch a persisted Ministry agenda proposal submission record by proposal id.",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "proposal_id",
+                "Agenda proposal identifier.",
+            )],
+        )),
+    );
+    paths.insert(
         "/v1/gov/proposals/deploy-contract".to_owned(),
         Value::Object(json_post_operation(
             "Governance",
             "Propose contract deployment.",
-            "Submit a governance proposal for contract deployment; optionally sign and submit when authority/private_key are provided.",
+            "Submit a governance proposal for contract deployment and receive draft instructions for local signing.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3269,7 +2268,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Submit a ZK ballot.",
-            "Submit a zero-knowledge ballot; Torii submits when private_key is provided.",
+            "Submit a zero-knowledge ballot and receive draft instructions unless the request is invalid.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3280,7 +2279,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Submit a ZK ballot (v1).",
-            "Submit a ZK ballot using the v1 envelope; Torii submits when private_key is provided.",
+            "Submit a ZK ballot using the v1 envelope and receive draft instructions unless the request is invalid.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3291,7 +2290,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Submit a ballot proof.",
-            "Submit a ZK ballot proof bundle; Torii submits when private_key is provided.",
+            "Submit a ZK ballot proof bundle and receive draft instructions unless the request is invalid.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3302,7 +2301,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Submit a plain ballot.",
-            "Submit a non-ZK ballot; Torii submits when private_key is provided.",
+            "Submit a non-ZK ballot and receive draft instructions unless the request is invalid.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3313,7 +2312,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Finalize a referendum.",
-            "Finalize referendum tally and status; Torii submits when authority/private_key are provided.",
+            "Finalize referendum tally and status and receive draft instructions for local signing.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3366,13 +2365,16 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/instances/{ns}".to_owned(),
+        "/v1/gov/contracts/{contract_address}".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
-            "List contract instances by namespace.",
-            "List governance contract instances for a namespace.",
+            "Fetch a governed contract binding.",
+            "Fetch the active governance binding for a canonical contract address.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("ns", "Namespace identifier.")],
+            vec![string_path_param(
+                "contract_address",
+                "Canonical Bech32m contract address.",
+            )],
         )),
     );
     paths.insert(
@@ -3380,7 +2382,7 @@ fn governance_paths() -> Map {
         Value::Object(json_post_operation(
             "Governance",
             "Enact a referendum.",
-            "Enact an approved referendum; Torii submits when authority/private_key are provided.",
+            "Enact an approved referendum and receive draft instructions for local signing.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3394,6 +2396,26 @@ fn governance_paths() -> Map {
             "Return the current governance council roster.",
             "#/components/schemas/JsonValue",
             Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/gov/citizens".to_owned(),
+        Value::Object(json_get_operation(
+            "Governance",
+            "Fetch citizenship registry count.",
+            "Return the exact number of accounts registered in the governance citizenship registry.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/gov/citizens/{account_id}".to_owned(),
+        Value::Object(json_get_operation(
+            "Governance",
+            "Fetch account citizenship status.",
+            "Return whether an account is registered in the governance citizenship registry.",
+            "#/components/schemas/JsonValue",
+            vec![path_param("account_id", "Account id.")],
         )),
     );
     paths.insert(
@@ -3453,6 +2475,230 @@ fn runtime_paths() -> Map {
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
+    );
+    paths.insert(
+        "/v1/node/query/projection/checkpoint".to_owned(),
+        Value::Object(json_get_operation(
+            "Runtime",
+            "Fetch latest query projection checkpoint.",
+            "Return the latest persisted query projection checkpoint descriptor.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/node/query/projection/checkpoint/plan".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("Runtime".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Plan a rebuilt query projection checkpoint.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Rebuilds the referenced shard archives from the live node snapshot, validates that the uploaded manifest/ticket set exactly matches the canonical non-empty live shard catalog, and returns the checkpoint descriptor without persisting it."
+                        .to_owned(),
+                ),
+            );
+            operation.insert(
+                "operationId".into(),
+                Value::String("nodeQueryProjectionCheckpointPlan".to_owned()),
+            );
+            operation.insert(
+                "requestBody".into(),
+                Value::Object(json_request_body("#/components/schemas/JsonValue")),
+            );
+            operation.insert(
+                "responses".into(),
+                Value::Object({
+                    let mut responses = Map::new();
+                    responses.insert(
+                        "200".to_owned(),
+                        json_response(
+                            "Validated query projection checkpoint descriptor.",
+                            schema_ref("#/components/schemas/JsonValue"),
+                        ),
+                    );
+                    responses
+                }),
+            );
+            let mut methods = Map::new();
+            methods.insert("post".to_owned(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/node/query/projection/checkpoint/publish".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("Runtime".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Publish a rebuilt query projection checkpoint.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Rebuilds the referenced shard archives from the live node snapshot, validates that the uploaded manifest/ticket set exactly matches the canonical non-empty live shard catalog, and persists the resulting checkpoint descriptor."
+                        .to_owned(),
+                ),
+            );
+            operation.insert(
+                "operationId".into(),
+                Value::String("nodeQueryProjectionCheckpointPublish".to_owned()),
+            );
+            operation.insert(
+                "requestBody".into(),
+                Value::Object(json_request_body("#/components/schemas/JsonValue")),
+            );
+            operation.insert(
+                "responses".into(),
+                Value::Object({
+                    let mut responses = Map::new();
+                    responses.insert(
+                        "200".to_owned(),
+                        json_response(
+                            "Persisted query projection checkpoint descriptor.",
+                            schema_ref("#/components/schemas/JsonValue"),
+                        ),
+                    );
+                    responses
+                }),
+            );
+            let mut methods = Map::new();
+            methods.insert("post".to_owned(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/node/query/projection/catalog/{resource}".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("Runtime".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Enumerate the live query projection shard catalog.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Returns the canonical ordered non-empty shard entries for the requested live projection resource. Supported resources are `accounts`, `account_assets`, `asset_holders`, `asset_definitions`, and `domains`. `asset_definition_id` narrows `asset_holders`, while `offset` and `limit` paginate the stable entry set."
+                        .to_owned(),
+                ),
+            );
+            operation.insert(
+                "operationId".into(),
+                Value::String("nodeQueryProjectionShardCatalog".to_owned()),
+            );
+            operation.insert(
+                "parameters".into(),
+                Value::Array(vec![
+                    string_path_param(
+                        "resource",
+                        "Projection resource family (`accounts`, `account_assets`, `asset_holders`, `asset_definitions`, or `domains`).",
+                    ),
+                    string_query_param(
+                        "asset_definition_id",
+                        "Canonical or alias asset-definition selector used to narrow `asset_holders` entries.",
+                    ),
+                    integer_query_param(
+                        "offset",
+                        "Stable entry offset within the canonical ordered catalog.",
+                        Some("uint64"),
+                    ),
+                    integer_query_param(
+                        "limit",
+                        "Maximum number of catalog entries to return.",
+                        Some("uint32"),
+                    ),
+                ]),
+            );
+            operation.insert(
+                "responses".into(),
+                Value::Object({
+                    let mut responses = Map::new();
+                    responses.insert(
+                        "200".to_owned(),
+                        json_response(
+                            "Live query projection shard catalog.",
+                            schema_ref("#/components/schemas/JsonValue"),
+                        ),
+                    );
+                    responses
+                }),
+            );
+            let mut methods = Map::new();
+            methods.insert("get".to_owned(), Value::Object(operation));
+            methods
+        }),
+    );
+    paths.insert(
+        "/v1/node/query/projection/shards/{resource}/{partition_id}".to_owned(),
+        Value::Object({
+            let mut operation = Map::new();
+            operation.insert(
+                "tags".into(),
+                Value::Array(vec![Value::String("Runtime".to_owned())]),
+            );
+            operation.insert(
+                "summary".into(),
+                Value::String("Export a canonical query projection shard archive.".to_owned()),
+            );
+            operation.insert(
+                "description".into(),
+                Value::String(
+                    "Builds a Norito-encoded `QueryProjectionShardArchive` for the requested resource partition directly from the node's live query snapshot. Supported resources are `accounts`, `account_assets`, `asset_holders`, `asset_definitions`, and `domains`; `asset_definition_id` is required when `resource=asset_holders`."
+                        .to_owned(),
+                ),
+            );
+            operation.insert(
+                "operationId".into(),
+                Value::String("nodeQueryProjectionShardExport".to_owned()),
+            );
+            operation.insert(
+                "parameters".into(),
+                Value::Array(vec![
+                    string_path_param(
+                        "resource",
+                        "Projection resource family (`accounts`, `account_assets`, `asset_holders`, `asset_definitions`, or `domains`).",
+                    ),
+                    integer_path_param(
+                        "partition_id",
+                        "Stable projection partition identifier.",
+                        Some("uint32"),
+                    ),
+                    string_query_param(
+                        "asset_definition_id",
+                        "Canonical or alias asset-definition selector required for `asset_holders`.",
+                    ),
+                ]),
+            );
+            operation.insert(
+                "responses".into(),
+                Value::Object({
+                    let mut responses = Map::new();
+                    responses.insert(
+                        "200".to_owned(),
+                        binary_response("Norito-encoded query projection shard archive payload."),
+                    );
+                    responses
+                }),
+            );
+            let mut methods = Map::new();
+            methods.insert("get".to_owned(), Value::Object(operation));
+            methods
+        }),
     );
     paths.insert(
         "/v1/runtime/abi/active".to_owned(),
@@ -3537,7 +2783,7 @@ fn account_paths() -> Map {
         Value::Object(json_get_operation(
             "Accounts",
             "List accounts.",
-            "List accounts visible to the caller.",
+            "List accounts visible to the caller. `id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form; responses always render canonical I105 account ids.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -3547,7 +2793,7 @@ fn account_paths() -> Map {
         Value::Object(json_post_operation(
             "Accounts",
             "Query accounts.",
-            "Query accounts with JSON envelope.",
+            "Query accounts with JSON envelope. `id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form; responses always render canonical I105 account ids.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3558,7 +2804,59 @@ fn account_paths() -> Map {
         Value::Object(json_post_operation(
             "Accounts",
             "Onboard an account.",
-            "Register or onboard an account; when the UAID is not bound to the global dataspace, Torii publishes a default manifest to bind it (requires CanPublishSpaceDirectoryManifest{dataspace=0}).",
+            "Register or onboard an account; when the UAID is not bound to the universal dataspace, Torii publishes a default manifest to bind it (requires CanPublishSpaceDirectoryManifest{dataspace=0}).",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    let mut account_get = json_get_operation(
+        "Accounts",
+        "Fetch canonical account detail.",
+        "Fetch the canonical account existence/materialization view for a specific account id or alias. This read is ingress-independent and fans out across the configured Nexus dataspaces, returning the shared canonical account payload when any authoritative dataspace reports it. Defaults to JSON when Accept is omitted or */*; application/x-norito returns the same typed payload encoded as Norito.",
+        "#/components/schemas/AccountReadResponse",
+        vec![string_path_param(
+            "account_id",
+            "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+        )],
+    );
+    if let Some(Value::Object(get_op)) = account_get.get_mut("get") {
+        if let Some(Value::Object(responses)) = get_op.get_mut("responses") {
+            responses.insert(
+                "200".to_owned(),
+                Value::Object(single_dual_format_response(
+                    "#/components/schemas/AccountReadResponse",
+                ))
+                .get("200")
+                .cloned()
+                .expect("200 response present"),
+            );
+            responses.insert(
+                "404".to_owned(),
+                json_response("Account not found.", error_schema_reference()),
+            );
+        }
+    }
+    paths.insert(
+        "/v1/accounts/{account_id}".to_owned(),
+        Value::Object(account_get),
+    );
+    paths.insert(
+        "/v1/accounts/faucet/puzzle".to_owned(),
+        Value::Object(json_get_operation(
+            "Accounts",
+            "Fetch the faucet proof-of-work puzzle.",
+            "Return the current decentralized faucet proof-of-work puzzle, anchored to recent committed block data; difficulty adapts to recent committed and queued faucet claim volume, the work predicate is memory-hard scrypt, and finalized VRF seed material is required in the challenge when that mode is enabled.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/accounts/faucet".to_owned(),
+        Value::Object(json_post_operation(
+            "Accounts",
+            "Request faucet funds.",
+            "Transfer a fixed amount of testnet funds to an existing account when the configured faucet is enabled, the account has no positive balance for the configured asset, and a valid memory-hard scrypt proof-of-work solution for the returned queue-aware puzzle is supplied when required.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3569,21 +2867,27 @@ fn account_paths() -> Map {
         Value::Object(json_post_operation(
             "Accounts",
             "Query account transactions.",
-            "Query transactions for a specific account.",
+            "Query transactions for a specific account. Results are merged across the caller-visible dataspaces only; private dataspace history the caller cannot read is silently omitted.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("account_id", "Account identifier.")],
+            vec![string_path_param(
+                "account_id",
+                "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            )],
         )),
     );
     paths.insert(
         "/v1/accounts/{account_id}/assets".to_owned(),
         Value::Object({
-            let mut params = vec![string_path_param("account_id", "Account identifier.")];
+            let mut params = vec![string_path_param(
+                "account_id",
+                "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            )];
             params.extend(account_assets_list_query_parameters());
             json_get_operation(
                 "Accounts",
                 "List account assets.",
-                "List assets held by an account (supports pagination and optional asset_id filtering).",
+                "List assets held by an account (supports pagination plus optional `asset` and `scope` filtering). Results are ingress-independent and merged across the caller-visible dataspaces; balances remain separated by their existing `scope` values instead of being summed across dataspaces.",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -3594,10 +2898,13 @@ fn account_paths() -> Map {
         Value::Object(json_post_operation(
             "Accounts",
             "Query account assets.",
-            "Query assets held by an account.",
+            "Query assets held by an account. Results are ingress-independent and merged across the caller-visible dataspaces; balances remain separated by their existing `scope` values instead of being summed across dataspaces.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("account_id", "Account identifier.")],
+            vec![string_path_param(
+                "account_id",
+                "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            )],
         )),
     );
     paths.insert(
@@ -3605,20 +2912,26 @@ fn account_paths() -> Map {
         Value::Object(json_get_operation(
             "Accounts",
             "List account permissions.",
-            "List permissions granted to an account.",
+            "List permissions granted to an account. Signed/internal reads fan out across all configured dataspaces so dataspace-scoped grants remain visible regardless of ingress; unsigned reads stay limited to caller-visible routes.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("account_id", "Account identifier.")],
+            vec![string_path_param(
+                "account_id",
+                "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            )],
         )),
     );
     paths.insert(
         "/v1/accounts/{account_id}/transactions".to_owned(),
         Value::Object({
-            let mut params = vec![string_path_param("account_id", "Account identifier.")];
+            let mut params = vec![string_path_param(
+                "account_id",
+                "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            )];
             params.extend(account_transactions_list_query_parameters());
             json_get_operation(
                 "Accounts",
                 "List account transactions.",
-                "List transactions authored by an account (supports pagination and optional asset_id filtering).",
+                "List transactions authored by an account (supports pagination and optional asset_id filtering). Results are merged across the caller-visible dataspaces only; private dataspace history the caller cannot read is silently omitted.",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -3630,12 +2943,12 @@ fn account_paths() -> Map {
             let mut params = vec![string_path_param("uaid", "User account identifier.")];
             params.push(string_query_param(
                 "asset_id",
-                "Filter portfolio positions by asset identifier.",
+                "Filter portfolio positions by exact canonical Base58 asset id.",
             ));
             json_get_operation(
                 "Accounts",
                 "Fetch account portfolio.",
-                "Fetch the asset portfolio for an account identifier (supports optional asset_id filtering).",
+                "Fetch the asset portfolio for an account identifier (supports optional `asset_id` filtering).",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -3668,21 +2981,80 @@ fn identifier_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/identifiers/receipts/{receipt_hash}".to_owned(),
+        Value::Object({
+            let params = vec![string_path_param(
+                "receipt_hash",
+                "Hidden-function receipt hash used to look up the persisted claim binding.",
+            )];
+            json_get_operation(
+                "Identifiers",
+                "Look up an identifier claim by receipt hash.",
+                "Resolve a persisted identifier claim by its deterministic receipt hash for audit and support tooling.",
+                "#/components/schemas/IdentifierClaimLookupResponse",
+                params,
+            )
+        }),
+    );
+    paths.insert(
         "/v1/accounts/{account_id}/identifiers/claim-receipt".to_owned(),
         Value::Object({
             let params = vec![string_path_param(
                 "account_id",
-                "Canonical target account identifier for the claim receipt.",
+                "Canonical target account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace` for the claim receipt.",
             )];
             json_post_operation(
                 "Identifiers",
                 "Issue an identifier claim receipt.",
-                "Normalize a raw identifier input under a hidden-function policy and return a signed receipt that can be embedded into `ClaimIdentifier`.",
+                "Normalize a raw identifier input under a hidden-function policy and return an attested receipt that can be embedded into `ClaimIdentifier`.",
                 "#/components/schemas/IdentifierResolveRequest",
                 "#/components/schemas/IdentifierResolveResponse",
                 params,
             )
         }),
+    );
+    paths
+}
+
+fn ram_lfe_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/ram-lfe/program-policies".to_owned(),
+        Value::Object(json_get_operation(
+            "RamLfe",
+            "List RAM-LFE program policies.",
+            "List globally registered RAM-LFE program policies and their public execution metadata.",
+            "#/components/schemas/RamLfeProgramPolicyListResponse",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/ram-lfe/programs/{program_id}/execute".to_owned(),
+        Value::Object({
+            let params = vec![string_path_param(
+                "program_id",
+                "RAM-LFE program identifier.",
+            )];
+            json_post_operation(
+                "RamLfe",
+                "Execute a RAM-LFE program.",
+                "Execute a RAM-LFE program from plaintext or BFV-encrypted input and return the stateless execution receipt.",
+                "#/components/schemas/RamLfeExecuteRequest",
+                "#/components/schemas/RamLfeExecuteResponse",
+                params,
+            )
+        }),
+    );
+    paths.insert(
+        "/v1/ram-lfe/receipts/verify".to_owned(),
+        Value::Object(json_post_operation(
+            "RamLfe",
+            "Verify a RAM-LFE receipt.",
+            "Validate a stateless RAM-LFE execution receipt against the published on-chain program policy and optionally compare a caller-supplied output blob to the receipt output hash.",
+            "#/components/schemas/RamLfeReceiptVerifyRequest",
+            "#/components/schemas/RamLfeReceiptVerifyResponse",
+            Vec::new(),
+        )),
     );
     paths
 }
@@ -3719,18 +3091,31 @@ fn asset_paths() -> Map {
         "/v1/assets/definitions".to_owned(),
         Value::Object(json_get_operation(
             "Assets",
-            "List asset definitions with name and alias.",
-            "List asset definitions with canonical id, human-readable name, and optional alias.",
+            "List asset definitions.",
+            "List asset definitions as full objects with canonical Base58 id, optional alias, and `alias_binding` lease metadata when an alias exists.",
             "#/components/schemas/JsonValue",
             Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/assets/definitions/{asset}".to_owned(),
+        Value::Object(json_get_operation(
+            "Assets",
+            "Fetch one asset definition.",
+            "Fetch an asset definition by unprefixed Base58 id or `<name>#<domain>.<dataspace>` / `<name>#<dataspace>` alias, including `alias_binding` lease metadata when present.",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "asset",
+                "Asset selector (unprefixed Base58 id or alias).",
+            )],
         )),
     );
     paths.insert(
         "/v1/assets/definitions/query".to_owned(),
         Value::Object(json_post_operation(
             "Assets",
-            "Query asset definitions with name and alias.",
-            "Query asset definitions with JSON envelope, including name and optional alias fields.",
+            "Query asset definitions.",
+            "Query asset definitions with a JSON envelope and full asset-definition objects in the response, including `alias_binding` lease metadata when present.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -3741,13 +3126,13 @@ fn asset_paths() -> Map {
         Value::Object({
             let mut params = vec![string_path_param(
                 "definition_id",
-                "Asset definition identifier.",
+                "Asset selector (unprefixed Base58 id or alias).",
             )];
             params.extend(asset_holders_list_query_parameters());
             json_get_operation(
                 "Assets",
                 "List asset holders.",
-                "List holders for an asset definition (supports pagination and optional asset_id filtering).",
+                "List holders for an asset definition (supports pagination plus optional account_id and scope filtering).",
                 "#/components/schemas/JsonValue",
                 params,
             )
@@ -3758,12 +3143,12 @@ fn asset_paths() -> Map {
         Value::Object(json_post_operation(
             "Assets",
             "Query asset holders.",
-            "Query holders for an asset definition.",
+            "Query holders for an asset definition. `account_id` filters accept canonical I105 account ids or on-chain aliases in `name@domain.dataspace` / `name@dataspace` form. Aggregate mode supports exact PAYNET-style PKR directory queries such as grouping by `primary_alias_domain` with `distinct_count(account_id)` and `sum(quantity)`. In production aggregate mode Torii serves published DA projection shards from local cache/storage (`query_source=projection_da_cache`) and hydrates missing shards from approved SoraFS providers on demand (`query_source=projection_da_hydrated`). Incomplete projections return `projection_archive_unavailable` instead of scanning live holders. `live_debug` requires an explicit debug opt-in.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
                 "definition_id",
-                "Asset definition identifier.",
+                "Asset selector (unprefixed Base58 id or alias).",
             )],
         )),
     );
@@ -3776,7 +3161,7 @@ fn asset_paths() -> Map {
             "#/components/schemas/JsonValue",
             vec![string_path_param(
                 "definition_id",
-                "Asset definition identifier.",
+                "Asset selector (unprefixed Base58 id or alias).",
             )],
         )),
     );
@@ -3809,10 +3194,39 @@ fn nft_paths() -> Map {
     paths
 }
 
+fn rwa_paths() -> Map {
+    let mut paths = Map::new();
+    paths.insert(
+        "/v1/rwas".to_owned(),
+        Value::Object(json_get_operation(
+            "RWAs",
+            "List RWA lots.",
+            "List RWA lots visible to the caller.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/rwas/query".to_owned(),
+        Value::Object(json_post_operation(
+            "RWAs",
+            "Query RWA lots.",
+            "Query RWA lots with JSON envelope.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths
+}
+
 fn subscription_paths() -> Map {
     let mut paths = Map::new();
     let plan_query_params = vec![
-        string_query_param("provider", "Filter plans by provider account id."),
+        string_query_param(
+            "provider",
+            "Filter plans by provider account id (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
+        ),
         integer_query_param("limit", "Optional page size limit.", Some("uint64")),
         integer_query_param(
             "offset",
@@ -3820,26 +3234,24 @@ fn subscription_paths() -> Map {
             Some("uint64"),
         ),
     ];
-    let mut plans = json_get_operation(
+    let plans = json_get_operation(
         "Subscriptions",
         "List subscription plans.",
         "List subscription plans by provider.",
         "#/components/schemas/JsonValue",
         plan_query_params,
     );
-    plans.extend(json_post_operation(
-        "Subscriptions",
-        "Create a subscription plan.",
-        "Register a subscription plan on an asset definition.",
-        "#/components/schemas/JsonValue",
-        "#/components/schemas/JsonValue",
-        Vec::new(),
-    ));
     paths.insert("/v1/subscriptions/plans".to_owned(), Value::Object(plans));
 
     let subscription_query_params = vec![
-        string_query_param("owned_by", "Filter subscriptions by subscriber account id."),
-        string_query_param("provider", "Filter subscriptions by provider account id."),
+        string_query_param(
+            "owned_by",
+            "Filter subscriptions by subscriber account id (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
+        ),
+        string_query_param(
+            "provider",
+            "Filter subscriptions by provider account id (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
+        ),
         string_query_param(
             "status",
             "Filter by status (`active`, `paused`, `past_due`, `canceled`, `suspended`).",
@@ -3851,21 +3263,13 @@ fn subscription_paths() -> Map {
             Some("uint64"),
         ),
     ];
-    let mut subs = json_get_operation(
+    let subs = json_get_operation(
         "Subscriptions",
         "List subscriptions.",
         "List subscriptions with optional filters.",
         "#/components/schemas/JsonValue",
         subscription_query_params,
     );
-    subs.extend(json_post_operation(
-        "Subscriptions",
-        "Create a subscription.",
-        "Create a subscription NFT and billing trigger.",
-        "#/components/schemas/JsonValue",
-        "#/components/schemas/JsonValue",
-        Vec::new(),
-    ));
     paths.insert("/v1/subscriptions".to_owned(), Value::Object(subs));
 
     let sub_param = string_path_param("subscription_id", "Subscription NFT identifier.");
@@ -3877,72 +3281,6 @@ fn subscription_paths() -> Map {
             "Fetch a subscription by NFT id.",
             "#/components/schemas/JsonValue",
             vec![sub_param.clone()],
-        )),
-    );
-    paths.insert(
-        "/v1/subscriptions/{subscription_id}/pause".to_owned(),
-        Value::Object(json_post_operation(
-            "Subscriptions",
-            "Pause a subscription.",
-            "Pause a subscription and unregister billing triggers.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![sub_param.clone()],
-        )),
-    );
-    paths.insert(
-        "/v1/subscriptions/{subscription_id}/resume".to_owned(),
-        Value::Object(json_post_operation(
-            "Subscriptions",
-            "Resume a subscription.",
-            "Resume a subscription and re-schedule billing.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![sub_param.clone()],
-        )),
-    );
-    paths.insert(
-        "/v1/subscriptions/{subscription_id}/cancel".to_owned(),
-        Value::Object(json_post_operation(
-            "Subscriptions",
-            "Cancel a subscription.",
-            "Cancel a subscription immediately or schedule cancellation at period end.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![sub_param.clone()],
-        )),
-    );
-    paths.insert(
-        "/v1/subscriptions/{subscription_id}/keep".to_owned(),
-        Value::Object(json_post_operation(
-            "Subscriptions",
-            "Keep a subscription.",
-            "Undo a scheduled period-end cancellation and keep billing active.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![sub_param.clone()],
-        )),
-    );
-    paths.insert(
-        "/v1/subscriptions/{subscription_id}/usage".to_owned(),
-        Value::Object(json_post_operation(
-            "Subscriptions",
-            "Record subscription usage.",
-            "Record usage for a subscription via a usage trigger.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![sub_param.clone()],
-        )),
-    );
-    paths.insert(
-        "/v1/subscriptions/{subscription_id}/charge-now".to_owned(),
-        Value::Object(json_post_operation(
-            "Subscriptions",
-            "Charge a subscription now.",
-            "Trigger immediate billing for a subscription.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![sub_param],
         )),
     );
     paths
@@ -3983,28 +3321,6 @@ fn space_directory_paths() -> Map {
             "Fetch manifests registered for a user account identifier.",
             "#/components/schemas/JsonValue",
             vec![string_path_param("uaid", "User account identifier.")],
-        )),
-    );
-    paths.insert(
-        "/v1/space-directory/manifests".to_owned(),
-        Value::Object(json_post_operation(
-            "SpaceDirectory",
-            "Publish a space directory manifest.",
-            "Publish a space directory manifest.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/space-directory/manifests/revoke".to_owned(),
-        Value::Object(json_post_operation(
-            "SpaceDirectory",
-            "Revoke a space directory manifest.",
-            "Revoke a space directory manifest.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
         )),
     );
     paths
@@ -4061,6 +3377,16 @@ fn explorer_paths() -> Map {
             "Explorer",
             "List NFTs (explorer).",
             "List NFTs for explorer usage.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/explorer/rwas".to_owned(),
+        Value::Object(json_get_operation(
+            "Explorer",
+            "List RWAs (explorer).",
+            "List RWA lots for explorer usage.",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
@@ -4142,7 +3468,10 @@ fn explorer_paths() -> Map {
             "Fetch account detail (explorer).",
             "Fetch account detail for explorer usage.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("account_id", "Account identifier.")],
+            vec![string_path_param(
+                "account_id",
+                "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            )],
         )),
     );
     paths.insert(
@@ -4163,7 +3492,10 @@ fn explorer_paths() -> Map {
             );
             operation.insert(
                 "parameters".into(),
-                Value::Array(vec![string_path_param("account_id", "Account identifier.")]),
+                Value::Array(vec![string_path_param(
+                    "account_id",
+                    "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+                )]),
             );
             let mut responses = Map::new();
             responses.insert("200".to_owned(), binary_response("QR code payload."));
@@ -4229,7 +3561,7 @@ fn explorer_paths() -> Map {
             "Fetch asset detail (explorer).",
             "Fetch asset detail for explorer usage.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("asset_id", "Asset identifier.")],
+            vec![string_path_param("asset_id", "Canonical Base58 asset id.")],
         )),
     );
     paths.insert(
@@ -4240,6 +3572,16 @@ fn explorer_paths() -> Map {
             "Fetch NFT detail for explorer usage.",
             "#/components/schemas/JsonValue",
             vec![string_path_param("nft_id", "NFT identifier.")],
+        )),
+    );
+    paths.insert(
+        "/v1/explorer/rwas/{rwa_id}".to_owned(),
+        Value::Object(json_get_operation(
+            "Explorer",
+            "Fetch RWA detail (explorer).",
+            "Fetch RWA detail for explorer usage.",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param("rwa_id", "RWA identifier.")],
         )),
     );
     paths.insert(
@@ -4283,50 +3625,6 @@ fn explorer_paths() -> Map {
 
 fn sorafs_paths() -> Map {
     let mut paths = Map::new();
-    paths.insert(
-        "/v1/sorafs/pin/register".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Register a pin manifest.",
-            "Register a pin manifest for SoraFS.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/capacity/declare".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Declare capacity.",
-            "Declare SoraFS capacity availability.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/capacity/telemetry".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Submit capacity telemetry.",
-            "Submit SoraFS capacity telemetry.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/capacity/dispute".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Submit a capacity dispute.",
-            "Submit a capacity dispute request.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
     paths.insert(
         "/v1/sorafs/capacity/schedule".to_owned(),
         Value::Object(json_post_operation(
@@ -4879,7 +4177,7 @@ fn content_paths() -> Map {
                 Value::String(
                     "Fetch content bundle bytes (path captures the remaining path segments). \
 Role- or sponsor-gated bundles require canonical request headers \
-(`X-Iroha-Account`, `X-Iroha-Signature`)."
+(`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, `X-Iroha-Nonce`)."
                         .to_owned(),
                 ),
             );
@@ -4904,76 +4202,112 @@ Role- or sponsor-gated bundles require canonical request headers \
 fn sns_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
-        "/v1/sns/registrations".to_owned(),
+        "/v1/sns/names".to_owned(),
         Value::Object(json_post_operation(
             "SNS",
-            "Register a SNS suffix.",
-            "Register a SNS suffix.",
+            "Register a SNS name lease.",
+            "Register a ledger-backed SNS name record in one of the fixed namespaces.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}".to_owned(),
+        "/v1/sns/names/{namespace}/{literal}".to_owned(),
         Value::Object(json_get_operation(
             "SNS",
-            "Fetch a SNS registration.",
-            "Fetch a SNS registration by selector.",
+            "Fetch a SNS name record.",
+            "Fetch a ledger-backed SNS name record by namespace and canonical literal.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("selector", "SNS selector value.")],
+            vec![
+                string_path_param(
+                    "namespace",
+                    "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
+                ),
+                string_path_param("literal", "Canonical SNS literal for the namespace."),
+            ],
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}/renew".to_owned(),
+        "/v1/sns/names/{namespace}/{literal}/renew".to_owned(),
         Value::Object(json_post_operation(
             "SNS",
-            "Renew a SNS registration.",
-            "Renew a SNS registration by selector.",
+            "Renew a SNS name record.",
+            "Renew a ledger-backed SNS name record by namespace and canonical literal.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("selector", "SNS selector value.")],
+            vec![
+                string_path_param(
+                    "namespace",
+                    "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
+                ),
+                string_path_param("literal", "Canonical SNS literal for the namespace."),
+            ],
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}/transfer".to_owned(),
+        "/v1/sns/names/{namespace}/{literal}/transfer".to_owned(),
         Value::Object(json_post_operation(
             "SNS",
-            "Transfer a SNS registration.",
-            "Transfer a SNS registration by selector.",
+            "Transfer a SNS name record.",
+            "Transfer a ledger-backed SNS name record by namespace and canonical literal.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("selector", "SNS selector value.")],
+            vec![
+                string_path_param(
+                    "namespace",
+                    "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
+                ),
+                string_path_param("literal", "Canonical SNS literal for the namespace."),
+            ],
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}/controllers".to_owned(),
+        "/v1/sns/names/{namespace}/{literal}/controllers".to_owned(),
         Value::Object(json_post_operation(
             "SNS",
             "Update SNS controllers.",
-            "Update SNS registration controllers.",
+            "Update controllers for a ledger-backed SNS name record.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("selector", "SNS selector value.")],
+            vec![
+                string_path_param(
+                    "namespace",
+                    "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
+                ),
+                string_path_param("literal", "Canonical SNS literal for the namespace."),
+            ],
         )),
     );
     paths.insert(
-        "/v1/sns/registrations/{selector}/freeze".to_owned(),
+        "/v1/sns/names/{namespace}/{literal}/freeze".to_owned(),
         Value::Object({
             let post_op = json_post_operation(
                 "SNS",
-                "Freeze a SNS registration.",
-                "Freeze a SNS registration.",
+                "Freeze a SNS name record.",
+                "Freeze a ledger-backed SNS name record.",
                 "#/components/schemas/JsonValue",
                 "#/components/schemas/JsonValue",
-                vec![string_path_param("selector", "SNS selector value.")],
+                vec![
+                    string_path_param(
+                        "namespace",
+                        "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
+                    ),
+                    string_path_param("literal", "Canonical SNS literal for the namespace."),
+                ],
             );
             let delete_op = json_delete_operation(
                 "SNS",
-                "Unfreeze a SNS registration.",
-                "Unfreeze a SNS registration.",
+                "Unfreeze a SNS name record.",
+                "Unfreeze a ledger-backed SNS name record.",
                 "#/components/schemas/JsonValue",
-                vec![string_path_param("selector", "SNS selector value.")],
+                vec![
+                    string_path_param(
+                        "namespace",
+                        "SNS namespace (`account-alias`, `domain`, or `dataspace`).",
+                    ),
+                    string_path_param("literal", "Canonical SNS literal for the namespace."),
+                ],
             );
             let mut methods = Map::new();
             if let Some(post_value) = post_op.get("post") {
@@ -4994,34 +4328,6 @@ fn sns_paths() -> Map {
             "#/components/schemas/JsonValue",
             vec![string_path_param("suffix_id", "Suffix identifier.")],
         )),
-    );
-    paths.insert(
-        "/v1/sns/governance/cases".to_owned(),
-        Value::Object({
-            let get_op = json_get_operation(
-                "SNS",
-                "List SNS governance cases.",
-                "List SNS governance cases.",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            );
-            let post_op = json_post_operation(
-                "SNS",
-                "Create a SNS governance case.",
-                "Create a SNS governance case.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
-            );
-            let mut methods = Map::new();
-            if let Some(get_value) = get_op.get("get") {
-                methods.insert("get".to_owned(), get_value.clone());
-            }
-            if let Some(post_value) = post_op.get("post") {
-                methods.insert("post".to_owned(), post_value.clone());
-            }
-            methods
-        }),
     );
     paths
 }
@@ -5389,6 +4695,22 @@ fn sumeragi_paths() -> Map {
         Value::Object(bridge_finality_bundle_operation()),
     );
     paths.insert(
+        "/v1/sccp/capabilities".to_owned(),
+        Value::Object(sccp_capabilities_operation()),
+    );
+    paths.insert(
+        "/v1/sccp/manifests".to_owned(),
+        Value::Object(sccp_manifests_operation()),
+    );
+    paths.insert(
+        "/v1/sccp/artifacts/message/{message_id}".to_owned(),
+        Value::Object(sccp_message_artifact_operation()),
+    );
+    paths.insert(
+        "/v1/sccp/jobs/message/{message_id}".to_owned(),
+        Value::Object(sccp_message_job_operation()),
+    );
+    paths.insert(
         "/v1/sumeragi/validator-sets".to_owned(),
         Value::Object(sumeragi_validator_sets_operation()),
     );
@@ -5594,6 +4916,175 @@ fn bridge_finality_bundle_operation() -> Map {
             "Finality bundle not found for the requested height.",
             error_schema_reference(),
         ),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_capabilities_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Discover SCCP proof capabilities.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns the local SCCP domain id, legacy proof backends, generic message proof \
+             family, supported codecs, and the per-counterparty backend labels relayers should \
+             use for Ethereum, BSC, Solana, TON, Tron, SORA2, SORA Kusama, and SORA Polkadot."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpCapabilities".to_owned()),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response("SCCP capability snapshot.", schema_ref("JsonValue")),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_manifests_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Discover SCCP proof manifests.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns the typed per-counterparty SCCP proof manifests used to derive chain-specific \
+             backend labels, verifier targets, finality models, public inputs, and manifest seeds \
+             for Ethereum, BSC, Solana, TON, Tron, SORA2, SORA Kusama, and SORA Polkadot."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpProofManifests".to_owned()),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response("SCCP proof manifest collection.", schema_ref("JsonValue")),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_message_artifact_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Fetch a typed SCCP transparent proof artifact.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns the typed transparent SCCP proof artifact for a canonical message id, \
+             including the chain profile, public inputs, verifier-backend metadata, generated \
+             counterparty submission package, real proof bytes, and embedded Nexus message bundle. \
+             Supports JSON or Norito content negotiation via the `Accept` header."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpMessageArtifact".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![string_path_param(
+            "message_id",
+            "Canonical SCCP message id hex string.",
+        )]),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response(
+            "Typed SCCP transparent proof artifact.",
+            schema_ref("JsonValue"),
+        ),
+    );
+    responses.insert(
+        "404".into(),
+        json_response("SCCP message not found.", error_schema_reference()),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_message_job_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Fetch a normalized SCCP counterparty proof job.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns a prover-oriented SCCP job for a canonical message id, including the \
+             chain-specific normalized payload projection plus the original typed Nexus message \
+             bundle. Supports JSON or Norito content negotiation via the `Accept` header."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpMessageJob".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![string_path_param(
+            "message_id",
+            "Canonical SCCP message id hex string.",
+        )]),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response(
+            "Normalized SCCP counterparty proof job.",
+            schema_ref("JsonValue"),
+        ),
+    );
+    responses.insert(
+        "404".into(),
+        json_response("SCCP message not found.", error_schema_reference()),
     );
     responses.insert("406".into(), not_acceptable_response());
     operation.insert("responses".into(), Value::Object(responses));
@@ -5867,6 +5358,25 @@ fn single_json_response(schema_ref: &str) -> Map {
             "description": "Successful response",
             "content": {
                 "application/json": {
+                    "schema": { "$ref": schema_ref }
+                }
+            }
+        }),
+    );
+    responses
+}
+
+fn single_dual_format_response(schema_ref: &str) -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        norito::json!({
+            "description": "Successful response",
+            "content": {
+                "application/json": {
+                    "schema": { "$ref": schema_ref }
+                },
+                "application/x-norito": {
                     "schema": { "$ref": schema_ref }
                 }
             }
@@ -6190,7 +5700,7 @@ fn nexus_public_lane_stake_operation() -> Map {
             Value::Object(lane_id_parameter()),
             string_query_param(
                 "validator",
-                "Optional validator account literal to filter stake entries (canonical I105 only).",
+                "Optional validator account literal to filter stake entries (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
             ),
         ]),
     );
@@ -6233,10 +5743,10 @@ fn nexus_public_lane_rewards_operation() -> Map {
         Value::String("List pending rewards for a public lane account.".to_owned()),
     );
     operation.insert(
-        "description".into(),
-        Value::String(
-            "Returns the unclaimed reward amount per asset for the requested account in the \
-             given public lane. Requires an `account` query parameter (canonical I105) and \
+            "description".into(),
+            Value::String(
+                "Returns the unclaimed reward amount per asset for the requested account in the \
+             given public lane. Requires an `account` query parameter (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`) and \
              accepts optional `asset_id` and `upto_epoch` filters."
                 .to_owned(),
         ),
@@ -6263,9 +5773,9 @@ fn nexus_public_lane_rewards_operation() -> Map {
             Value::Object(lane_id_parameter()),
             string_query_param(
                 "account",
-                "Account literal to evaluate pending rewards for (canonical I105 only).",
+                "Account literal to evaluate pending rewards for (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
             ),
-            string_query_param("asset_id", "Filter pending rewards by asset identifier."),
+            string_query_param("asset_id", "Filter pending rewards by canonical Base58 asset id."),
             Value::Object(upto_epoch_param),
         ]),
     );
@@ -6310,7 +5820,7 @@ fn nexus_dataspaces_account_summary_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Resolves the supplied canonical I105 account literal \
+            "Resolves the supplied canonical I105 account literal or on-chain alias \
              and returns a joined view of UAID bindings, space-directory manifests, \
              portfolio counters, and per-dataspace consensus commitments."
                 .to_owned(),
@@ -6324,7 +5834,7 @@ fn nexus_dataspaces_account_summary_operation() -> Map {
         "parameters".into(),
         Value::Array(vec![string_path_param(
             "literal",
-            "Account literal to resolve (canonical I105 only).",
+            "Account literal to resolve (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`).",
         )]),
     );
     operation.insert(
@@ -6396,7 +5906,8 @@ fn kaigi_relay_id_parameter() -> Map {
     param.insert(
         "description".into(),
         Value::String(
-            "Relay account identifier encoded as a canonical I105 account literal.".to_owned(),
+            "Relay account identifier encoded as a canonical I105 account literal or on-chain alias `name@domain.dataspace` / `name@dataspace`."
+                .to_owned(),
         ),
     );
     let mut schema = Map::new();
@@ -6567,17 +6078,22 @@ fn paths_section() -> Map {
     paths.extend(query_paths());
     paths.extend(stream_paths());
     paths.extend(connect_paths());
+    paths.extend(vpn_paths());
     paths.extend(mcp_paths());
     paths.extend(proof_paths());
     paths.extend(contracts_paths());
+    paths.extend(multisig_paths());
+    paths.extend(controls_paths());
     paths.extend(zk_paths());
     paths.extend(governance_paths());
     paths.extend(runtime_paths());
     paths.extend(account_paths());
+    paths.extend(ram_lfe_paths());
     paths.extend(identifier_paths());
     paths.extend(domain_paths());
     paths.extend(asset_paths());
     paths.extend(nft_paths());
+    paths.extend(rwa_paths());
     paths.extend(subscription_paths());
     paths.extend(parameter_paths());
     paths.extend(space_directory_paths());
@@ -6678,8 +6194,10 @@ fn alias_resolve_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns the canonical alias spelling, the bound account identifier, and \
-             (if known) the deterministic alias index."
+            "Routes account-alias resolution through the Nexus read proxy using the alias \
+             dataspace, then returns the canonical alias spelling, the bound account \
+             identifier, and (if known) the deterministic alias index. Unsigned/public \
+             requests remain allowed for ordinary public alias lookups."
                 .to_owned(),
         ),
     );
@@ -6732,6 +6250,13 @@ fn alias_resolve_responses() -> Map {
         json_response("Alias not found.", error_schema_reference()),
     );
     responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Alias lookup was denied by the routed dataspace and no allowed route resolved it.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
         "503".to_owned(),
         json_response("Alias runtime unavailable.", error_schema_reference()),
     );
@@ -6751,8 +6276,9 @@ fn alias_resolve_index_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns the alias string and account identifier registered under the \
-             provided index."
+            "Fans out the alias-index lookup across configured Nexus dataspaces because the \
+             index alone does not encode a dataspace, dedupes identical bindings, and returns \
+             `source = fanout` when the result comes from multi-route merging."
                 .to_owned(),
         ),
     );
@@ -6783,7 +6309,7 @@ fn asset_alias_resolve_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Returns canonical `aid` plus human-readable fields for `<name>#<domain>@<dataspace>` or `<name>#<dataspace>` aliases."
+            "Returns the canonical Base58 asset definition id, human-readable fields, and `alias_binding` lease metadata for `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` aliases."
                 .to_owned(),
         ),
     );
@@ -6795,6 +6321,39 @@ fn asset_alias_resolve_operation() -> Map {
     operation.insert(
         "responses".into(),
         Value::Object(asset_alias_resolve_responses()),
+    );
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn alias_lookup_by_account_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Aliases".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("List aliases bound to an account across reachable dataspaces.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Routes the lookup through the Nexus read proxy using the target account routes, \
+             merges deduplicated alias rows across reachable dataspaces, recomputes `total`, \
+             and returns `source = fanout` when multiple routes contribute to the response."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("aliasLookupByAccount".to_owned()),
+    );
+    operation.insert("requestBody".into(), alias_lookup_by_account_request_body());
+    operation.insert(
+        "responses".into(),
+        Value::Object(alias_lookup_by_account_responses()),
     );
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
@@ -6875,8 +6434,80 @@ fn alias_resolve_index_responses() -> Map {
         ),
     );
     responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Alias-index lookup was denied by one or more routed dataspaces and no allowed route resolved it.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
         "404".to_owned(),
         json_response("Alias index not found.", error_schema_reference()),
+    );
+    responses.insert(
+        "409".to_owned(),
+        json_response(
+            "Multiple dataspaces returned conflicting alias-index bindings.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "503".to_owned(),
+        json_response("Alias runtime unavailable.", error_schema_reference()),
+    );
+    responses
+}
+
+fn alias_lookup_by_account_request_body() -> Value {
+    let mut media = Map::new();
+    media.insert(
+        "application/json".into(),
+        Value::Object({
+            let mut schema = Map::new();
+            schema.insert("schema".into(), schema_ref("AliasLookupByAccountRequest"));
+            schema
+        }),
+    );
+
+    let mut body = Map::new();
+    body.insert("required".into(), Value::Bool(true));
+    body.insert("content".into(), Value::Object(media));
+    Value::Object(body)
+}
+
+fn alias_lookup_by_account_responses() -> Map {
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "Alias list successfully resolved.",
+            schema_ref("AliasLookupByAccountResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "Malformed request (account id or filters are invalid).",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "403".to_owned(),
+        json_response(
+            "Alias lookup was denied by one or more routed dataspaces and no allowed route returned aliases.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response("Account alias list not found.", error_schema_reference()),
+    );
+    responses.insert(
+        "409".to_owned(),
+        json_response(
+            "Multiple dataspaces returned conflicting alias-account roots.",
+            error_schema_reference(),
+        ),
     );
     responses.insert(
         "503".to_owned(),
@@ -7333,6 +6964,18 @@ fn string_path_param(name: &str, description: &str) -> Value {
     Value::Object(param)
 }
 
+fn string_header_param(name: &str, description: &str, required: bool) -> Value {
+    let mut param = Map::new();
+    param.insert("name".into(), Value::String(name.to_owned()));
+    param.insert("in".into(), Value::String("header".to_owned()));
+    param.insert("required".into(), Value::Bool(required));
+    param.insert("description".into(), Value::String(description.to_owned()));
+    let mut schema = Map::new();
+    schema.insert("type".into(), Value::String("string".to_owned()));
+    param.insert("schema".into(), Value::Object(schema));
+    Value::Object(param)
+}
+
 fn integer_path_param(name: &str, description: &str, format: Option<&str>) -> Value {
     let mut param = Map::new();
     param.insert("name".into(), Value::String(name.to_owned()));
@@ -7663,6 +7306,86 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "PipelineTransactionStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["Queued", "Approved", "Committed", "Applied", "Rejected", "Expired"],
+                    "description": "Stable pipeline status kind."
+                },
+                "block_height": {
+                    "type": ["integer", "null"],
+                    "format": "uint64",
+                    "description": "Block height reported for the status when available."
+                },
+                "rejection_reason": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Structured rejection reason when `kind` is `Rejected`."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "PipelineTransactionStatusResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["hash", "status", "scope", "resolved_from"],
+            "additionalProperties": false,
+            "properties": {
+                "hash": {
+                    "type": "string",
+                    "description": "Canonical signed transaction hash (hex, lowercase)."
+                },
+                "status": {
+                    "$ref": "#/components/schemas/PipelineTransactionStatus"
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["local", "auto", "global"],
+                    "description": "Read scope applied by Torii."
+                },
+                "resolved_from": {
+                    "type": "string",
+                    "enum": ["cache", "queue", "state"],
+                    "description": "Source used by Torii to resolve the status."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountReadResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "opaque_ids"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical account identifier rendered as the domainless I105 literal."
+                },
+                "label": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Stable account label when assigned.",
+                    "nullable": true
+                },
+                "uaid": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Universal account identifier bound to this account when registered in Nexus.",
+                    "nullable": true
+                },
+                "opaque_ids": {
+                    "type": "array",
+                    "description": "Opaque identifiers currently mapped to the account UAID.",
+                    "items": { "$ref": "#/components/schemas/JsonValue" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "ApiVersionInfo".to_owned(),
         norito::json!({
             "type": "object",
@@ -7702,7 +7425,7 @@ fn openapi_schemas() -> Map {
             "required": ["account_id", "platform", "token"],
             "additionalProperties": false,
             "properties": {
-                "account_id": { "type": "string", "description": "Account identifier registering the device." },
+                "account_id": { "type": "string", "description": "Account selector for the device owner (canonical I105 or on-chain alias `name@domain.dataspace` / `name@dataspace`); registrations are stored against the resolved canonical I105 account id." },
                 "platform": { "type": "string", "description": "Push platform label (FCM, APNS)." },
                 "token": { "type": "string", "description": "Device token." },
                 "topics": {
@@ -7769,7 +7492,7 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "alias": {
                     "type": "string",
-                    "description": "Asset alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) to resolve."
+                    "description": "Asset alias literal (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) to resolve."
                 }
             }
         }),
@@ -7797,6 +7520,546 @@ fn openapi_schemas() -> Map {
                 "source": {
                     "type": "string",
                     "description": "Backend source for the alias mapping."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "BfvParameters".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["polynomial_degree", "plaintext_modulus", "ciphertext_modulus"],
+            "additionalProperties": false,
+            "properties": {
+                "polynomial_degree": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "description": "Ring degree used by the BFV input-encryption envelope."
+                },
+                "plaintext_modulus": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Plaintext modulus `t` used by the BFV input-encryption envelope."
+                },
+                "ciphertext_modulus": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Ciphertext modulus `q` used by the BFV input-encryption envelope."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "BfvPublicKey".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["b", "a"],
+            "additionalProperties": false,
+            "properties": {
+                "b": {
+                    "type": "array",
+                    "items": {"type": "integer", "format": "uint64"},
+                    "description": "First BFV public-key polynomial."
+                },
+                "a": {
+                    "type": "array",
+                    "items": {"type": "integer", "format": "uint64"},
+                    "description": "Second BFV public-key polynomial."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "BfvIdentifierPublicParameters".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["parameters", "public_key", "max_input_bytes"],
+            "additionalProperties": false,
+            "properties": {
+                "parameters": {
+                    "$ref": "#/components/schemas/BfvParameters"
+                },
+                "public_key": {
+                    "$ref": "#/components/schemas/BfvPublicKey"
+                },
+                "max_input_bytes": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "description": "Maximum number of UTF-8 bytes accepted by the BFV input envelope."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "BfvRamEncryptedInputMode".to_owned(),
+        norito::json!({
+            "type": "string",
+            "enum": ["resolver_canonicalized_envelope_v1"],
+            "description": "Canonicalization mode applied before the programmed RAM-FHE backend executes."
+        }),
+    );
+    schemas.insert(
+        "BfvRamProgramProfile".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "profile_version",
+                "register_count",
+                "memory_lane_count",
+                "ciphertext_mul_per_step",
+                "encrypted_input_mode",
+                "min_ciphertext_modulus"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "profile_version": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "description": "Stable programmed RAM-FHE profile version."
+                },
+                "register_count": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "description": "Number of ciphertext registers in the hidden execution machine."
+                },
+                "memory_lane_count": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "description": "Number of ciphertext memory lanes persisted across program steps."
+                },
+                "ciphertext_mul_per_step": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "description": "Maximum ciphertext-ciphertext multiplications per programmed step."
+                },
+                "encrypted_input_mode": {
+                    "$ref": "#/components/schemas/BfvRamEncryptedInputMode"
+                },
+                "min_ciphertext_modulus": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Minimum supported BFV ciphertext modulus for the programmed profile."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierResolutionReceiptPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "policy_id",
+                "execution",
+                "opaque_id",
+                "receipt_hash",
+                "uaid",
+                "account_id"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "policy_id": {
+                    "type": "string",
+                    "description": "Identifier policy namespace used for the resolution."
+                },
+                "execution": {
+                    "$ref": "#/components/schemas/RamLfeExecutionReceiptPayload"
+                },
+                "opaque_id": {
+                    "type": "string",
+                    "description": "Derived opaque identifier literal."
+                },
+                "receipt_hash": {
+                    "type": "string",
+                    "description": "Deterministic hidden-function receipt hash for this evaluation."
+                },
+                "uaid": {
+                    "type": "string",
+                    "description": "UAID currently bound to the opaque identifier."
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical account identifier currently bound to the UAID."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeExecutionReceiptPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "program_id",
+                "program_digest",
+                "backend",
+                "verification_mode",
+                "output_hash",
+                "associated_data_hash",
+                "executed_at_ms"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "program_id": {
+                    "type": "string",
+                    "description": "RAM-LFE program identifier."
+                },
+                "program_digest": {
+                    "type": "string",
+                    "description": "Published digest of the hidden compiled program."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "RAM-LFE backend that produced the receipt."
+                },
+                "verification_mode": {
+                    "type": "string",
+                    "description": "Receipt attestation mode (`signed` or `proof`)."
+                },
+                "output_hash": {
+                    "type": "string",
+                    "description": "Hash of the plaintext output bytes."
+                },
+                "associated_data_hash": {
+                    "type": "string",
+                    "description": "Hash of the associated-data blob bound into execution."
+                },
+                "executed_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Execution timestamp in milliseconds since Unix epoch."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeProofVerifierMetadata".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "proof_backend",
+                "circuit_id",
+                "public_inputs_schema_hash",
+                "verifying_key_bytes_b64"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "proof_backend": {
+                    "type": "string",
+                    "description": "Proof backend expected by verifier records."
+                },
+                "circuit_id": {
+                    "type": "string",
+                    "description": "Circuit identifier bound to the verifier."
+                },
+                "public_inputs_schema_hash": {
+                    "type": "string",
+                    "description": "Hash of the public-input schema accepted by the verifier."
+                },
+                "verifying_key_bytes_b64": {
+                    "type": "string",
+                    "description": "Base64-encoded verifying key bytes; the on-chain verifier hash is derived from these bytes."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeSignedReceiptAttestation".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "signature"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["signed"]
+                },
+                "signature": {
+                    "type": "string",
+                    "description": "Hex-encoded resolver signature over the canonical receipt payload."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeProofReceiptAttestation".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "proof_backend", "proof_b64"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["proof"]
+                },
+                "proof_backend": {
+                    "type": "string",
+                    "description": "Proof backend used to produce the receipt attestation."
+                },
+                "proof_b64": {
+                    "type": "string",
+                    "description": "Base64-encoded proof bytes."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeReceiptAttestation".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {"$ref": "#/components/schemas/RamLfeSignedReceiptAttestation"},
+                {"$ref": "#/components/schemas/RamLfeProofReceiptAttestation"}
+            ]
+        }),
+    );
+    schemas.insert(
+        "RamLfeExecutionReceipt".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["payload", "attestation"],
+            "additionalProperties": false,
+            "properties": {
+                "payload": {
+                    "$ref": "#/components/schemas/RamLfeExecutionReceiptPayload"
+                },
+                "attestation": {
+                    "$ref": "#/components/schemas/RamLfeReceiptAttestation"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeProgramPolicySummary".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "program_id",
+                "owner",
+                "active",
+                "resolver_public_key",
+                "backend",
+                "verification_mode"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "program_id": {
+                    "type": "string",
+                    "description": "RAM-LFE program identifier."
+                },
+                "owner": {
+                    "type": "string",
+                    "description": "Canonical account identifier that owns the program policy."
+                },
+                "active": {
+                    "type": "boolean",
+                    "description": "Whether the program policy is active for new executions."
+                },
+                "resolver_public_key": {
+                    "type": "string",
+                    "description": "Public key used to verify RAM-LFE execution receipts."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "RAM-LFE backend advertised by the program policy."
+                },
+                "verification_mode": {
+                    "type": "string",
+                    "description": "Receipt attestation mode (`signed` or `proof`)."
+                },
+                "input_encryption": {
+                    "type": "string",
+                    "description": "Optional encrypted-input scheme published for this program."
+                },
+                "input_encryption_public_parameters": {
+                    "type": "string",
+                    "description": "Optional hex-encoded Norito payload containing the public input-encryption parameters."
+                },
+                "input_encryption_public_parameters_decoded": {
+                    "$ref": "#/components/schemas/BfvIdentifierPublicParameters"
+                },
+                "ram_fhe_profile": {
+                    "$ref": "#/components/schemas/BfvRamProgramProfile"
+                },
+                "proof_verifier": {
+                    "$ref": "#/components/schemas/RamLfeProofVerifierMetadata"
+                },
+                "note": {
+                    "type": "string",
+                    "description": "Optional human-readable note attached to the program policy."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeProgramPolicyListResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["total", "items"],
+            "additionalProperties": false,
+            "properties": {
+                "total": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Number of program policies returned."
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/components/schemas/RamLfeProgramPolicySummary"
+                    },
+                    "description": "Registered RAM-LFE program policies."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeExecuteRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "input_hex": {
+                    "type": "string",
+                    "description": "Hex-encoded plaintext input bytes. Supply exactly one of `input_hex` or `encrypted_input`."
+                },
+                "encrypted_input": {
+                    "type": "string",
+                    "description": "Hex-encoded Norito BFV ciphertext envelope. Supply exactly one of `input_hex` or `encrypted_input`."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeExecuteResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "program_id",
+                "opaque_hash",
+                "receipt_hash",
+                "output_hex",
+                "output_hash",
+                "associated_data_hash",
+                "executed_at_ms",
+                "backend",
+                "verification_mode",
+                "receipt"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "program_id": {
+                    "type": "string",
+                    "description": "RAM-LFE program identifier."
+                },
+                "opaque_hash": {
+                    "type": "string",
+                    "description": "Opaque evaluator hash returned by the RAM-LFE backend."
+                },
+                "receipt_hash": {
+                    "type": "string",
+                    "description": "Deterministic receipt hash returned by the RAM-LFE backend."
+                },
+                "output_hex": {
+                    "type": "string",
+                    "description": "Hex-encoded plaintext output bytes."
+                },
+                "output_hash": {
+                    "type": "string",
+                    "description": "Hash of the plaintext output bytes."
+                },
+                "associated_data_hash": {
+                    "type": "string",
+                    "description": "Hash of the associated-data blob bound into execution."
+                },
+                "executed_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Execution timestamp in milliseconds since Unix epoch."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "RAM-LFE backend that produced the receipt."
+                },
+                "verification_mode": {
+                    "type": "string",
+                    "description": "Receipt attestation mode (`signed` or `proof`)."
+                },
+                "receipt": {
+                    "$ref": "#/components/schemas/RamLfeExecutionReceipt"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeReceiptVerifyRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["receipt"],
+            "additionalProperties": false,
+            "properties": {
+                "receipt": {
+                    "$ref": "#/components/schemas/RamLfeExecutionReceipt"
+                },
+                "output_hex": {
+                    "type": "string",
+                    "description": "Optional hex-encoded plaintext output bytes to compare against `receipt.payload.output_hash`."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "RamLfeReceiptVerifyResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "valid",
+                "program_id",
+                "backend",
+                "verification_mode",
+                "output_hash",
+                "associated_data_hash"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "valid": {
+                    "type": "boolean",
+                    "description": "Whether the receipt validated against the published program policy."
+                },
+                "program_id": {
+                    "type": "string",
+                    "description": "RAM-LFE program identifier from the receipt."
+                },
+                "backend": {
+                    "type": "string",
+                    "description": "RAM-LFE backend advertised by the receipt."
+                },
+                "verification_mode": {
+                    "type": "string",
+                    "description": "Receipt attestation mode (`signed` or `proof`)."
+                },
+                "output_hash": {
+                    "type": "string",
+                    "description": "Receipt payload output hash."
+                },
+                "associated_data_hash": {
+                    "type": "string",
+                    "description": "Receipt payload associated-data hash."
+                },
+                "output_hash_matches": {
+                    "type": "boolean",
+                    "description": "Whether the supplied `output_hex` matched `output_hash`, when provided."
+                },
+                "error": {
+                    "type": "string",
+                    "description": "Validation failure reason when `valid == false`."
                 }
             }
         }),
@@ -7839,6 +8102,15 @@ fn openapi_schemas() -> Map {
                 "input_encryption_public_parameters": {
                     "type": "string",
                     "description": "Optional hex-encoded Norito payload containing the public input-encryption parameters."
+                },
+                "input_encryption_public_parameters_decoded": {
+                    "$ref": "#/components/schemas/BfvIdentifierPublicParameters"
+                },
+                "ram_fhe_profile": {
+                    "$ref": "#/components/schemas/BfvRamProgramProfile"
+                },
+                "proof_verifier": {
+                    "$ref": "#/components/schemas/RamLfeProofVerifierMetadata"
                 },
                 "note": {
                     "type": "string",
@@ -7896,23 +8168,45 @@ fn openapi_schemas() -> Map {
         norito::json!({
             "type": "object",
             "required": [
+                "payload",
+                "attestation"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "payload": {
+                    "$ref": "#/components/schemas/IdentifierResolutionReceiptPayload"
+                },
+                "attestation": {
+                    "$ref": "#/components/schemas/RamLfeReceiptAttestation"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "IdentifierClaimLookupResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
                 "policy_id",
                 "opaque_id",
+                "receipt_hash",
                 "uaid",
                 "account_id",
-                "resolved_at_ms",
-                "backend",
-                "signature"
+                "verified_at_ms"
             ],
             "additionalProperties": false,
             "properties": {
                 "policy_id": {
                     "type": "string",
-                    "description": "Identifier policy namespace used for resolution."
+                    "description": "Identifier policy namespace bound to the claim."
                 },
                 "opaque_id": {
                     "type": "string",
                     "description": "Derived opaque identifier literal."
+                },
+                "receipt_hash": {
+                    "type": "string",
+                    "description": "Deterministic hidden-function receipt hash for the original evaluation."
                 },
                 "uaid": {
                     "type": "string",
@@ -7922,23 +8216,96 @@ fn openapi_schemas() -> Map {
                     "type": "string",
                     "description": "Canonical account identifier currently bound to the UAID."
                 },
-                "resolved_at_ms": {
+                "verified_at_ms": {
                     "type": "integer",
                     "format": "uint64",
-                    "description": "Resolution timestamp in milliseconds since Unix epoch."
+                    "description": "Ledger timestamp in milliseconds when the identifier claim was accepted."
                 },
                 "expires_at_ms": {
                     "type": "integer",
                     "format": "uint64",
-                    "description": "Optional receipt expiry timestamp in milliseconds since Unix epoch."
-                },
-                "backend": {
+                    "description": "Optional identifier-claim expiry timestamp in milliseconds since Unix epoch."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AliasLookupByAccountRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
                     "type": "string",
-                    "description": "Hidden-function backend that produced the opaque identifier."
+                    "description": "Canonical account identifier to inspect."
                 },
-                "signature": {
+                "dataspace": {
                     "type": "string",
-                    "description": "Hex-encoded resolver signature over the canonical receipt payload."
+                    "nullable": true,
+                    "description": "Optional dataspace alias filter applied after routing."
+                },
+                "domain": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional alias-domain filter applied after routing."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AliasLookupByAccountItem".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["alias", "dataspace", "is_primary"],
+            "additionalProperties": false,
+            "properties": {
+                "alias": {
+                    "type": "string",
+                    "description": "Canonical alias representation."
+                },
+                "dataspace": {
+                    "type": "string",
+                    "description": "Dataspace alias that owns the binding."
+                },
+                "domain": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Optional alias domain."
+                },
+                "is_primary": {
+                    "type": "boolean",
+                    "description": "Whether this alias is the account's primary label in that dataspace."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AliasLookupByAccountResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "total", "items"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "description": "Canonical account identifier used for the lookup."
+                },
+                "total": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Merged count of deduplicated alias rows."
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/components/schemas/AliasLookupByAccountItem"
+                    },
+                    "description": "Merged alias rows returned by reachable dataspaces."
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Resolver source, including `fanout` when multiple routes contributed."
                 }
             }
         }),
@@ -7956,11 +8323,14 @@ fn openapi_schemas() -> Map {
                 },
                 "asset_definition_id": {
                     "type": "string",
-                    "description": "Canonical asset definition id (`aid:<32-lower-hex>`)."
+                    "description": "Canonical asset definition id (unprefixed Base58 address)."
                 },
                 "asset_name": {
                     "type": "string",
                     "description": "Human-readable asset name."
+                },
+                "alias_binding": {
+                    "$ref": "#/components/schemas/AssetAliasBinding"
                 },
                 "description": {
                     "type": "string",
@@ -7975,6 +8345,42 @@ fn openapi_schemas() -> Map {
                 "source": {
                     "type": "string",
                     "description": "Resolver source."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AssetAliasBinding".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["alias", "status", "bound_at_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "alias": {
+                    "type": "string",
+                    "description": "Canonical alias representation."
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["permanent", "leased_active", "leased_grace", "expired_pending_cleanup"],
+                    "description": "Observed lease state for the alias binding."
+                },
+                "lease_expiry_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "nullable": true,
+                    "description": "Lease expiry timestamp in milliseconds since Unix epoch."
+                },
+                "grace_until_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "nullable": true,
+                    "description": "Grace-window end timestamp in milliseconds since Unix epoch."
+                },
+                "bound_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "description": "Timestamp in milliseconds when the alias binding was recorded."
                 }
             }
         }),
@@ -8017,1054 +8423,6 @@ fn openapi_schemas() -> Map {
                 "source": {
                     "type": "string",
                     "description": "Backend source for the alias mapping."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineAllowanceItem".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": [
-                "certificate_id_hex",
-                "controller_id",
-                "controller_display",
-                "asset_id",
-                "registered_at_ms",
-                "expires_at_ms",
-                "policy_expires_at_ms",
-                "remaining_amount",
-                "record"
-            ],
-            "properties": {
-                "certificate_id_hex": {
-                    "type": "string",
-                    "description": "Deterministic certificate hash rendered as lowercase hex."
-                },
-                "controller_id": {
-                    "type": "string",
-                    "description": "Canonical controller account id."
-                },
-                "controller_display": {
-                    "type": "string",
-                    "description": "Controller rendered as canonical I105."
-                },
-                "asset_id": {
-                    "type": "string",
-                    "description": "Asset id bound to the allowance."
-                },
-                "registered_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Unix timestamp (ms) when the allowance was registered."
-                },
-                "expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Certificate expiry timestamp (ms)."
-                },
-                "policy_expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Policy expiry timestamp (ms) enforced by the issuer."
-                },
-                "refresh_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Next attestation refresh deadline (ms), if provided.",
-                    "nullable": true
-                },
-                "verdict_id_hex": {
-                    "type": "string",
-                    "description": "Cached attestation verdict identifier rendered as hex.",
-                    "nullable": true
-                },
-                "attestation_nonce_hex": {
-                    "type": "string",
-                    "description": "Nonce bound to the cached verdict rendered as hex.",
-                    "nullable": true
-                },
-                "remaining_amount": {
-                    "type": "string",
-                    "description": "Outstanding allowance amount that has not been reconciled."
-                },
-                "deadline_kind": {
-                    "type": "string",
-                    "description": "Deadline currently tracked for countdown warnings (`refresh`, `policy`, or `certificate`).",
-                    "nullable": true
-                },
-                "deadline_state": {
-                    "type": "string",
-                    "description": "Countdown classification (`ok`, `warning`, or `expired`).",
-                    "nullable": true
-                },
-                "deadline_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Unix millisecond timestamp for the selected deadline.",
-                    "nullable": true
-                },
-                "deadline_ms_remaining": {
-                    "type": "integer",
-                    "format": "int64",
-                    "description": "Signed milliseconds remaining until the deadline (negative when already expired).",
-                    "nullable": true
-                },
-                "record": {
-                    "type": "object",
-                    "description": "Full OfflineAllowanceRecord JSON payload."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineAllowanceListResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["items", "total"],
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/components/schemas/OfflineAllowanceItem"
-                    }
-                },
-                "total": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Total number of allowances matching the filter."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineAllowanceIssueRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["authority", "private_key", "certificate"],
-            "properties": {
-                "authority": {
-                    "type": "string",
-                    "description": "Account authorizing the registration transaction."
-                },
-                "private_key": {
-                    "type": "object",
-                    "description": "Exposed private key used to sign the transaction."
-                },
-                "certificate": {
-                    "type": "object",
-                    "description": "OfflineWalletCertificate payload to register."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineAllowanceIssueResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["certificate_id_hex"],
-            "properties": {
-                "certificate_id_hex": {
-                    "type": "string",
-                    "description": "Deterministic certificate id rendered as hex."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineWalletCertificateDraft".to_owned(),
-        norito::json!({
-            "type": "object",
-            "description": "OfflineWalletCertificate payload without the operator signature. Torii derives `operator` from its configured offline issuer keypair; client-supplied draft `operator` values are optional and ignored."
-        }),
-    );
-    schemas.insert(
-        "OfflineCertificateIssueRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["certificate"],
-            "properties": {
-                "certificate": {
-                    "$ref": "#/components/schemas/OfflineWalletCertificateDraft"
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineCertificateIssueResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["certificate_id_hex", "certificate"],
-            "properties": {
-                "certificate_id_hex": {
-                    "type": "string",
-                    "description": "Deterministic certificate id rendered as hex."
-                },
-                "certificate": {
-                    "type": "object",
-                    "description": "Operator-signed OfflineWalletCertificate payload."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineBuildClaimIssueRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["certificate_id_hex", "tx_id_hex", "platform"],
-            "properties": {
-                "certificate_id_hex": {
-                    "type": "string",
-                    "description": "Registered offline certificate identifier rendered as hex."
-                },
-                "tx_id_hex": {
-                    "type": "string",
-                    "description": "Receipt tx id rendered as hex. Used as build-claim nonce."
-                },
-                "platform": {
-                    "type": "string",
-                    "description": "Build-claim platform slug (`apple` or `android`)."
-                },
-                "app_id": {
-                    "type": "string",
-                    "nullable": true,
-                    "description": "Optional application identifier override."
-                },
-                "build_number": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "nullable": true,
-                    "description": "Optional build number override. Defaults to the certificate minimum."
-                },
-                "issued_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "nullable": true,
-                    "description": "Optional issuance timestamp override."
-                },
-                "expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "nullable": true,
-                    "description": "Optional expiry timestamp override."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineBuildClaimIssueResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["claim_id_hex", "build_claim"],
-            "properties": {
-                "claim_id_hex": {
-                    "type": "string",
-                    "description": "Deterministic build-claim identifier rendered as hex."
-                },
-                "build_claim": {
-                    "type": "object",
-                    "description": "Operator-signed OfflineBuildClaim payload."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineSettlementBuildClaimOverride".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["tx_id_hex"],
-            "properties": {
-                "tx_id_hex": {
-                    "type": "string",
-                    "description": "Receipt tx id rendered as hex (override target)."
-                },
-                "app_id": {
-                    "type": "string",
-                    "nullable": true,
-                    "description": "Optional application identifier override."
-                },
-                "build_number": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "nullable": true,
-                    "description": "Optional build number override."
-                },
-                "issued_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "nullable": true,
-                    "description": "Optional issuance timestamp override."
-                },
-                "expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "nullable": true,
-                    "description": "Optional expiry timestamp override."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineSettlementSubmitRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["authority", "private_key", "transfer"],
-            "properties": {
-                "authority": {
-                    "type": "string",
-                    "description": "Account authorizing the settlement transaction."
-                },
-                "private_key": {
-                    "type": "object",
-                    "description": "Exposed private key used to sign the transaction."
-                },
-                "transfer": {
-                    "type": "object",
-                    "description": "OfflineToOnlineTransfer bundle to settle. Torii auto-fills missing receipt build claims when `torii.offline_issuer` is configured."
-                },
-                "build_claim_overrides": {
-                    "type": "array",
-                    "description": "Optional per-receipt build-claim overrides keyed by tx_id_hex.",
-                    "items": {
-                        "$ref": "#/components/schemas/OfflineSettlementBuildClaimOverride"
-                    }
-                },
-                "repair_existing_build_claims": {
-                    "type": "boolean",
-                    "description": "When true, Torii re-issues and replaces existing receipt build claims."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineSettlementSubmitResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["bundle_id_hex", "transaction_hash_hex"],
-            "properties": {
-                "bundle_id_hex": {
-                    "type": "string",
-                    "description": "Deterministic bundle identifier rendered as hex."
-                },
-                "transaction_hash_hex": {
-                    "type": "string",
-                    "description": "Canonical signed transaction hash rendered as hex."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineSpendReceiptsSubmitRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["receipts"],
-            "properties": {
-                "receipts": {
-                    "type": "array",
-                    "description": "Ordered receipts to validate.",
-                    "items": { "type": "object" }
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineSpendReceiptsSubmitResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["receipts_root_hex", "receipt_count", "total_amount"],
-            "properties": {
-                "receipts_root_hex": {
-                    "type": "string",
-                    "description": "Poseidon receipts root rendered as hex."
-                },
-                "receipt_count": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Number of receipts processed."
-                },
-                "total_amount": {
-                    "type": "string",
-                    "description": "Sum of receipt amounts."
-                },
-                "asset_id": {
-                    "type": "string",
-                    "nullable": true,
-                    "description": "Asset identifier derived from the receipts."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineBundleProofSummary".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["version", "metadata_keys"],
-            "properties": {
-                "version": {
-                    "type": "integer",
-                    "format": "uint16",
-                    "description": "Aggregate proof envelope version."
-                },
-                "proof_sum_bytes": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "nullable": true,
-                    "description": "Sum proof size in bytes, when present."
-                },
-                "proof_counter_bytes": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "nullable": true,
-                    "description": "Counter proof size in bytes, when present."
-                },
-                "proof_replay_bytes": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "nullable": true,
-                    "description": "Replay proof size in bytes, when present."
-                },
-                "metadata_keys": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Sorted metadata keys present in the envelope."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineBundleProofStatusResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["bundle_id_hex", "receipts_root_hex", "proof_status"],
-            "properties": {
-                "bundle_id_hex": {
-                    "type": "string",
-                    "description": "Deterministic bundle identifier rendered as hex."
-                },
-                "receipts_root_hex": {
-                    "type": "string",
-                    "description": "Poseidon receipts root computed from stored receipts."
-                },
-                "aggregate_proof_root_hex": {
-                    "type": "string",
-                    "nullable": true,
-                    "description": "Receipts root advertised by the aggregate proof envelope when present."
-                },
-                "receipts_root_matches": {
-                    "type": "boolean",
-                    "nullable": true,
-                    "description": "Whether the computed receipts root matches the advertised root."
-                },
-                "proof_status": {
-                    "type": "string",
-                    "description": "Proof status label (`missing`, `match`, or `mismatch`)."
-                },
-                "proof_summary": {
-                    "allOf": [
-                        { "$ref": "#/components/schemas/OfflineBundleProofSummary" }
-                    ],
-                    "nullable": true,
-                    "description": "Optional summary of the aggregate proof payload."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineStateResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["allowances", "transfers", "summaries", "revocations", "now_ms"],
-            "properties": {
-                "allowances": {
-                    "type": "array",
-                    "items": { "type": "object" },
-                    "description": "Registered OfflineAllowanceRecord entries."
-                },
-                "transfers": {
-                    "type": "array",
-                    "items": { "type": "object" },
-                    "description": "OfflineTransferRecord entries."
-                },
-                "summaries": {
-                    "type": "array",
-                    "items": { "type": "object" },
-                    "description": "OfflineCounterSummary entries."
-                },
-                "revocations": {
-                    "type": "array",
-                    "items": { "type": "object" },
-                    "description": "OfflineVerdictRevocation entries."
-                },
-                "now_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Snapshot timestamp (ms)."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineCertificateRenewRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["authority", "private_key", "certificate"],
-            "properties": {
-                "authority": {
-                    "type": "string",
-                    "description": "Account authorizing the renewal transaction."
-                },
-                "private_key": {
-                    "type": "object",
-                    "description": "Exposed private key used to sign the transaction."
-                },
-                "certificate": {
-                    "type": "object",
-                    "description": "New OfflineWalletCertificate payload to register."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineCertificateRenewResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["certificate_id_hex"],
-            "properties": {
-                "certificate_id_hex": {
-                    "type": "string",
-                    "description": "Deterministic renewed certificate id rendered as hex."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineCertificateRevokeRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["authority", "private_key", "certificate_id_hex"],
-            "properties": {
-                "authority": {
-                    "type": "string",
-                    "description": "Account authorizing the revocation transaction."
-                },
-                "private_key": {
-                    "type": "object",
-                    "description": "Exposed private key used to sign the transaction."
-                },
-                "certificate_id_hex": {
-                    "type": "string",
-                    "description": "Certificate identifier to revoke (hex, case-insensitive)."
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "Revocation reason slug."
-                },
-                "note": {
-                    "type": "string",
-                    "nullable": true,
-                    "description": "Optional human note describing the revocation."
-                },
-                "metadata": {
-                    "type": "object",
-                    "description": "Optional metadata attached to the revocation record."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineCertificateRevokeResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["verdict_id_hex"],
-            "properties": {
-                "verdict_id_hex": {
-                    "type": "string",
-                    "description": "Deterministic verdict identifier rendered as hex."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineReceiptListItem".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": [
-                "bundle_id_hex",
-                "tx_id_hex",
-                "certificate_id_hex",
-                "controller_id",
-                "controller_display",
-                "receiver_id",
-                "receiver_display",
-                "asset_id",
-                "amount",
-                "invoice_id",
-                "counter",
-                "recorded_at_ms",
-                "recorded_at_height"
-            ],
-            "properties": {
-                "bundle_id_hex": { "type": "string" },
-                "tx_id_hex": { "type": "string" },
-                "certificate_id_hex": { "type": "string" },
-                "controller_id": { "type": "string" },
-                "controller_display": { "type": "string" },
-                "receiver_id": { "type": "string" },
-                "receiver_display": { "type": "string" },
-                "asset_id": { "type": "string" },
-                "amount": {
-                    "type": "string",
-                    "description": "Receipt amount."
-                },
-                "invoice_id": { "type": "string" },
-                "counter": {
-                    "type": "integer",
-                    "format": "uint64"
-                },
-                "recorded_at_ms": {
-                    "type": "integer",
-                    "format": "uint64"
-                },
-                "recorded_at_height": {
-                    "type": "integer",
-                    "format": "uint64"
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineReceiptListResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["items", "total"],
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/components/schemas/OfflineReceiptListItem"
-                    }
-                },
-                "total": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Total number of receipts matching the filter."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineSummaryItem".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": [
-                "certificate_id_hex",
-                "controller_id",
-                "controller_display",
-                "summary_hash_hex",
-                "apple_key_counters",
-                "android_series_counters"
-            ],
-            "properties": {
-                "certificate_id_hex": {
-                    "type": "string",
-                    "description": "Deterministic certificate hash rendered as lowercase hex."
-                },
-                "controller_id": {
-                    "type": "string",
-                    "description": "Controller account id bound to the certificate."
-                },
-                "controller_display": {
-                    "type": "string",
-                    "description": "Controller rendered as canonical I105."
-                },
-                "summary_hash_hex": {
-                    "type": "string",
-                    "description": "BLAKE2b-256 hash of the counter maps rendered as hex."
-                },
-                "apple_key_counters": {
-                    "type": "object",
-                    "description": "Per-App Attest key counter checkpoints.",
-                    "additionalProperties": {
-                        "type": "integer",
-                        "format": "uint64"
-                    }
-                },
-                "android_series_counters": {
-                    "type": "object",
-                    "description": "Per-Android marker series counter checkpoints.",
-                    "additionalProperties": {
-                        "type": "integer",
-                        "format": "uint64"
-                    }
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineSummaryListResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["items", "total"],
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/components/schemas/OfflineSummaryItem"
-                    }
-                },
-                "total": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Total number of summaries matching the filter."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineTransferItem".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": [
-                "bundle_id_hex",
-                "controller_id",
-                "controller_display",
-                "receiver_id",
-                "receiver_display",
-                "deposit_account_id",
-                "deposit_account_display",
-                "receipt_count",
-                "total_amount",
-                "status",
-                "recorded_at_ms",
-                "recorded_at_height",
-                "claimed_delta",
-                "transfer"
-            ],
-            "properties": {
-                "bundle_id_hex": {
-                    "type": "string",
-                    "description": "Bundle identifier rendered as lowercase hex."
-                },
-                "controller_id": {
-                    "type": "string",
-                    "description": "Controller account id associated with the originating allowance."
-                },
-                "controller_display": {
-                    "type": "string",
-                    "description": "Controller rendered as canonical I105 account literal."
-                },
-                "receiver_id": {
-                    "type": "string",
-                    "description": "Offline receiver account id."
-                },
-                "receiver_display": {
-                    "type": "string",
-                    "description": "Receiver rendered as canonical I105 account literal."
-                },
-                "deposit_account_id": {
-                    "type": "string",
-                    "description": "Online account that will receive the deposit."
-                },
-                "deposit_account_display": {
-                    "type": "string",
-                    "description": "Deposit account rendered as canonical I105 account literal."
-                },
-                "asset_id": {
-                    "type": "string",
-                    "description": "Asset id inferred from receipts, if present."
-                },
-                "receipt_count": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Number of receipts included in the bundle."
-                },
-                "total_amount": {
-                    "type": "string",
-                    "description": "Human-readable total amount aggregated from receipts."
-                },
-                "status": {
-                    "type": "string",
-                    "enum": ["settled", "rejected", "archived"],
-                    "description": "Lifecycle status enforced for the bundle."
-                },
-                "rejection_reason": {
-                    "type": "string",
-                    "description": "Stable rejection code when `status` is `rejected`.",
-                    "nullable": true
-                },
-                "recorded_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Unix timestamp (ms) when the bundle settled on-ledger."
-                },
-                "recorded_at_height": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Block height that recorded the bundle."
-                },
-                "archived_at_height": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Optional block height when the bundle was archived.",
-                    "nullable": true
-                },
-                "certificate_id_hex": {
-                    "type": "string",
-                    "description": "Canonical sender certificate identifier (hex).",
-                    "nullable": true
-                },
-                "certificate_expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Certificate expiry timestamp captured at settlement.",
-                    "nullable": true
-                },
-                "policy_expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Policy expiry timestamp captured at settlement.",
-                    "nullable": true
-                },
-                "refresh_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Attestation refresh deadline captured at settlement.",
-                    "nullable": true
-                },
-                "verdict_id_hex": {
-                    "type": "string",
-                    "description": "Cached attestation verdict identifier.",
-                    "nullable": true
-                },
-                "attestation_nonce_hex": {
-                    "type": "string",
-                    "description": "Cached attestation nonce captured at settlement.",
-                    "nullable": true
-                },
-                "platform_policy": {
-                    "type": "string",
-                    "description": "Platform attestation policy (e.g., play_integrity).",
-                    "nullable": true
-                },
-                "platform_token_snapshot": {
-                    "$ref": "#/components/schemas/OfflinePlatformTokenSnapshot",
-                    "nullable": true,
-                    "description": "Snapshot of the attestation token recorded during settlement."
-                },
-                "verdict_snapshot": {
-                    "$ref": "#/components/schemas/OfflineVerdictSnapshot",
-                    "nullable": true,
-                    "description": "Snapshot of certificate/verdict metadata captured at settlement."
-                },
-                "status_transitions": {
-                    "type": "array",
-                    "description": "Ordered lifecycle history for the bundle.",
-                    "items": {
-                        "$ref": "#/components/schemas/OfflineTransferStatusTransition"
-                    }
-                },
-                "claimed_delta": {
-                    "type": "string",
-                    "description": "Claimed delta reported by the balance proof."
-                },
-                "transfer": {
-                    "type": "object",
-                    "description": "Full OfflineToOnlineTransfer payload serialized as JSON."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineVerdictSnapshot".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": [
-                "certificate_id",
-                "certificate_expires_at_ms",
-                "policy_expires_at_ms"
-            ],
-            "properties": {
-                "certificate_id": {
-                    "type": "string",
-                    "description": "Deterministic certificate identifier backing the bundle (`hash:...` literal)."
-                },
-                "verdict_id": {
-                    "type": "string",
-                    "nullable": true,
-                    "description": "Cached attestation verdict identifier literal."
-                },
-                "attestation_nonce": {
-                    "type": "string",
-                    "nullable": true,
-                    "description": "Cached attestation nonce literal."
-                },
-                "refresh_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "nullable": true,
-                    "description": "Timestamp when the attestation must be refreshed."
-                },
-                "certificate_expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Certificate expiry timestamp captured at settlement."
-                },
-                "policy_expires_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Policy expiry timestamp captured at settlement."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflinePlatformTokenSnapshot".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["policy", "attestation_jws_b64"],
-            "properties": {
-                "policy": {
-                    "type": "string",
-                    "description": "Attestation policy slug (e.g., play_integrity)."
-                },
-                "attestation_jws_b64": {
-                    "type": "string",
-                    "description": "Base64-encoded JWS payload captured at settlement."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineTransferStatusTransition".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["status", "transitioned_at_ms"],
-            "properties": {
-                "status": {
-                    "type": "string",
-                    "enum": ["settled", "rejected", "archived"],
-                    "description": "Status that became active during this transition."
-                },
-                "transitioned_at_ms": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Timestamp when the transition occurred."
-                },
-                "verdict_snapshot": {
-                    "$ref": "#/components/schemas/OfflineVerdictSnapshot",
-                    "nullable": true,
-                    "description": "Optional verdict metadata snapshot captured at this transition."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineTransferListResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["items", "total"],
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/components/schemas/OfflineTransferItem"
-                    }
-                },
-                "total": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Total number of transfer bundles matching the filter."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineRejectionItem".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["platform", "reason", "count"],
-            "properties": {
-                "platform": {
-                    "type": "string",
-                    "description": "Platform label (general, apple, android)."
-                },
-                "reason": {
-                    "type": "string",
-                    "description": "Canonical rejection reason label."
-                },
-                "count": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Number of occurrences recorded for this platform/reason pair."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineRejectionListResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["items", "total"],
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/components/schemas/OfflineRejectionItem"
-                    }
-                },
-                "total": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Sum of all rejection counters returned in the payload."
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "OfflineQueryEnvelope".to_owned(),
-        norito::json!({
-            "type": "object",
-            "description": "Superset of Torii's Norito QueryEnvelope structure.",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Optional label for the query payload."
-                },
-                "filter": {
-                    "type": "object",
-                    "description": "Filter expression object expressed in the Torii filter DSL.",
-                    "additionalProperties": true
-                },
-                "select": {
-                    "type": "object",
-                    "description": "Optional projection selector.",
-                    "additionalProperties": true
-                },
-                "sort": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "description": "Field/order pair such as {\"key\":\"registered_at_ms\",\"order\":\"desc\"}.",
-                        "additionalProperties": true
-                    }
-                },
-                "pagination": {
-                    "type": "object",
-                    "properties": {
-                        "limit": {
-                            "type": "integer",
-                            "format": "uint64"
-                        },
-                        "offset": {
-                            "type": "integer",
-                            "format": "uint64"
-                        }
-                    }
-                },
-                "fetch_size": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "description": "Optional batch fetch size hint."
                 }
             }
         }),
@@ -9962,7 +9320,7 @@ fn openapi_schemas() -> Map {
         "PublicLaneValidatorRecord".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["lane_id", "validator", "stake_account", "total_stake", "self_stake", "status"],
+            "required": ["lane_id", "validator", "peer_id", "stake_account", "total_stake", "self_stake", "status"],
             "additionalProperties": false,
             "properties": {
                 "lane_id": {
@@ -9972,7 +9330,11 @@ fn openapi_schemas() -> Map {
                 },
                 "validator": {
                     "type": "string",
-                    "description": "Validator account literal rendered as canonical I105."
+                    "description": "Validator authority account literal rendered as canonical I105."
+                },
+                "peer_id": {
+                    "type": "string",
+                    "description": "Peer identity bound to the validator for consensus and routed traffic."
                 },
                 "stake_account": {
                     "type": "string",
@@ -10489,6 +9851,346 @@ fn openapi_schemas() -> Map {
             }
         }),
     );
+    schemas.insert(
+        "MultisigAccountSelector".to_owned(),
+        norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "multisig_account_id": {
+                    "type": "string",
+                    "description": "Active concrete multisig account id."
+                },
+                "multisig_account_alias": {
+                    "type": "string",
+                    "description": "Stable multisig alias in name@dataspace or name@domain.dataspace format."
+                }
+            },
+            "oneOf": [
+                { "required": ["multisig_account_id"] },
+                { "required": ["multisig_account_alias"] }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigSpecPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["signatories", "quorum", "transaction_ttl_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "signatories": {
+                    "type": "object",
+                    "description": "Map of signer account ids to weight.",
+                    "additionalProperties": {
+                        "type": "integer",
+                        "format": "uint8"
+                    }
+                },
+                "quorum": {
+                    "type": "integer",
+                    "format": "uint16"
+                },
+                "transaction_ttl_ms": {
+                    "type": "integer",
+                    "format": "uint64"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigProposalPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["instructions", "proposed_at_ms", "expires_at_ms", "approvals"],
+            "additionalProperties": false,
+            "properties": {
+                "instructions": {
+                    "type": "array",
+                    "items": { "type": "object" }
+                },
+                "proposed_at_ms": {
+                    "type": "integer",
+                    "format": "uint64"
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64"
+                },
+                "approvals": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "is_relayed": {
+                    "anyOf": [
+                        { "type": "boolean" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigProposeRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "required": ["signer_account_id", "instructions"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signer_account_id": { "type": "string" },
+                        "public_key_hex": { "type": "string" },
+                        "signature_b64": { "type": "string" },
+                        "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "fee_sponsor": { "type": "string" },
+                        "instructions": {
+                            "type": "array",
+                            "items": { "type": "object" }
+                        }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigApproveRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "required": ["signer_account_id"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signer_account_id": { "type": "string" },
+                        "public_key_hex": { "type": "string" },
+                        "signature_b64": { "type": "string" },
+                        "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "fee_sponsor": { "type": "string" },
+                        "proposal_id": { "type": "string" },
+                        "instructions_hash": { "type": "string" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "resolved_multisig_account_id"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "type": "boolean" },
+                "resolved_multisig_account_id": { "type": "string" },
+                "submitted": { "type": "boolean" },
+                "proposal_id": { "type": "string" },
+                "instructions_hash": { "type": "string" },
+                "tx_hash_hex": { "type": "string" },
+                "executed_tx_hash_hex": { "type": "string" },
+                "creation_time_ms": { "type": "integer", "format": "uint64" },
+                "signing_message_b64": { "type": "string" }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigContractCallProposeRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "required": ["signer_account_id", "entrypoint"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signer_account_id": { "type": "string" },
+                        "public_key_hex": { "type": "string" },
+                        "signature_b64": { "type": "string" },
+                        "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "contract_address": { "type": "string" },
+                        "contract_alias": { "type": "string" },
+                        "entrypoint": { "type": "string" },
+                        "payload": { "type": "object" },
+                        "gas_asset_id": { "type": "string" },
+                        "fee_sponsor": { "type": "string" },
+                        "gas_limit": { "type": "integer", "format": "uint64" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigContractCallApproveRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "required": ["signer_account_id"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signer_account_id": { "type": "string" },
+                        "public_key_hex": { "type": "string" },
+                        "signature_b64": { "type": "string" },
+                        "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "fee_sponsor": { "type": "string" },
+                        "proposal_id": { "type": "string" },
+                        "instructions_hash": { "type": "string" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigContractCallResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "resolved_multisig_account_id"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "type": "boolean" },
+                "resolved_multisig_account_id": { "type": "string" },
+                "submitted": { "type": "boolean" },
+                "proposal_id": { "type": "string" },
+                "instructions_hash": { "type": "string" },
+                "tx_hash_hex": { "type": "string" },
+                "executed_tx_hash_hex": { "type": "string" },
+                "creation_time_ms": { "type": "integer", "format": "uint64" },
+                "signing_message_b64": { "type": "string" }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigCancelRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "required": ["signer_account_id"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "signer_account_id": { "type": "string" },
+                        "public_key_hex": { "type": "string" },
+                        "signature_b64": { "type": "string" },
+                        "creation_time_ms": { "type": "integer", "format": "uint64" },
+                        "fee_sponsor": { "type": "string" },
+                        "proposal_id": { "type": "string" },
+                        "instructions_hash": { "type": "string" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigCancelResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["ok", "resolved_multisig_account_id"],
+            "additionalProperties": false,
+            "properties": {
+                "ok": { "type": "boolean" },
+                "resolved_multisig_account_id": { "type": "string" },
+                "submitted": { "type": "boolean" },
+                "action": { "type": "string" },
+                "target_proposal_id": { "type": "string" },
+                "target_instructions_hash": { "type": "string" },
+                "cancel_proposal_id": { "type": "string" },
+                "cancel_instructions_hash": { "type": "string" },
+                "executed_tx_hash_hex": { "type": "string" },
+                "creation_time_ms": { "type": "integer", "format": "uint64" },
+                "signing_message_b64": { "type": "string" }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigSpecRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigSpecResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["resolved_multisig_account_id", "spec"],
+            "additionalProperties": false,
+            "properties": {
+                "resolved_multisig_account_id": { "type": "string" },
+                "spec": { "$ref": "#/components/schemas/MultisigSpecPayload" }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigProposalsListRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigProposalEntry".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["proposal_id", "instructions_hash", "proposal"],
+            "additionalProperties": false,
+            "properties": {
+                "proposal_id": { "type": "string" },
+                "instructions_hash": { "type": "string" },
+                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigProposalsListResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["resolved_multisig_account_id", "proposals"],
+            "additionalProperties": false,
+            "properties": {
+                "resolved_multisig_account_id": { "type": "string" },
+                "proposals": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/MultisigProposalEntry" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "MultisigProposalsGetRequest".to_owned(),
+        norito::json!({
+            "allOf": [
+                { "$ref": "#/components/schemas/MultisigAccountSelector" },
+                {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "proposal_id": { "type": "string" },
+                        "instructions_hash": { "type": "string" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
+        "MultisigProposalGetResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["resolved_multisig_account_id", "proposal_id", "instructions_hash", "proposal"],
+            "additionalProperties": false,
+            "properties": {
+                "resolved_multisig_account_id": { "type": "string" },
+                "proposal_id": { "type": "string" },
+                "instructions_hash": { "type": "string" },
+                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" }
+            }
+        }),
+    );
     schemas
 }
 
@@ -10581,7 +10283,10 @@ mod tests {
         assert!(paths.contains_key("/v1/aliases/voprf/evaluate"));
         assert!(paths.contains_key("/v1/aliases/resolve"));
         assert!(paths.contains_key("/v1/aliases/resolve_index"));
+        assert!(paths.contains_key("/v1/aliases/by_account"));
         assert!(paths.contains_key("/v1/assets/aliases/resolve"));
+        assert!(paths.contains_key("/v1/contracts/aliases"));
+        assert!(paths.contains_key("/v1/contracts/aliases/resolve"));
         assert!(paths.contains_key("/v1/time/now"));
         assert!(paths.contains_key("/v1/time/status"));
         assert!(paths.contains_key("/v1/ledger/headers"));
@@ -10594,8 +10299,17 @@ mod tests {
         assert!(paths.contains_key("/v1/sumeragi/commit-certificates"));
         assert!(paths.contains_key("/v1/bridge/finality/{height}"));
         assert!(paths.contains_key("/v1/bridge/finality/bundle/{height}"));
+        assert!(paths.contains_key("/v1/sccp/capabilities"));
+        assert!(paths.contains_key("/v1/sccp/manifests"));
+        assert!(paths.contains_key("/v1/sccp/artifacts/message/{message_id}"));
+        assert!(paths.contains_key("/v1/sccp/jobs/message/{message_id}"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets/{height}"));
+        assert!(paths.contains_key("/v1/contracts/view/batch"));
+        assert!(paths.contains_key("/v1/contracts/rollups/swaps/fills"));
+        assert!(paths.contains_key("/v1/contracts/rollups/swaps/candles"));
+        assert!(paths.contains_key("/v1/contracts/rollups/trader/activity"));
+        assert!(paths.contains_key("/v1/contracts/rollups/trader/account"));
         assert!(paths.contains_key("/health"));
         assert!(paths.contains_key("/v1/operator/auth/login/verify"));
         assert!(paths.contains_key("/v1/kaigi/relays"));
@@ -10611,26 +10325,134 @@ mod tests {
         assert!(paths.contains_key("/events"));
         assert!(paths.contains_key("/v1/da/ingest"));
         assert!(paths.contains_key("/v1/connect/session"));
+        assert!(paths.contains_key("/v1/vpn/profile"));
+        assert!(paths.contains_key("/v1/vpn/sessions"));
+        assert!(paths.contains_key("/v1/vpn/sessions/{session_id}"));
+        assert!(paths.contains_key("/v1/vpn/receipts"));
         assert!(paths.contains_key("/v1/mcp"));
         assert!(paths.contains_key("/v1/zk/attachments"));
+        assert!(paths.contains_key("/v1/multisig/propose"));
+        assert!(paths.contains_key("/v1/multisig/approve"));
+        assert!(paths.contains_key("/v1/contracts/call/multisig/propose"));
+        assert!(paths.contains_key("/v1/contracts/call/multisig/approve"));
+        assert!(paths.contains_key("/v1/multisig/cancel"));
+        assert!(paths.contains_key("/v1/multisig/spec"));
+        assert!(paths.contains_key("/v1/multisig/proposals/list"));
+        assert!(paths.contains_key("/v1/multisig/proposals/get"));
+        assert!(paths.contains_key("/v1/multisig/approvals/list"));
+        assert!(paths.contains_key("/v1/multisig/approvals/get"));
+        assert!(paths.contains_key("/v1/multisig/approvals/list_for_authority"));
+        assert!(paths.contains_key("/v1/multisig/approvals/get_for_authority"));
+        assert!(paths.contains_key("/v1/controls/asset-transfer/get"));
+        assert!(paths.contains_key("/v1/ministry/agenda/proposals/draft"));
+        assert!(paths.contains_key("/v1/ministry/agenda/proposals/{proposal_id}"));
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
+        assert!(paths.contains_key("/v1/gov/citizens"));
         assert!(paths.contains_key("/v1/gov/stream"));
         assert!(paths.contains_key("/v1/telemetry/live"));
+        assert!(paths.contains_key("/v1/node/query/projection/checkpoint"));
+        assert!(paths.contains_key("/v1/node/query/projection/checkpoint/plan"));
+        assert!(paths.contains_key("/v1/node/query/projection/checkpoint/publish"));
+        assert!(paths.contains_key("/v1/node/query/projection/catalog/{resource}"));
+        assert!(paths.contains_key("/v1/node/query/projection/shards/{resource}/{partition_id}"));
         assert!(paths.contains_key("/v1/runtime/abi/active"));
         assert!(paths.contains_key("/v1/accounts"));
+        assert!(paths.contains_key("/v1/transactions/history"));
+        assert!(paths.contains_key("/v1/contracts/activity"));
+        assert!(paths.contains_key("/v1/contracts/events"));
+        assert!(paths.contains_key("/v1/contracts/events/sse"));
+        assert!(paths.contains_key("/v1/offline/v2/readiness"));
+        assert!(paths.contains_key("/v1/ram-lfe/program-policies"));
+        assert!(paths.contains_key("/v1/ram-lfe/programs/{program_id}/execute"));
+        assert!(paths.contains_key("/v1/ram-lfe/receipts/verify"));
         assert!(paths.contains_key("/v1/assets/definitions"));
         assert!(paths.contains_key("/v1/explorer/accounts"));
         assert!(paths.contains_key("/v1/sorafs/providers"));
         assert!(paths.contains_key("/v1/soradns/directory/latest"));
         assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
-        assert!(paths.contains_key("/v1/sns/registrations"));
+        assert!(paths.contains_key("/v1/sns/names"));
         assert!(paths.contains_key("/v1/soranet/privacy/event"));
         assert!(paths.contains_key("/v1/webhooks"));
         assert!(paths.contains_key("/v1/notify/devices"));
     }
 
     #[test]
-    fn account_and_asset_list_params_include_asset_id_filters() {
+    fn identifier_policy_schema_exposes_ram_fhe_profile() {
+        let doc = generate_spec();
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas section");
+        let summary = schemas
+            .get("IdentifierPolicySummary")
+            .and_then(Value::as_object)
+            .expect("IdentifierPolicySummary schema");
+        let summary_properties = summary
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("IdentifierPolicySummary properties");
+        assert_eq!(
+            summary_properties
+                .get("ram_fhe_profile")
+                .and_then(Value::as_object)
+                .and_then(|field| field.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/BfvRamProgramProfile")
+        );
+
+        let profile = schemas
+            .get("BfvRamProgramProfile")
+            .and_then(Value::as_object)
+            .expect("BfvRamProgramProfile schema");
+        let required = profile
+            .get("required")
+            .and_then(Value::as_array)
+            .expect("BfvRamProgramProfile required fields");
+        assert!(
+            required
+                .iter()
+                .any(|value| value.as_str() == Some("profile_version"))
+        );
+        assert!(
+            required
+                .iter()
+                .any(|value| value.as_str() == Some("encrypted_input_mode"))
+        );
+        assert!(schemas.contains_key("BfvRamEncryptedInputMode"));
+    }
+
+    #[test]
+    fn ram_lfe_execute_schema_references_receipt_payload() {
+        let doc = generate_spec();
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas section");
+        let execute = schemas
+            .get("RamLfeExecuteResponse")
+            .and_then(Value::as_object)
+            .expect("RamLfeExecuteResponse schema");
+        let properties = execute
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("RamLfeExecuteResponse properties");
+        assert_eq!(
+            properties
+                .get("receipt")
+                .and_then(Value::as_object)
+                .and_then(|field| field.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/RamLfeExecutionReceipt")
+        );
+        assert!(schemas.contains_key("RamLfeExecutionReceiptPayload"));
+    }
+
+    #[test]
+    fn account_and_asset_list_params_include_asset_related_filters() {
         fn params_for(doc: &Value, path: &str) -> Vec<String> {
             let paths = doc
                 .get("paths")
@@ -10660,17 +10482,34 @@ mod tests {
         let account_assets = params_for(&doc, "/v1/accounts/{account_id}/assets");
         assert!(account_assets.contains(&"limit".to_owned()));
         assert!(account_assets.contains(&"offset".to_owned()));
-        assert!(account_assets.contains(&"asset_id".to_owned()));
+        assert!(account_assets.contains(&"asset".to_owned()));
 
         let account_transactions = params_for(&doc, "/v1/accounts/{account_id}/transactions");
         assert!(account_transactions.contains(&"limit".to_owned()));
         assert!(account_transactions.contains(&"offset".to_owned()));
         assert!(account_transactions.contains(&"asset_id".to_owned()));
 
+        let contract_activity = params_for(&doc, "/v1/contracts/activity");
+        assert!(contract_activity.contains(&"limit".to_owned()));
+        assert!(contract_activity.contains(&"offset".to_owned()));
+        assert!(contract_activity.contains(&"contract_alias".to_owned()));
+        assert!(contract_activity.contains(&"contract_entrypoint".to_owned()));
+        assert!(contract_activity.contains(&"result_ok".to_owned()));
+
+        let contract_events = params_for(&doc, "/v1/contracts/events");
+        assert!(contract_events.contains(&"limit".to_owned()));
+        assert!(contract_events.contains(&"offset".to_owned()));
+        assert!(contract_events.contains(&"module".to_owned()));
+        assert!(contract_events.contains(&"event_kind".to_owned()));
+        assert!(contract_events.contains(&"participant".to_owned()));
+        assert!(contract_events.contains(&"asset_id".to_owned()));
+        assert!(contract_events.contains(&"provenance".to_owned()));
+
         let asset_holders = params_for(&doc, "/v1/assets/{definition_id}/holders");
         assert!(asset_holders.contains(&"limit".to_owned()));
         assert!(asset_holders.contains(&"offset".to_owned()));
-        assert!(asset_holders.contains(&"asset_id".to_owned()));
+        assert!(asset_holders.contains(&"account_id".to_owned()));
+        assert!(asset_holders.contains(&"scope".to_owned()));
     }
 
     #[test]
@@ -10909,6 +10748,22 @@ mod tests {
             responses.contains_key("404"),
             "pipeline status should document 404 for missing cache entries"
         );
+        let response_200 = responses
+            .get("200")
+            .and_then(Value::as_object)
+            .expect("200 response");
+        let content = response_200
+            .get("content")
+            .and_then(Value::as_object)
+            .expect("pipeline status content");
+        assert!(
+            content.contains_key("application/json"),
+            "pipeline status should document default JSON output"
+        );
+        assert!(
+            content.contains_key("application/x-norito"),
+            "pipeline status should document typed Norito output"
+        );
         let params = get
             .get("parameters")
             .and_then(Value::as_array)
@@ -10924,6 +10779,41 @@ mod tests {
             has_scope,
             "pipeline status should document scope query hint"
         );
+    }
+
+    #[test]
+    fn account_get_documents_canonical_dual_format_read() {
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let account_get = paths
+            .get("/v1/accounts/{account_id}")
+            .and_then(Value::as_object)
+            .expect("account get path");
+        let get = account_get
+            .get("get")
+            .and_then(Value::as_object)
+            .expect("get op");
+        let responses = get
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("responses");
+        assert!(
+            responses.contains_key("404"),
+            "account get should document missing-account behavior"
+        );
+        let response_200 = responses
+            .get("200")
+            .and_then(Value::as_object)
+            .expect("200 response");
+        let content = response_200
+            .get("content")
+            .and_then(Value::as_object)
+            .expect("account get content");
+        assert!(content.contains_key("application/json"));
+        assert!(content.contains_key("application/x-norito"));
     }
 
     #[test]
@@ -11096,7 +10986,7 @@ mod tests {
             PathCase {
                 label: "offline",
                 builder: offline_paths,
-                expected: "/v1/offline/revocations",
+                expected: "/v1/offline/v2/readiness",
             },
             PathCase {
                 label: "system",
@@ -11141,7 +11031,7 @@ mod tests {
             PathCase {
                 label: "contracts",
                 builder: contracts_paths,
-                expected: "/v1/contracts/deploy",
+                expected: "/v1/contracts/call",
             },
             PathCase {
                 label: "zk",
@@ -11156,7 +11046,7 @@ mod tests {
             PathCase {
                 label: "runtime",
                 builder: runtime_paths,
-                expected: "/v1/runtime/abi/active",
+                expected: "/v1/node/query/projection/checkpoint",
             },
             PathCase {
                 label: "accounts",
@@ -11177,6 +11067,11 @@ mod tests {
                 label: "nfts",
                 builder: nft_paths,
                 expected: "/v1/nfts",
+            },
+            PathCase {
+                label: "rwas",
+                builder: rwa_paths,
+                expected: "/v1/rwas",
             },
             PathCase {
                 label: "parameters",
@@ -11211,7 +11106,7 @@ mod tests {
             PathCase {
                 label: "sns",
                 builder: sns_paths,
-                expected: "/v1/sns/registrations",
+                expected: "/v1/sns/names",
             },
             PathCase {
                 label: "soranet",
@@ -11282,13 +11177,17 @@ mod tests {
             _ => panic!("tags section should be an array"),
         };
         let mut has_push = false;
+        let mut has_vpn = false;
         for tag in tags {
             let Some(obj) = tag.as_object() else { continue };
             if obj.get("name").and_then(Value::as_str) == Some("Push") {
                 has_push = true;
-                break;
+            }
+            if obj.get("name").and_then(Value::as_str) == Some("VPN") {
+                has_vpn = true;
             }
         }
         assert!(has_push, "tags should include Push");
+        assert!(has_vpn, "tags should include VPN");
     }
 }

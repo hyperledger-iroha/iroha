@@ -23,7 +23,7 @@ public final class SoftwareKeyProviderStorageTests {
     final KeyPassphraseProvider passphraseProvider = () -> "storage-passphrase".toCharArray();
     final SoftwareKeyProvider provider =
         new SoftwareKeyProvider(
-            SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_PREFERRED,
+            SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_REQUIRED,
             store,
             passphraseProvider);
 
@@ -31,7 +31,7 @@ public final class SoftwareKeyProviderStorageTests {
 
     final SoftwareKeyProvider restoredProvider =
         new SoftwareKeyProvider(
-            SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_PREFERRED,
+            SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_REQUIRED,
             store,
             passphraseProvider);
     final KeyPair restored =
@@ -50,7 +50,7 @@ public final class SoftwareKeyProviderStorageTests {
     final KeyPassphraseProvider passphraseProvider = () -> "file-passphrase".toCharArray();
     final SoftwareKeyProvider provider =
         new SoftwareKeyProvider(
-            SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_PREFERRED,
+            SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_REQUIRED,
             store,
             passphraseProvider);
 
@@ -58,7 +58,7 @@ public final class SoftwareKeyProviderStorageTests {
 
     final SoftwareKeyProvider restoredProvider =
         new SoftwareKeyProvider(
-            SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_PREFERRED,
+            SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_REQUIRED,
             store,
             passphraseProvider);
     final KeyPair restored =

@@ -5,10 +5,14 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
     case invalidChainId(String)
     case emptyAccountId(field: String)
     case malformedAccountId(field: String, value: String)
+    case emptyRwaId(field: String)
+    case malformedRwaId(field: String, value: String)
     case emptyAssetDefinitionId
     case malformedAssetDefinitionId(String)
     case emptyDomainId(field: String)
     case malformedDomainId(field: String, value: String)
+    case emptyLabel(field: String)
+    case malformedLabel(field: String, value: String)
     case emptyAssetId
     case malformedAssetId(String)
     case invalidZkBallotPublicInputs(String)
@@ -22,19 +26,27 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
         case let .emptyAccountId(field):
             return "Account id for \(field) must not be empty."
         case let .malformedAccountId(field, value):
-            return "Account id for \(field) must be encoded-only (i105) with no whitespace (received '\(value)')."
+            return "Account id for \(field) must be a canonical bare I105 literal with no whitespace (received '\(value)')."
+        case let .emptyRwaId(field):
+            return "RWA id for \(field) must not be empty."
+        case let .malformedRwaId(field, value):
+            return "RWA id for \(field) must use '<64-hex-hash>$<domain>' public form with no whitespace (received '\(value)')."
         case .emptyAssetDefinitionId:
             return "Asset definition id must not be empty."
         case let .malformedAssetDefinitionId(value):
-            return "Asset definition id must use canonical 'aid:<32-lower-hex-no-dash>' UUID-v4 form (received '\(value)')."
+            return "Asset definition id must use canonical unprefixed Base58 form (received '\(value)')."
         case let .emptyDomainId(field):
             return "Domain id for \(field) must not be empty."
         case let .malformedDomainId(field, value):
-            return "Domain id for \(field) must not contain whitespace, '@', '#', or '$' (received '\(value)')."
+            return "Domain id for \(field) must use canonical fully-qualified 'name.dataspace' form with no whitespace or reserved separators (received '\(value)')."
+        case let .emptyLabel(field):
+            return "Label for \(field) must not be empty."
+        case let .malformedLabel(field, value):
+            return "Label for \(field) must use lowercase a-z, 0-9, '_' or '-' and be 32 characters or fewer (received '\(value)')."
         case .emptyAssetId:
             return "Asset id must not be empty."
         case let .malformedAssetId(value):
-            return "Asset id must be encoded-only in 'norito:<hex>' form with no whitespace (received '\(value)')."
+            return "Asset id must use canonical unprefixed Base58 form with no whitespace (received '\(value)')."
         case let .invalidZkBallotPublicInputs(reason):
             return "Governance ZK public inputs are invalid: \(reason)"
         }
@@ -82,7 +94,7 @@ struct TransactionInputValidator {
         return trimmed
     }
 
-    private static func sanitizeAccountId(_ accountId: String, field: String) throws -> String {
+    static func sanitizeAccountId(_ accountId: String, field: String) throws -> String {
         let trimmed = accountId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw TransactionInputError.emptyAccountId(field: field)
@@ -94,11 +106,33 @@ struct TransactionInputValidator {
             throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
         }
         do {
-            let address = try AccountAddress.parseEncoded(trimmed, expectedPrefix: nil)
+            let address = try AccountAddress.parseEncodedSwiftOnly(trimmed, expectedPrefix: nil)
             return try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
         } catch {
             throw TransactionInputError.malformedAccountId(field: field, value: trimmed)
         }
+    }
+
+    static func sanitizeRwaId(_ rwaId: String, field: String) throws -> String {
+        let trimmed = rwaId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw TransactionInputError.emptyRwaId(field: field)
+        }
+        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            throw TransactionInputError.malformedRwaId(field: field, value: trimmed)
+        }
+        let parts = trimmed.split(separator: "$", omittingEmptySubsequences: false)
+        guard parts.count == 2 else {
+            throw TransactionInputError.malformedRwaId(field: field, value: trimmed)
+        }
+        let hashPart = String(parts[0])
+        let domainPart = String(parts[1])
+        let hexScalars = CharacterSet(charactersIn: "0123456789abcdefABCDEF")
+        guard hashPart.count == 64, hashPart.unicodeScalars.allSatisfy({ hexScalars.contains($0) }) else {
+            throw TransactionInputError.malformedRwaId(field: field, value: trimmed)
+        }
+        let sanitizedDomain = try sanitizeDomainId(domainPart, field: field)
+        return "\(hashPart.lowercased())$\(sanitizedDomain)"
     }
 
     private static func sanitizeAssetDefinitionId(_ assetDefinitionId: String) throws -> String {
@@ -109,38 +143,55 @@ struct TransactionInputValidator {
         if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        let prefix = "aid:"
-        guard trimmed.hasPrefix(prefix) else {
+        guard AssetDefinitionAddress.looksCanonical(trimmed) else {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        let payload = String(trimmed.dropFirst(prefix.count))
-        guard payload.count == 32,
-              !payload.contains("-"),
-              payload.unicodeScalars.allSatisfy({
-                  CharacterSet(charactersIn: "0123456789abcdef").contains($0)
-              }),
-              let raw = Data(hexString: payload),
-              raw.count == 16 else {
+        if NoritoNativeBridge.shared.blake3Hash(data: Data()) != nil,
+           AssetDefinitionAddress.decode(trimmed) == nil {
             throw TransactionInputError.malformedAssetDefinitionId(trimmed)
         }
-        let bytes = [UInt8](raw)
-        guard bytes[6] >> 4 == 0x4,
-              (bytes[8] & 0xC0) == 0x80 else {
-            throw TransactionInputError.malformedAssetDefinitionId(trimmed)
-        }
-        return "\(prefix)\(payload)"
+        return trimmed
     }
 
-    private static func sanitizeDomainId(_ domainId: String, field: String) throws -> String {
+    static func sanitizeDomainId(_ domainId: String, field: String) throws -> String {
         let trimmed = domainId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw TransactionInputError.emptyDomainId(field: field)
         }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
+            || trimmed.contains("@")
+            || trimmed.contains("#")
+            || trimmed.contains("$")
+        {
             throw TransactionInputError.malformedDomainId(field: field, value: trimmed)
         }
-        if trimmed.contains("@") || trimmed.contains("#") || trimmed.contains("$") {
+        let parts = trimmed.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              !parts[0].isEmpty,
+              !parts[1].isEmpty
+        else {
             throw TransactionInputError.malformedDomainId(field: field, value: trimmed)
+        }
+        do {
+            let name = try AccountAddress.canonicalizeDomainLabel(String(parts[0]))
+            let dataspace = try AccountAddress.canonicalizeDomainLabel(String(parts[1]))
+            return "\(name).\(dataspace)"
+        } catch {
+            throw TransactionInputError.malformedDomainId(field: field, value: trimmed)
+        }
+    }
+
+    static func sanitizeLabel(_ label: String, field: String) throws -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw TransactionInputError.emptyLabel(field: field)
+        }
+        if trimmed.count > 32 || trimmed != trimmed.lowercased() {
+            throw TransactionInputError.malformedLabel(field: field, value: trimmed)
+        }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789_-")
+        if trimmed.unicodeScalars.contains(where: { !allowed.contains($0) }) {
+            throw TransactionInputError.malformedLabel(field: field, value: trimmed)
         }
         return trimmed
     }
@@ -150,20 +201,11 @@ struct TransactionInputValidator {
         guard !trimmed.isEmpty else {
             throw TransactionInputError.emptyAssetId
         }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+        do {
+            return try sanitizeAssetDefinitionId(trimmed)
+        } catch {
             throw TransactionInputError.malformedAssetId(trimmed)
         }
-        let lower = trimmed.lowercased()
-        guard lower.hasPrefix("norito:") else {
-            throw TransactionInputError.malformedAssetId(trimmed)
-        }
-        let hex = String(trimmed.dropFirst("norito:".count))
-        guard !hex.isEmpty,
-              hex.count.isMultiple(of: 2),
-              Data(hexString: hex) != nil else {
-            throw TransactionInputError.malformedAssetId(trimmed)
-        }
-        return "norito:\(hex.lowercased())"
     }
 
     static func sanitizeMetadataTarget(_ target: MetadataTarget) throws -> MetadataTarget {
@@ -174,6 +216,9 @@ struct TransactionInputValidator {
         case let .account(accountId):
             let sanitized = try sanitizeAccountId(accountId, field: "target")
             return .account(sanitized)
+        case let .rwa(rwaId):
+            let sanitized = try sanitizeRwaId(rwaId, field: "target")
+            return .rwa(sanitized)
         case let .assetDefinition(assetDefinitionId):
             let sanitized = try sanitizeAssetDefinitionId(assetDefinitionId)
             return .assetDefinition(sanitized)
@@ -188,6 +233,8 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
     case nativeBridgeUnavailable
     case nativeBridgeError(NativeBridgeError)
     case unsupportedSigningAlgorithm(SigningAlgorithm)
+    case invalidClaimIdentifierReceipt(String)
+    case invalidNativeSignedTransaction(String)
 
     public var errorDescription: String? {
         switch self {
@@ -199,13 +246,258 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
             return "Norito native bridge call failed: \(error)"
         case let .unsupportedSigningAlgorithm(algorithm):
             return "Signing algorithm \(algorithm) is not supported by this encoder."
+        case let .invalidClaimIdentifierReceipt(reason):
+            return "ClaimIdentifier receipt is invalid: \(reason)"
+        case let .invalidNativeSignedTransaction(reason):
+            return "Native signed transaction is invalid: \(reason)"
         }
     }
 }
 
-struct SwiftTransactionEncoder {
-    private static let signedTransactionType = "iroha_data_model::transaction::signed::model::SignedTransaction"
+private struct NativeClaimIdentifierExecutionEnvelope: Encodable, Sendable {
+    let programId: String
+    let programDigest: String
+    let backend: String
+    let verificationMode: String
+    let outputHash: String
+    let associatedDataHash: String
+    let executedAtMs: UInt64
+    let expiresAtMs: UInt64?
 
+    private enum CodingKeys: String, CodingKey {
+        case programId = "program_id"
+        case programDigest = "program_digest"
+        case backend
+        case verificationMode = "verification_mode"
+        case outputHash = "output_hash"
+        case associatedDataHash = "associated_data_hash"
+        case executedAtMs = "executed_at_ms"
+        case expiresAtMs = "expires_at_ms"
+    }
+}
+
+private struct NativeClaimIdentifierPayloadEnvelope: Encodable, Sendable {
+    let policyId: String
+    let execution: NativeClaimIdentifierExecutionEnvelope
+    let opaqueId: String
+    let receiptHash: String
+    let uaid: String
+    let accountId: String
+
+    private enum CodingKeys: String, CodingKey {
+        case policyId = "policy_id"
+        case execution
+        case opaqueId = "opaque_id"
+        case receiptHash = "receipt_hash"
+        case uaid
+        case accountId = "account_id"
+    }
+}
+
+private struct NativeClaimIdentifierAttestationEnvelope: Encodable, Sendable {
+    let kind: String
+    let signature: String?
+    let proofBackend: String?
+    let proofB64: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case signature
+        case proofBackend = "proof_backend"
+        case proofB64 = "proof_b64"
+    }
+}
+
+private struct NativeClaimIdentifierReceiptEnvelope: Encodable, Sendable {
+    let payload: NativeClaimIdentifierPayloadEnvelope
+    let attestation: NativeClaimIdentifierAttestationEnvelope
+
+    private enum CodingKeys: String, CodingKey {
+        case payload
+        case attestation
+    }
+}
+
+private let signedTransactionWireVersion: UInt8 = 1
+
+private func encodeVersionedSignedTransaction(_ signedTransaction: Data) -> Data {
+    var bytes = Data([signedTransactionWireVersion])
+    bytes.append(signedTransaction)
+    return bytes
+}
+
+private func encodeNativeClaimIdentifierReceiptJSON(
+    _ receipt: ToriiIdentifierResolutionReceipt
+) throws -> Data {
+    do {
+        _ = try ToriiIdentifierReceiptCanonicalEncoder.canonicalPayloadBytes(for: receipt)
+    } catch let ToriiClientError.invalidPayload(message) {
+        throw SwiftTransactionEncoderError.invalidClaimIdentifierReceipt(message)
+    }
+    let execution = receipt.payload.execution
+
+    let payload = NativeClaimIdentifierPayloadEnvelope(
+        policyId: receipt.payload.policyId,
+        execution: NativeClaimIdentifierExecutionEnvelope(
+            programId: execution.programId,
+            programDigest: execution.programDigest,
+            backend: execution.backend,
+            verificationMode: execution.verificationMode,
+            outputHash: execution.outputHash,
+            associatedDataHash: execution.associatedDataHash,
+            executedAtMs: execution.executedAtMs,
+            expiresAtMs: execution.expiresAtMs
+        ),
+        opaqueId: receipt.payload.opaqueId,
+        receiptHash: receipt.payload.receiptHash,
+        uaid: receipt.payload.uaid,
+        accountId: receipt.payload.accountId
+    )
+    let attestation = NativeClaimIdentifierAttestationEnvelope(
+        kind: receipt.attestation.kind,
+        signature: receipt.attestation.signature,
+        proofBackend: receipt.attestation.proofBackend,
+        proofB64: receipt.attestation.proofB64
+    )
+    return try JSONEncoder().encode(
+        NativeClaimIdentifierReceiptEnvelope(
+            payload: payload,
+            attestation: attestation
+        )
+    )
+}
+
+private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
+    private static let instructionWireName = "identity::SetPrimaryAccountAlias"
+    private static let instructionTypeName = "iroha_data_model::isi::domain_link::SetPrimaryAccountAlias"
+
+    static func encode(chainId: String,
+                       authority: String,
+                       creationTimeMs: UInt64,
+                       ttlMs: UInt64?,
+                       accountId: String,
+                       aliasDomain: String?,
+                       aliasDataspaceId: UInt64,
+                       alias: String,
+                       signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        let instructionPayload = try encodeInstruction(
+            accountId: accountId,
+            aliasDomain: aliasDomain,
+            aliasDataspaceId: aliasDataspaceId,
+            alias: alias
+        )
+        let transactionPayload = try encodeTransactionPayload(
+            chainId: chainId,
+            authority: authority,
+            creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs,
+            instructionPayload: instructionPayload
+        )
+        let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
+        let signedTransaction = encodeSignedTransaction(
+            signature: signature,
+            transactionPayload: transactionPayload
+        )
+        let transactionHash = IrohaHash.hash(encodeTransactionEntrypoint(signedTransaction))
+        let norito = encodeVersionedSignedTransaction(signedTransaction)
+        return SignedTransactionEnvelope(
+            norito: norito,
+            signedTransaction: signedTransaction,
+            payload: nil,
+            transactionHash: transactionHash
+        )
+    }
+
+    private static func encodeInstruction(
+        accountId: String,
+        aliasDomain: String?,
+        aliasDataspaceId: UInt64,
+        alias: String
+    ) throws -> Data {
+        let accountPayload = try OfflineNorito.encodeAccountId(accountId)
+        let accountAliasPayload = try encodeAccountAlias(
+            aliasDomain: aliasDomain,
+            aliasDataspaceId: aliasDataspaceId,
+            alias: alias
+        )
+
+        var instructionPayload = OfflineNoritoWriter()
+        instructionPayload.writeField(accountPayload)
+        instructionPayload.writeField(try OfflineNorito.encodeOption(accountAliasPayload, encode: { $0 }))
+        instructionPayload.writeField(encodeNoneOption())
+
+        let framedInstruction = noritoEncode(typeName: instructionTypeName, payload: instructionPayload.data, flags: 0)
+        var wireInstruction = OfflineNoritoWriter()
+        wireInstruction.writeField(OfflineNorito.encodeString(instructionWireName))
+        wireInstruction.writeField(OfflineNorito.encodeBytesVec(framedInstruction))
+        return wireInstruction.data
+    }
+
+    private static func encodeAccountAlias(aliasDomain: String?, aliasDataspaceId: UInt64, alias: String) throws -> Data {
+        var payload = OfflineNoritoWriter()
+        payload.writeField(OfflineNorito.encodeString(alias))
+        payload.writeField(try OfflineNorito.encodeOption(aliasDomain, encode: OfflineNorito.encodeString))
+        payload.writeField(OfflineNorito.encodeUInt64(aliasDataspaceId))
+        return payload.data
+    }
+
+    private static func encodeTransactionPayload(chainId: String,
+                                                 authority: String,
+                                                 creationTimeMs: UInt64,
+                                                 ttlMs: UInt64?,
+                                                 instructionPayload: Data) throws -> Data {
+        let executablePayload = encodeExecutable(instructionPayload: instructionPayload)
+        var transactionPayload = OfflineNoritoWriter()
+        transactionPayload.writeField(OfflineNorito.encodeString(chainId))
+        transactionPayload.writeField(OfflineNorito.encodeString(authority))
+        transactionPayload.writeField(OfflineNorito.encodeUInt64(creationTimeMs))
+        transactionPayload.writeField(executablePayload)
+        transactionPayload.writeField(try OfflineNorito.encodeOption(ttlMs, encode: OfflineNorito.encodeUInt64))
+        transactionPayload.writeField(encodeNoneOption())
+        transactionPayload.writeField(encodeEmptyMetadata())
+        return transactionPayload.data
+    }
+
+    private static func encodeExecutable(instructionPayload: Data) -> Data {
+        var instructions = OfflineNoritoWriter()
+        instructions.writeLength(1)
+        instructions.writeField(instructionPayload)
+
+        var executable = OfflineNoritoWriter()
+        executable.writeUInt32LE(0)
+        executable.writeField(instructions.data)
+        return executable.data
+    }
+
+    private static func encodeSignedTransaction(signature: Data,
+                                                transactionPayload: Data) -> Data {
+        var signedTransaction = OfflineNoritoWriter()
+        signedTransaction.writeField(OfflineNorito.encodeConstVec(signature))
+        signedTransaction.writeField(transactionPayload)
+        signedTransaction.writeField(encodeNoneOption())
+        signedTransaction.writeField(encodeNoneOption())
+        return signedTransaction.data
+    }
+
+    private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
+        var entrypoint = OfflineNoritoWriter()
+        entrypoint.writeUInt32LE(0)
+        entrypoint.writeField(signedTransaction)
+        return entrypoint.data
+    }
+
+    private static func encodeEmptyMetadata() -> Data {
+        var metadata = OfflineNoritoWriter()
+        metadata.writeLength(0)
+        return metadata.data
+    }
+
+    private static func encodeNoneOption() -> Data {
+        Data([0])
+    }
+}
+
+struct SwiftTransactionEncoder {
     private static func bridgeOrThrow(_ body: () throws -> NativeSignedTransaction?) throws -> NativeSignedTransaction {
         guard NoritoNativeBridge.shared.isAvailable else {
             throw SwiftTransactionEncoderError.nativeBridgeUnavailable
@@ -220,18 +512,18 @@ struct SwiftTransactionEncoder {
         }
     }
 
-    private static func wrap(native: NativeSignedTransaction) -> SignedTransactionEnvelope {
-        if let framed = noritoDecodeFrame(native.signedBytes) {
-            return SignedTransactionEnvelope(norito: native.signedBytes,
-                                             signedTransaction: framed.payload,
-                                             payload: nil,
-                                             transactionHash: native.hash)
+    private static func wrap(native: NativeSignedTransaction) throws -> SignedTransactionEnvelope {
+        guard native.signedBytes.first == signedTransactionWireVersion else {
+            throw SwiftTransactionEncoderError.invalidNativeSignedTransaction(
+                "missing version byte \(signedTransactionWireVersion)"
+            )
         }
-        let norito = noritoEncode(typeName: signedTransactionType,
-                                  payload: native.signedBytes,
-                                  flags: 0x04)
-        return SignedTransactionEnvelope(norito: norito,
-                                         signedTransaction: native.signedBytes,
+        let signedTransaction = Data(native.signedBytes.dropFirst())
+        guard !signedTransaction.isEmpty else {
+            throw SwiftTransactionEncoderError.invalidNativeSignedTransaction("empty signed transaction payload")
+        }
+        return SignedTransactionEnvelope(norito: native.signedBytes,
+                                         signedTransaction: signedTransaction,
                                          payload: nil,
                                          transactionHash: native.hash)
     }
@@ -255,6 +547,14 @@ struct SwiftTransactionEncoder {
         }
         let destination = ids.accountIds["destination"] ?? transfer.destination
         let privateKey = try privateKeyBytes(from: signingKey)
+        let feeSponsor: String?
+        if let rawFeeSponsor = transfer.feeSponsor?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !rawFeeSponsor.isEmpty
+        {
+            feeSponsor = rawFeeSponsor
+        } else {
+            feeSponsor = nil
+        }
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeTransfer(chainId: ids.chainId,
                                                          authority: ids.authorityId,
@@ -264,10 +564,11 @@ struct SwiftTransactionEncoder {
                                                          assetDefinitionId: assetDefinitionId,
                                                          quantity: transfer.quantity,
                                                          destination: destination,
+                                                         feeSponsor: feeSponsor,
                                                          privateKey: privateKey,
                                                          algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeMint(request: MintRequest,
@@ -301,7 +602,7 @@ struct SwiftTransactionEncoder {
                                                      privateKey: privateKey,
                                                      algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeBurn(request: BurnRequest,
@@ -335,7 +636,7 @@ struct SwiftTransactionEncoder {
                                                      privateKey: privateKey,
                                                      algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeShield(request: ShieldRequest,
@@ -372,7 +673,7 @@ struct SwiftTransactionEncoder {
                                                        privateKey: privateKey,
                                                        algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeUnshield(request: UnshieldRequest,
@@ -409,7 +710,7 @@ struct SwiftTransactionEncoder {
                                                          privateKey: privateKey,
                                                          algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeZkTransfer(request: ZkTransferRequest,
@@ -443,7 +744,7 @@ struct SwiftTransactionEncoder {
                                                            privateKey: privateKey,
                                                            algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeRegisterZkAsset(request: RegisterZkAssetRequest,
@@ -485,7 +786,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeMultisigRegister(request: MultisigRegisterRequest,
@@ -517,7 +818,85 @@ struct SwiftTransactionEncoder {
                                                                  privateKey: privateKey,
                                                                  algorithm: signingKey.algorithm)
         }
-        return wrap(native: native)
+        return try wrap(native: native)
+    }
+
+    static func encodeClaimIdentifier(request: ClaimIdentifierRequest,
+                                      keypair: Keypair,
+                                      creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try encodeClaimIdentifier(request: request,
+                                         signingKey: signingKey,
+                                         creationTimeMs: creationTimeMs)
+    }
+
+    static func encodeClaimIdentifier(request: ClaimIdentifierRequest,
+                                      signingKey: SigningKey,
+                                      creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let receiptAccountId = request.receipt.payload.accountId
+        let ids = try TransactionInputValidator.validate(chainId: request.chainId,
+                                                         authorityId: request.authority,
+                                                         accountIds: [
+                                                            TransactionInputValidator.NamedAccountId(field: "account", value: request.accountId),
+                                                            TransactionInputValidator.NamedAccountId(field: "receipt_account", value: receiptAccountId)
+                                                         ])
+        let canonicalAccountId = ids.accountIds["account"] ?? request.accountId
+        guard canonicalAccountId == ids.accountIds["receipt_account"] else {
+            throw SwiftTransactionEncoderError.invalidClaimIdentifierReceipt(
+                "accountId must match receipt.payload.account_id."
+            )
+        }
+
+        let privateKey = try privateKeyBytes(from: signingKey)
+        let receiptJSON = try encodeNativeClaimIdentifierReceiptJSON(request.receipt)
+        let native = try bridgeOrThrow {
+            try NoritoNativeBridge.shared.encodeClaimIdentifier(
+                chainId: ids.chainId,
+                authority: ids.authorityId,
+                creationTimeMs: creationTimeMs,
+                ttlMs: request.ttlMs,
+                accountId: canonicalAccountId,
+                receiptJSON: receiptJSON,
+                privateKey: privateKey,
+                algorithm: signingKey.algorithm
+            )
+        }
+        return try wrap(native: native)
+    }
+
+    static func encodeSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
+                                             keypair: Keypair,
+                                             creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try encodeSetPrimaryAccountAlias(request: request, signingKey: signingKey, creationTimeMs: creationTimeMs)
+    }
+
+    static func encodeSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
+                                             signingKey: SigningKey,
+                                             creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let ids = try TransactionInputValidator.validate(
+            chainId: request.chainId,
+            authorityId: request.authority,
+            accountIds: [
+                TransactionInputValidator.NamedAccountId(field: "account", value: request.accountId)
+            ]
+        )
+        let accountId = ids.accountIds["account"] ?? request.accountId
+        let alias = try TransactionInputValidator.sanitizeLabel(request.alias, field: "alias")
+        let aliasDomain = try request.aliasDomain.map {
+            try TransactionInputValidator.sanitizeLabel($0, field: "alias_domain")
+        }
+        return try SetPrimaryAccountAliasSwiftNoritoEncoder.encode(
+            chainId: ids.chainId,
+            authority: ids.authorityId,
+            creationTimeMs: creationTimeMs,
+            ttlMs: request.ttlMs,
+            accountId: accountId,
+            aliasDomain: aliasDomain,
+            aliasDataspaceId: request.aliasDataspaceId,
+            alias: alias,
+            signingKey: signingKey
+        )
     }
 
     static func encodeSetMetadata(request: SetMetadataRequest,
@@ -548,7 +927,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeRemoveMetadata(request: RemoveMetadataRequest,
@@ -578,7 +957,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeProposeDeploy(request: ProposeDeployContractRequest,
@@ -601,8 +980,7 @@ struct SwiftTransactionEncoder {
                 authority: ids.authorityId,
                 creationTimeMs: creationTimeMs,
                 ttlMs: request.ttlMs,
-                namespace: request.namespace,
-                contractId: request.contractId,
+                contractAddress: request.contractAddress,
                 codeHashHex: request.codeHashHex,
                 abiHashHex: request.abiHashHex,
                 abiVersion: request.abiVersion,
@@ -612,7 +990,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeCastPlainBallot(request: CastPlainBallotRequest,
@@ -647,7 +1025,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeCastZkBallot(request: CastZkBallotRequest,
@@ -677,7 +1055,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     private static func normalizeZkBallotPublicInputs(_ data: Data) throws -> Data {
@@ -778,13 +1156,13 @@ struct SwiftTransactionEncoder {
         if case .null = value { return }
         guard case let .string(owner) = value else {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical account id"
+                "owner must be a canonical I105 account id"
             )
         }
         let canonical = try canonicalizeZkBallotOwnerLiteral(owner)
         if canonical != owner {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must use canonical account id form"
+                "owner must use canonical I105 account id form"
             )
         }
     }
@@ -793,28 +1171,28 @@ struct SwiftTransactionEncoder {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed == raw else {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical account id"
+                "owner must be a canonical I105 account id"
             )
         }
         if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical account id"
+                "owner must be a canonical I105 account id"
             )
         }
         if trimmed.contains("@") {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical account id"
+                "owner must be a canonical I105 account id"
             )
         }
         let address: AccountAddress
         do {
-            address = try AccountAddress.parseEncoded(
+            address = try AccountAddress.parseEncodedSwiftOnly(
                 trimmed,
                 expectedPrefix: 0x02F1
             )
         } catch {
             throw TransactionInputError.invalidZkBallotPublicInputs(
-                "owner must be a canonical account id"
+                "owner must be a canonical I105 account id"
             )
         }
         let i105 = try address.toI105(networkPrefix: 0x02F1)
@@ -856,7 +1234,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodeFinalizeReferendum(request: FinalizeReferendumRequest,
@@ -884,7 +1262,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     static func encodePersistCouncil(request: PersistCouncilRequest,
@@ -920,7 +1298,7 @@ struct SwiftTransactionEncoder {
                 algorithm: signingKey.algorithm
             )
         }
-        return wrap(native: native)
+        return try wrap(native: native)
     }
 
     private static func privateKeyBytes(from signingKey: SigningKey) throws -> Data {

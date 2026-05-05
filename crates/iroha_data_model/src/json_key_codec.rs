@@ -21,7 +21,6 @@ macro_rules! impl_id_key_codec {
 }
 
 impl_id_key_codec!(
-    crate::domain::DomainId,
     crate::asset::AssetDefinitionId,
     crate::asset::AssetId,
     crate::nft::NftId,
@@ -31,6 +30,17 @@ impl_id_key_codec!(
     crate::proof::ProofId,
     crate::isi::settlement::SettlementId,
 );
+
+impl JsonKeyCodec for crate::domain::DomainId {
+    fn encode_json_key(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        crate::domain::DomainId::parse_fully_qualified(encoded)
+            .map_err(|err| json::Error::Message(err.to_string()))
+    }
+}
 
 impl JsonKeyCodec for crate::account::AccountId {
     fn encode_json_key(&self, out: &mut String) {
@@ -79,7 +89,17 @@ impl JsonKeyCodec for crate::runtime::RuntimeUpgradeId {
     }
 }
 
-impl JsonKeyCodec for crate::account::rekey::AccountLabel {
+impl JsonKeyCodec for crate::escrow::EscrowId {
+    fn encode_json_key(&self, out: &mut String) {
+        self.as_hash().encode_json_key(out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        <Hash as JsonKeyCodec>::decode_json_key(encoded).map(Self::new)
+    }
+}
+
+impl JsonKeyCodec for crate::account::rekey::AccountAlias {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::new();
         norito::json::JsonSerialize::json_serialize(self, &mut buf);
@@ -89,6 +109,32 @@ impl JsonKeyCodec for crate::account::rekey::AccountLabel {
     fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
         let mut parser = json::Parser::new(encoded);
         norito::json::JsonDeserialize::json_deserialize(&mut parser)
+    }
+}
+
+impl JsonKeyCodec for crate::smart_contract::ContractAlias {
+    fn encode_json_key(&self, out: &mut String) {
+        norito::json::write_json_string(self.as_ref(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        encoded
+            .parse()
+            .map_err(|err: crate::ParseError| json::Error::Message(err.reason.into()))
+    }
+}
+
+impl JsonKeyCodec for crate::smart_contract::ContractAddress {
+    fn encode_json_key(&self, out: &mut String) {
+        json::write_json_string(self.as_ref(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        encoded
+            .parse()
+            .map_err(|err: crate::smart_contract::ContractAddressError| {
+                json::Error::Message(err.to_string())
+            })
     }
 }
 
@@ -181,6 +227,20 @@ impl JsonKeyCodec for crate::nexus::DataSpaceId {
     }
 }
 
+impl JsonKeyCodec for crate::nexus::LaneId {
+    fn encode_json_key(&self, out: &mut String) {
+        <u64 as JsonKeyCodec>::encode_json_key(&u64::from(self.as_u32()), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        <u64 as JsonKeyCodec>::decode_json_key(encoded).and_then(|value| {
+            u32::try_from(value)
+                .map(crate::nexus::LaneId::new)
+                .map_err(|_| json::Error::Message("lane id out of range".into()))
+        })
+    }
+}
+
 impl JsonKeyCodec for crate::nexus::UniversalAccountId {
     fn encode_json_key(&self, out: &mut String) {
         <Hash as JsonKeyCodec>::encode_json_key(self.as_hash(), out);
@@ -214,6 +274,18 @@ impl JsonKeyCodec for crate::identifier::IdentifierPolicyId {
     }
 }
 
+impl JsonKeyCodec for crate::ram_lfe::RamLfeProgramId {
+    fn encode_json_key(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        encoded
+            .parse::<crate::ram_lfe::RamLfeProgramId>()
+            .map_err(|err| json::Error::Message(err.to_string()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mv::json::JsonKeyCodec;
@@ -235,7 +307,7 @@ mod tests {
 
     #[test]
     fn account_id_json_key_codec_rejects_domain_suffix_literal() {
-        let err = crate::account::AccountId::decode_json_key("alice@wonderland")
+        let err = crate::account::AccountId::decode_json_key("alice@banka.dataspace")
             .expect_err("domain suffix literal must be rejected");
         assert!(
             err.to_string().contains("canonical I105"),

@@ -1,78 +1,73 @@
 ---
-lang: zh-hant
-direction: ltr
-source: docs/portal/docs/reference/address-safety.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
 title: Address Safety & Accessibility
 description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
 ---
 
-此頁麵包含 ADDR-6c 文檔交付內容。應用這些
-對錢包、瀏覽器、SDK 工具和任何門戶界面的限制
-呈現或接受面向人類的地址。規範數據模型位於
-`docs/account_structure.md`；下面的清單解釋瞭如何公開這些
-格式而不影響安全性或可訪問性。
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
-## 安全共享流程
+## Safe sharing flows
 
-- 默認每個複制/共享操作到 I105 地址。顯示已解決的
-  域作為支持上下文，因此校驗和字符串保持在前面和中心。
-- 提供捆綁完整純文本地址和二維碼的“共享”功能
-  從相同的有效負載派生的代碼。讓用戶在提交之前檢查兩者。
-- 當空間需要截斷時（小卡片、通知），保留前導
-  人類可讀的前綴，顯示省略號，並保留最後 4-6 個字符，以便
-  校驗和錨點仍然存在。提供點擊/鍵盤快捷鍵來複製完整內容
-  沒有截斷的字符串。
-- 通過發出預覽的確認 toast 來防止剪貼板不同步
-  複製的確切 I105 字符串。在可以進行遙測的情況下，計數副本
-  嘗試與共享操作，因此用戶體驗回歸很快就會浮現出來。
+- Default every copy/share action to the canonical I105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-## IME 和輸入保護
+## IME & input safeguards
 
-- 拒絕地址字段中的非 ASCII 輸入。當 IME 組合工件（完整
-  寬度、假名、音調標記）出現，並顯示一條內聯警告，解釋如何
-  在重試之前將鍵盤切換為拉丁輸入法。
-- 提供純文本粘貼區域，可剝離組合標記並替換
-  驗證前帶有 ASCII 空格的空白。這樣可以避免用戶流失
-  當他們在流程中禁用 IME 時會取得進展。
-- 強化針對零寬度連接器、變體選擇器等的驗證
-  隱形 Unicode 代碼點。記錄被拒絕的代碼點類別以便進行模糊測試
-  套件可以導入遙測數據。
+- Validate account-id fields as canonical I105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-## 輔助技術期望
+## Assistive technology expectations
 
-- 用 `aria-label` 或 `aria-describedby` 註釋每個地址塊
-  拼出人類可讀的前綴並將有效負載分成 4-8 個字符
-  組（“ih dash b 三二……”）。這會阻止屏幕閱讀器產生
-  難以理解的字符流。
-- 通過禮貌的實時區域更新宣布成功的複制/共享事件。包括
-  目的地（剪貼板、共享表、二維碼），以便用戶知道操作
-  無需移動焦點即可完成。
-- 為 QR 預覽提供描述性 `alt` 文本（例如，“I105 地址
-  `<account>` 上鍊 `0x1234`”）。提供“將地址複製為文本”
-  針對低視力用戶的 QR 畫布附近的後備。
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## Sora-only 壓縮地址
+## Single-format policy
 
-- 門控：將 `i105` 壓縮字符串隱藏在顯式確認後面。
-  確認必須重申該表格僅適用於 Sora Nexus 鏈。
-- 標籤：每次出現都必須包含可見的“僅限 Sora”徽章和
-  描述為什麼其他網絡需要 I105 表格的工具提示。
-- Guardrails：如果活動鏈判別式不是 Nexus 分配，
-  完全拒絕生成壓縮地址並引導用戶返回
-  I105。
-- 遙測：記錄請求和復制壓縮表單的頻率，以便
-  事件手冊可以檢測意外的共享峰值。
+- Keep canonical I105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-## 質量門
+## Quality gates
 
-- 擴展自動化 UI 測試（或故事書 a11y 套件）以斷言該地址
-  組件公開所需的 ARIA 元數據和 IME 拒絕消息
-  出現。
-- 包括 IME 輸入（假名、拼音）、屏幕閱讀器通行證的手動 QA 場景
-  (VoiceOver/NVDA)，並在發布前對高對比度主題進行 QR 複製。
-- 將這些檢查與 I105 奇偶校驗測試一起顯示在發布清單中
-  因此，回歸在得到糾正之前一直處於阻塞狀態。
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

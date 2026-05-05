@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoException;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.telemetry.DeviceProfile;
 import org.hyperledger.iroha.android.telemetry.DeviceProfileProvider;
 import org.hyperledger.iroha.android.telemetry.NetworkContext;
@@ -44,6 +45,8 @@ public final class NoritoRpcClientTests {
     defaultHeadersAndPayloadAreApplied();
     requestOverridesApplyHeadersMethodAndQuery();
     nonSuccessStatusRaisesException();
+    rejectsInsecureAuthorizationHeader();
+    rejectsCredentialedAbsoluteHostOverride();
     observersReceiveCallbacks();
     flowControllerGuardsLifecycle();
     telemetrySignalsEmitForRpcCalls();
@@ -58,7 +61,7 @@ public final class NoritoRpcClientTests {
           NoritoRpcClient.builder()
               .setBaseUri(server.baseUri())
               .setTransportExecutor(new UrlConnectionTransportExecutor())
-              .putDefaultHeader("Authorization", "Bearer token")
+              .putDefaultHeader("X-Test-Token", "sample-token")
               .build();
       final byte[] requestPayload = "deadbeef".getBytes(StandardCharsets.UTF_8);
       final byte[] response = client.call("/rpc/default", requestPayload);
@@ -74,7 +77,7 @@ public final class NoritoRpcClientTests {
           : "Content-Type should default to application/x-norito";
       assert "application/x-norito".equals(recorded.header("Accept"))
           : "Accept should default to application/x-norito";
-      assert "Bearer token".equals(recorded.header("Authorization"))
+      assert "sample-token".equals(recorded.header("X-Test-Token"))
           : "Default headers must be preserved";
     }
   }
@@ -134,6 +137,40 @@ public final class NoritoRpcClientTests {
       }
       assert threw : "Expected non-success status to raise NoritoRpcException";
     }
+  }
+
+  private static void rejectsInsecureAuthorizationHeader() {
+    final NoritoRpcClient client =
+        NoritoRpcClient.builder()
+            .setBaseUri(URI.create("http://example.com"))
+            .putDefaultHeader("Authorization", "Bearer token")
+            .build();
+    boolean threw = false;
+    try {
+      client.call("/rpc/default", new byte[] {0x00});
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+      assert ex.getMessage().contains("refuses insecure transport")
+          : "expected insecure transport error";
+    }
+    assert threw : "Expected insecure credentialed RPC request to be rejected";
+  }
+
+  private static void rejectsCredentialedAbsoluteHostOverride() {
+    final NoritoRpcClient client =
+        NoritoRpcClient.builder()
+            .setBaseUri(URI.create("https://example.com"))
+            .putDefaultHeader("Authorization", "Bearer token")
+            .build();
+    boolean threw = false;
+    try {
+      client.call("https://evil.example/rpc/default", new byte[] {0x00});
+    } catch (final IllegalArgumentException ex) {
+      threw = true;
+      assert ex.getMessage().contains("mismatched host")
+          : "expected host mismatch error";
+    }
+    assert threw : "Expected credentialed absolute host override to be rejected";
   }
 
   private static void observersReceiveCallbacks() throws Exception {
@@ -241,8 +278,8 @@ public final class NoritoRpcClientTests {
           : "RPC telemetry should capture route";
       assert "POST".equals(rpcSignal.fields().get("method"))
           : "RPC telemetry should capture method";
-      assert !rpcSignal.fields().containsKey("fallback")
-          : "RPC telemetry should not emit fallback field";
+      assert !rpcSignal.fields().containsKey("alternate_path")
+          : "RPC telemetry should not emit alternate-path field";
       final Object status = rpcSignal.fields().get("status_code");
       assert status instanceof Number && ((Number) status).intValue() == 200
           : "RPC telemetry should record status";
@@ -255,19 +292,21 @@ public final class NoritoRpcClientTests {
   }
 
   private static void callTransactionUsesCodecAdapter() throws Exception {
+    final String aliceAuthority = TestAccountIds.ed25519Authority(0x21);
+    final String bobAuthority = TestAccountIds.ed25519Authority(0x22);
     final RecordingHandler handler =
         new RecordingHandler(200, "encoded".getBytes(StandardCharsets.UTF_8));
     try (SimpleHttpServer server = SimpleHttpServer.start("/rpc/codec", handler)) {
       final TransactionPayload payload =
           TransactionPayload.builder()
               .setChainId("00000001")
-              .setAuthority("alice@test")
+              .setAuthority(aliceAuthority)
               .setInstructionBytes(new byte[] {0x01, 0x02})
               .build();
       final StubCodecAdapter codec =
           new StubCodecAdapter(
               "encoded".getBytes(StandardCharsets.UTF_8),
-              payload.toBuilder().setAuthority("bob@test").build());
+              payload.toBuilder().setAuthority(bobAuthority).build());
       final NoritoRpcClient client =
           NoritoRpcClient.builder()
               .setBaseUri(server.baseUri())
@@ -277,7 +316,7 @@ public final class NoritoRpcClientTests {
           client.callTransaction("/rpc/codec", payload, codec, null);
       assert codec.encodeCallCount() == 1 : "Codec should encode request once";
       assert codec.decodeCallCount() == 1 : "Codec should decode response once";
-      assert "bob@test".equals(decoded.authority())
+      assert bobAuthority.equals(decoded.authority())
           : "Decoded payload should come from codec adapter";
     }
   }

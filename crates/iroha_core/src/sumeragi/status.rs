@@ -10,7 +10,7 @@ use std::{
         Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering as StdOrdering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use iroha_config::parameters::actual::ConsensusMode;
@@ -321,6 +321,14 @@ static EFFECTIVE_NPOS_TIMEOUTS_DA_MS: AtomicU64 = AtomicU64::new(0);
 static EFFECTIVE_NPOS_TIMEOUTS_AGGREGATOR_MS: AtomicU64 = AtomicU64::new(0);
 static EFFECTIVE_NPOS_TIMEOUTS_EXEC_MS: AtomicU64 = AtomicU64::new(0);
 static EFFECTIVE_NPOS_TIMEOUTS_WITNESS_MS: AtomicU64 = AtomicU64::new(0);
+static NPOS_REPAIR_COVERAGE_SET: AtomicBool = AtomicBool::new(false);
+static NPOS_REPAIR_COVERAGE_HEIGHT: AtomicU64 = AtomicU64::new(0);
+static NPOS_REPAIR_COVERAGE_VIEW: AtomicU64 = AtomicU64::new(0);
+static NPOS_REPAIR_COVERAGE_PEERS: AtomicU64 = AtomicU64::new(0);
+static NPOS_REPAIR_COVERAGE_REQUIRED_BPS: AtomicU64 = AtomicU64::new(0);
+static NPOS_REPAIR_COVERAGE_SELECTED_BPS: AtomicU64 = AtomicU64::new(0);
+static NPOS_REPAIR_COVERAGE_REACHED: AtomicBool = AtomicBool::new(false);
+static NPOS_REPAIR_COVERAGE_REASON: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 #[allow(dead_code)]
 static MODE_FLIP_KILL_SWITCH: AtomicBool = AtomicBool::new(true);
 #[allow(dead_code)]
@@ -352,6 +360,9 @@ static LAST_COLLECT_PRECOMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COLLECT_AGG_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_COMMIT_EMA_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_PIPELINE_TOTAL_EMA_MS: AtomicU64 = AtomicU64::new(0);
+static COMMIT_PIPELINE_STATUS: OnceLock<Mutex<CommitPipelineStatusState>> = OnceLock::new();
+static ROUND_GAP_STATUS: OnceLock<Mutex<RoundGapStatusState>> = OnceLock::new();
+static ROUND_TRACE_STATUS: OnceLock<Mutex<RoundTraceStatusState>> = OnceLock::new();
 static GOSSIP_FALLBACK_TOTAL: AtomicU64 = AtomicU64::new(0);
 static GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
 static QUORUM_STALL_AGE_ESCALATION_TOTAL: AtomicU64 = AtomicU64::new(0);
@@ -587,6 +598,8 @@ static GOSSIP_FALLBACK_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static WORKER_QUEUE_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
+static COMMIT_TIMING_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+#[cfg(test)]
 static STATUS_TEST_GLOBAL_LOCK: OnceLock<TestLock> = OnceLock::new();
 
 static AVAILABILITY_STATS: OnceLock<Mutex<AvailabilityStats>> = OnceLock::new();
@@ -708,10 +721,10 @@ pub struct NexusFeeSnapshot {
     pub sponsor_cap_exceeded_total: u64,
     /// Failures due to config/asset parsing errors.
     pub config_errors_total: u64,
-    /// Failures while executing the fee transfer.
+    /// Failures while executing the fee debit.
     pub transfer_failures_total: u64,
-    /// Last attempted fee amount (base units) if available.
-    pub last_amount: Option<u128>,
+    /// Last attempted fee amount if available.
+    pub last_amount: Option<Numeric>,
     /// Asset definition id used for the last attempt.
     pub last_asset_id: Option<String>,
     /// Payer classification for the last attempt.
@@ -731,8 +744,8 @@ pub enum NexusFeeEvent {
         payer_kind: NexusFeePayer,
         /// Account id that paid.
         payer_id: String,
-        /// Amount charged (base units).
-        amount: u128,
+        /// Amount charged.
+        amount: Numeric,
         /// Asset definition id string.
         asset_id: String,
     },
@@ -752,19 +765,19 @@ pub enum NexusFeeEvent {
     SponsorCapExceeded {
         /// Account that attempted to sponsor.
         payer_id: String,
-        /// Maximum allowed fee in base units.
-        max_fee: u64,
-        /// Attempted fee in base units.
-        attempted_fee: u128,
+        /// Maximum allowed fee.
+        max_fee: Numeric,
+        /// Attempted fee.
+        attempted_fee: Numeric,
     },
-    /// Fee transfer failed to apply.
+    /// Fee debit failed to apply.
     TransferFailed {
         /// Payer classification.
         payer_kind: NexusFeePayer,
         /// Account that attempted to pay.
         payer_id: String,
-        /// Amount attempted (base units).
-        amount: u128,
+        /// Amount attempted.
+        amount: Numeric,
         /// Asset definition id string.
         asset_id: String,
         /// Human-readable reason.
@@ -1820,6 +1833,8 @@ pub fn reset_membership_snapshot_for_tests() {
 
 /// Set PRF context (seed/height/view) used for leader selection (best-effort).
 pub fn set_prf_context(seed: [u8; 32], height: u64, view: u64) {
+    #[cfg(test)]
+    let _guard = mode_tags_test_guard();
     PRF_HEIGHT.store(height, Ordering::Relaxed);
     PRF_VIEW.store(view, Ordering::Relaxed);
     let slot = PRF_SEED.get_or_init(|| Mutex::new(None));
@@ -1998,6 +2013,75 @@ fn effective_npos_timeouts_snapshot() -> Option<NposTimeoutsSnapshot> {
     })
 }
 
+/// Record the latest local NPoS repair fanout coverage selection.
+pub fn record_npos_repair_coverage(
+    height: u64,
+    view: u64,
+    reason: &str,
+    selected_peer_count: usize,
+    required_stake_quorum_bps: u16,
+    selected_stake_coverage_bps: u16,
+    reached_stake_quorum_coverage: bool,
+) {
+    NPOS_REPAIR_COVERAGE_HEIGHT.store(height, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_VIEW.store(view, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_PEERS.store(selected_peer_count as u64, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_REQUIRED_BPS
+        .store(u64::from(required_stake_quorum_bps), Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_SELECTED_BPS
+        .store(u64::from(selected_stake_coverage_bps), Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_REACHED.store(reached_stake_quorum_coverage, Ordering::Relaxed);
+    if let Ok(mut slot) = NPOS_REPAIR_COVERAGE_REASON
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        *slot = Some(reason.to_owned());
+    }
+    NPOS_REPAIR_COVERAGE_SET.store(true, Ordering::Release);
+}
+
+fn npos_repair_coverage_snapshot() -> Option<NposRepairCoverageSnapshot> {
+    if !NPOS_REPAIR_COVERAGE_SET.load(Ordering::Acquire) {
+        return None;
+    }
+    let reason = NPOS_REPAIR_COVERAGE_REASON
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone())
+        .unwrap_or_default();
+    Some(NposRepairCoverageSnapshot {
+        last_repair_height: NPOS_REPAIR_COVERAGE_HEIGHT.load(Ordering::Relaxed),
+        last_repair_view: NPOS_REPAIR_COVERAGE_VIEW.load(Ordering::Relaxed),
+        reason,
+        selected_repair_peer_count: NPOS_REPAIR_COVERAGE_PEERS.load(Ordering::Relaxed),
+        required_stake_quorum_bps: NPOS_REPAIR_COVERAGE_REQUIRED_BPS
+            .load(Ordering::Relaxed)
+            .min(u64::from(u16::MAX)) as u16,
+        selected_stake_coverage_bps: NPOS_REPAIR_COVERAGE_SELECTED_BPS
+            .load(Ordering::Relaxed)
+            .min(u64::from(u16::MAX)) as u16,
+        reached_stake_quorum_coverage: NPOS_REPAIR_COVERAGE_REACHED.load(Ordering::Relaxed),
+    })
+}
+
+#[cfg(test)]
+fn reset_npos_repair_coverage_for_tests() {
+    NPOS_REPAIR_COVERAGE_SET.store(false, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_HEIGHT.store(0, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_VIEW.store(0, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_PEERS.store(0, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_REQUIRED_BPS.store(0, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_SELECTED_BPS.store(0, Ordering::Relaxed);
+    NPOS_REPAIR_COVERAGE_REACHED.store(false, Ordering::Relaxed);
+    if let Ok(mut slot) = NPOS_REPAIR_COVERAGE_REASON
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+    {
+        *slot = None;
+    }
+}
+
 /// Record the latest deterministic membership view hash snapshot.
 pub fn set_membership_view_hash(hash: [u8; 32], height: u64, view: u64, epoch: u64) {
     MEMBERSHIP_HEIGHT.store(height, Ordering::Relaxed);
@@ -2010,6 +2094,8 @@ pub fn set_membership_view_hash(hash: [u8; 32], height: u64, view: u64, epoch: u
 
 /// Snapshot PRF context if known: (seed, height, view).
 pub fn prf_context() -> (Option<[u8; 32]>, u64, u64) {
+    #[cfg(test)]
+    let _guard = mode_tags_test_guard();
     let h = PRF_HEIGHT.load(Ordering::Relaxed);
     let v = PRF_VIEW.load(Ordering::Relaxed);
     let seed = PRF_SEED
@@ -2458,6 +2544,10 @@ pub enum ConsensusMessageKind {
     BlockCreated,
     /// Block-sync update batches (`BlockSyncUpdate`).
     BlockSyncUpdate,
+    /// Exact frontier body fetch request (`FetchBlockBody`).
+    FetchBlockBody,
+    /// Exact frontier body fetch response (`BlockBodyResponse`).
+    BlockBodyResponse,
     /// Consensus-parameter advertisements (`ConsensusParams`).
     ConsensusParams,
     /// Proposal hints (`ProposalHint`).
@@ -2474,6 +2564,10 @@ pub enum ConsensusMessageKind {
     VrfReveal,
     /// Execution witness payloads (`ExecWitness`).
     ExecWitness,
+    /// RBC INIT repair requests (`RbcInitRequest`).
+    RbcInitRequest,
+    /// RBC chunk repair requests (`RbcChunkRequest`).
+    RbcChunkRequest,
     /// RBC init payloads (`RbcInit`).
     RbcInit,
     /// RBC chunk payloads (`RbcChunk`).
@@ -2495,6 +2589,8 @@ impl ConsensusMessageKind {
         match self {
             ConsensusMessageKind::BlockCreated => "block_created",
             ConsensusMessageKind::BlockSyncUpdate => "block_sync_update",
+            ConsensusMessageKind::FetchBlockBody => "fetch_block_body",
+            ConsensusMessageKind::BlockBodyResponse => "block_body_response",
             ConsensusMessageKind::ConsensusParams => "consensus_params",
             ConsensusMessageKind::ProposalHint => "proposal_hint",
             ConsensusMessageKind::Proposal => "proposal",
@@ -2503,6 +2599,8 @@ impl ConsensusMessageKind {
             ConsensusMessageKind::VrfCommit => "vrf_commit",
             ConsensusMessageKind::VrfReveal => "vrf_reveal",
             ConsensusMessageKind::ExecWitness => "exec_witness",
+            ConsensusMessageKind::RbcInitRequest => "rbc_init_request",
+            ConsensusMessageKind::RbcChunkRequest => "rbc_chunk_request",
             ConsensusMessageKind::RbcInit => "rbc_init",
             ConsensusMessageKind::RbcChunk => "rbc_chunk",
             ConsensusMessageKind::RbcReady => "rbc_ready",
@@ -2992,11 +3090,11 @@ pub enum WorkerLoopStage {
     Idle,
     /// Draining vote-related messages.
     DrainVotes,
-    /// Draining RBC chunk messages.
+    /// Draining the unified RBC session ingress lane.
     DrainRbcChunks,
     /// Draining block payload messages.
     DrainBlockPayloads,
-    /// Draining block messages.
+    /// Draining fallback block/control messages.
     DrainBlocks,
     /// Executing the consensus tick.
     Tick,
@@ -3061,9 +3159,9 @@ pub enum WorkerQueueKind {
     Votes,
     /// Block payload messages.
     BlockPayload,
-    /// RBC chunk messages.
+    /// Unified RBC session ingress messages.
     RbcChunks,
-    /// Block messages.
+    /// Fallback block/control messages.
     Blocks,
     /// Consensus control-flow messages.
     Consensus,
@@ -3080,9 +3178,9 @@ pub struct WorkerQueueDepthSnapshot {
     pub vote_rx: u64,
     /// Queue depth for block payload messages.
     pub block_payload_rx: u64,
-    /// Queue depth for RBC chunk messages.
+    /// Queue depth for the unified RBC session ingress lane.
     pub rbc_chunk_rx: u64,
-    /// Queue depth for block messages.
+    /// Queue depth for fallback block/control messages.
     pub block_rx: u64,
     /// Queue depth for consensus control-flow messages.
     pub consensus_rx: u64,
@@ -3099,9 +3197,9 @@ pub struct WorkerQueueTotalsSnapshot {
     pub vote_rx: u64,
     /// Total for block payload messages.
     pub block_payload_rx: u64,
-    /// Total for RBC chunk messages.
+    /// Total for the unified RBC session ingress lane.
     pub rbc_chunk_rx: u64,
-    /// Total for block messages.
+    /// Total for fallback block/control messages.
     pub block_rx: u64,
     /// Total for consensus control-flow messages.
     pub consensus_rx: u64,
@@ -3224,6 +3322,25 @@ pub struct NposTimeoutsSnapshot {
     pub witness_ms: u64,
 }
 
+/// Observational NPoS repair fanout stake coverage.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NposRepairCoverageSnapshot {
+    /// Last height for which a repair fanout selection was recorded.
+    pub last_repair_height: u64,
+    /// Last view for which a repair fanout selection was recorded.
+    pub last_repair_view: u64,
+    /// Operator-facing reason label for the latest repair selection.
+    pub reason: String,
+    /// Number of peers selected for the latest repair fanout.
+    pub selected_repair_peer_count: u64,
+    /// Required stake quorum threshold in basis points.
+    pub required_stake_quorum_bps: u16,
+    /// Selected repair fanout stake coverage in basis points.
+    pub selected_stake_coverage_bps: u16,
+    /// Whether the latest selected fanout reached the stake quorum threshold.
+    pub reached_stake_quorum_coverage: bool,
+}
+
 /// Snapshot of the most recent commit certificate (summary only).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QcSnapshot {
@@ -3241,6 +3358,226 @@ pub struct QcSnapshot {
     pub validator_set_len: u64,
     /// Total signatures attached to the certificate.
     pub signatures_total: u64,
+}
+
+/// Snapshot of the latest hidden commit-pipeline budget.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommitPipelineSnapshot {
+    /// End-to-end time spent in the most recent commit-pipeline run.
+    pub last_total_ms: u64,
+    /// Time spent validating/finalizing candidate blocks before gating.
+    pub last_validation_ms: u64,
+    /// Time spent rebuilding cached QCs from votes.
+    pub last_qc_rebuild_ms: u64,
+    /// Time spent in the validation/availability gate checks.
+    pub last_gate_ms: u64,
+    /// Time spent finalizing pending blocks into the commit worker.
+    pub last_finalize_ms: u64,
+    /// Time spent draining finished commit results.
+    pub last_drain_results_ms: u64,
+    /// Sum of QC verification subtotals across drained commit results.
+    pub last_drain_qc_verify_ms: u64,
+    /// Sum of persistence subtotals across drained commit results.
+    pub last_drain_persist_ms: u64,
+    /// Sum of Kura store subtotals across drained commit results.
+    pub last_drain_kura_store_ms: u64,
+    /// Sum of state-apply subtotals across drained commit results.
+    pub last_drain_state_apply_ms: u64,
+    /// Sum of state-commit subtotals across drained commit results.
+    pub last_drain_state_commit_ms: u64,
+    /// EMA of end-to-end commit-pipeline time.
+    pub ema_total_ms: u64,
+    /// EMA of validation time.
+    pub ema_validation_ms: u64,
+    /// EMA of gate time.
+    pub ema_gate_ms: u64,
+    /// EMA of finalize time.
+    pub ema_finalize_ms: u64,
+}
+
+/// Snapshot of the hidden DELIVER-to-next-proposal gap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RoundGapSnapshot {
+    /// Most recent elapsed time from first accepted DELIVER to local state commit.
+    pub last_deliver_to_state_commit_ms: u64,
+    /// Most recent elapsed time from local state commit to pacemaker unblock.
+    pub last_state_commit_to_next_propose_ms: u64,
+    /// Most recent elapsed time from first accepted DELIVER to pacemaker unblock.
+    pub last_deliver_to_next_propose_ms: u64,
+    /// EMA of DELIVER-to-state-commit.
+    pub ema_deliver_to_state_commit_ms: u64,
+    /// EMA of state-commit-to-next-propose.
+    pub ema_state_commit_to_next_propose_ms: u64,
+    /// EMA of DELIVER-to-next-propose.
+    pub ema_deliver_to_next_propose_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RoundPhaseTrace {
+    #[default]
+    WaitProposal,
+    WaitBlock,
+    WaitValidation,
+    WaitDa,
+    WaitPrepareQc,
+    WaitCommitQc,
+    Commit,
+    AdvanceView,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RoundEventCauseTrace {
+    #[default]
+    Tick,
+    #[allow(dead_code)] // Only emitted/asserted by round-trace unit tests.
+    ProposalObserved,
+    BlockAvailable,
+    RbcDelivered,
+    ValidationPassed,
+    VoteReceived,
+    QcReceived,
+    CommitRequested,
+    CommitCompleted,
+    BlockSyncUpdated,
+    NoProgressWake,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RoundPhaseGapSnapshot {
+    pub wait_proposal_ms: u64,
+    pub wait_block_ms: u64,
+    pub wait_validation_ms: u64,
+    pub wait_da_ms: u64,
+    pub wait_prepare_qc_ms: u64,
+    pub wait_commit_qc_ms: u64,
+    pub commit_ms: u64,
+    pub advance_view_ms: u64,
+}
+
+impl RoundPhaseGapSnapshot {
+    pub(crate) fn set(&mut self, phase: RoundPhaseTrace, value_ms: u64) {
+        match phase {
+            RoundPhaseTrace::WaitProposal => self.wait_proposal_ms = value_ms,
+            RoundPhaseTrace::WaitBlock => self.wait_block_ms = value_ms,
+            RoundPhaseTrace::WaitValidation => self.wait_validation_ms = value_ms,
+            RoundPhaseTrace::WaitDa => self.wait_da_ms = value_ms,
+            RoundPhaseTrace::WaitPrepareQc => self.wait_prepare_qc_ms = value_ms,
+            RoundPhaseTrace::WaitCommitQc => self.wait_commit_qc_ms = value_ms,
+            RoundPhaseTrace::Commit => self.commit_ms = value_ms,
+            RoundPhaseTrace::AdvanceView => self.advance_view_ms = value_ms,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RoundTraceEntry {
+    pub timestamp_ms: u64,
+    pub height: u64,
+    pub view: u64,
+    pub phase: RoundPhaseTrace,
+    pub previous_phase: Option<RoundPhaseTrace>,
+    pub cause: RoundEventCauseTrace,
+    pub queue_latency_ms: Option<u64>,
+    pub pending_blocks: u64,
+    pub blocking_pending_blocks: u64,
+    pub commit_inflight: bool,
+    pub queue_saturated: bool,
+    pub queue_depths: WorkerQueueDepthSnapshot,
+    pub no_progress_wake: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RoundTraceSnapshot {
+    pub latest: Option<RoundTraceEntry>,
+    pub gaps: RoundPhaseGapSnapshot,
+    pub entries: Vec<RoundTraceEntry>,
+}
+
+/// Commit-pipeline sample published by the runtime.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CommitPipelineSample {
+    /// End-to-end time spent in the most recent commit-pipeline run.
+    pub total_ms: u64,
+    /// Time spent validating/finalizing candidate blocks before gating.
+    pub validation_ms: u64,
+    /// Time spent rebuilding cached QCs from votes.
+    pub qc_rebuild_ms: u64,
+    /// Time spent in the validation/availability gate checks.
+    pub gate_ms: u64,
+    /// Time spent finalizing pending blocks into the commit worker.
+    pub finalize_ms: u64,
+    /// Time spent draining finished commit results.
+    pub drain_results_ms: u64,
+    /// Sum of QC verification subtotals across drained commit results.
+    pub drain_qc_verify_ms: u64,
+    /// Sum of persistence subtotals across drained commit results.
+    pub drain_persist_ms: u64,
+    /// Sum of Kura store subtotals across drained commit results.
+    pub drain_kura_store_ms: u64,
+    /// Sum of state-apply subtotals across drained commit results.
+    pub drain_state_apply_ms: u64,
+    /// Sum of state-commit subtotals across drained commit results.
+    pub drain_state_commit_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TimingEma {
+    value_ms: f64,
+    initialized: bool,
+}
+
+impl TimingEma {
+    const ALPHA: f64 = 0.2;
+
+    fn update(&mut self, sample_ms: u64) -> u64 {
+        #[allow(clippy::cast_precision_loss)]
+        let sample = sample_ms as f64;
+        if self.initialized {
+            self.value_ms = Self::ALPHA.mul_add(sample, (1.0 - Self::ALPHA) * self.value_ms);
+        } else {
+            self.value_ms = sample;
+            self.initialized = true;
+        }
+        round_ema_ms(self.value_ms)
+    }
+}
+
+#[derive(Debug, Default)]
+struct CommitPipelineStatusState {
+    snapshot: CommitPipelineSnapshot,
+    total_ema: TimingEma,
+    validation_ema: TimingEma,
+    gate_ema: TimingEma,
+    finalize_ema: TimingEma,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct RoundGapKey {
+    height: u64,
+    view: u64,
+    block_hash: HashOf<BlockHeader>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RoundGapMarkers {
+    deliver_at: Option<std::time::Instant>,
+    state_commit_at: Option<std::time::Instant>,
+    unblocked_at: Option<std::time::Instant>,
+}
+
+#[derive(Debug, Default)]
+struct RoundGapStatusState {
+    snapshot: RoundGapSnapshot,
+    deliver_to_state_commit_ema: TimingEma,
+    state_commit_to_next_propose_ema: TimingEma,
+    deliver_to_next_propose_ema: TimingEma,
+    markers: BTreeMap<RoundGapKey, RoundGapMarkers>,
+}
+
+#[derive(Debug, Default)]
+struct RoundTraceStatusState {
+    snapshot: RoundTraceSnapshot,
+    entries: VecDeque<RoundTraceEntry>,
 }
 
 /// Snapshot of dedup cache evictions for inbound consensus traffic.
@@ -3311,6 +3648,8 @@ pub struct StatusSnapshot {
     pub effective_pacemaker_interval_ms: u64,
     /// Effective NPoS timeouts for the active mode (ms).
     pub effective_npos_timeouts: Option<NposTimeoutsSnapshot>,
+    /// Observational NPoS repair fanout coverage.
+    pub npos_repair_coverage: Option<NposRepairCoverageSnapshot>,
     /// Effective collector count (K) for the active mode.
     pub effective_collectors_k: u64,
     /// Effective redundant send fanout (r) for the active mode.
@@ -3556,6 +3895,10 @@ pub struct StatusSnapshot {
     pub worker_loop: WorkerLoopSnapshot,
     /// Commit inflight status for stall detection.
     pub commit_inflight: CommitInflightSnapshot,
+    /// Latest hidden commit-pipeline budget sample.
+    pub commit_pipeline: CommitPipelineSnapshot,
+    /// Latest DELIVER-to-next-proposal gap sample.
+    pub round_gap: RoundGapSnapshot,
     /// Transaction gossip telemetry snapshot.
     pub tx_gossip: TxGossipSnapshot,
     /// Total inbound gossip entries skipped because the transaction hash was already known.
@@ -3675,6 +4018,28 @@ impl StatusSnapshot {
         self.nexus_staking = NexusStakingSnapshot::default();
         self.npos_election = None;
         self
+    }
+}
+
+fn commit_pipeline_status_slot() -> &'static Mutex<CommitPipelineStatusState> {
+    COMMIT_PIPELINE_STATUS.get_or_init(|| Mutex::new(CommitPipelineStatusState::default()))
+}
+
+fn round_gap_status_slot() -> &'static Mutex<RoundGapStatusState> {
+    ROUND_GAP_STATUS.get_or_init(|| Mutex::new(RoundGapStatusState::default()))
+}
+
+fn round_trace_status_slot() -> &'static Mutex<RoundTraceStatusState> {
+    ROUND_TRACE_STATUS.get_or_init(|| Mutex::new(RoundTraceStatusState::default()))
+}
+
+fn round_ema_ms(value_ms: f64) -> u64 {
+    if !value_ms.is_finite() || value_ms <= 0.0 {
+        return 0;
+    }
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    {
+        value_ms.round().min(u64::MAX as f64) as u64
     }
 }
 
@@ -4248,6 +4613,11 @@ pub fn snapshot() -> StatusSnapshot {
         epoch_commit_deadline_offset = 0;
         epoch_reveal_deadline_offset = 0;
     }
+    let npos_repair_coverage = if mode_tag == crate::sumeragi::consensus::NPOS_TAG {
+        npos_repair_coverage_snapshot()
+    } else {
+        None
+    };
     let recent_evictions = recent_rbc_evictions();
     let pending_rbc = pending_rbc_snapshot();
     let (lane_governance_sealed_total, lane_governance_sealed_aliases, lane_governance_entries) =
@@ -4290,6 +4660,8 @@ pub fn snapshot() -> StatusSnapshot {
     let validation_rejects = validation_reject_snapshot();
     let peer_key_policy = peer_key_policy_snapshot();
     let consensus_caps = consensus_caps();
+    let commit_pipeline = commit_pipeline_snapshot();
+    let round_gap = round_gap_snapshot();
     let mode_flip_kill_switch = MODE_FLIP_KILL_SWITCH.load(Ordering::Relaxed);
     let mode_flip_blocked = MODE_FLIP_BLOCKED.load(Ordering::Relaxed);
     let last_flip_timestamp_ms = MODE_LAST_FLIP_TS_SET
@@ -4314,6 +4686,7 @@ pub fn snapshot() -> StatusSnapshot {
             .load(Ordering::Relaxed),
         effective_pacemaker_interval_ms: EFFECTIVE_PACEMAKER_INTERVAL_MS.load(Ordering::Relaxed),
         effective_npos_timeouts: effective_npos_timeouts_snapshot(),
+        npos_repair_coverage,
         effective_collectors_k: EFFECTIVE_COLLECTORS_K.load(Ordering::Relaxed),
         effective_redundant_send_r: EFFECTIVE_REDUNDANT_SEND_R.load(Ordering::Relaxed),
         mode_activation_lag_blocks,
@@ -4508,6 +4881,8 @@ pub fn snapshot() -> StatusSnapshot {
         tx_queue_saturated,
         worker_loop,
         commit_inflight,
+        commit_pipeline,
+        round_gap,
         tx_gossip: TxGossipSnapshot::default(),
         gossip_duplicate_known_skipped_total: GOSSIP_DUPLICATE_KNOWN_SKIPPED_TOTAL
             .load(Ordering::Relaxed),
@@ -4668,6 +5043,10 @@ pub(crate) enum DedupEvictionKind {
     Vote,
     /// `BlockCreated` payload cache evictions.
     BlockCreated,
+    /// Exact `FetchBlockBody` payload cache evictions.
+    FetchBlockBody,
+    /// Exact `BlockBodyResponse` payload cache evictions.
+    BlockBodyResponse,
     /// Proposal payload cache evictions.
     Proposal,
     /// RBC INIT payload cache evictions.
@@ -4706,6 +5085,23 @@ pub(crate) fn record_dedup_evictions(kind: DedupEvictionKind, capacity: usize, e
             }
             if expired > 0 {
                 DEDUP_BLOCK_CREATED_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
+        DedupEvictionKind::FetchBlockBody => {
+            if capacity > 0 {
+                DEDUP_FETCH_PENDING_BLOCK_EVICT_CAPACITY_TOTAL
+                    .fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_FETCH_PENDING_BLOCK_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
+            }
+        }
+        DedupEvictionKind::BlockBodyResponse => {
+            if capacity > 0 {
+                DEDUP_BLOCK_SYNC_UPDATE_EVICT_CAPACITY_TOTAL.fetch_add(capacity, Ordering::Relaxed);
+            }
+            if expired > 0 {
+                DEDUP_BLOCK_SYNC_UPDATE_EVICT_EXPIRED_TOTAL.fetch_add(expired, Ordering::Relaxed);
             }
         }
         DedupEvictionKind::Proposal => {
@@ -6595,6 +6991,205 @@ pub fn note_commit_pipeline_tick(_mode: ConsensusMode, has_pending: bool) {
     }
 }
 
+fn commit_pipeline_snapshot() -> CommitPipelineSnapshot {
+    commit_pipeline_status_slot()
+        .lock()
+        .map(|guard| guard.snapshot)
+        .unwrap_or_default()
+}
+
+fn round_gap_snapshot() -> RoundGapSnapshot {
+    round_gap_status_slot()
+        .lock()
+        .map(|guard| guard.snapshot)
+        .unwrap_or_default()
+}
+
+#[allow(dead_code)] // Read by round-trace unit tests.
+pub(crate) fn round_trace_snapshot() -> RoundTraceSnapshot {
+    round_trace_status_slot()
+        .lock()
+        .map(|guard| guard.snapshot.clone())
+        .unwrap_or_default()
+}
+
+/// Publish the most recent commit-pipeline budget sample.
+pub fn record_commit_pipeline_sample(sample: CommitPipelineSample) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&COMMIT_TIMING_TEST_LOCK) else {
+        return;
+    };
+    if let Ok(mut guard) = commit_pipeline_status_slot().lock() {
+        guard.snapshot.last_total_ms = sample.total_ms;
+        guard.snapshot.last_validation_ms = sample.validation_ms;
+        guard.snapshot.last_qc_rebuild_ms = sample.qc_rebuild_ms;
+        guard.snapshot.last_gate_ms = sample.gate_ms;
+        guard.snapshot.last_finalize_ms = sample.finalize_ms;
+        guard.snapshot.last_drain_results_ms = sample.drain_results_ms;
+        guard.snapshot.last_drain_qc_verify_ms = sample.drain_qc_verify_ms;
+        guard.snapshot.last_drain_persist_ms = sample.drain_persist_ms;
+        guard.snapshot.last_drain_kura_store_ms = sample.drain_kura_store_ms;
+        guard.snapshot.last_drain_state_apply_ms = sample.drain_state_apply_ms;
+        guard.snapshot.last_drain_state_commit_ms = sample.drain_state_commit_ms;
+        guard.snapshot.ema_total_ms = guard.total_ema.update(sample.total_ms);
+        guard.snapshot.ema_validation_ms = guard.validation_ema.update(sample.validation_ms);
+        guard.snapshot.ema_gate_ms = guard.gate_ema.update(sample.gate_ms);
+        guard.snapshot.ema_finalize_ms = guard.finalize_ema.update(sample.finalize_ms);
+    }
+}
+
+fn update_round_gap_snapshot(
+    state: &mut RoundGapStatusState,
+    deliver_to_state_commit_ms: u64,
+    state_commit_to_next_propose_ms: u64,
+    deliver_to_next_propose_ms: u64,
+) {
+    state.snapshot.last_deliver_to_state_commit_ms = deliver_to_state_commit_ms;
+    state.snapshot.last_state_commit_to_next_propose_ms = state_commit_to_next_propose_ms;
+    state.snapshot.last_deliver_to_next_propose_ms = deliver_to_next_propose_ms;
+    state.snapshot.ema_deliver_to_state_commit_ms = state
+        .deliver_to_state_commit_ema
+        .update(deliver_to_state_commit_ms);
+    state.snapshot.ema_state_commit_to_next_propose_ms = state
+        .state_commit_to_next_propose_ema
+        .update(state_commit_to_next_propose_ms);
+    state.snapshot.ema_deliver_to_next_propose_ms = state
+        .deliver_to_next_propose_ema
+        .update(deliver_to_next_propose_ms);
+}
+
+fn prune_round_gap_markers(markers: &mut BTreeMap<RoundGapKey, RoundGapMarkers>) {
+    const ROUND_GAP_MARKER_CAP: usize = 64;
+    while markers.len() > ROUND_GAP_MARKER_CAP {
+        let Some(first) = markers.keys().next().copied() else {
+            break;
+        };
+        let _ = markers.remove(&first);
+    }
+}
+
+fn note_round_gap_marker(
+    height: u64,
+    view: u64,
+    block_hash: HashOf<BlockHeader>,
+    update: impl FnOnce(&mut RoundGapMarkers, Instant),
+) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&COMMIT_TIMING_TEST_LOCK) else {
+        return;
+    };
+    let Ok(mut guard) = round_gap_status_slot().lock() else {
+        return;
+    };
+    let key = RoundGapKey {
+        height,
+        view,
+        block_hash,
+    };
+    let (deliver_at, state_commit_at, unblocked_at) = {
+        let entry = guard.markers.entry(key).or_default();
+        update(entry, Instant::now());
+        (entry.deliver_at, entry.state_commit_at, entry.unblocked_at)
+    };
+
+    let deliver_to_state_commit_ms =
+        deliver_at
+            .zip(state_commit_at)
+            .map(|(deliver_at, state_commit_at)| {
+                u64::try_from(
+                    state_commit_at
+                        .saturating_duration_since(deliver_at)
+                        .as_millis(),
+                )
+                .unwrap_or(u64::MAX)
+            });
+    let state_commit_to_next_propose_ms =
+        state_commit_at
+            .zip(unblocked_at)
+            .map(|(state_commit_at, unblocked_at)| {
+                u64::try_from(
+                    unblocked_at
+                        .saturating_duration_since(state_commit_at)
+                        .as_millis(),
+                )
+                .unwrap_or(u64::MAX)
+            });
+    let deliver_to_next_propose_ms =
+        deliver_at
+            .zip(unblocked_at)
+            .map(|(deliver_at, unblocked_at)| {
+                u64::try_from(
+                    unblocked_at
+                        .saturating_duration_since(deliver_at)
+                        .as_millis(),
+                )
+                .unwrap_or(u64::MAX)
+            });
+
+    if let (
+        Some(deliver_to_state_commit_ms),
+        Some(state_commit_to_next_propose_ms),
+        Some(deliver_to_next_propose_ms),
+    ) = (
+        deliver_to_state_commit_ms,
+        state_commit_to_next_propose_ms,
+        deliver_to_next_propose_ms,
+    ) {
+        update_round_gap_snapshot(
+            &mut guard,
+            deliver_to_state_commit_ms,
+            state_commit_to_next_propose_ms,
+            deliver_to_next_propose_ms,
+        );
+        let _ = guard.markers.remove(&key);
+    }
+
+    prune_round_gap_markers(&mut guard.markers);
+}
+
+/// Record the first accepted RBC DELIVER for a round.
+pub fn record_round_gap_deliver(height: u64, view: u64, block_hash: HashOf<BlockHeader>) {
+    note_round_gap_marker(height, view, block_hash, |markers, now| {
+        markers.deliver_at.get_or_insert(now);
+    });
+}
+
+/// Record a successful local state commit for a round.
+pub fn record_round_gap_state_commit(height: u64, view: u64, block_hash: HashOf<BlockHeader>) {
+    note_round_gap_marker(height, view, block_hash, |markers, now| {
+        markers.state_commit_at.get_or_insert(now);
+    });
+}
+
+/// Record the point where a committed block stops blocking the pacemaker.
+pub fn record_round_gap_unblocked(height: u64, view: u64, block_hash: HashOf<BlockHeader>) {
+    note_round_gap_marker(height, view, block_hash, |markers, now| {
+        markers.unblocked_at.get_or_insert(now);
+    });
+}
+
+fn prune_round_trace_entries(entries: &mut VecDeque<RoundTraceEntry>) {
+    const ROUND_TRACE_CAP: usize = 32;
+    while entries.len() > ROUND_TRACE_CAP {
+        let _ = entries.pop_front();
+    }
+}
+
+pub(crate) fn record_round_trace(entry: RoundTraceEntry, gaps: RoundPhaseGapSnapshot) {
+    #[cfg(test)]
+    let Some(_guard) = try_reentrant_test_guard(&COMMIT_TIMING_TEST_LOCK) else {
+        return;
+    };
+    let Ok(mut guard) = round_trace_status_slot().lock() else {
+        return;
+    };
+    guard.entries.push_back(entry);
+    prune_round_trace_entries(&mut guard.entries);
+    guard.snapshot.latest = Some(entry);
+    guard.snapshot.gaps = gaps;
+    guard.snapshot.entries = guard.entries.iter().copied().collect();
+}
+
 fn now_timestamp_ms() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -7154,6 +7749,30 @@ pub(crate) fn reset_commit_inflight_for_tests() {
 }
 
 #[cfg(test)]
+pub(crate) fn reset_commit_pipeline_status_for_tests() {
+    let _guard = commit_timing_test_guard();
+    if let Ok(mut guard) = commit_pipeline_status_slot().lock() {
+        *guard = CommitPipelineStatusState::default();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_round_gap_status_for_tests() {
+    let _guard = commit_timing_test_guard();
+    if let Ok(mut guard) = round_gap_status_slot().lock() {
+        *guard = RoundGapStatusState::default();
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_round_trace_for_tests() {
+    let _guard = commit_timing_test_guard();
+    if let Ok(mut guard) = round_trace_status_slot().lock() {
+        *guard = RoundTraceStatusState::default();
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn reset_availability_stats_for_tests() {
     let mut stats = availability_slot().lock().unwrap();
     stats.total_votes = 0;
@@ -7458,6 +8077,12 @@ pub(crate) fn local_removed_test_guard() -> TestLockGuard {
 
 #[cfg(test)]
 #[allow(private_interfaces)]
+pub(crate) fn commit_timing_test_guard() -> TestLockGuard {
+    reentrant_test_guard(&COMMIT_TIMING_TEST_LOCK)
+}
+
+#[cfg(test)]
+#[allow(private_interfaces)]
 pub(crate) fn mode_tags_test_guard() -> TestLockGuard {
     reentrant_test_guard(&MODE_TAGS_TEST_LOCK)
 }
@@ -7638,7 +8263,7 @@ mod tests {
         ManifestGateKind, PrecommitSignerRecord, WorkerLoopStage, WorkerQueueKind,
     };
     use crate::governance::manifest::{GovernanceHooks, GovernanceRules, RuntimeUpgradeHook};
-    use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase, QcAggregate};
+    use crate::sumeragi::consensus::{NPOS_TAG, PERMISSIONED_TAG, Phase, QcAggregate};
 
     #[test]
     fn locked_qc_updates_monotonically() {
@@ -7756,6 +8381,33 @@ mod tests {
     }
 
     #[test]
+    fn npos_repair_coverage_snapshot_is_npos_only() {
+        let _guard = super::mode_tags_test_guard();
+        super::reset_npos_repair_coverage_for_tests();
+        super::set_mode_tags(PERMISSIONED_TAG, None, None);
+        super::record_npos_repair_coverage(12, 3, "missing_commit_votes", 2, 6_667, 7_500, true);
+        assert!(
+            super::snapshot().npos_repair_coverage.is_none(),
+            "permissioned status must not surface NPoS repair coverage"
+        );
+
+        super::set_mode_tags(NPOS_TAG, None, None);
+        let coverage = super::snapshot()
+            .npos_repair_coverage
+            .expect("npos repair coverage should be present");
+        assert_eq!(coverage.last_repair_height, 12);
+        assert_eq!(coverage.last_repair_view, 3);
+        assert_eq!(coverage.reason, "missing_commit_votes");
+        assert_eq!(coverage.selected_repair_peer_count, 2);
+        assert_eq!(coverage.required_stake_quorum_bps, 6_667);
+        assert_eq!(coverage.selected_stake_coverage_bps, 7_500);
+        assert!(coverage.reached_stake_quorum_coverage);
+
+        super::reset_npos_repair_coverage_for_tests();
+        super::set_mode_tags("", None, None);
+    }
+
+    #[test]
     fn membership_snapshot_tracks_view_hash() {
         super::reset_membership_snapshot_for_tests();
         assert!(super::membership_snapshot().is_none());
@@ -7817,6 +8469,7 @@ mod tests {
 
     #[test]
     fn rbc_mismatch_snapshot_tracks_counts_per_peer() {
+        let _guard = super::rbc_status_test_guard();
         super::reset_rbc_mismatch_for_tests();
         let peer_a = PeerId::new(KeyPair::random().public_key().clone());
         let peer_b = PeerId::new(KeyPair::random().public_key().clone());
@@ -9149,6 +9802,99 @@ mod tests {
     }
 
     #[test]
+    fn commit_pipeline_snapshot_tracks_last_and_ema_fields() {
+        let _guard = super::commit_timing_test_guard();
+        super::reset_commit_pipeline_status_for_tests();
+        super::record_commit_pipeline_sample(super::CommitPipelineSample {
+            total_ms: 120,
+            validation_ms: 30,
+            qc_rebuild_ms: 11,
+            gate_ms: 7,
+            finalize_ms: 19,
+            drain_results_ms: 13,
+            drain_qc_verify_ms: 2,
+            drain_persist_ms: 3,
+            drain_kura_store_ms: 4,
+            drain_state_apply_ms: 5,
+            drain_state_commit_ms: 6,
+        });
+        super::record_commit_pipeline_sample(super::CommitPipelineSample {
+            total_ms: 80,
+            validation_ms: 10,
+            qc_rebuild_ms: 9,
+            gate_ms: 5,
+            finalize_ms: 11,
+            drain_results_ms: 12,
+            drain_qc_verify_ms: 8,
+            drain_persist_ms: 7,
+            drain_kura_store_ms: 6,
+            drain_state_apply_ms: 5,
+            drain_state_commit_ms: 4,
+        });
+
+        let snapshot = super::snapshot().commit_pipeline;
+        assert_eq!(snapshot.last_total_ms, 80);
+        assert_eq!(snapshot.last_validation_ms, 10);
+        assert_eq!(snapshot.last_qc_rebuild_ms, 9);
+        assert_eq!(snapshot.last_gate_ms, 5);
+        assert_eq!(snapshot.last_finalize_ms, 11);
+        assert_eq!(snapshot.last_drain_results_ms, 12);
+        assert_eq!(snapshot.last_drain_qc_verify_ms, 8);
+        assert_eq!(snapshot.last_drain_persist_ms, 7);
+        assert_eq!(snapshot.last_drain_kura_store_ms, 6);
+        assert_eq!(snapshot.last_drain_state_apply_ms, 5);
+        assert_eq!(snapshot.last_drain_state_commit_ms, 4);
+        assert_eq!(snapshot.ema_total_ms, 112);
+        assert_eq!(snapshot.ema_validation_ms, 26);
+        assert_eq!(snapshot.ema_gate_ms, 7);
+        assert_eq!(snapshot.ema_finalize_ms, 17);
+    }
+
+    #[test]
+    fn round_gap_snapshot_records_markers_in_order() {
+        let _guard = super::commit_timing_test_guard();
+        super::reset_round_gap_status_for_tests();
+        let hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xCC; UntypedHash::LENGTH],
+        ));
+
+        super::record_round_gap_deliver(9, 3, hash);
+        std::thread::sleep(Duration::from_millis(2));
+        super::record_round_gap_state_commit(9, 3, hash);
+        std::thread::sleep(Duration::from_millis(2));
+        super::record_round_gap_unblocked(9, 3, hash);
+
+        let snapshot = super::snapshot().round_gap;
+        assert!(snapshot.last_deliver_to_state_commit_ms >= 2);
+        assert!(snapshot.last_state_commit_to_next_propose_ms >= 2);
+        assert!(
+            snapshot.last_deliver_to_next_propose_ms >= snapshot.last_deliver_to_state_commit_ms
+        );
+        assert_eq!(
+            snapshot.ema_deliver_to_state_commit_ms,
+            snapshot.last_deliver_to_state_commit_ms
+        );
+        assert_eq!(
+            snapshot.ema_state_commit_to_next_propose_ms,
+            snapshot.last_state_commit_to_next_propose_ms
+        );
+        assert_eq!(
+            snapshot.ema_deliver_to_next_propose_ms,
+            snapshot.last_deliver_to_next_propose_ms
+        );
+
+        let next_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
+            [0xDD; UntypedHash::LENGTH],
+        ));
+        super::record_round_gap_deliver(10, 0, next_hash);
+        let second = super::snapshot().round_gap;
+        assert_eq!(
+            second.last_deliver_to_next_propose_ms,
+            snapshot.last_deliver_to_next_propose_ms
+        );
+    }
+
+    #[test]
     fn pacemaker_backpressure_deferral_counter_tracks_increments() {
         super::reset_pacemaker_backpressure_deferrals_for_test();
         let initial = super::snapshot().pacemaker_backpressure_deferrals_total;
@@ -9187,16 +9933,16 @@ mod tests {
         super::reset_nexus_economics_for_tests();
         super::record_nexus_fee_event(super::NexusFeeEvent::Charged {
             payer_kind: super::NexusFeePayer::Payer,
-            payer_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_owned(),
-            amount: 10,
-            asset_id: "xor#sora".to_owned(),
+            payer_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_owned(),
+            amount: Numeric::from(10_u32),
+            asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
         });
         super::record_nexus_fee_event(super::NexusFeeEvent::SponsorDisabled {
-            payer_id: "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_owned(),
+            payer_id: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
         });
         super::record_nexus_fee_event(super::NexusFeeEvent::SponsorUnauthorized {
-            sponsor_id: "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_owned(),
-            authority_id: "6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp".to_owned(),
+            sponsor_id: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
+            authority_id: "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53".to_owned(),
         });
         let snap = super::nexus_fee_snapshot();
         assert_eq!(snap.charged_total, 1);
@@ -9207,7 +9953,7 @@ mod tests {
         assert_eq!(
             snap.last_error.as_deref(),
             Some(
-                "sponsor not authorized for authority 6cmzPVPX56eBcmRhnGrr3u5gDWjq3TbpwCwsNquHectzPZcFFA7TTEp"
+                "sponsor not authorized for authority sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"
             )
         );
     }
@@ -9240,6 +9986,7 @@ mod tests {
         let governance_rules = GovernanceRules {
             version: 1,
             validators: vec![ALICE_ID.clone(), BOB_ID.clone()],
+            validator_bindings: Vec::new(),
             quorum: Some(2),
             protected_namespaces: ["governance", "treasury"]
                 .into_iter()
@@ -9272,7 +10019,7 @@ mod tests {
         let status = super::LaneManifestStatus {
             lane: LaneId::new(3),
             alias: "governance".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -9286,7 +10033,7 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         let entry = &snapshot[0];
         assert_eq!(entry.lane_id, 3);
-        assert_eq!(entry.dataspace_id, DataSpaceId::GLOBAL.as_u64());
+        assert_eq!(entry.dataspace_id, DataSpaceId::UNIVERSAL.as_u64());
         assert_eq!(entry.visibility, LaneVisibility::Public.as_str());
         assert_eq!(
             entry.storage_profile,

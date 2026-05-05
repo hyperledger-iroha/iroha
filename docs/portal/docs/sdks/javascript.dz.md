@@ -68,15 +68,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -144,54 +144,26 @@ I18NI000000061X, `/v1/assets/definitions`, NFTs, balues, རྒྱུ་དང�
 
 I18NF0000022X
 
-## ཟུར་ཐོ་དང་ འཁྲུན་ཆོད་མེ་ཊ་ཌེ་ཊ་
+## Offline V2 readiness
 
-ཕྱིར་གཏོང་འཐུས་ཀྱི་ལན་འདེབས་ཚུ་གིས་ མཐོ་རིམ་གྱི་ ལག་དེབ་མེ་ཊ་ཌེ་ཊ་ གདོང་ཁར་ གསལ་སྟོན་འབདཝ་ཨིན།
-I18NI000000063X, `policy_expires_at_ms`, I18NI000000065, I18NI000000066,
-I18NI000000067X, དང་ `remaining_amount` དེ་ རུལ་བའི་མཉམ་དུ་ལོག་ཡོད།
-ཐོ་བཀོད་འབདཝ་ལས་ ཌེཤ་བོརཌ་ཚུ་གིས་ བཙུགས་ཏེ་ཡོད་མི་ Norito གི་ འབབ་ཁུངས་ཚུ་ གསལ་སྟོན་འབད་མི་དགོ། གསརཔ་འདི།
-གྲོགས་རམ་པ་ (`deadline_kind`, I18NI0000000070X, I18NI0000000071X,
-I18NI000000072X) ཤུལ་མའི་དུས་ཡུན་ཚང་བའི་དུས་ཚོད་ (གསར་བསྐྲུན་ → སྲིད་བྱུས།
-→ལག་ཁྱེར་༽ དེ་འབདཝ་ལས་ འཐུས་ཅིག་ཡོད་པའི་སྐབས་ ཡུ་ཨའི་ ངོ་རྟགས་ཚུ་གིས་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་ ཉེན་བརྡ་འབད་ཚུགས།
-<24h ལྷག་ཡོད། ཨེསི་ཌི་ཀེ་
-`/v1/offline/allowances` གིས་ བརྡ་སྟོན་འབད་མི་ REST ཚགས་མ་ཚུ་ མེ་ལོང་:
-`certificateExpiresBeforeMs/AfterMs`, I18NI00000075,
-I18NI0000000076X, I18NI000000077X, I18NI0000000078X, དང་།
-I18NI000000079X / I18NI0000080X བུ་ལོན། ནུས་མེད་མཉམ་སྡེབ་ཚུ་(དོན་ལུ་དོན་ལུ།
-དཔེར་ན་ `onlyMissingVerdict` + `verdictIdHex`) འདི་ Torii གི་ཧེ་མ་ ཉེ་གནས་ལུ་ ངོས་ལེན་འབདཝ་ཨིན།
-ཟེར་སླབ་ཨིན།
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
-I18NF0000023X
+```js
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
+```
+## Offline V2 readiness
 
-## ཕྱིར་ཐིག་མཐོ་རིམ་ (གནད་ཚིག + ཐོ་འགོད་)།
-
-ཁྱོད་ཀྱིས་ལག་ཁྱེར་བྱིན་དགོ་པའི་སྐབས་ མཐོ་ཚད་གྲོགས་རམ་པ་ཚུ་ལག་ལེན་འཐབ།
-ཡིག་ཚང་ནང་ཐོ་བཀོད་འབད། ཨེསི་ཌི་ཀེ་གིས་ བཏོན་ཡོད་པའི་དང་ ཐོ་བཀོད་འབད་ཡོད་པའི་ལག་ཁྱེར་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
-ལོག་མ་འབད་བའི་ཧེ་མ་ ཨའི་ཌི་ཚུ་མཐུན་སྒྲིག་འབདཝ་ཨིནམ་དང་ ལན་ནང་ པེ་ལོཌི་གཉིས་ཆ་ར་ཚུདཔ་ཨིན། ཡོདཔ༌ཨིན
-མཐོ་རིམ་གྱི་མཇུག་བསྡུའི་ས་ཚིགས་མེད། གྲོགས་རམ་པ་འདི་གིས་ གནད་དོན་ + ཐོ་བཀོད་ཁ་པར་ཚུ་ རིམ་སྒྲིག་འབདཝ་ཨིན། གལ་སྲིད
-ཁྱོད་ལུ་ཧེ་མ་ལས་ མིང་རྟགས་བཀོད་ཡོད་པའི་ལག་ཁྱེར་ཅིག་ཡོདཔ་ཨིན། `registerOfflineAllowance` (ཡང་ན་ ཡང་ན་)
-`renewOfflineAllowance` ཐད་ཀར་ ཐད་ཀར་.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
 ## Torii འདྲི་དཔྱད་དང་རྒྱུན་སྤེལ་ (ཝེབ་སོ་ཀེཊི་ཚུ།)
 
 འདྲི་དཔྱད་གྲོགས་རམ་པ་ཚུ་གིས་ གནས་ཚད་ཕྱིར་བཏོན་འབདཝ་ཨིན།
@@ -226,7 +198,7 @@ I18NI000000088X བརྡ་བཀོད་དང་ཉེན་བརྡ་ཚ�
 I18NI000000090X མཐའ་མཚམས་ཚུ་ དེ་ལས་ ཌེཤ་བོརཌི་ཚུ་གིས་ བསྐྱར་རྩེད་འབད་ཚུགས།
 དེ་དང་འདྲ་བའི་པར་བརྙན་དེ་གིས་ དྲྭ་ཚིགས་ལུ་དབང་ཚད་ཡོདཔ་ཨིན། `getExplorerMetrics()` སྤྱིར་བཏང་བཟོཝ་ཨིན།
 འགྲུལ་ལམ་འདི་ལྕོགས་མིན་བཟོ་བའི་སྐབས་ པེ་ལོཌི་དང་ `null` སླར་ལོག་འབདཝ་ཨིན། དེ་དང་མཉམ་དུ་བསྡམས།
-I18NI000000093X ཁྱོད་ལུ་ I105 (དགའ་གདམ་)/སོ་ར་ (ངོ་མ) དང་ ནང་ཐིག་ཚུ་དགོཔ་ཨིན།
+I18NI000000093X ཁྱོད་ལུ་ i105 (དགའ་གདམ་)/སོ་ར་ (ངོ་མ) དང་ ནང་ཐིག་ཚུ་དགོཔ་ཨིན།
 བགོ་བཤའ་ཨེབ་རྟ་ཚུ་གི་དོན་ལུ་ SVG.
 
 ```ts
@@ -241,7 +213,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -249,8 +221,8 @@ console.log(
 );
 ```
 
-`I105` བརྒྱུད་དེ་ Explorer གི་སྔོན་སྒྲིག་བསྡམ་བཞག་ཡོདཔ།
-འདམ་ཁ་རྐྱབ་མི་ཚུ། དང་འདོད་ཡོད་པའི་ I105 ཐོན་འབྲས་ཡང་ན་ ཞུ་བ་ I105 གི་དོན་ལུ་ བཀག་ཆ་འབད་མི་འདི་ ཕྱིར་བཏོན་འབད།
+`i105` བརྒྱུད་དེ་ Explorer གི་སྔོན་སྒྲིག་བསྡམ་བཞག་ཡོདཔ།
+འདམ་ཁ་རྐྱབ་མི་ཚུ། དང་འདོད་ཡོད་པའི་ i105 ཐོན་འབྲས་ཡང་ན་ ཞུ་བ་ i105 གི་དོན་ལུ་ བཀག་ཆ་འབད་མི་འདི་ ཕྱིར་བཏོན་འབད།
 ཁྱོད་ལུ་ QR-safe དབྱེ་བ་དགོཔ་སྐབས། བསྡམས་པའི་ཚིག་འདི་ དྲག་ཤོས་གཉིས་པ་ཨིན།
 UX གི་དོན་ལུ་ སོ་ར་རྐྱངམ་ཅིག་གི་གདམ་ཁ། གྲོགས་རམ་པ་དེ་གིས་ ཨ་རྟག་ར་ ཀེ་ནོ་ནིག་ངོས་འཛིན་པ་སླར་ལོག་འབདཝ་ཨིན།
 སེལ་འཐུ་འབད་ཡོད་པའི་ཚིག་དོན་དང་ མེ་ཊ་ཌེ་ཊ་ (ཡོངས་འབྲེལ་སྔོན་སྒྲིག་ ཀིའུ་ཨར་ཐོན་རིམ་/ཚད་གཞི་ འཛོལ་བ།
@@ -419,7 +391,7 @@ for await (const event of torii.streamEvents({
   ཀེ་ནོ་ནིག་རྩིས་ཐོའི་ཨའི་ཌི་ཚུ་གིས་ བདག་དབང་གི་ བདག་དབང་ཚུ་ སྡེ་ཚན་བཟོ་ནི། འདི་ཚགས་མ་འབད་ནིའི་དོན་ལུ་ `assetId`
   spired of sesigh ཅིག་ལུ་མར་འབབ་ཨིན།
 - I18NI000000143X གནད་སྡུད་ས་སྟོང་ ↔ རྩིས་ཐོ་ཆ་མཉམ་གྲངས་རྩིས་འབདཝ་ཨིན།
-  བཱའིན་ཌིང་ (`I105` གིས་ `i105` ཚིག་དོན་ཚུ་སླར་ལོག་འབདཝ་ཨིན།)
+  བཱའིན་ཌིང་ (`i105` གིས་ `i105` ཚིག་དོན་ཚུ་སླར་ལོག་འབདཝ་ཨིན།)
 - I18NI0000000146X གིས་ ལྕོགས་གྲུབ་རེ་རེ་བཞིན་ གསལ་སྟོན་འབདཝ་ཨིན།
   ཚེ་སྲོག་གི་གནས་རིམ་དང་ རྩིས་ཞིབ་འབད་ནིའི་དོན་ལུ་ མཐའ་མཚམས་ཀྱི་རྩིས་ཁྲ་ཚུ།བཀོལ་སྤྱོད་པའི་སྒྲུབ་བྱེད་ཐུམ་སྒྲིལ་ཚུ་གི་དོན་ལུ་ དཔར་བསྐྲུན་/ཆ་མེད་གཏང་ནི་གི་རྒྱུན་རིམ་ཚུ་གསལ་སྟོན་འབད་ཞིནམ་ལས་ ཨེསི་ཌི་ཀེ་གནས་སྤོ།
 ལམ་སྟོན་, ཡོངས་ཁྱབ་རྩིས་ཁྲའི་ལམ་སྟོན་ (`docs/source/universal_accounts_guide.md`) ལུ་རྗེས་སུ་འབྲང་།
@@ -462,7 +434,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -472,7 +444,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

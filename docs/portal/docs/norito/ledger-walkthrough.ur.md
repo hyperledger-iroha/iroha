@@ -4,9 +4,9 @@ direction: rtl
 source: docs/portal/docs/norito/ledger-walkthrough.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2ea0c0b2f750131568e801b5fe583ae46ebddda3ce4f9fb52387725c2e227520
-source_last_modified: "2025-11-07T12:25:39.145308+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: a26e8de48d00066a9551f1909840165fc33e0ffc18b38b7ac4c6491b2c825f7b
+source_last_modified: "2026-04-03T17:43:03.931384+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -27,8 +27,8 @@ slug: /norito/ledger-walkthrough
 اس گائیڈ میں `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو ان account IDs سے بدلیں جو آپ استعمال کرنا چاہتے ہیں۔ defaults bundle پہلے ہی demo keys سے اخذ کیے گئے دو accounts شامل کرتا ہے:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 پہلے چند accounts لسٹ کر کے ویلیوز کی تصدیق کریں:
@@ -47,7 +47,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # wonderland کے اندر accounts (ضرورت ہو تو --limit بڑھائیں)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # وہ asset definitions جو پہلے سے موجود ہیں
@@ -62,14 +62,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI submitted transaction hash (مثلاً `0x5f…`) پرنٹ کرتا ہے۔ اسے محفوظ کریں تاکہ بعد میں status کو query کیا جا سکے۔
 
 ## 3. آپریٹر اکاؤنٹ میں units mint کریں
 
-asset quantities `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` میں `coffee#wonderland` کی 250 units mint کریں:
+asset quantities `(asset definition, account)` کے جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` میں `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` کی 250 units mint کریں:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -182,7 +182,7 @@ translator: machine-google-reviewed
   አዲስ የቴሌሜትሪ ምግቦች እንደገና ሳይፈጠሩ ሜታል-ቪኤስ-ሲፒዩ ዴልታዎች።
 
 ## WP2-B ፖሲዶን አንጸባራቂ ጫኚ እና የራስ-ሙከራ ተመሳሳይነት- `fastpq_prover::poseidon_manifest()` አሁን አካትቶ ይተነትናል።
-  `artifacts/offline_poseidon/constants.ron`፣ SHA-256 ያሰላል
+  `artifacts/poseidon/constants.ron`፣ SHA-256 ያሰላል
   (`poseidon_manifest_sha256()`)፣ እና በሲፒዩ ላይ ያለውን ቅጽበታዊ ገጽ እይታ ያረጋግጣል
   ማንኛውም የጂፒዩ ሥራ ከመጀመሩ በፊት የፖሲዶን ጠረጴዛዎች። `build_metal_context()` መዝገቦች
   የቴሌሜትሪ ላኪዎች ማተም እንዲችሉ በማሞቅ ጊዜ መፈጨት

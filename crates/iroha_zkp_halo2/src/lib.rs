@@ -61,8 +61,31 @@ pub use envelope::{
     Halo2ProofEnvelopeHeader, PCS_IPA, PUBLIC_INPUT_STRIDE, TRANSCRIPT_BLAKE2B,
 };
 pub use errors::Error;
-pub use norito_types::{IpaParams, IpaProofData, OpenVerifyEnvelope, PolyOpenPublic, ZkCurveId};
+pub use norito_types::{
+    IpaParams, IpaProofData, OpenVerifyEnvelope, PolyOpenPublic, PolyOpenTranscriptMetadata,
+    ZkCurveId,
+};
 pub use transcript::Transcript;
+
+/// Optional resource limits for standalone `OpenVerifyEnvelope` decoding.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct OpenVerifyLimits {
+    /// Maximum allowed circuit/domain size exponent (`n <= 2^max_k`).
+    pub max_k: Option<u32>,
+    /// Maximum allowed transcript label length in bytes.
+    pub max_transcript_label_len: Option<usize>,
+}
+
+impl OpenVerifyLimits {
+    /// Returns an unbounded limit set.
+    #[must_use]
+    pub const fn unbounded() -> Self {
+        Self {
+            max_k: None,
+            max_transcript_label_len: None,
+        }
+    }
+}
 
 /// Crate constants and domain separation tags.
 pub mod constants {
@@ -132,7 +155,17 @@ pub mod norito_helpers {
         w: &IpaProofData,
     ) -> Result<crate::ipa::IpaProof<B>, Error> {
         if w.version != 1 {
-            return Err(Error::VerificationFailed);
+            return Err(Error::UnsupportedVersion {
+                component: "IpaProofData",
+                version: w.version,
+            });
+        }
+        if w.l.len() != w.r.len() {
+            return Err(Error::InvalidProofShape {
+                reason: "L/R round count",
+                expected: w.l.len(),
+                actual: w.r.len(),
+            });
         }
         let l_vec =
             w.l.iter()
@@ -171,11 +204,103 @@ pub mod norito_helpers {
 
     /// Decode and dispatch a polynomial opening envelope according to its backend.
     pub fn decode_envelope(env: &OpenVerifyEnvelope) -> Result<DecodedEnvelope, Error> {
+        decode_envelope_with_limits(env, OpenVerifyLimits::unbounded())
+    }
+
+    /// Decode and dispatch a polynomial opening envelope with explicit resource limits.
+    pub fn decode_envelope_with_limits(
+        env: &OpenVerifyEnvelope,
+        limits: OpenVerifyLimits,
+    ) -> Result<DecodedEnvelope, Error> {
+        validate_envelope_limits(env, limits)?;
         if env.params.n != env.public.n {
-            return Err(Error::VerificationFailed);
+            return Err(Error::DimensionMismatch {
+                expected: env.params.n as usize,
+                actual: env.public.n as usize,
+            });
         }
         if env.params.curve_id != env.public.curve_id {
-            return Err(Error::VerificationFailed);
+            return Err(Error::CurveMismatch {
+                expected: ZkCurveId::from_u16(env.params.curve_id),
+                actual: ZkCurveId::from_u16(env.public.curve_id),
+            });
+        }
+        if env.public.version != 1 {
+            return Err(Error::UnsupportedVersion {
+                component: "PolyOpenPublic",
+                version: env.public.version,
+            });
+        }
+        validate_proof_rounds(env.params.n as usize, env.proof.l.len(), env.proof.r.len())?;
+        decode_envelope_unchecked(env)
+    }
+
+    fn validate_envelope_limits(
+        env: &OpenVerifyEnvelope,
+        limits: OpenVerifyLimits,
+    ) -> Result<(), Error> {
+        if let Some(max) = limits.max_transcript_label_len {
+            let actual = env.transcript_label.len();
+            if actual > max {
+                return Err(Error::EnvelopeLimitExceeded {
+                    limit: "transcript_label_len",
+                    max,
+                    actual,
+                });
+            }
+        }
+        if let Some(max_k) = limits.max_k {
+            let max_n = if max_k >= usize::BITS {
+                usize::MAX
+            } else {
+                1usize << max_k
+            };
+            let actual = env.params.n as usize;
+            if actual > max_n {
+                return Err(Error::EnvelopeLimitExceeded {
+                    limit: "max_k",
+                    max: max_n,
+                    actual,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_proof_rounds(n: usize, l_rounds: usize, r_rounds: usize) -> Result<(), Error> {
+        if l_rounds != r_rounds {
+            return Err(Error::InvalidProofShape {
+                reason: "L/R round count",
+                expected: l_rounds,
+                actual: r_rounds,
+            });
+        }
+        if n == 0 || (n & (n - 1)) != 0 {
+            return Err(Error::InvalidN(n));
+        }
+        let expected = n.trailing_zeros() as usize;
+        if l_rounds != expected {
+            return Err(Error::InvalidProofShape {
+                reason: "round count",
+                expected,
+                actual: l_rounds,
+            });
+        }
+        Ok(())
+    }
+
+    fn decode_envelope_unchecked(env: &OpenVerifyEnvelope) -> Result<DecodedEnvelope, Error> {
+        if env.params.version != 1 {
+            return Err(Error::UnsupportedVersion {
+                component: "IpaParams",
+                version: env.params.version,
+            });
+        }
+        if env.proof.version != 1 {
+            return Err(Error::UnsupportedVersion {
+                component: "IpaProofData",
+                version: env.proof.version,
+            });
         }
         match ZkCurveId::from_u16(env.params.curve_id) {
             ZkCurveId::Pallas => {
@@ -247,7 +372,7 @@ pub mod norito_helpers {
                     p_g,
                 })
             }
-            _ => Err(Error::VerificationFailed),
+            backend => Err(Error::UnsupportedBackend { backend }),
         }
     }
 
@@ -411,9 +536,13 @@ pub mod batch {
         }
     }
 
-    fn verify_single(env: &OpenVerifyEnvelope) -> Result<bool, Error> {
-        let decoded = norito_helpers::decode_envelope(env)?;
+    fn verify_single_with_limits(
+        env: &OpenVerifyEnvelope,
+        limits: OpenVerifyLimits,
+    ) -> Result<bool, Error> {
+        let decoded = norito_helpers::decode_envelope_with_limits(env, limits)?;
         let mut transcript = Transcript::new(&env.transcript_label);
+        let metadata = env.transcript_metadata();
         let result = match decoded {
             DecodedEnvelope::Pallas {
                 params,
@@ -421,13 +550,14 @@ pub mod batch {
                 z,
                 t,
                 p_g,
-            } => backend::pallas::Polynomial::verify_open(
+            } => backend::pallas::Polynomial::verify_open_with_metadata(
                 params.as_ref(),
                 &mut transcript,
                 z,
                 p_g,
                 t,
                 proof.as_ref(),
+                metadata,
             ),
             DecodedEnvelope::Bn254 {
                 params,
@@ -435,13 +565,14 @@ pub mod batch {
                 z,
                 t,
                 p_g,
-            } => backend::bn254::Polynomial::verify_open(
+            } => backend::bn254::Polynomial::verify_open_with_metadata(
                 params.as_ref(),
                 &mut transcript,
                 z,
                 p_g,
                 t,
                 proof.as_ref(),
+                metadata,
             ),
             #[cfg(feature = "goldilocks_backend")]
             DecodedEnvelope::Goldilocks {
@@ -450,13 +581,14 @@ pub mod batch {
                 z,
                 t,
                 p_g,
-            } => backend::goldilocks::Polynomial::verify_open(
+            } => backend::goldilocks::Polynomial::verify_open_with_metadata(
                 params.as_ref(),
                 &mut transcript,
                 z,
                 p_g,
                 t,
                 proof.as_ref(),
+                metadata,
             ),
             #[cfg(not(feature = "goldilocks_backend"))]
             DecodedEnvelope::Goldilocks => {
@@ -477,8 +609,14 @@ pub mod batch {
         }
     }
 
-    fn verify_sequential(envelopes: &[OpenVerifyEnvelope]) -> Vec<Result<bool, Error>> {
-        envelopes.iter().map(verify_single).collect()
+    fn verify_sequential_with_limits(
+        envelopes: &[OpenVerifyEnvelope],
+        limits: OpenVerifyLimits,
+    ) -> Vec<Result<bool, Error>> {
+        envelopes
+            .iter()
+            .map(|env| verify_single_with_limits(env, limits))
+            .collect()
     }
 
     /// Verify multiple `OpenVerifyEnvelope`s and return per-envelope results.
@@ -491,36 +629,55 @@ pub mod batch {
         envelopes: &[OpenVerifyEnvelope],
         options: &BatchOptions,
     ) -> Vec<Result<bool, Error>> {
+        verify_open_batch_with_limits(envelopes, options, OpenVerifyLimits::unbounded())
+    }
+
+    /// Verify multiple `OpenVerifyEnvelope`s with explicit resource limits.
+    pub fn verify_open_batch_with_limits(
+        envelopes: &[OpenVerifyEnvelope],
+        options: &BatchOptions,
+        limits: OpenVerifyLimits,
+    ) -> Vec<Result<bool, Error>> {
         if envelopes.is_empty() {
             return Vec::new();
         }
         match options.parallelism {
-            Parallelism::Sequential => verify_sequential(envelopes),
+            Parallelism::Sequential => verify_sequential_with_limits(envelopes, limits),
             Parallelism::Auto => {
                 #[cfg(feature = "parallel")]
                 {
-                    envelopes.par_iter().map(verify_single).collect()
+                    envelopes
+                        .par_iter()
+                        .map(|env| verify_single_with_limits(env, limits))
+                        .collect()
                 }
                 #[cfg(not(feature = "parallel"))]
                 {
-                    verify_sequential(envelopes)
+                    verify_sequential_with_limits(envelopes, limits)
                 }
             }
             Parallelism::Limited(limit) => {
                 #[cfg(feature = "parallel")]
                 {
                     if limit.get() <= 1 {
-                        return verify_sequential(envelopes);
+                        return verify_sequential_with_limits(envelopes, limits);
                     }
                     limited_pool(limit).map_or_else(
-                        || verify_sequential(envelopes),
-                        |pool| pool.install(|| envelopes.par_iter().map(verify_single).collect()),
+                        || verify_sequential_with_limits(envelopes, limits),
+                        |pool| {
+                            pool.install(|| {
+                                envelopes
+                                    .par_iter()
+                                    .map(|env| verify_single_with_limits(env, limits))
+                                    .collect()
+                            })
+                        },
                     )
                 }
                 #[cfg(not(feature = "parallel"))]
                 {
                     let _ = limit;
-                    verify_sequential(envelopes)
+                    verify_sequential_with_limits(envelopes, limits)
                 }
             }
         }

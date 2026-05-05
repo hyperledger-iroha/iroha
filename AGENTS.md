@@ -5,12 +5,13 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 ## Quickstart
 - Build workspace: `cargo build --workspace`
 - Builds can take about 20 minutes; use a 20-minute timeout for build steps.
-- Test everything: `cargo test --workspace` (note that this run typically takes several hours; plan accordingly)
+- Test everything: `cargo test` or `cargo test --workspace` (note that this run typically takes several hours; plan accordingly)
 - Lint strictly: `cargo clippy --workspace --all-targets -- -D warnings`
 - Format code: `cargo fmt --all` (edition 2024)
 - Test one crate: `cargo test -p <crate>`
 - Run one test: `cargo test -p <crate> <test_name> -- --nocapture`
 - Swift SDK: from the `IrohaSwift` directory run `swift test` to execute the Swift package tests.
+- Kotlin SDK: from the `kotlin` directory run `./gradlew :core-jvm:test --console=plain`; build Android artifacts with `./gradlew :client-android:assembleRelease :offline-wallet-android:assembleRelease --quiet`.
 - Android SDK: from `java/iroha_android` run `JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ./gradlew test`.
 - Scripts dependencies: `python3 -m pip install -r scripts/requirements.txt`.
 - Script tests: `pytest pytests/scripts`.
@@ -23,6 +24,11 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
   - Clarification: Kotodama targets the Iroha Virtual Machine (IVM) and produces IVM bytecode (`.to`). It does not target “risc5”/RISC‑V as a standalone architecture. Where RISC‑V–like encodings appear in the repository, they are implementation details of IVM’s instruction formats and must not change observable behavior across hardware.
 - Norito is the data serialization codec for Iroha
 - The entire workspace targets the Rust standard library (`std`). WASM/no-std builds are no longer supported and should not be considered when making changes.
+- Universal-account model:
+  - `AccountId` is the canonical account identity and is always domainless.
+  - Domain context for routing, aliasing, and ownership lives outside the canonical account identity in alias bindings and domain-owned entities.
+  - Account aliases are a separate SNS/account-label layer. Both domain-qualified aliases like `merchant@banka.paynet` and dataspace-root aliases like `merchant@paynet` bind to the same canonical `AccountId`.
+  - In tests and fixtures, seed the universal `AccountId` first, then add alias leases, alias permissions, and any domain-owned state separately. Use `Account::new(...)` for account registration and bind aliases separately only when the behavior under test depends on them.
 
 ## Repository structure
 - `Cargo.toml` at the repository root defines the workspace and lists all member crates.
@@ -34,6 +40,8 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
     - `iroha_cli` – command-line interface for interacting with a node.
     - `iroha_core`, `iroha_data_model`, `iroha_crypto`, and other supporting crates.
 - `IrohaSwift/` – Swift Package for the client/mobile SDK. Its sources live under `Sources/IrohaSwift/` and its unit tests under `Tests/IrohaSwiftTests/`. Run `swift test` from this directory to exercise the Swift suite.
+- `kotlin/` – default JVM/Android SDK for new mobile work. `core-jvm` contains the pure Kotlin/JVM Norito + client/model stack, `client-android` adds Android-only client/keystore integration, and `offline-wallet-android` contains Android-only offline wallet code and JNI libraries.
+- `java/` – Java SDKs kept in sync with the Kotlin SDK during the migration period. `java/norito_java` mirrors the Kotlin Norito implementation and `java/iroha_android` mirrors the Android/client surface until the Kotlin SDK fully replaces it.
 - `integration_tests/` – Cargo crate hosting cross-component tests under `tests/`.
 - `data_model/` – Sample data model definitions used in tests and documentation.
 - `docs/` – Project documentation and design notes. Markdown sources live in `docs/source/`.
@@ -58,6 +66,10 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - If logic changes, make sure all .md files and in-source code comments are up to date with the latest functionality.
 - Make sure that all logic added is done in such a way that it won't hurt the use of the IVM in a blockchain setting where different nodes on a P2P network have different hardware, but still the output should be the same given the same input block.
 - When answering questions about behaviour or implementation details, read the relevant code paths first and ensure you understand how they work before responding.
+- Treat the Kotlin SDK as the default solution for Android consumers. Keep Kotlin API/behavior changes mirrored in the corresponding `java/` implementation until the Java Android SDK is fully retired.
+- Kotlin SDK constraints from `kotlin/CLAUDE.md` are repository policy for new Kotlin SDK code: no `java.lang.reflect.*`, keep `core-jvm` free of Android dependencies, keep Android client code in `client-android`, and keep offline wallet Android/JNI code in `offline-wallet-android`.
+- Kotlin SDK enforces JDK 8 API compatibility at compile time via `-Xjdk-release=8`. All modules will fail to compile if JDK 9+ APIs are used (e.g. `Optional.isEmpty()`, `BigInteger.TWO`, `URLEncoder.encode(String, Charset)`, `Arrays.compareUnsigned()`). Use Kotlin stdlib equivalents or JDK 8 overloads instead. **Do not remove `-Xjdk-release=8`** — it is the only compile-time guard; without it, incompatible calls compile silently and crash at runtime.
+- Any cross-library wire-format or fixture test that currently validates Java SDK classes must validate the Kotlin SDK classes against the same shared fixtures as well.
 - Configuration: Prefer `iroha_config` parameters over environment variables for all runtime behavior. Add new knobs to `crates/iroha_config` (user → actual → defaults) and thread values explicitly through constructors or dependency injection (e.g., host setters). Keep any environment-based toggles only for developer convenience in tests and do not rely on them in production paths. We do not support shipping features behind environment variables—production behavior must always be sourced from the configuration files, and those configs must expose sensible defaults so a newcomer can clone the repo, run the binaries, and have everything “just work” without editing values manually.
   - For IVM/Kotodama v1, strict pointer‑ABI type policy is always enforced. There is no ABI-policy toggle; contracts and hosts must adhere to the ABI policy unconditionally.
 - Don't gate anything used in IVM syscalls or opcodes; every Iroha build must ship those code paths to keep deterministic behavior across nodes.
@@ -68,7 +80,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Add a `TODO:` comment explaining any temporary or incomplete implementation.
 - Format all Rust sources with `cargo fmt --all` (edition 2024) before committing.
 - Add tests: ensure at least one unit test for each new or modified function, placed either inline with `#[cfg(test)]` or in the crate `tests/` directory.
-- Run `cargo test` locally, fix any build issues, and ensure it passes. Do this for the entire repository, not just a specific crate.
+- Run `cargo test` locally for the full workspace, fix any build issues, and ensure it passes when the validation budget allows. Use `cargo test -p <crate>` for focused crate suites.
 - Optionally run `cargo clippy -- -D warnings` for additional lint checks.
 
 ## Documentation
@@ -130,6 +142,45 @@ Note: First release policy
 - Do not attempt to disable DA/RBC in tests (e.g., via `DevBypassDaAndRbcForZeroChain`); DA is enforced and that bypass path currently deadlocks in `sumeragi` during consensus startup.
 - QC quorum must be satisfied by voting validators (`min_votes_for_commit`); observer padding does not count toward availability/prevote/precommit quorum checks, so aggregate QCs only after enough validator votes arrive.
 - DA-enabled consensus now waits longer before view changes (commit quorum timeout = `block_time + 3 * commit_time`) to let RBC/availability QC finish on slower hosts.
+- When the user asks about the live SORA Taira testnet or deployed Torii MCP
+  workflows, consult `skills/sora-taira-testnet/SKILL.md` in this repo and
+  prefer the curated `iroha.*` tool surface. Treat
+  `https://taira.sora.org/v1/mcp` as the current primary public Taira MCP
+  endpoint unless the user or operator gives you a different public Torii
+  root for the deployment under test.
+- Treat any Taira/runtime signing inputs such as `authority`,
+  `private_key`, bearer tokens, or forwarded auth headers as runtime-only
+  secrets and never persist them in repo files or committed docs.
+- For Taira rollout/debug work, do not trust MCP discovery alone. Use
+  `configs/soranexus/taira/check_mcp_rollout.sh`, and for final public cutover
+  require the signed canary path with `--write-config <runtime-only client.toml>`.
+  Prefer `configs/soranexus/taira/taira-canary-client.example.toml` as the
+  source template; `defaults/client.toml` uses the generic zero chain id.
+  The canary signer must already exist on Taira, but the rollout smoke can now
+  bootstrap the faucet asset automatically if the only failure is
+  `Failed to find asset`.
+- For multi-validator Taira deploy changes, do not hand-edit
+  `configs/soranexus/taira/config.toml` into separate copies. Render per-host
+  configs from `configs/soranexus/taira/validator_roster.example.toml` plus
+  `configs/soranexus/taira/validator_secrets.example.toml` with
+  `python3 scripts/render_taira_validator_bundle.py --roster ... --secrets ...`
+  and point the unit at the generated config path.
+- If a live public Taira write fails with `route_unavailable`, treat it as an
+  ingress or authoritative-peer routing failure first, not a user payload bug.
+- If a live Taira signed canary fails with `Failed to find asset`, check the
+  faucet/bootstrap path before changing deploy topology: the signer may simply
+  be unfunded for the fee asset.
+- When the user asks about the live SORA Minamoto mainnet or deployed Torii MCP
+  workflows, consult `skills/sora-minamoto-mainnet/SKILL.md` in this repo and
+  prefer the curated `iroha.*` tool surface. Treat
+  `https://minamoto.sora.org/v1/mcp` as the current primary public Minamoto MCP
+  endpoint unless the user or operator gives you a different public Torii
+  root for the deployment under test.
+- For Minamoto mainnet work, stay read-only until the user explicitly asks to
+  mutate live state. Do not use Taira testnet faucet/bootstrap/canary
+  assumptions on Minamoto; prefer pre-signed transaction envelopes for
+  irreversible or value-moving operations, and keep any Minamoto signing inputs
+  runtime-only.
 
 ## Navigation tips
 - Search code: `rg '<term>'` and list files: `fd <name>`.

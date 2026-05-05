@@ -2,7 +2,7 @@
 id: address-checksum-runbook
 title: Account Address Checksum Incident Runbook
 sidebar_label: Checksum incidents
-description: Operational response for I105 checksum failures (ADDR-7).
+description: Operational response for i105 checksum failures (ADDR-7).
 ---
 
 :::note Canonical Source
@@ -67,8 +67,8 @@ If the incident is specifically about Local-8/Local-12 collisions, follow the
 - Inspect user-provided literals via `iroha tools address inspect` to find zero-width
   joins, kana conversions, or truncated payloads.
 - Cross-check wallet/explorer flows with
-  `docs/source/sns/address_display_guidelines.md` (dual copy targets, warnings,
-  QR helpers) to ensure they follow the approved UX.
+  `docs/source/sns/address_display_guidelines.md` (canonical i105 copy/share,
+  alias labeling, QR helpers) to ensure they follow the approved UX.
 
 ### Manifest or registry issues
 

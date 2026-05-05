@@ -144,6 +144,36 @@ The metrics endpoint (`/metrics`) now exposes the guard descriptor commitment vi
 validate that the pinning material served to clients matches the directory
 consensus.
 
+## VPN backend daemon
+
+When `vpn.backend_addr` is set in the relay configuration, `soranet-relay`
+expects a local TCP backend process to be listening on that socket. The new
+`sora-vpn-backend` binary in `tools/sora-vpn-backend` provides that relay-side
+bridge for Linux hosts:
+
+- It listens on `SORANET_VPN_BACKEND_LISTEN_ADDR` (default `127.0.0.1:19090`).
+- It derives a per-session Linux `tun` interface name from
+  `SORANET_VPN_BACKEND_INTERFACE` (used as an interface prefix, default
+  `svpn`).
+- It receives the per-session tunnel addresses, session subnet routes, and MTU
+  from the relay over the local bootstrap frame instead of relying on one fixed
+  address plan.
+- It can enable IP forwarding and per-session MASQUERADE rules using
+  `iptables`/`ip6tables`.
+
+Typical relay deployments should either:
+
+1. Run `sora-vpn-backend` as a companion service on the same host and point
+   `vpn.backend_addr` at its listen socket.
+2. Keep `vpn.backend_addr` unset if the relay is not meant to terminate VPN
+   traffic.
+
+The backend now supports concurrent sessions on one daemon instance, but it
+still relies on deterministic session-derived address allocation. If you need
+strong collision-avoidance guarantees across large shared fleets, extend the
+relay-to-backend bootstrap contract with an operator-assigned address pool
+allocator before deploying it to multi-tenant infrastructure.
+
 ## Runtime endpoints and persistence
 
 The relay exposes an admin HTTP listener at `admin_listen` for operational

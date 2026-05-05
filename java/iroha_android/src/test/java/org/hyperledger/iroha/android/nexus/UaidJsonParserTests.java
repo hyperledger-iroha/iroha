@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.nexus;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import org.hyperledger.iroha.android.testing.TestAssetDefinitionIds;
 
 public final class UaidJsonParserTests {
 
@@ -18,6 +19,7 @@ public final class UaidJsonParserTests {
   }
 
   private static void parsesPortfolioPayload() {
+    final String assetDefinitionId = TestAssetDefinitionIds.SECONDARY;
     final String json =
         """
         {
@@ -29,12 +31,12 @@ public final class UaidJsonParserTests {
               "dataspace_alias": "primary",
               "accounts": [
                 {
-                  "account_id": "alice@wonderland",
+                  "account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
                   "label": "alice",
                   "assets": [
                     {
-                      "asset_id": "usd#wonderland#alice",
-                      "asset_definition_id": "usd#wonderland",
+                      "asset": "%s",
+                      "scope": "global",
                       "quantity": "15"
                     }
                   ]
@@ -43,7 +45,8 @@ public final class UaidJsonParserTests {
             }
           ]
         }
-        """;
+        """
+            .formatted(assetDefinitionId);
     final UaidPortfolioResponse response =
         UaidJsonParser.parsePortfolio(json.getBytes(StandardCharsets.UTF_8));
     assert UAID.equals(response.uaid()) : "uaid mismatch";
@@ -56,12 +59,12 @@ public final class UaidJsonParserTests {
     assert "primary".equals(dataspace.dataspaceAlias()) : "dataspace alias mismatch";
     assert dataspace.accounts().size() == 1 : "account list size mismatch";
     final UaidPortfolioResponse.UaidPortfolioAccount account = dataspace.accounts().get(0);
-    assert "alice@wonderland".equals(account.accountId()) : "account id mismatch";
+    assert "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".equals(account.accountId()) : "account id mismatch";
     assert "alice".equals(account.label()) : "account label mismatch";
     assert account.assets().size() == 1 : "asset list size mismatch";
     final UaidPortfolioResponse.UaidPortfolioAsset asset = account.assets().get(0);
-    assert "usd#wonderland#alice".equals(asset.assetId()) : "asset id mismatch";
-    assert "usd#wonderland".equals(asset.assetDefinitionId()) : "definition id mismatch";
+    assert assetDefinitionId.equals(asset.asset()) : "definition id mismatch";
+    assert "global".equals(asset.scope()) : "scope mismatch";
     assert "15".equals(asset.quantity()) : "quantity mismatch";
   }
 
@@ -78,7 +81,7 @@ public final class UaidJsonParserTests {
               "manifest_hash": "deadbeef",
               "status": "Active",
               "lifecycle": { "activated_epoch": 1.5 },
-              "accounts": ["alice@wonderland"],
+              "accounts": ["sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"],
               "manifest": {}
             }
           ]

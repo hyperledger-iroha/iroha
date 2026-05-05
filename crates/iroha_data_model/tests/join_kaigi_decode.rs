@@ -9,13 +9,13 @@ use iroha_data_model::{
 
 #[test]
 fn join_kaigi_roundtrip_preserves_optional_fields() {
-    let domain_id = "wonderland".parse::<DomainId>().expect("domain id");
+    let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let call_id = KaigiId::new(
         domain_id.clone(),
         "kaigi".parse::<Name>().expect("call name"),
     );
     let participant =
-        AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+        AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
             .expect("participant account id")
             .into_account_id();
     let commitment = KaigiParticipantCommitment {

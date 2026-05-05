@@ -86,6 +86,7 @@ static HSE_DECRYPT: AtomicU64 = AtomicU64::new(0);
 static HSE_CODEC: AtomicU64 = AtomicU64::new(0);
 static HSE_IO: AtomicU64 = AtomicU64::new(0);
 static HSE_OTHER: AtomicU64 = AtomicU64::new(0);
+static MALFORMED_PAYLOAD_FRAMES: AtomicU64 = AtomicU64::new(0);
 
 // Handshake latency histogram buckets (ms)
 const HN: usize = 12;
@@ -567,7 +568,7 @@ mod handshake_config_tests {
     use std::num::NonZeroU32;
 
     use rand::{SeedableRng, rngs::StdRng};
-    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
     use tempfile::tempdir;
 
     use super::*;
@@ -1132,6 +1133,15 @@ pub fn handshake_ms_count() -> u64 {
     HANDSHAKE_MS_COUNT.load(Ordering::Relaxed)
 }
 
+/// Returns the number of decrypted peer frames dropped due to malformed inner payloads.
+pub fn malformed_payload_frame_count() -> u64 {
+    MALFORMED_PAYLOAD_FRAMES.load(Ordering::Relaxed)
+}
+
+fn record_malformed_payload_frame() {
+    MALFORMED_PAYLOAD_FRAMES.fetch_add(1, Ordering::Relaxed);
+}
+
 fn observe_handshake_ms(ms: u64) {
     HANDSHAKE_MS_SUM.fetch_add(ms, Ordering::Relaxed);
     HANDSHAKE_MS_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -1494,6 +1504,7 @@ pub mod handles {
     /// Per-topic senders for peer substreams.
     pub(super) struct TopicSenders<T> {
         pub(super) hi_consensus: post_channel::Sender<T>,
+        pub(super) hi_consensus_payload: post_channel::Sender<T>,
         pub(super) hi_consensus_chunk: post_channel::Sender<T>,
         pub(super) hi_control: post_channel::Sender<T>,
         pub(super) lo_block_sync: post_channel::Sender<T>,
@@ -1532,8 +1543,10 @@ pub mod handles {
 
             let topic = msg.topic();
             let sender = match topic {
-                crate::network::message::Topic::Consensus
-                | crate::network::message::Topic::ConsensusPayload => &self.senders.hi_consensus,
+                crate::network::message::Topic::Consensus => &self.senders.hi_consensus,
+                crate::network::message::Topic::ConsensusPayload => {
+                    &self.senders.hi_consensus_payload
+                }
                 crate::network::message::Topic::ConsensusChunk => &self.senders.hi_consensus_chunk,
                 crate::network::message::Topic::Control => &self.senders.hi_control,
                 crate::network::message::Topic::BlockSync => &self.senders.lo_block_sync,
@@ -1550,6 +1563,73 @@ pub mod handles {
                 TrySendError::Closed(_) => PostError::Closed,
             })
         }
+    }
+
+    /// Receiver set kept alive by network tests that need a synthetic peer handle.
+    #[cfg(test)]
+    pub(crate) struct TestPeerHandleReceivers<T: Pload> {
+        _hi_consensus: post_channel::Receiver<T>,
+        _hi_consensus_payload: post_channel::Receiver<T>,
+        _hi_consensus_chunk: post_channel::Receiver<T>,
+        _hi_control: post_channel::Receiver<T>,
+        _lo_block_sync: post_channel::Receiver<T>,
+        _lo_tx_gossip: post_channel::Receiver<T>,
+        _lo_peer_gossip: post_channel::Receiver<T>,
+        _lo_health: post_channel::Receiver<T>,
+        lo_other: post_channel::Receiver<T>,
+    }
+
+    #[cfg(test)]
+    impl<T: Pload> TestPeerHandleReceivers<T> {
+        /// Receive the next generic-lane message, if any.
+        pub(crate) fn try_recv_other(
+            &mut self,
+        ) -> Result<T, tokio::sync::mpsc::error::TryRecvError> {
+            self.lo_other.try_recv()
+        }
+    }
+
+    /// Build a synthetic peer handle for network unit tests.
+    #[cfg(test)]
+    pub(crate) fn test_peer_handle<T: Pload>(
+        cap: usize,
+    ) -> (PeerHandle<T>, TestPeerHandleReceivers<T>) {
+        let (hi_consensus_tx, hi_consensus_rx) = post_channel::channel(cap);
+        let (hi_consensus_payload_tx, hi_consensus_payload_rx) = post_channel::channel(cap);
+        let (hi_consensus_chunk_tx, hi_consensus_chunk_rx) = post_channel::channel(cap);
+        let (hi_control_tx, hi_control_rx) = post_channel::channel(cap);
+        let (lo_block_sync_tx, lo_block_sync_rx) = post_channel::channel(cap);
+        let (lo_tx_gossip_tx, lo_tx_gossip_rx) = post_channel::channel(cap);
+        let (lo_peer_gossip_tx, lo_peer_gossip_rx) = post_channel::channel(cap);
+        let (lo_health_tx, lo_health_rx) = post_channel::channel(cap);
+        let (lo_other_tx, lo_other_rx) = post_channel::channel(cap);
+
+        (
+            PeerHandle {
+                senders: TopicSenders {
+                    hi_consensus: hi_consensus_tx,
+                    hi_consensus_payload: hi_consensus_payload_tx,
+                    hi_consensus_chunk: hi_consensus_chunk_tx,
+                    hi_control: hi_control_tx,
+                    lo_block_sync: lo_block_sync_tx,
+                    lo_tx_gossip: lo_tx_gossip_tx,
+                    lo_peer_gossip: lo_peer_gossip_tx,
+                    lo_health: lo_health_tx,
+                    lo_other: lo_other_tx,
+                },
+            },
+            TestPeerHandleReceivers {
+                _hi_consensus: hi_consensus_rx,
+                _hi_consensus_payload: hi_consensus_payload_rx,
+                _hi_consensus_chunk: hi_consensus_chunk_rx,
+                _hi_control: hi_control_rx,
+                _lo_block_sync: lo_block_sync_rx,
+                _lo_tx_gossip: lo_tx_gossip_rx,
+                _lo_peer_gossip: lo_peer_gossip_rx,
+                _lo_health: lo_health_rx,
+                lo_other: lo_other_rx,
+            },
+        )
     }
 
     #[cfg(test)]
@@ -1575,9 +1655,25 @@ pub mod handles {
             }
         }
 
+        #[derive(Clone, Debug, Decode, Encode)]
+        struct ConsensusPayloadMsg;
+
+        impl<'a> norito::core::DecodeFromSlice<'a> for ConsensusPayloadMsg {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                norito::core::decode_field_canonical::<Self>(bytes)
+            }
+        }
+
+        impl ClassifyTopic for ConsensusPayloadMsg {
+            fn topic(&self) -> Topic {
+                Topic::ConsensusPayload
+            }
+        }
+
         #[test]
         fn consensus_chunk_routes_to_high_queue() {
             let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(1);
+            let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) = post_channel::channel(1);
             let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) = post_channel::channel(1);
             let (hi_control_tx, mut hi_control_rx) = post_channel::channel(1);
             let (lo_block_sync_tx, mut lo_block_sync_rx) = post_channel::channel(1);
@@ -1589,6 +1685,7 @@ pub mod handles {
             let handle = PeerHandle {
                 senders: TopicSenders {
                     hi_consensus: hi_consensus_tx,
+                    hi_consensus_payload: hi_consensus_payload_tx,
                     hi_consensus_chunk: hi_consensus_chunk_tx,
                     hi_control: hi_control_tx,
                     lo_block_sync: lo_block_sync_tx,
@@ -1609,6 +1706,69 @@ pub mod handles {
             ));
             assert!(matches!(
                 hi_consensus_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                hi_consensus_payload_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(hi_control_rx.try_recv(), Err(TryRecvError::Empty)));
+            assert!(matches!(
+                lo_block_sync_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                lo_tx_gossip_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                lo_peer_gossip_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(lo_health_rx.try_recv(), Err(TryRecvError::Empty)));
+            assert!(matches!(lo_other_rx.try_recv(), Err(TryRecvError::Empty)));
+        }
+
+        #[test]
+        fn consensus_payload_routes_to_dedicated_high_queue() {
+            let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(1);
+            let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) = post_channel::channel(1);
+            let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) = post_channel::channel(1);
+            let (hi_control_tx, mut hi_control_rx) = post_channel::channel(1);
+            let (lo_block_sync_tx, mut lo_block_sync_rx) = post_channel::channel(1);
+            let (lo_tx_gossip_tx, mut lo_tx_gossip_rx) = post_channel::channel(1);
+            let (lo_peer_gossip_tx, mut lo_peer_gossip_rx) = post_channel::channel(1);
+            let (lo_health_tx, mut lo_health_rx) = post_channel::channel(1);
+            let (lo_other_tx, mut lo_other_rx) = post_channel::channel(1);
+
+            let handle = PeerHandle {
+                senders: TopicSenders {
+                    hi_consensus: hi_consensus_tx,
+                    hi_consensus_payload: hi_consensus_payload_tx,
+                    hi_consensus_chunk: hi_consensus_chunk_tx,
+                    hi_control: hi_control_tx,
+                    lo_block_sync: lo_block_sync_tx,
+                    lo_tx_gossip: lo_tx_gossip_tx,
+                    lo_peer_gossip: lo_peer_gossip_tx,
+                    lo_health: lo_health_tx,
+                    lo_other: lo_other_tx,
+                },
+            };
+
+            handle
+                .post(ConsensusPayloadMsg)
+                .expect("consensus payload post should succeed");
+
+            assert!(matches!(
+                hi_consensus_payload_rx.try_recv(),
+                Ok(ConsensusPayloadMsg)
+            ));
+            assert!(matches!(
+                hi_consensus_rx.try_recv(),
+                Err(TryRecvError::Empty)
+            ));
+            assert!(matches!(
+                hi_consensus_chunk_rx.try_recv(),
                 Err(TryRecvError::Empty)
             ));
             assert!(matches!(hi_control_rx.try_recv(), Err(TryRecvError::Empty)));
@@ -1829,13 +1989,33 @@ mod run {
     const LOW_TOPIC_COUNT: usize = 5;
     const HI_BUDGET_RESET: u8 = 32;
     const HI_BUDGET_FALLBACK: u8 = 1;
+    const HI_CONTROL_BURST_MAX: u8 = 4;
+    const HI_CONSENSUS_BURST_MAX: u8 = 4;
+    const HI_PAYLOAD_BURST_MAX: u8 = 2;
     // Drain a few queued outbound posts per loop iteration to allow `MessageSender` to
     // batch multiple logical messages into fewer encrypted frames.
     const OUTBOUND_DRAIN_HI_MAX: usize = 8;
     const OUTBOUND_DRAIN_LO_MAX: usize = 32;
     const INBOUND_SEND_WARN_MS: u64 = 250;
-    const FORMAT_ERROR_BACKOFF_BASE_MS: u64 = 10;
-    const FORMAT_ERROR_BACKOFF_MAX_MS: u64 = 200;
+    // Decrypt/auth failures remain fatal. A malformed inner payload frame, however,
+    // is discarded after the encrypted frame has been consumed, so the next frame can
+    // still decode cleanly. Keep validator links alive through bounded transient
+    // framing damage under load instead of tearing down quorum after a tiny burst.
+    const MALFORMED_PAYLOAD_FRAME_THRESHOLD: u32 = 64;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum HighTopic {
+        Control,
+        Consensus,
+        ConsensusPayload,
+        ConsensusChunk,
+    }
+
+    fn note_malformed_payload_frame(streak: &mut u32) -> bool {
+        record_malformed_payload_frame();
+        *streak = streak.saturating_add(1);
+        *streak >= MALFORMED_PAYLOAD_FRAME_THRESHOLD
+    }
 
     fn low_topic_label(topic: LowTopic) -> &'static str {
         match topic {
@@ -1845,6 +2025,127 @@ mod run {
             LowTopic::Health => "low:health",
             LowTopic::Other => "low:other",
         }
+    }
+
+    fn high_topic_label(topic: HighTopic) -> &'static str {
+        match topic {
+            HighTopic::Control => "hi:control",
+            HighTopic::Consensus => "hi:consensus",
+            HighTopic::ConsensusPayload => "hi:consensus_payload",
+            HighTopic::ConsensusChunk => "hi:consensus_chunk",
+        }
+    }
+
+    fn note_high_topic_served(
+        control_burst: &mut u8,
+        consensus_burst: &mut u8,
+        payload_burst: &mut u8,
+        topic: HighTopic,
+    ) {
+        match topic {
+            HighTopic::Control => {
+                *control_burst = control_burst.saturating_add(1).min(HI_CONTROL_BURST_MAX);
+            }
+            HighTopic::Consensus => {
+                *control_burst = 0;
+                *consensus_burst = consensus_burst
+                    .saturating_add(1)
+                    .min(HI_CONSENSUS_BURST_MAX);
+            }
+            HighTopic::ConsensusPayload => {
+                *control_burst = 0;
+                *consensus_burst = 0;
+                *payload_burst = payload_burst.saturating_add(1).min(HI_PAYLOAD_BURST_MAX);
+            }
+            HighTopic::ConsensusChunk => {
+                *control_burst = 0;
+                *consensus_burst = 0;
+                *payload_burst = 0;
+            }
+        }
+    }
+
+    fn try_recv_high_data_fair<T>(
+        payload_burst: u8,
+        hi_consensus_payload_rx: &mut post_channel::Receiver<T>,
+        hi_consensus_chunk_rx: &mut post_channel::Receiver<T>,
+    ) -> Option<(HighTopic, T)> {
+        if payload_burst >= HI_PAYLOAD_BURST_MAX {
+            if let Some(m) = hi_consensus_chunk_rx.try_recv_now() {
+                return Some((HighTopic::ConsensusChunk, m));
+            }
+        }
+        if let Some(m) = hi_consensus_payload_rx.try_recv_now() {
+            return Some((HighTopic::ConsensusPayload, m));
+        }
+        hi_consensus_chunk_rx
+            .try_recv_now()
+            .map(|m| (HighTopic::ConsensusChunk, m))
+    }
+
+    fn try_recv_high_fair<T>(
+        control_burst: &mut u8,
+        consensus_burst: &mut u8,
+        payload_burst: &mut u8,
+        hi_control_rx: &mut post_channel::Receiver<T>,
+        hi_consensus_rx: &mut post_channel::Receiver<T>,
+        hi_consensus_payload_rx: &mut post_channel::Receiver<T>,
+        hi_consensus_chunk_rx: &mut post_channel::Receiver<T>,
+    ) -> Option<(HighTopic, T)> {
+        if *control_burst >= HI_CONTROL_BURST_MAX {
+            if let Some(m) = hi_consensus_rx.try_recv_now() {
+                note_high_topic_served(
+                    control_burst,
+                    consensus_burst,
+                    payload_burst,
+                    HighTopic::Consensus,
+                );
+                return Some((HighTopic::Consensus, m));
+            }
+            if let Some((topic, msg)) = try_recv_high_data_fair(
+                *payload_burst,
+                hi_consensus_payload_rx,
+                hi_consensus_chunk_rx,
+            ) {
+                note_high_topic_served(control_burst, consensus_burst, payload_burst, topic);
+                return Some((topic, msg));
+            }
+        }
+        if let Some(m) = hi_control_rx.try_recv_now() {
+            note_high_topic_served(
+                control_burst,
+                consensus_burst,
+                payload_burst,
+                HighTopic::Control,
+            );
+            return Some((HighTopic::Control, m));
+        }
+        if *consensus_burst >= HI_CONSENSUS_BURST_MAX {
+            if let Some((topic, msg)) = try_recv_high_data_fair(
+                *payload_burst,
+                hi_consensus_payload_rx,
+                hi_consensus_chunk_rx,
+            ) {
+                note_high_topic_served(control_burst, consensus_burst, payload_burst, topic);
+                return Some((topic, msg));
+            }
+        }
+        if let Some(m) = hi_consensus_rx.try_recv_now() {
+            note_high_topic_served(
+                control_burst,
+                consensus_burst,
+                payload_burst,
+                HighTopic::Consensus,
+            );
+            return Some((HighTopic::Consensus, m));
+        }
+        let next = try_recv_high_data_fair(
+            *payload_burst,
+            hi_consensus_payload_rx,
+            hi_consensus_chunk_rx,
+        )?;
+        note_high_topic_served(control_burst, consensus_burst, payload_burst, next.0);
+        Some(next)
     }
 
     fn bump_low_rr(low_rr: &mut u8, served_idx: usize) {
@@ -2047,6 +2348,8 @@ mod run {
 
             // Create per-topic substreams (bounded or unbounded depending on feature).
             let (hi_consensus_tx, mut hi_consensus_rx) = post_channel::channel(post_capacity);
+            let (hi_consensus_payload_tx, mut hi_consensus_payload_rx) =
+                post_channel::channel(post_capacity);
             let (hi_consensus_chunk_tx, mut hi_consensus_chunk_rx) =
                 post_channel::channel(post_capacity);
             let (hi_control_tx, mut hi_control_rx) = post_channel::channel(post_capacity);
@@ -2059,6 +2362,7 @@ mod run {
             let ready_peer_handle = handles::PeerHandle {
                 senders: handles::TopicSenders {
                     hi_consensus: hi_consensus_tx,
+                    hi_consensus_payload: hi_consensus_payload_tx,
                     hi_consensus_chunk: hi_consensus_chunk_tx,
                     hi_control: hi_control_tx,
                     lo_block_sync: lo_block_sync_tx,
@@ -2102,6 +2406,7 @@ mod run {
                 read_low.map(|read| MessageReader::new(read, cryptographer.clone(), max_frame_bytes));
             // Sampler for repeated read/parse errors to avoid log floods from malformed peers
             let mut read_err_sampler = LogSampler::new();
+            let mut malformed_payload_sampler = LogSampler::new();
             let mut recv_backpressure_sampler = LogSampler::new();
             let mut message_sender_hi = MessageSender::new(write, cryptographer.clone(), max_frame_bytes);
             let mut message_sender_low =
@@ -2148,7 +2453,11 @@ mod run {
             // low topics during sustained consensus traffic.
             let mut hi_budget: u8 = HI_BUDGET_RESET;
             let mut low_rr: u8 = 0;
-            let mut format_error_streak: u32 = 0;
+            let mut hi_control_burst: u8 = 0;
+            let mut hi_consensus_burst: u8 = 0;
+            let mut hi_payload_burst: u8 = 0;
+            let mut malformed_payload_streak_hi: u32 = 0;
+            let mut malformed_payload_streak_low: u32 = 0;
 
             loop {
                 if let Some((topic, msg)) = maybe_take_low_after_hi(
@@ -2210,56 +2519,26 @@ mod run {
                 // I/O driver churn under load.
                 let mut drained_hi = 0usize;
                 while drained_hi < OUTBOUND_DRAIN_HI_MAX && hi_budget > 0 {
-                    let mut progressed = if let Some(m) = hi_consensus_rx.try_recv_now() {
-                        iroha_logger::trace!("Post message (hi:consensus/drain)");
-                        if let Err(error) =
-                            message_sender_hi.prepare_message(&Message::Data(m), Priority::High)
-                        {
-                            iroha_logger::error!(%error, "Failed to encrypt message.");
-                            break;
-                        }
-                        hi_budget = hi_budget.saturating_sub(1);
-                        drained_hi = drained_hi.saturating_add(1);
-                        true
-                    } else {
-                        false
+                    let Some((topic, msg)) = try_recv_high_fair(
+                        &mut hi_control_burst,
+                        &mut hi_consensus_burst,
+                        &mut hi_payload_burst,
+                        &mut hi_control_rx,
+                        &mut hi_consensus_rx,
+                        &mut hi_consensus_payload_rx,
+                        &mut hi_consensus_chunk_rx,
+                    ) else {
+                        break;
                     };
-                    if hi_budget == 0 {
+                    iroha_logger::trace!("Post message ({}/drain)", high_topic_label(topic));
+                    if let Err(error) =
+                        message_sender_hi.prepare_message(&Message::Data(msg), Priority::High)
+                    {
+                        iroha_logger::error!(%error, "Failed to encrypt message.");
                         break;
                     }
-
-                    if let Some(m) = hi_consensus_chunk_rx.try_recv_now() {
-                        iroha_logger::trace!("Post message (hi:consensus_chunk/drain)");
-                        if let Err(error) =
-                            message_sender_hi.prepare_message(&Message::Data(m), Priority::High)
-                        {
-                            iroha_logger::error!(%error, "Failed to encrypt message.");
-                            break;
-                        }
-                        hi_budget = hi_budget.saturating_sub(1);
-                        drained_hi = drained_hi.saturating_add(1);
-                        progressed = true;
-                    }
-                    if hi_budget == 0 {
-                        break;
-                    }
-
-                    if let Some(m) = hi_control_rx.try_recv_now() {
-                        iroha_logger::trace!("Post message (hi:control/drain)");
-                        if let Err(error) =
-                            message_sender_hi.prepare_message(&Message::Data(m), Priority::High)
-                        {
-                            iroha_logger::error!(%error, "Failed to encrypt message.");
-                            break;
-                        }
-                        hi_budget = hi_budget.saturating_sub(1);
-                        drained_hi = drained_hi.saturating_add(1);
-                        progressed = true;
-                    }
-
-                    if !progressed {
-                        break;
-                    }
+                    hi_budget = hi_budget.saturating_sub(1);
+                    drained_hi = drained_hi.saturating_add(1);
                 }
 
                 let mut drained_lo = 0usize;
@@ -2340,9 +2619,47 @@ mod run {
                         );
                         break;
                     }
+                    msg = hi_control_rx.recv(), if hi_budget > 0 => {
+                        if let Some(m) = msg {
+                            note_high_topic_served(
+                                &mut hi_control_burst,
+                                &mut hi_consensus_burst,
+                                &mut hi_payload_burst,
+                                HighTopic::Control,
+                            );
+                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::Control));
+                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
+                                iroha_logger::error!(%error, "Failed to encrypt message.");
+                                break;
+                            }
+                            hi_budget = hi_budget.saturating_sub(1);
+                        }
+                    }
                     msg = hi_consensus_rx.recv(), if hi_budget > 0 => {
                         if let Some(m) = msg {
-                            iroha_logger::trace!("Post message (hi:consensus)");
+                            note_high_topic_served(
+                                &mut hi_control_burst,
+                                &mut hi_consensus_burst,
+                                &mut hi_payload_burst,
+                                HighTopic::Consensus,
+                            );
+                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::Consensus));
+                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
+                                iroha_logger::error!(%error, "Failed to encrypt message.");
+                                break;
+                            }
+                            hi_budget = hi_budget.saturating_sub(1);
+                        }
+                    }
+                    msg = hi_consensus_payload_rx.recv(), if hi_budget > 0 => {
+                        if let Some(m) = msg {
+                            note_high_topic_served(
+                                &mut hi_control_burst,
+                                &mut hi_consensus_burst,
+                                &mut hi_payload_burst,
+                                HighTopic::ConsensusPayload,
+                            );
+                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusPayload));
                             if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
@@ -2352,17 +2669,13 @@ mod run {
                     }
                     msg = hi_consensus_chunk_rx.recv(), if hi_budget > 0 => {
                         if let Some(m) = msg {
-                            iroha_logger::trace!("Post message (hi:consensus_chunk)");
-                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
-                                iroha_logger::error!(%error, "Failed to encrypt message.");
-                                break;
-                            }
-                            hi_budget = hi_budget.saturating_sub(1);
-                        }
-                    }
-                    msg = hi_control_rx.recv(), if hi_budget > 0 => {
-                        if let Some(m) = msg {
-                            iroha_logger::trace!("Post message (hi:control)");
+                            note_high_topic_served(
+                                &mut hi_control_burst,
+                                &mut hi_consensus_burst,
+                                &mut hi_payload_burst,
+                                HighTopic::ConsensusChunk,
+                            );
+                            iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusChunk));
                             if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
@@ -2474,35 +2787,50 @@ mod run {
                     msg = message_reader.read_message() => {
                         let (message, encoded_len): (Message<T>, usize) = match msg {
                             Ok(Some((msg, encoded_len))) => {
-                                format_error_streak = 0;
+                                malformed_payload_streak_hi = 0;
                                 (msg, encoded_len)
                             }
                             Ok(None) => {
                                 iroha_logger::debug!("Peer send whole message and close connection");
                                 break;
                             }
-                            Err(error) => {
-                                let is_format_error = matches!(error, Error::Format);
-                                if is_format_error {
-                                    format_error_streak = format_error_streak.saturating_add(1);
-                                } else {
-                                    format_error_streak = 0;
+                            Err(Error::MalformedPayloadFrame) => {
+                                let disconnect =
+                                    note_malformed_payload_frame(&mut malformed_payload_streak_hi);
+                                if let Some(suppressed) = malformed_payload_sampler
+                                    .should_log(tokio::time::Duration::from_millis(500))
+                                {
+                                    iroha_logger::warn!(
+                                        peer = %peer_id,
+                                        conn_id,
+                                        stream = "high",
+                                        malformed_payload_streak = malformed_payload_streak_hi,
+                                        threshold = MALFORMED_PAYLOAD_FRAME_THRESHOLD,
+                                        suppressed,
+                                        "Dropped malformed decrypted peer payload frame"
+                                    );
                                 }
-                                let backoff_ms = (u64::from(format_error_streak)
-                                    .saturating_mul(FORMAT_ERROR_BACKOFF_BASE_MS))
-                                .min(FORMAT_ERROR_BACKOFF_MAX_MS);
+                                if disconnect {
+                                    iroha_logger::error!(
+                                        peer = %peer_id,
+                                        conn_id,
+                                        stream = "high",
+                                        malformed_payload_streak = malformed_payload_streak_hi,
+                                        "Disconnecting peer after consecutive malformed decrypted payload frames"
+                                    );
+                                    break;
+                                }
+                                idle_interval.reset();
+                                ping_interval.reset();
+                                continue;
+                            }
+                            Err(error) => {
                                 if let Some(supp) = read_err_sampler.should_log(tokio::time::Duration::from_millis(500)) {
                                     iroha_logger::error!(
                                         ?error,
                                         suppressed=supp,
-                                        format_error = is_format_error,
-                                        format_error_streak,
-                                        backoff_ms,
                                         "Error while reading message from peer."
                                     );
-                                }
-                                if is_format_error && backoff_ms > 0 {
-                                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                                 }
                                 break;
                             }
@@ -2569,7 +2897,7 @@ mod run {
                     }, if message_reader_low.is_some() => {
                         let (message, encoded_len): (Message<T>, usize) = match msg {
                             Ok(Some((msg, encoded_len))) => {
-                                format_error_streak = 0;
+                                malformed_payload_streak_low = 0;
                                 (msg, encoded_len)
                             }
                             Ok(None) => {
@@ -2577,28 +2905,43 @@ mod run {
                                 message_reader_low = None;
                                 continue;
                             }
-                            Err(error) => {
-                                let is_format_error = matches!(error, Error::Format);
-                                if is_format_error {
-                                    format_error_streak = format_error_streak.saturating_add(1);
-                                } else {
-                                    format_error_streak = 0;
+                            Err(Error::MalformedPayloadFrame) => {
+                                let disconnect =
+                                    note_malformed_payload_frame(&mut malformed_payload_streak_low);
+                                if let Some(suppressed) = malformed_payload_sampler
+                                    .should_log(tokio::time::Duration::from_millis(500))
+                                {
+                                    iroha_logger::warn!(
+                                        peer = %peer_id,
+                                        conn_id,
+                                        stream = "low",
+                                        malformed_payload_streak = malformed_payload_streak_low,
+                                        threshold = MALFORMED_PAYLOAD_FRAME_THRESHOLD,
+                                        suppressed,
+                                        "Dropped malformed decrypted peer payload frame"
+                                    );
                                 }
-                                let backoff_ms = (u64::from(format_error_streak)
-                                    .saturating_mul(FORMAT_ERROR_BACKOFF_BASE_MS))
-                                .min(FORMAT_ERROR_BACKOFF_MAX_MS);
+                                if disconnect {
+                                    iroha_logger::error!(
+                                        peer = %peer_id,
+                                        conn_id,
+                                        stream = "low",
+                                        malformed_payload_streak = malformed_payload_streak_low,
+                                        "Disconnecting peer after consecutive malformed decrypted payload frames"
+                                    );
+                                    break;
+                                }
+                                idle_interval.reset();
+                                ping_interval.reset();
+                                continue;
+                            }
+                            Err(error) => {
                                 if let Some(supp) = read_err_sampler.should_log(tokio::time::Duration::from_millis(500)) {
                                     iroha_logger::debug!(
                                         ?error,
                                         suppressed=supp,
-                                        format_error = is_format_error,
-                                        format_error_streak,
-                                        backoff_ms,
                                         "Error while reading message from peer (low stream)."
                                     );
-                                }
-                                if is_format_error && backoff_ms > 0 {
-                                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                                 }
                                 message_reader_low = None;
                                 continue;
@@ -2932,7 +3275,7 @@ mod run {
         ///
         /// # Errors
         /// - Fail to decrypt message
-        /// - Fail to decode message
+        /// - Fail to decode the encrypted envelope
         fn parse_next_encrypted_frame(&mut self) -> Result<bool, Error> {
             let mut buf = &self.buffer[..];
             if buf.remaining() < Self::U32_SIZE {
@@ -2949,24 +3292,26 @@ mod run {
             }
 
             let data = &buf[..size];
-            {
+            let parsed = (|| -> Result<VecDeque<(M, usize)>, Error> {
                 let decrypted = self.cryptographer.decrypt_into(data, &mut self.decrypted)?;
                 let decrypted_len = decrypted.len();
                 if decrypted_len == 0 {
-                    return Err(Error::Format);
+                    return Err(Error::MalformedPayloadFrame);
                 }
-
                 // Decrypted payload may contain multiple Norito-framed messages.
                 let align = core::mem::align_of::<ncore::Archived<M>>();
                 let mut offset = 0usize;
+                let mut frame_messages = VecDeque::new();
                 while offset < decrypted_len {
-                    let remaining = decrypted.get(offset..).ok_or(Error::Format)?;
-                    let frame_len = framed_message_len::<M>(
-                        remaining,
-                        self.framed_schema,
-                        self.framed_padding,
-                    )?;
-                    let frame = remaining.get(..frame_len).ok_or(Error::Format)?;
+                    let remaining = decrypted
+                        .get(offset..)
+                        .ok_or(Error::MalformedPayloadFrame)?;
+                    let frame_len =
+                        framed_message_len::<M>(remaining, self.framed_schema, self.framed_padding)
+                            .map_err(|_| Error::MalformedPayloadFrame)?;
+                    let frame = remaining
+                        .get(..frame_len)
+                        .ok_or(Error::MalformedPayloadFrame)?;
                     let misaligned = align > 1
                         && !frame.is_empty()
                         && !((frame.as_ptr() as usize).is_multiple_of(align));
@@ -2977,22 +3322,19 @@ mod run {
                     } else {
                         ncore::decode_from_bytes::<M>(frame)
                     };
-                    let decoded = match decoded {
-                        Ok(value) => value,
-                        Err(err) => {
-                            iroha_logger::warn!(error = ?err, "Failed to decode peer message");
-                            return Err(Error::Format);
-                        }
-                    };
-                    self.pending.push_back((decoded, frame_len));
+                    let decoded = decoded.map_err(|_| Error::MalformedPayloadFrame)?;
+                    frame_messages.push_back((decoded, frame_len));
                     offset = offset.saturating_add(frame_len);
                 }
-                if offset != decrypted_len {
-                    return Err(Error::Format);
+                if offset == decrypted_len {
+                    Ok(frame_messages)
+                } else {
+                    Err(Error::MalformedPayloadFrame)
                 }
-            };
+            })();
 
             self.buffer.advance(size + Self::U32_SIZE);
+            self.pending.extend(parsed?);
 
             Ok(true)
         }
@@ -3014,8 +3356,12 @@ mod run {
         encrypted: Vec<u8>,
         /// Reusable buffers for framing outbound messages.
         frame_pool: Vec<BytesMut>,
-        /// Queue of encrypted messages waiting to be sent (high priority).
-        queue_high: VecDeque<BytesMut>,
+        /// Queues of encrypted high-priority frames by scheduling class.
+        queue_high_control: VecDeque<BytesMut>,
+        queue_high_consensus: VecDeque<BytesMut>,
+        queue_high_consensus_payload: VecDeque<BytesMut>,
+        queue_high_consensus_chunk: VecDeque<BytesMut>,
+        queue_high_other: VecDeque<BytesMut>,
         /// Queue of encrypted messages waiting to be sent (low priority).
         queue_low: VecDeque<BytesMut>,
         /// In-flight coalesced bytes currently being written to the socket.
@@ -3023,18 +3369,37 @@ mod run {
         batch_offset: usize,
         /// Maximum payload size accepted per encrypted frame
         max_frame_bytes: usize,
+        /// Number of consecutive control frames emitted before giving consensus/data a turn.
+        high_control_burst: usize,
+        /// Number of consecutive consensus frames emitted before giving payload/chunk a turn.
+        high_consensus_burst: usize,
+        /// Number of consecutive payload frames emitted before giving chunk a turn.
+        high_payload_burst: usize,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum HighBatchClass {
         Control,
+        Consensus,
+        ConsensusPayload,
         ConsensusChunk,
         Other,
+    }
+
+    impl HighBatchClass {
+        fn should_isolate_plaintext(self) -> bool {
+            matches!(
+                self,
+                Self::Control | Self::ConsensusPayload | Self::ConsensusChunk
+            )
+        }
     }
 
     fn classify_high_batch(topic: Topic) -> HighBatchClass {
         match topic {
             Topic::Control => HighBatchClass::Control,
+            Topic::Consensus => HighBatchClass::Consensus,
+            Topic::ConsensusPayload => HighBatchClass::ConsensusPayload,
             Topic::ConsensusChunk => HighBatchClass::ConsensusChunk,
             _ => HighBatchClass::Other,
         }
@@ -3046,6 +3411,9 @@ mod run {
         const MAX_BATCH_FRAMES: usize = 16;
         const MAX_BATCH_BYTES: usize = 64 * 1024;
         const MAX_BATCH_HI_BURST: usize = 4;
+        const MAX_BATCH_CONTROL_BURST: usize = 4;
+        const MAX_BATCH_CONSENSUS_BURST: usize = 4;
+        const MAX_BATCH_PAYLOAD_BURST: usize = 2;
         const MAX_PLAINTEXT_MSGS_HI: usize = 16;
         const MAX_PLAINTEXT_MSGS_LO: usize = 32;
         const MAX_PLAINTEXT_BYTES_HI: usize = 64 * 1024;
@@ -3070,11 +3438,18 @@ mod run {
                 plain_low_msgs: 0,
                 encrypted: Vec::with_capacity(capacity),
                 frame_pool: Vec::new(),
-                queue_high: VecDeque::new(),
+                queue_high_control: VecDeque::new(),
+                queue_high_consensus: VecDeque::new(),
+                queue_high_consensus_payload: VecDeque::new(),
+                queue_high_consensus_chunk: VecDeque::new(),
+                queue_high_other: VecDeque::new(),
                 queue_low: VecDeque::new(),
                 batch: BytesMut::with_capacity(batch_capacity),
                 batch_offset: 0,
                 max_frame_bytes,
+                high_control_burst: 0,
+                high_consensus_burst: 0,
+                high_payload_burst: 0,
             }
         }
 
@@ -3098,17 +3473,19 @@ mod run {
             match priority {
                 Priority::High => {
                     let class = classify_high_batch(topic);
-                    // Control traffic should not be delayed behind other high batches.
-                    if class == HighBatchClass::Control {
+                    // Control and availability-repair traffic should not be batched with
+                    // neighbouring high-priority messages. If one encrypted frame is lost or
+                    // malformed under fault injection, this keeps the blast radius to a single
+                    // control/payload/chunk message and lets Sumeragi repair fanout make progress.
+                    if class.should_isolate_plaintext() {
                         self.flush_plain_high()?;
-                        self.enqueue_current_buffer(Priority::High)?;
+                        self.enqueue_current_buffer(Priority::High, Some(class))?;
                         return Ok(());
                     }
 
                     if self.plain_high_class.is_some_and(|c| c != class) {
                         self.flush_plain_high()?;
                     }
-                    self.plain_high_class = Some(class);
 
                     let cap = Self::MAX_PLAINTEXT_BYTES_HI.min(max_plaintext);
                     let would_exceed_bytes = !self.plain_high.is_empty()
@@ -3120,10 +3497,15 @@ mod run {
 
                     // If the single message exceeds the high cap, still send it as its own frame.
                     if self.plain_high.is_empty() && msg_len > cap {
-                        self.enqueue_current_buffer(Priority::High)?;
+                        self.enqueue_current_buffer(Priority::High, Some(class))?;
                         return Ok(());
                     }
 
+                    if self.plain_high.is_empty() {
+                        // A cap-triggered flush clears the current class; restore it for the
+                        // new plaintext batch before appending more high-priority bytes.
+                        self.plain_high_class = Some(class);
+                    }
                     self.plain_high.extend_from_slice(&self.buffer);
                     self.plain_high_msgs = self.plain_high_msgs.saturating_add(1);
                 }
@@ -3137,7 +3519,7 @@ mod run {
                     }
 
                     if self.plain_low.is_empty() && msg_len > cap {
-                        self.enqueue_current_buffer(Priority::Low)?;
+                        self.enqueue_current_buffer(Priority::Low, None)?;
                         return Ok(());
                     }
 
@@ -3182,7 +3564,11 @@ mod run {
             self.batch_offset < self.batch.len()
                 || !self.plain_high.is_empty()
                 || !self.plain_low.is_empty()
-                || !self.queue_high.is_empty()
+                || !self.queue_high_control.is_empty()
+                || !self.queue_high_consensus.is_empty()
+                || !self.queue_high_consensus_payload.is_empty()
+                || !self.queue_high_consensus_chunk.is_empty()
+                || !self.queue_high_other.is_empty()
                 || !self.queue_low.is_empty()
         }
 
@@ -3190,8 +3576,11 @@ mod run {
             if self.plain_high.is_empty() {
                 return Ok(());
             }
+            let class = self
+                .plain_high_class
+                .expect("high plaintext batch must track its scheduling class");
             let plaintext = core::mem::take(&mut self.plain_high);
-            match self.enqueue_encrypted(&plaintext, Priority::High) {
+            match self.enqueue_encrypted(&plaintext, Priority::High, Some(class)) {
                 Ok(()) => {
                     let mut plaintext = plaintext;
                     plaintext.clear();
@@ -3212,7 +3601,7 @@ mod run {
                 return Ok(());
             }
             let plaintext = core::mem::take(&mut self.plain_low);
-            match self.enqueue_encrypted(&plaintext, Priority::Low) {
+            match self.enqueue_encrypted(&plaintext, Priority::Low, None) {
                 Ok(()) => {
                     let mut plaintext = plaintext;
                     plaintext.clear();
@@ -3230,9 +3619,13 @@ mod run {
         /// Enqueue currently encoded message bytes from `self.buffer`.
         ///
         /// Keeps the original bytes intact when encryption/framing fails.
-        fn enqueue_current_buffer(&mut self, priority: Priority) -> Result<(), Error> {
+        fn enqueue_current_buffer(
+            &mut self,
+            priority: Priority,
+            high_class: Option<HighBatchClass>,
+        ) -> Result<(), Error> {
             let plaintext = core::mem::take(&mut self.buffer);
-            match self.enqueue_encrypted(&plaintext, priority) {
+            match self.enqueue_encrypted(&plaintext, priority, high_class) {
                 Ok(()) => {
                     let mut plaintext = plaintext;
                     plaintext.clear();
@@ -3246,7 +3639,12 @@ mod run {
             }
         }
 
-        fn enqueue_encrypted(&mut self, plaintext: &[u8], priority: Priority) -> Result<(), Error> {
+        fn enqueue_encrypted(
+            &mut self,
+            plaintext: &[u8],
+            priority: Priority,
+            high_class: Option<HighBatchClass>,
+        ) -> Result<(), Error> {
             let encrypted = self
                 .cryptographer
                 .encrypt_into(plaintext, &mut self.encrypted)?;
@@ -3265,10 +3663,154 @@ mod run {
             frame.put_u32(size as u32);
             frame.put_slice(encrypted);
             match priority {
-                Priority::High => self.queue_high.push_back(frame),
+                Priority::High => match high_class.unwrap_or(HighBatchClass::Other) {
+                    HighBatchClass::Control => self.queue_high_control.push_back(frame),
+                    HighBatchClass::Consensus => self.queue_high_consensus.push_back(frame),
+                    HighBatchClass::ConsensusPayload => {
+                        self.queue_high_consensus_payload.push_back(frame);
+                    }
+                    HighBatchClass::ConsensusChunk => {
+                        self.queue_high_consensus_chunk.push_back(frame);
+                    }
+                    HighBatchClass::Other => self.queue_high_other.push_back(frame),
+                },
                 Priority::Low => self.queue_low.push_back(frame),
             }
             Ok(())
+        }
+
+        fn next_high_background_class(&self) -> Option<HighBatchClass> {
+            if self.high_payload_burst >= Self::MAX_BATCH_PAYLOAD_BURST
+                && !self.queue_high_consensus_chunk.is_empty()
+            {
+                return Some(HighBatchClass::ConsensusChunk);
+            }
+            if !self.queue_high_consensus_payload.is_empty() {
+                return Some(HighBatchClass::ConsensusPayload);
+            }
+            if !self.queue_high_consensus_chunk.is_empty() {
+                return Some(HighBatchClass::ConsensusChunk);
+            }
+            None
+        }
+
+        fn next_high_batch_class(&self) -> Option<HighBatchClass> {
+            let non_control_pending = !self.queue_high_consensus.is_empty()
+                || !self.queue_high_consensus_payload.is_empty()
+                || !self.queue_high_consensus_chunk.is_empty()
+                || !self.queue_high_other.is_empty();
+            if !self.queue_high_control.is_empty()
+                && (!non_control_pending || self.high_control_burst < Self::MAX_BATCH_CONTROL_BURST)
+            {
+                return Some(HighBatchClass::Control);
+            }
+
+            let background_pending = !self.queue_high_consensus_payload.is_empty()
+                || !self.queue_high_consensus_chunk.is_empty();
+            if !self.queue_high_consensus.is_empty()
+                && (!background_pending
+                    || self.high_consensus_burst < Self::MAX_BATCH_CONSENSUS_BURST)
+            {
+                return Some(HighBatchClass::Consensus);
+            }
+
+            if let Some(class) = self.next_high_background_class() {
+                return Some(class);
+            }
+
+            if !self.queue_high_control.is_empty() {
+                return Some(HighBatchClass::Control);
+            }
+            if !self.queue_high_consensus.is_empty() {
+                return Some(HighBatchClass::Consensus);
+            }
+            if !self.queue_high_other.is_empty() {
+                return Some(HighBatchClass::Other);
+            }
+            None
+        }
+
+        fn availability_repair_pending(&self) -> bool {
+            !self.queue_high_consensus_payload.is_empty()
+                || !self.queue_high_consensus_chunk.is_empty()
+        }
+
+        fn high_queue_len(&self, class: HighBatchClass) -> usize {
+            match class {
+                HighBatchClass::Control => self.queue_high_control.front().map_or(0, BytesMut::len),
+                HighBatchClass::Consensus => {
+                    self.queue_high_consensus.front().map_or(0, BytesMut::len)
+                }
+                HighBatchClass::ConsensusPayload => self
+                    .queue_high_consensus_payload
+                    .front()
+                    .map_or(0, BytesMut::len),
+                HighBatchClass::ConsensusChunk => self
+                    .queue_high_consensus_chunk
+                    .front()
+                    .map_or(0, BytesMut::len),
+                HighBatchClass::Other => self.queue_high_other.front().map_or(0, BytesMut::len),
+            }
+        }
+
+        fn pop_high_frame(&mut self, class: HighBatchClass) -> BytesMut {
+            match class {
+                HighBatchClass::Control => self
+                    .queue_high_control
+                    .pop_front()
+                    .expect("selected control queue must contain a frame"),
+                HighBatchClass::Consensus => self
+                    .queue_high_consensus
+                    .pop_front()
+                    .expect("selected consensus queue must contain a frame"),
+                HighBatchClass::ConsensusPayload => self
+                    .queue_high_consensus_payload
+                    .pop_front()
+                    .expect("selected payload queue must contain a frame"),
+                HighBatchClass::ConsensusChunk => self
+                    .queue_high_consensus_chunk
+                    .pop_front()
+                    .expect("selected chunk queue must contain a frame"),
+                HighBatchClass::Other => self
+                    .queue_high_other
+                    .pop_front()
+                    .expect("selected high-other queue must contain a frame"),
+            }
+        }
+
+        fn note_high_batch_sent(&mut self, class: HighBatchClass) {
+            match class {
+                HighBatchClass::Control => {
+                    self.high_control_burst = self
+                        .high_control_burst
+                        .saturating_add(1)
+                        .min(Self::MAX_BATCH_CONTROL_BURST);
+                }
+                HighBatchClass::Consensus => {
+                    self.high_control_burst = 0;
+                    self.high_consensus_burst = self
+                        .high_consensus_burst
+                        .saturating_add(1)
+                        .min(Self::MAX_BATCH_CONSENSUS_BURST);
+                }
+                HighBatchClass::ConsensusPayload => {
+                    self.high_control_burst = 0;
+                    self.high_consensus_burst = 0;
+                    self.high_payload_burst = self
+                        .high_payload_burst
+                        .saturating_add(1)
+                        .min(Self::MAX_BATCH_PAYLOAD_BURST);
+                }
+                HighBatchClass::ConsensusChunk => {
+                    self.high_control_burst = 0;
+                    self.high_consensus_burst = 0;
+                    self.high_payload_burst = 0;
+                }
+                HighBatchClass::Other => {
+                    self.high_control_burst = 0;
+                    self.high_consensus_burst = 0;
+                }
+            }
         }
 
         fn fill_batch(&mut self) {
@@ -3280,26 +3822,35 @@ mod run {
             let mut hi_burst = 0usize;
 
             while frames_added < Self::MAX_BATCH_FRAMES {
-                let take_low = hi_burst >= Self::MAX_BATCH_HI_BURST && !self.queue_low.is_empty();
-                let take_high = !take_low && !self.queue_high.is_empty();
-                let take_low = !take_high && !self.queue_low.is_empty();
-                if !(take_high || take_low) {
+                let force_low = hi_burst >= Self::MAX_BATCH_HI_BURST
+                    && !self.queue_low.is_empty()
+                    && !self.availability_repair_pending();
+                let next_high = if force_low {
+                    None
+                } else {
+                    self.next_high_batch_class()
+                };
+                let take_low = force_low || (next_high.is_none() && !self.queue_low.is_empty());
+                if next_high.is_none() && !take_low {
                     break;
                 }
 
-                let queue = if take_high {
-                    &mut self.queue_high
+                let frame_len = if let Some(class) = next_high {
+                    self.high_queue_len(class)
                 } else {
-                    &mut self.queue_low
+                    self.queue_low.front().map_or(0, BytesMut::len)
                 };
-                let frame_len = queue.front().map_or(0, BytesMut::len);
                 if frames_added > 0
                     && self.batch.len().saturating_add(frame_len) > Self::MAX_BATCH_BYTES
                 {
                     break;
                 }
 
-                let mut frame = queue.pop_front().expect("queue.front checked");
+                let mut frame = if let Some(class) = next_high {
+                    self.pop_high_frame(class)
+                } else {
+                    self.queue_low.pop_front().expect("queue.front checked")
+                };
                 self.batch.extend_from_slice(&frame);
                 frame.clear();
                 if self.frame_pool.len() < Self::FRAME_POOL_MAX {
@@ -3307,7 +3858,8 @@ mod run {
                 }
 
                 frames_added = frames_added.saturating_add(1);
-                if take_high {
+                if let Some(class) = next_high {
+                    self.note_high_batch_sent(class);
                     hi_burst = hi_burst.saturating_add(1);
                 } else {
                     hi_burst = 0;
@@ -3340,11 +3892,21 @@ mod run {
         T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
     {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            let archived = ncore::archived_from_slice::<Self>(bytes)?;
-            let archived_bytes = archived.bytes();
-            let _guard = ncore::PayloadCtxGuard::enter(archived_bytes);
+            use std::borrow::Cow;
+
+            let min_size = core::mem::size_of::<ncore::Archived<Self>>();
+            let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
+                let mut padded = Vec::with_capacity(min_size);
+                padded.extend_from_slice(bytes);
+                padded.resize(min_size, 0);
+                Cow::Owned(padded)
+            } else {
+                Cow::Borrowed(bytes)
+            };
+            let archived = ncore::archived_from_slice::<Self>(decode_bytes.as_ref())?;
+            let _guard = ncore::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
             let value = <Self as ncore::NoritoDeserialize>::try_deserialize(archived.archived())?;
-            Ok((value, archived_bytes.len()))
+            Ok((value, bytes.len()))
         }
     }
 
@@ -3439,6 +4001,33 @@ mod run {
             }
         }
 
+        #[derive(Encode, Decode, Clone, Debug, PartialEq, Eq)]
+        enum RoutedMsg {
+            Control(u8),
+            Consensus(u8),
+            ConsensusPayload(u8),
+            ConsensusChunk(u8),
+            TxGossip(u8),
+        }
+
+        impl ClassifyTopic for RoutedMsg {
+            fn topic(&self) -> Topic {
+                match self {
+                    Self::Control(_) => Topic::Control,
+                    Self::Consensus(_) => Topic::Consensus,
+                    Self::ConsensusPayload(_) => Topic::ConsensusPayload,
+                    Self::ConsensusChunk(_) => Topic::ConsensusChunk,
+                    Self::TxGossip(_) => Topic::TxGossip,
+                }
+            }
+        }
+
+        impl<'a> ncore::DecodeFromSlice<'a> for RoutedMsg {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+                ncore::decode_field_canonical::<Self>(bytes)
+            }
+        }
+
         #[derive(Default)]
         struct WriteStats {
             writes: usize,
@@ -3505,6 +4094,30 @@ mod run {
             ) -> Poll<std::io::Result<()>> {
                 Poll::Ready(Ok(()))
             }
+        }
+
+        fn encrypted_wire_frame_count(bytes: &[u8]) -> usize {
+            let mut pos = 0usize;
+            let mut frames = 0usize;
+            while pos < bytes.len() {
+                assert!(
+                    bytes.len().saturating_sub(pos) >= MessageSender::<ChaCha20Poly1305>::U32_SIZE,
+                    "truncated encrypted frame prefix"
+                );
+                let len = u32::from_be_bytes(
+                    bytes[pos..pos + MessageSender::<ChaCha20Poly1305>::U32_SIZE]
+                        .try_into()
+                        .expect("u32 slice length"),
+                ) as usize;
+                pos = pos.saturating_add(MessageSender::<ChaCha20Poly1305>::U32_SIZE);
+                assert!(
+                    bytes.len().saturating_sub(pos) >= len,
+                    "truncated encrypted frame payload"
+                );
+                pos = pos.saturating_add(len);
+                frames = frames.saturating_add(1);
+            }
+            frames
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -3608,6 +4221,350 @@ mod run {
                 Message::Data(blob) => assert_eq!(blob.0, vec![1u8]),
                 _ => panic!("expected low data frame"),
             }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_keeps_high_batch_class_after_cap_flush() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[12u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for _ in 0..=MessageSender::<ChaCha20Poly1305>::MAX_PLAINTEXT_MSGS_HI {
+                sender
+                    .prepare_message(&Message::Data(Dummy), Priority::High)
+                    .expect("prepare high message");
+            }
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<Dummy>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = 0usize;
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(Dummy) => {
+                        delivered = delivered.saturating_add(1);
+                    }
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                MessageSender::<ChaCha20Poly1305>::MAX_PLAINTEXT_MSGS_HI + 1
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_schedules_control_consensus_payload_then_chunk() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[10u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for msg in [
+                RoutedMsg::ConsensusPayload(1),
+                RoutedMsg::ConsensusChunk(2),
+                RoutedMsg::Consensus(3),
+                RoutedMsg::Control(4),
+            ] {
+                sender
+                    .prepare_message(&Message::Data(msg), Priority::High)
+                    .expect("prepare routed message");
+                sender.flush_plain_high().expect("flush routed batch");
+            }
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(msg) => delivered.push(msg),
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                vec![
+                    RoutedMsg::Control(4),
+                    RoutedMsg::Consensus(3),
+                    RoutedMsg::ConsensusPayload(1),
+                    RoutedMsg::ConsensusChunk(2),
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_isolates_consensus_payload_and_chunk_encrypted_frames() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[13u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for msg in [
+                RoutedMsg::ConsensusPayload(1),
+                RoutedMsg::ConsensusPayload(2),
+                RoutedMsg::ConsensusChunk(3),
+            ] {
+                sender
+                    .prepare_message(&Message::Data(msg), Priority::High)
+                    .expect("prepare availability message");
+            }
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                assert_eq!(
+                    encrypted_wire_frame_count(&buffer),
+                    3,
+                    "availability-repair messages should use one encrypted frame each"
+                );
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(msg) => delivered.push(msg),
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                vec![
+                    RoutedMsg::ConsensusPayload(1),
+                    RoutedMsg::ConsensusPayload(2),
+                    RoutedMsg::ConsensusChunk(3),
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_high_lane_fairness_drains_payload_and_chunk_under_consensus() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[11u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for id in 1..=9 {
+                sender
+                    .prepare_message(&Message::Data(RoutedMsg::Consensus(id)), Priority::High)
+                    .expect("prepare consensus");
+                sender.flush_plain_high().expect("flush consensus");
+            }
+            sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusPayload(10)),
+                    Priority::High,
+                )
+                .expect("prepare payload");
+            sender.flush_plain_high().expect("flush payload");
+            sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusChunk(11)),
+                    Priority::High,
+                )
+                .expect("prepare chunk");
+            sender.flush_plain_high().expect("flush chunk");
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(msg) => delivered.push(msg),
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                vec![
+                    RoutedMsg::Consensus(1),
+                    RoutedMsg::Consensus(2),
+                    RoutedMsg::Consensus(3),
+                    RoutedMsg::Consensus(4),
+                    RoutedMsg::ConsensusPayload(10),
+                    RoutedMsg::Consensus(5),
+                    RoutedMsg::Consensus(6),
+                    RoutedMsg::Consensus(7),
+                    RoutedMsg::Consensus(8),
+                    RoutedMsg::ConsensusChunk(11),
+                    RoutedMsg::Consensus(9),
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_defers_low_when_availability_repair_is_pending() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[14u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            for id in 1..=4 {
+                sender
+                    .prepare_message(&Message::Data(RoutedMsg::Consensus(id)), Priority::High)
+                    .expect("prepare consensus");
+                sender.flush_plain_high().expect("flush consensus");
+            }
+            sender
+                .prepare_message(&Message::Data(RoutedMsg::TxGossip(90)), Priority::Low)
+                .expect("prepare low gossip");
+            sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusPayload(10)),
+                    Priority::High,
+                )
+                .expect("prepare payload");
+            sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusChunk(11)),
+                    Priority::High,
+                )
+                .expect("prepare chunk");
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(msg) => delivered.push(msg),
+                    other => panic!("expected data frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                vec![
+                    RoutedMsg::Consensus(1),
+                    RoutedMsg::Consensus(2),
+                    RoutedMsg::Consensus(3),
+                    RoutedMsg::Consensus(4),
+                    RoutedMsg::ConsensusPayload(10),
+                    RoutedMsg::ConsensusChunk(11),
+                    RoutedMsg::TxGossip(90),
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_sender_restores_high_batch_class_after_msg_cap_flush() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[12u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+            let max_msgs_hi =
+                u8::try_from(MessageSender::<ChaCha20Poly1305>::MAX_PLAINTEXT_MSGS_HI)
+                    .expect("high-priority plaintext cap fits in u8");
+
+            for id in 1..=max_msgs_hi.saturating_add(1) {
+                sender
+                    .prepare_message(&Message::Data(RoutedMsg::Consensus(id)), Priority::High)
+                    .expect("prepare consensus");
+            }
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let mut delivered = Vec::new();
+            while let Some((msg, _)) = reader.read_message().await.expect("read message") {
+                match msg {
+                    Message::Data(RoutedMsg::Consensus(id)) => delivered.push(id),
+                    other => panic!("expected consensus frame, got {other:?}"),
+                }
+            }
+
+            assert_eq!(
+                delivered,
+                (1..=max_msgs_hi.saturating_add(1)).collect::<Vec<_>>()
+            );
         }
 
         #[tokio::test(flavor = "current_thread")]
@@ -3777,6 +4734,148 @@ mod run {
             assert_eq!(hi_budget, HI_BUDGET_FALLBACK);
         }
 
+        #[tokio::test(flavor = "current_thread")]
+        async fn high_lane_consensus_bypasses_payload_and_chunk_posts() {
+            let (control_tx, mut control_rx) = post_channel::channel(8);
+            let (consensus_tx, mut consensus_rx) = post_channel::channel(8);
+            let (payload_tx, mut payload_rx) = post_channel::channel(8);
+            let (chunk_tx, mut chunk_rx) = post_channel::channel(8);
+            let _ = control_tx;
+
+            payload_tx.send("payload").await.expect("queue payload");
+            chunk_tx.send("chunk").await.expect("queue chunk");
+            consensus_tx
+                .send("consensus")
+                .await
+                .expect("queue consensus");
+
+            let mut consensus_burst = 0u8;
+            let mut payload_burst = 0u8;
+            let mut control_burst = 0u8;
+
+            let first = try_recv_high_fair(
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            )
+            .expect("first high message");
+            let second = try_recv_high_fair(
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            )
+            .expect("second high message");
+            let third = try_recv_high_fair(
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            )
+            .expect("third high message");
+
+            assert_eq!(first, (HighTopic::Consensus, "consensus"));
+            assert_eq!(second, (HighTopic::ConsensusPayload, "payload"));
+            assert_eq!(third, (HighTopic::ConsensusChunk, "chunk"));
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn high_lane_payload_and_chunk_progress_under_sustained_consensus() {
+            let (control_tx, mut control_rx) = post_channel::channel(16);
+            let (consensus_tx, mut consensus_rx) = post_channel::channel(16);
+            let (payload_tx, mut payload_rx) = post_channel::channel(16);
+            let (chunk_tx, mut chunk_rx) = post_channel::channel(16);
+            let _ = control_tx;
+
+            for id in 1..=9 {
+                consensus_tx
+                    .send(format!("c{id}"))
+                    .await
+                    .expect("queue consensus");
+            }
+            payload_tx
+                .send(String::from("payload"))
+                .await
+                .expect("queue payload");
+            chunk_tx
+                .send(String::from("chunk"))
+                .await
+                .expect("queue chunk");
+
+            let mut consensus_burst = 0u8;
+            let mut payload_burst = 0u8;
+            let mut control_burst = 0u8;
+            let mut served = Vec::new();
+            while let Some(item) = try_recv_high_fair(
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            ) {
+                served.push(item);
+            }
+
+            let expected = vec![
+                (HighTopic::Consensus, String::from("c1")),
+                (HighTopic::Consensus, String::from("c2")),
+                (HighTopic::Consensus, String::from("c3")),
+                (HighTopic::Consensus, String::from("c4")),
+                (HighTopic::ConsensusPayload, String::from("payload")),
+                (HighTopic::Consensus, String::from("c5")),
+                (HighTopic::Consensus, String::from("c6")),
+                (HighTopic::Consensus, String::from("c7")),
+                (HighTopic::Consensus, String::from("c8")),
+                (HighTopic::ConsensusChunk, String::from("chunk")),
+                (HighTopic::Consensus, String::from("c9")),
+            ];
+            assert_eq!(served, expected);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn high_lane_control_priority_remains_unchanged() {
+            let (control_tx, mut control_rx) = post_channel::channel(8);
+            let (consensus_tx, mut consensus_rx) = post_channel::channel(8);
+            let (payload_tx, mut payload_rx) = post_channel::channel(8);
+            let (chunk_tx, mut chunk_rx) = post_channel::channel(8);
+
+            payload_tx.send("payload").await.expect("queue payload");
+            chunk_tx.send("chunk").await.expect("queue chunk");
+            consensus_tx
+                .send("consensus")
+                .await
+                .expect("queue consensus");
+            control_tx.send("control").await.expect("queue control");
+
+            let mut consensus_burst = 0u8;
+            let mut payload_burst = 0u8;
+            let mut control_burst = 0u8;
+            let first = try_recv_high_fair(
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            )
+            .expect("first high message");
+
+            assert_eq!(first, (HighTopic::Control, "control"));
+        }
+
         #[test]
         fn inbound_priority_marks_control_planes_high() {
             assert_eq!(
@@ -3803,6 +4902,32 @@ mod run {
             );
         }
 
+        fn framed_message<T: Encode>(value: &T) -> Vec<u8> {
+            ncore::to_bytes(value).expect("encode framed message")
+        }
+
+        fn encrypted_frame(plaintext: &[u8], key_byte: u8) -> Vec<u8> {
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[key_byte; 32])
+                    .expect("valid key length");
+            let mut encrypted = Vec::new();
+            let encrypted = cryptographer
+                .encrypt_into(plaintext, &mut encrypted)
+                .expect("encrypt frame");
+            let mut frame = Vec::with_capacity(
+                MessageReader::<ChaCha20Poly1305, Message<Blob>>::U32_SIZE + encrypted.len(),
+            );
+            let encrypted_len =
+                u32::try_from(encrypted.len()).expect("encrypted frame length fits in u32");
+            frame.extend_from_slice(&encrypted_len.to_be_bytes());
+            frame.extend_from_slice(encrypted);
+            frame
+        }
+
+        fn blob_message_frame(payload: &[u8]) -> Vec<u8> {
+            framed_message(&Message::Data(Blob(payload.to_vec())))
+        }
+
         struct FakeRead {
             data: Bytes,
             pos: usize,
@@ -3826,8 +4951,170 @@ mod run {
         }
 
         #[tokio::test(flavor = "current_thread")]
-        async fn malformed_frame_flood_is_sampled() {
-            // Build a buffer with many bogus frames: [len=16][16 zero bytes] * N
+        async fn malformed_decrypted_payload_frame_is_dropped_and_next_valid_frame_is_delivered() {
+            let key_byte = 5u8;
+            let mut malformed_plain = blob_message_frame(&[1u8]);
+            let mut truncated_inner = blob_message_frame(&[2u8]);
+            truncated_inner.pop().expect("truncate inner frame");
+            malformed_plain.extend_from_slice(&truncated_inner);
+            let valid_plain = blob_message_frame(&[9u8]);
+
+            let mut raw = encrypted_frame(&malformed_plain, key_byte);
+            raw.extend_from_slice(&encrypted_frame(&valid_plain, key_byte));
+
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead {
+                data: Bytes::from(raw),
+                pos: 0,
+            });
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[key_byte; 32])
+                    .expect("valid key length");
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
+                MessageReader::new(read, cryptographer, 1024);
+
+            let err = reader
+                .read_message()
+                .await
+                .expect_err("first decrypted frame should be dropped");
+            assert!(matches!(err, Error::MalformedPayloadFrame));
+
+            let (message, encoded_len) = reader
+                .read_message()
+                .await
+                .expect("read next frame")
+                .expect("valid frame should remain readable");
+            assert_eq!(encoded_len, valid_plain.len());
+            match message {
+                Message::Data(blob) => assert_eq!(blob.0, vec![9u8]),
+                other => panic!("expected valid data frame, got {other:?}"),
+            }
+
+            let none = reader.read_message().await.expect("stream exhausted");
+            assert!(none.is_none());
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn malformed_payload_frame_counter_tracks_recovery_without_disconnect() {
+            let key_byte = 6u8;
+            let mut first_bad = blob_message_frame(&[1u8, 2u8]);
+            first_bad.pop().expect("truncate first malformed frame");
+            let valid_plain = blob_message_frame(&[7u8, 8u8]);
+            let mut second_bad = blob_message_frame(&[3u8, 4u8]);
+            second_bad.pop().expect("truncate second malformed frame");
+
+            let mut raw = encrypted_frame(&first_bad, key_byte);
+            raw.extend_from_slice(&encrypted_frame(&valid_plain, key_byte));
+            raw.extend_from_slice(&encrypted_frame(&second_bad, key_byte));
+            raw.extend_from_slice(&encrypted_frame(&valid_plain, key_byte));
+
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead {
+                data: Bytes::from(raw),
+                pos: 0,
+            });
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[key_byte; 32])
+                    .expect("valid key length");
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
+                MessageReader::new(read, cryptographer, 1024);
+            let counter_before = super::super::malformed_payload_frame_count();
+            let mut streak = 0u32;
+
+            let err = reader
+                .read_message()
+                .await
+                .expect_err("first malformed frame should not decode");
+            assert!(matches!(err, Error::MalformedPayloadFrame));
+            assert!(
+                !super::note_malformed_payload_frame(&mut streak),
+                "one malformed decrypted frame must not disconnect the session"
+            );
+            assert!(
+                super::super::malformed_payload_frame_count() >= counter_before.saturating_add(1)
+            );
+
+            let (message, _) = reader
+                .read_message()
+                .await
+                .expect("valid frame after malformed one")
+                .expect("message after malformed one");
+            streak = 0;
+            match message {
+                Message::Data(blob) => assert_eq!(blob.0, vec![7u8, 8u8]),
+                other => panic!("expected valid data frame, got {other:?}"),
+            }
+
+            let err = reader
+                .read_message()
+                .await
+                .expect_err("second malformed frame should not decode");
+            assert!(matches!(err, Error::MalformedPayloadFrame));
+            assert!(
+                !super::note_malformed_payload_frame(&mut streak),
+                "streak should restart after a successfully decoded frame"
+            );
+            assert_eq!(streak, 1);
+            assert!(
+                super::super::malformed_payload_frame_count() >= counter_before.saturating_add(2)
+            );
+
+            let (message, _) = reader
+                .read_message()
+                .await
+                .expect("reader should continue after second malformed frame")
+                .expect("final valid message");
+            match message {
+                Message::Data(blob) => assert_eq!(blob.0, vec![7u8, 8u8]),
+                other => panic!("expected valid data frame, got {other:?}"),
+            }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn malformed_payload_frame_disconnects_after_threshold_consecutive_frames() {
+            let key_byte = 7u8;
+            let mut malformed_plain = blob_message_frame(&[0xAAu8]);
+            malformed_plain.pop().expect("truncate malformed frame");
+
+            let mut raw = Vec::new();
+            for _ in 0..super::MALFORMED_PAYLOAD_FRAME_THRESHOLD {
+                raw.extend_from_slice(&encrypted_frame(&malformed_plain, key_byte));
+            }
+
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead {
+                data: Bytes::from(raw),
+                pos: 0,
+            });
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[key_byte; 32])
+                    .expect("valid key length");
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
+                MessageReader::new(read, cryptographer, 1024);
+            let counter_before = super::super::malformed_payload_frame_count();
+            let mut streak = 0u32;
+
+            for attempt in 1..=super::MALFORMED_PAYLOAD_FRAME_THRESHOLD {
+                let err = reader
+                    .read_message()
+                    .await
+                    .expect_err("malformed decrypted frame should be reported");
+                assert!(matches!(err, Error::MalformedPayloadFrame));
+                let disconnect = super::note_malformed_payload_frame(&mut streak);
+                assert_eq!(
+                    disconnect,
+                    attempt == super::MALFORMED_PAYLOAD_FRAME_THRESHOLD
+                );
+            }
+
+            assert_eq!(streak, super::MALFORMED_PAYLOAD_FRAME_THRESHOLD);
+            assert!(
+                super::super::malformed_payload_frame_count()
+                    >= counter_before
+                        .saturating_add(u64::from(super::MALFORMED_PAYLOAD_FRAME_THRESHOLD))
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn decrypt_failure_remains_fatal_and_log_sampling_limits_flood() {
+            // Build a buffer with many bogus encrypted frames: [len=16][16 zero bytes] * N.
             const FRAMES: usize = 200;
             let mut raw = Vec::with_capacity(FRAMES * (4 + 16));
             for _ in 0..FRAMES {
@@ -3839,20 +5126,18 @@ mod run {
                 data: Bytes::from(raw),
                 pos: 0,
             });
-            // Any key works; decrypt will fail on random zeros
-            let crypt =
-                super::cryptographer::Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(
-                    &[1u8; 32],
-                )
-                .expect("valid key length");
-            let mut mr: MessageReader<ChaCha20Poly1305, Dummy> =
-                MessageReader::new(read, crypt, 1024);
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[1u8; 32])
+                    .expect("valid key length");
+            let mut reader: MessageReader<ChaCha20Poly1305, Dummy> =
+                MessageReader::new(read, cryptographer, 1024);
 
-            // First attempt should yield an error due to malformed/cannot decrypt frame
-            let err = mr.read_message().await.err();
-            assert!(err.is_some(), "expected read error from malformed frame");
+            let err = reader
+                .read_message()
+                .await
+                .expect_err("undecryptable frame should remain fatal");
+            assert!(matches!(err, Error::SymmetricEncryption(_)));
 
-            // Now simulate a flood of such errors and ensure our sampler would emit at most once
             let mut sampler = crate::sampler::LogSampler::new();
             let mut logged = 0u32;
             for _ in 0..FRAMES {
@@ -4355,6 +5640,7 @@ mod state {
         local_pk: &K::PublicKey,
         remote_pk: &K::PublicKey,
         chain_id: Option<&iroha_data_model::ChainId>,
+        transport_binding: Option<&[u8; iroha_crypto::Hash::LENGTH]>,
     ) -> Vec<u8> {
         let _ = (local_pk, remote_pk);
         let mut data = Vec::new();
@@ -4362,6 +5648,9 @@ mod state {
         data.extend_from_slice(&advertised_addr.encode());
         if let Some(cid) = chain_id {
             data.extend_from_slice(&cid.encode());
+        }
+        if let Some(binding) = transport_binding {
+            data.extend_from_slice(binding);
         }
         data
     }
@@ -4555,21 +5844,27 @@ mod state {
                         match stream {
                             crate::transport::TcpConnectStream::Plain(tcp) => {
                                 let tls = crate::transport::tls::connect_tls(sni_host, tcp).await?;
+                                let transport_binding =
+                                    Some(crate::transport::tls_peer_certificate_fingerprint(&tls)?);
                                 let (read_half, write_half) = tokio::io::split(tls);
-                                Ok::<_, std::io::Error>(Connection::from_split(
+                                Ok::<_, std::io::Error>(Connection::from_split_with_binding(
                                     connection_id,
                                     read_half,
                                     write_half,
+                                    transport_binding,
                                 ))
                             }
                             crate::transport::TcpConnectStream::Tls(proxy_tls) => {
                                 let tls =
                                     crate::transport::tls::connect_tls(sni_host, proxy_tls).await?;
+                                let transport_binding =
+                                    Some(crate::transport::tls_peer_certificate_fingerprint(&tls)?);
                                 let (read_half, write_half) = tokio::io::split(tls);
-                                Ok::<_, std::io::Error>(Connection::from_split(
+                                Ok::<_, std::io::Error>(Connection::from_split_with_binding(
                                     connection_id,
                                     read_half,
                                     write_half,
+                                    transport_binding,
                                 ))
                             }
                         }
@@ -4671,6 +5966,8 @@ mod state {
 
                     let res = tokio::time::timeout(remaining, async {
                         let conn = dialer.connect(target, QUIC_SERVER_NAME).await?;
+                        let transport_binding =
+                            Some(crate::transport::quic_peer_certificate_fingerprint(&conn)?);
                         let remote = conn.remote_address();
                         let (send_hi, recv_hi) = conn
                             .open_bi()
@@ -4693,6 +5990,7 @@ mod state {
                             send_low,
                             recv_low,
                             Some(remote),
+                            transport_binding,
                         ))
                     })
                     .await;
@@ -4761,6 +6059,7 @@ mod state {
                 {
                     return Ok(ConnectedTo {
                         our_public_address,
+                        expected_peer_id: peer_id.clone(),
                         key_pair,
                         connection: conn,
                         chain_id,
@@ -4783,6 +6082,7 @@ mod state {
                             crate::network::inc_scion_outbound();
                             return Ok(ConnectedTo {
                                 our_public_address,
+                                expected_peer_id: peer_id.clone(),
                                 key_pair,
                                 connection,
                                 chain_id,
@@ -4905,6 +6205,7 @@ mod state {
                             {
                                 return Ok(ConnectedTo {
                                     our_public_address,
+                                    expected_peer_id: peer_id.clone(),
                                     key_pair,
                                     connection: conn,
                                     chain_id,
@@ -4926,6 +6227,7 @@ mod state {
             };
             Ok(ConnectedTo {
                 our_public_address,
+                expected_peer_id: peer_id,
                 key_pair,
                 connection,
                 chain_id,
@@ -5057,6 +6359,7 @@ mod state {
     /// Peer that is being connected to.
     pub(super) struct ConnectedTo {
         our_public_address: SocketAddr,
+        expected_peer_id: iroha_data_model::prelude::PeerId,
         key_pair: KeyPair,
         connection: Connection,
         chain_id: Option<iroha_data_model::ChainId>,
@@ -5074,6 +6377,7 @@ mod state {
         pub(super) async fn send_client_hello<K: Kex, E: Enc>(
             Self {
                 our_public_address,
+                expected_peer_id,
                 key_pair,
                 mut connection,
                 chain_id,
@@ -5190,6 +6494,7 @@ mod state {
             let kx_remote_pk = K::new().keypair(KeyGenOption::Random).0;
             Ok(SendKey {
                 our_public_address,
+                expected_peer_id: Some(expected_peer_id),
                 key_pair,
                 kx_local_pk,
                 kx_remote_pk,
@@ -5338,6 +6643,7 @@ mod state {
             let kx_remote_pk = K::new().keypair(KeyGenOption::Random).0;
             Ok(SendKey {
                 our_public_address,
+                expected_peer_id: None,
                 key_pair,
                 kx_local_pk,
                 kx_remote_pk,
@@ -5357,6 +6663,7 @@ mod state {
     #[cfg(test)]
     pub(super) struct SendKeyInit<K: Kex, E: Enc> {
         pub(super) our_public_address: SocketAddr,
+        pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
         pub(super) key_pair: KeyPair,
         pub(super) kx_local_pk: K::PublicKey,
         pub(super) kx_remote_pk: K::PublicKey,
@@ -5374,6 +6681,7 @@ mod state {
     /// Peer that needs to send key.
     pub(super) struct SendKey<K: Kex, E: Enc> {
         pub(super) our_public_address: SocketAddr,
+        pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
         pub(super) key_pair: KeyPair,
         pub(super) kx_local_pk: K::PublicKey,
         pub(super) kx_remote_pk: K::PublicKey,
@@ -5393,6 +6701,7 @@ mod state {
         pub(super) fn new(init: SendKeyInit<K, E>) -> Self {
             let SendKeyInit {
                 our_public_address,
+                expected_peer_id,
                 key_pair,
                 kx_local_pk,
                 kx_remote_pk,
@@ -5408,6 +6717,7 @@ mod state {
             } = init;
             Self {
                 our_public_address,
+                expected_peer_id,
                 key_pair,
                 kx_local_pk,
                 kx_remote_pk,
@@ -5426,6 +6736,7 @@ mod state {
         pub(super) async fn send_our_public_key(
             Self {
                 our_public_address,
+                expected_peer_id,
                 key_pair,
                 kx_local_pk,
                 kx_remote_pk,
@@ -5449,6 +6760,7 @@ mod state {
                 &kx_local_pk,
                 &kx_remote_pk,
                 chain_id.as_ref(),
+                connection.transport_binding.as_ref(),
             );
             let signature = Signature::new(key_pair.private_key(), &payload);
             let (alg, pk_bytes) = key_pair.public_key().to_bytes();
@@ -5480,6 +6792,7 @@ mod state {
             write_half.flush().await?;
             Ok(GetKey {
                 connection,
+                expected_peer_id,
                 kx_local_pk,
                 kx_remote_pk,
                 cryptographer,
@@ -5497,6 +6810,7 @@ mod state {
     /// Peer that needs to get key.
     pub struct GetKey<K: Kex, E: Enc> {
         pub(super) connection: Connection,
+        pub(super) expected_peer_id: Option<iroha_data_model::prelude::PeerId>,
         pub(super) kx_local_pk: K::PublicKey,
         pub(super) kx_remote_pk: K::PublicKey,
         pub(super) cryptographer: Cryptographer<E>,
@@ -5514,6 +6828,7 @@ mod state {
         pub(super) async fn read_their_public_key(
             Self {
                 mut connection,
+                expected_peer_id,
                 kx_local_pk,
                 kx_remote_pk,
                 cryptographer,
@@ -5581,8 +6896,19 @@ mod state {
                 &kx_remote_pk,
                 &kx_local_pk,
                 chain_id.as_ref(),
+                connection.transport_binding.as_ref(),
             );
             signature.verify(&remote_pub_key, &payload)?;
+
+            if let Some(expected_peer_id) = expected_peer_id {
+                let found_peer_id = iroha_data_model::prelude::PeerId::from(remote_pub_key.clone());
+                if found_peer_id != expected_peer_id {
+                    return Err(crate::Error::HandshakePeerMismatch {
+                        expected: expected_peer_id,
+                        found: found_peer_id,
+                    });
+                }
+            }
 
             enforce_consensus_caps(consensus_caps.as_ref(), &consensus)?;
             enforce_confidential_caps(
@@ -5675,6 +7001,9 @@ mod state {
 
             let outbound = ConnectedTo {
                 our_public_address: addr_a,
+                expected_peer_id: iroha_data_model::prelude::PeerId::from(
+                    key_pair_b.public_key().clone(),
+                ),
                 key_pair: key_pair_a,
                 connection: Connection::from_split(1, read_a, write_a),
                 chain_id: None,
@@ -5950,6 +7279,7 @@ mod tests {
         };
         let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr,
+            expected_peer_id: None,
             key_pair,
             kx_local_pk,
             kx_remote_pk,
@@ -5989,6 +7319,7 @@ mod tests {
 
         let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
             our_public_address: addr.clone(),
+            expected_peer_id: None,
             key_pair,
             kx_local_pk: sender_kx.clone(),
             kx_remote_pk: receiver_kx.clone(),
@@ -6005,6 +7336,7 @@ mod tests {
 
         let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
             connection: Connection::from_split(2, receiver_read, receiver_write),
+            expected_peer_id: None,
             kx_local_pk: receiver_kx,
             kx_remote_pk: sender_kx,
             cryptographer,
@@ -6035,6 +7367,226 @@ mod tests {
             ready.scion_supported,
             "handshake should propagate SCION support flag"
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_accepts_matching_transport_binding() {
+        let kx = KexAlgo::new();
+        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
+        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
+        let addr: SocketAddr = "127.0.0.1:1444".parse().unwrap();
+        let key_pair = KeyPair::random();
+        let cryptographer =
+            Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[9u8; 32]).unwrap();
+        let transport_binding = [0x5Au8; iroha_crypto::Hash::LENGTH];
+
+        let (stream_a, stream_b) = tokio::io::duplex(256);
+        let (sender_read, sender_write) = tokio::io::split(stream_a);
+        let (receiver_read, receiver_write) = tokio::io::split(stream_b);
+
+        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+            our_public_address: addr,
+            expected_peer_id: None,
+            key_pair,
+            kx_local_pk: sender_kx.clone(),
+            kx_remote_pk: receiver_kx.clone(),
+            connection: Connection::from_split_with_binding(
+                11,
+                sender_read,
+                sender_write,
+                Some(transport_binding),
+            ),
+            cryptographer: cryptographer.clone(),
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        });
+
+        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+            connection: Connection::from_split_with_binding(
+                12,
+                receiver_read,
+                receiver_write,
+                Some(transport_binding),
+            ),
+            expected_peer_id: None,
+            kx_local_pk: receiver_kx,
+            kx_remote_pk: sender_kx,
+            cryptographer,
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        };
+
+        let sender = tokio::spawn(async move {
+            let _ = SendKey::send_our_public_key(send_key).await?;
+            Result::<(), crate::Error>::Ok(())
+        });
+
+        let ready = GetKey::read_their_public_key(get_key)
+            .await
+            .expect("handshake should succeed with matching transport binding");
+        sender
+            .await
+            .expect("sender task panicked")
+            .expect("sending handshake should succeed");
+
+        assert_eq!(ready.connection.transport_binding, Some(transport_binding));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handshake_rejects_mismatched_transport_binding() {
+        let kx = KexAlgo::new();
+        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
+        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
+        let addr: SocketAddr = "127.0.0.1:1446".parse().unwrap();
+        let key_pair = KeyPair::random();
+        let cryptographer =
+            Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[10u8; 32]).unwrap();
+
+        let (stream_a, stream_b) = tokio::io::duplex(256);
+        let (sender_read, sender_write) = tokio::io::split(stream_a);
+        let (receiver_read, receiver_write) = tokio::io::split(stream_b);
+
+        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+            our_public_address: addr,
+            expected_peer_id: None,
+            key_pair,
+            kx_local_pk: sender_kx.clone(),
+            kx_remote_pk: receiver_kx.clone(),
+            connection: Connection::from_split_with_binding(
+                13,
+                sender_read,
+                sender_write,
+                Some([0x11u8; iroha_crypto::Hash::LENGTH]),
+            ),
+            cryptographer: cryptographer.clone(),
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        });
+
+        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+            connection: Connection::from_split_with_binding(
+                14,
+                receiver_read,
+                receiver_write,
+                Some([0x22u8; iroha_crypto::Hash::LENGTH]),
+            ),
+            expected_peer_id: None,
+            kx_local_pk: receiver_kx,
+            kx_remote_pk: sender_kx,
+            cryptographer,
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        };
+
+        let sender = tokio::spawn(async move {
+            let _ = SendKey::send_our_public_key(send_key).await?;
+            Result::<(), crate::Error>::Ok(())
+        });
+
+        let err = match GetKey::read_their_public_key(get_key).await {
+            Ok(_) => panic!("mismatched transport binding must be rejected"),
+            Err(err) => err,
+        };
+        sender
+            .await
+            .expect("sender task panicked")
+            .expect("sending handshake should succeed");
+
+        assert!(
+            matches!(err, crate::Error::Keys(_)),
+            "expected signature verification failure, got {err:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn outgoing_handshake_rejects_unexpected_peer_identity() {
+        let kx = KexAlgo::new();
+        let (sender_kx, _sender_sk) = kx.keypair(KeyGenOption::Random);
+        let (receiver_kx, _receiver_sk) = kx.keypair(KeyGenOption::Random);
+        let addr: SocketAddr = "127.0.0.1:1445".parse().unwrap();
+        let actual_key_pair = KeyPair::random();
+        let expected_peer_id =
+            iroha_data_model::prelude::PeerId::from(KeyPair::random().public_key().clone());
+        let cryptographer =
+            Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[8u8; 32]).unwrap();
+
+        let (stream_a, stream_b) = tokio::io::duplex(256);
+        let (sender_read, sender_write) = tokio::io::split(stream_a);
+        let (receiver_read, receiver_write) = tokio::io::split(stream_b);
+
+        let send_key = SendKey::<KexAlgo, ChaCha20Poly1305>::new(SendKeyInit {
+            our_public_address: addr.clone(),
+            expected_peer_id: None,
+            key_pair: actual_key_pair,
+            kx_local_pk: sender_kx.clone(),
+            kx_remote_pk: receiver_kx.clone(),
+            connection: Connection::from_split(3, sender_read, sender_write),
+            cryptographer: cryptographer.clone(),
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        });
+
+        let get_key = GetKey::<KexAlgo, ChaCha20Poly1305> {
+            connection: Connection::from_split(4, receiver_read, receiver_write),
+            expected_peer_id: Some(expected_peer_id.clone()),
+            kx_local_pk: receiver_kx,
+            kx_remote_pk: sender_kx,
+            cryptographer,
+            chain_id: None,
+            consensus_caps: None,
+            confidential_caps: None,
+            crypto_caps: None,
+            relay_role: RelayRole::Disabled,
+            local_scion_supported: true,
+            trust_gossip: true,
+        };
+
+        let sender = tokio::spawn(async move {
+            let _ = SendKey::send_our_public_key(send_key).await?;
+            Result::<(), crate::Error>::Ok(())
+        });
+
+        let err = match GetKey::read_their_public_key(get_key).await {
+            Ok(_) => panic!("unexpected peer identity must be rejected"),
+            Err(err) => err,
+        };
+        sender
+            .await
+            .expect("sender task panicked")
+            .expect("sending handshake should succeed");
+
+        match err {
+            crate::Error::HandshakePeerMismatch { expected, found } => {
+                assert_eq!(expected, expected_peer_id);
+                assert_ne!(expected, found);
+            }
+            other => panic!("expected HandshakePeerMismatch, got {other:?}"),
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -6358,6 +7910,8 @@ mod cryptographer {
 
 /// An identification for peer connections.
 pub type ConnectionId = u64;
+/// Hash-sized binding for authenticated transport sessions.
+pub type TransportBinding = [u8; iroha_crypto::Hash::LENGTH];
 
 /// P2P connection
 pub struct Connection {
@@ -6375,6 +7929,8 @@ pub struct Connection {
     pub quic: Option<crate::transport::QuicConnection>,
     /// Remote addr, for logging purpose.
     pub remote_addr: Option<SocketAddr>,
+    /// Optional certificate fingerprint for TLS/QUIC channel binding.
+    pub transport_binding: Option<TransportBinding>,
 }
 
 impl Connection {
@@ -6390,11 +7946,27 @@ impl Connection {
             write_low: None,
             quic: None,
             remote_addr,
+            transport_binding: None,
         }
     }
 
     /// Instantiate a connection from arbitrary read/write halves.
     pub fn from_split<R, W>(id: ConnectionId, read: R, write: W) -> Self
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
+        Self::from_split_with_binding(id, read, write, None)
+    }
+
+    /// Instantiate a connection from arbitrary read/write halves with an optional
+    /// transport certificate binding.
+    pub fn from_split_with_binding<R, W>(
+        id: ConnectionId,
+        read: R,
+        write: W,
+        transport_binding: Option<TransportBinding>,
+    ) -> Self
     where
         R: AsyncRead + Send + Unpin + 'static,
         W: AsyncWrite + Send + Unpin + 'static,
@@ -6407,6 +7979,7 @@ impl Connection {
             write_low: None,
             quic: None,
             remote_addr: None,
+            transport_binding,
         }
     }
 
@@ -6420,6 +7993,7 @@ impl Connection {
         send_low: Option<quinn::SendStream>,
         recv_low: Option<quinn::RecvStream>,
         remote_addr: Option<SocketAddr>,
+        transport_binding: Option<TransportBinding>,
     ) -> Self {
         Connection {
             id,
@@ -6435,6 +8009,7 @@ impl Connection {
             }),
             quic: Some(quic),
             remote_addr,
+            transport_binding,
         }
     }
 }

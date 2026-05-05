@@ -32,8 +32,8 @@ slug: /norito/ledger-walkthrough
 לאורך המדריך החליפו את `$ADMIN_ACCOUNT` ו-`$RECEIVER_ACCOUNT` במזהי החשבונות שבהם תשתמשו. ה-bundle ברירת המחדל כבר כולל שני חשבונות שנגזרו מהמפתחות של הדמו:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 אמתו את הערכים על ידי הצגת החשבונות הראשונים:
@@ -52,7 +52,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts בתוך wonderland (החליפו את --limit במספר גבוה יותר אם צריך)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions שכבר קיימים
@@ -67,14 +67,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ה-CLI מדפיס את ה-hash של הטרנזקציה שנשלחה (לדוגמה, `0x5f…`). שמרו אותו כדי לבדוק את הסטטוס בהמשך.
 
 ## 3. מינט יחידות לחשבון המפעיל
 
-כמויות נכס חיות תחת הצמד `(asset definition, account)`. מינטו 250 יחידות של `coffee#wonderland` אל `$ADMIN_ACCOUNT`:
+כמויות נכס חיות תחת הצמד `(asset definition, account)`. מינטו 250 יחידות של `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` אל `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

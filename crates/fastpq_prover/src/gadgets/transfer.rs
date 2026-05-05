@@ -6,7 +6,10 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
     asset::id::AssetDefinitionId,
-    fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
+    fastpq::{
+        TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript,
+        normalized_numeric_to_u64,
+    },
 };
 use iroha_primitives::numeric::Numeric;
 use iroha_zkp_halo2::poseidon;
@@ -640,11 +643,21 @@ struct BalanceSnapshot {
 
 impl BalanceSnapshot {
     fn from_delta(delta: &TransferDeltaTranscript) -> Result<Self, Error> {
-        let amount = numeric_to_u64("amount", &delta.amount)?;
-        let from_before = numeric_to_u64("from_balance_before", &delta.from_balance_before)?;
-        let from_after = numeric_to_u64("from_balance_after", &delta.from_balance_after)?;
-        let to_before = numeric_to_u64("to_balance_before", &delta.to_balance_before)?;
-        let to_after = numeric_to_u64("to_balance_after", &delta.to_balance_after)?;
+        let target_scale = delta.normalized_scale();
+        let amount = numeric_to_u64("amount", &delta.amount, target_scale)?;
+        let from_before = numeric_to_u64(
+            "from_balance_before",
+            &delta.from_balance_before,
+            target_scale,
+        )?;
+        let from_after = numeric_to_u64(
+            "from_balance_after",
+            &delta.from_balance_after,
+            target_scale,
+        )?;
+        let to_before =
+            numeric_to_u64("to_balance_before", &delta.to_balance_before, target_scale)?;
+        let to_after = numeric_to_u64("to_balance_after", &delta.to_balance_after, target_scale)?;
 
         if from_before < amount {
             return Err(Error::TransferInvariant {
@@ -702,17 +715,15 @@ impl BalanceSnapshot {
     }
 }
 
-fn numeric_to_u64(field: &'static str, value: &Numeric) -> Result<u64, Error> {
-    value
-        .clone()
-        .try_into()
-        .map_err(|_| Error::TransferNumericBounds { field })
+fn numeric_to_u64(field: &'static str, value: &Numeric, target_scale: u32) -> Result<u64, Error> {
+    normalized_numeric_to_u64(value, target_scale).ok_or(Error::TransferNumericBounds { field })
 }
 
 #[cfg(test)]
 mod tests {
     use iroha_crypto::Hash;
     use iroha_data_model::{
+        DomainId,
         asset::id::AssetDefinitionId,
         fastpq::{TransferDeltaTranscript, TransferTranscript},
     };
@@ -787,7 +798,10 @@ mod tests {
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         let alice = (*ALICE_ID).clone();
         let bob = (*BOB_ID).clone();
-        let asset = AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let delta = TransferDeltaTranscript {
             from_account: alice.clone(),
             to_account: bob.clone(),
@@ -815,16 +829,17 @@ mod tests {
             .deltas
             .iter()
             .flat_map(|delta| {
+                let target_scale = delta.normalized_scale();
                 let sender = StateTransition::new(
                     balance_key(&delta.asset_definition, &delta.from_account),
-                    numeric_to_le_bytes(&delta.from_balance_before),
-                    numeric_to_le_bytes(&delta.from_balance_after),
+                    numeric_to_le_bytes(&delta.from_balance_before, target_scale),
+                    numeric_to_le_bytes(&delta.from_balance_after, target_scale),
                     OperationKind::Transfer,
                 );
                 let receiver = StateTransition::new(
                     balance_key(&delta.asset_definition, &delta.to_account),
-                    numeric_to_le_bytes(&delta.to_balance_before),
-                    numeric_to_le_bytes(&delta.to_balance_after),
+                    numeric_to_le_bytes(&delta.to_balance_before, target_scale),
+                    numeric_to_le_bytes(&delta.to_balance_after, target_scale),
                     OperationKind::Transfer,
                 );
                 [sender, receiver]
@@ -910,6 +925,23 @@ mod tests {
     }
 
     #[test]
+    fn verify_transcripts_accepts_mixed_scale_balances() {
+        let mut transcript = sample_transcript();
+        transcript.deltas[0].amount = Numeric::new(5, 1);
+        transcript.deltas[0].from_balance_before = Numeric::new(1, 0);
+        transcript.deltas[0].from_balance_after = Numeric::new(5, 1);
+        transcript.deltas[0].to_balance_before = Numeric::new(0, 0);
+        transcript.deltas[0].to_balance_after = Numeric::new(5, 1);
+        transcript.poseidon_preimage_digest = Some(compute_poseidon_digest(
+            &transcript.deltas[0],
+            &transcript.batch_hash,
+        ));
+
+        let transitions = sample_transitions(&transcript);
+        assert!(verify_transcripts(&transitions, &[transcript]).is_ok());
+    }
+
+    #[test]
     fn transfer_plan_summarises_witnesses() {
         let transcript = sample_multi_transcript();
         let witnesses =
@@ -949,7 +981,7 @@ mod tests {
             from_account: (*BOB_ID).clone(),
             to_account: (*ALICE_ID).clone(),
             asset_definition: AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "lily".parse().unwrap(),
             ),
             amount: Numeric::from(7u32),
@@ -974,8 +1006,8 @@ mod tests {
         to_bytes(&blob).expect("encode proof blob")
     }
 
-    fn numeric_to_le_bytes(value: &Numeric) -> Vec<u8> {
-        let amount: u64 = value.clone().try_into().expect("numeric fits u64");
+    fn numeric_to_le_bytes(value: &Numeric, target_scale: u32) -> Vec<u8> {
+        let amount = normalized_numeric_to_u64(value, target_scale).expect("numeric fits u64");
         amount.to_le_bytes().to_vec()
     }
 }

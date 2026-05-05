@@ -11,13 +11,25 @@ roadmap item “Documentation & rollout” by turning the supervisor behaviours 
 
 ## 1. First responder checklist
 
-1. Capture the data root that MOCHI is using. The default follows
-   `$TMPDIR/mochi/<profile-slug>`; custom paths appear in the UI title bar and
-   via `cargo run -p mochi-ui-egui -- --data-root ...`.
+1. Capture the workspace root and sandbox root that MOCHI is using. The default
+   layout is `<workspace>/.mochi/sandbox/<profile-slug>`; custom workspace and
+   data-root overrides appear in the UI title bar and via
+   `cargo run -p mochi-ui -- sandbox serve --workspace-root ...`.
+   When you use `scripts/mochi_local_sandbox.sh`, the helper also uses
+   `<workspace>/.mochi/build-target` as its default Cargo target dir unless
+   `MOCHI_CARGO_TARGET_DIR` overrides it.
 2. Run `./ci/check_mochi.sh` from the workspace root. This validates the core,
    UI, and integration crates before you begin modifying configs.
 3. Note the preset (`single-peer` or `four-peer-bft`). The generated topology
-   determines how many peer folders/logs you should expect under the data root.
+   determines how many peer folders/logs you should expect under the sandbox
+   root.
+4. If you are using the shell helper, capture:
+   - `scripts/mochi_local_sandbox.sh status`
+   - `<workspace>/.mochi/sandbox/<profile>/serve.log`
+   - `<workspace>/.mochi/sandbox/<profile>/session.json`
+   - `<workspace>/.mochi/sandbox/<profile>/serve.pid`
+   A `stale-session` status means `session.json` exists but the recorded Mochi
+   process is gone; inspect `serve.log`, then rerun `up` or `reset`.
 
 ## 2. Collect logs & telemetry evidence
 
@@ -25,11 +37,13 @@ roadmap item “Documentation & rollout” by turning the supervisor behaviours 
 layout:
 
 ```
-<data_root>/<profile>/
+<sandbox_root>/
   peers/<alias>/...
   logs/<alias>.log
   genesis/
   snapshots/
+  session.json
+  serve.log
 ```
 
 Follow these steps before making changes:
@@ -37,6 +51,9 @@ Follow these steps before making changes:
 - Use the **Logs** tab or open `logs/<alias>.log` directly to capture the last
   200 lines for each peer. The supervisor tails stdout/stderr/system channels
   via `PeerLogStream`, so these files match the UI output.
+- For headless `sandbox serve` runs, capture `serve.log` as well. It holds the
+  parent Mochi process output, including startup-stage failures before a peer
+  log exists.
 - Export a snapshot via **Maintenance → Export snapshot** (or call
   `Supervisor::export_snapshot`). The snapshot bundles storage, configs, and
   logs into `snapshots/<timestamp>-<label>/`.
@@ -56,7 +73,7 @@ If the UI reports “failed to spawn process” or “permission denied”, poin
 at known-good binaries:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -64,8 +81,13 @@ cargo run -p mochi-ui-egui -- \
 
 You can set `MOCHI_IROHAD`, `MOCHI_KAGAMI`, and `MOCHI_IROHA_CLI` to avoid
 typing the flags repeatedly. When debugging bundle builds, compare the
-`BundleConfig` in `mochi/mochi-ui-egui/src/config/` against the paths in
+`BundleConfig` in `mochi/mochi-ui-egui/src/config.rs` against the paths in
 `target/mochi-bundle`.
+
+For helper-script runs, check whether another process is holding the shared repo
+`target/` lock. Current Mochi helpers default to an isolated
+`<workspace>/.mochi/build-target`, so lock contention usually means
+`MOCHI_CARGO_TARGET_DIR` was pointed back at a busy directory.
 
 ### Port collisions
 
@@ -75,11 +97,43 @@ process is already listening on the default range (8080/1337). Relaunch MOCHI
 with explicit bases:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 The builder will fan out sequential ports from those bases, so reserve a range
 sized for your preset (`peer_count` peers → `peer_count` ports per transport).
+
+### Local MCP failed after peers started
+
+`sandbox serve` now validates the local Torii MCP surface after `/status`
+readiness. If startup reaches `serve.log` output such as `failed while
+validating local MCP`, confirm:
+
+- the active peer responds on `GET <torii>/v1/mcp`;
+- `tools/list` exposes curated `iroha.*` tools such as
+  `iroha.status`, `iroha.sumeragi.status`,
+  `iroha.transactions.submit`, and
+  `iroha.transactions.submit_and_wait`; and
+- raw `torii.*` tools are not leaking through the local curated surface.
+
+The helper script will not mark the sandbox ready until both `ready` and
+`mcp_ready` are `true` in `session.json`.
+
+### Readiness smoke failed after `/status` was ready
+
+The local smoke path signs with the bundled primary development signer and
+updates metadata on the existing `wonderland.universal` domain. It does not
+create a new SNS-gated domain. Submission uses `Content-Type:
+application/x-norito` and waits for commit through block/event streams plus
+HTTP status fallback (`/v1/pipeline/transactions/status?hash=...`, then
+explorer transaction lookup). A closed WebSocket stream should not fail
+readiness by itself if the HTTP status endpoint reports the transaction as
+committed.
+
+If the smoke transaction rejects, treat the rejection text in `serve.log` as
+authoritative. Common causes are stale storage from an older genesis, a
+mismatched generated config, or a non-default profile whose genesis does not
+include the sample domain/assets.
 
 ### Genesis and storage corruption
 
@@ -89,6 +143,21 @@ If Kagami exits before emitting a manifest, peers will crash immediately. Check
 For storage corruption, use the Maintenance section’s **Wipe & re-genesis**
 button (covered below) instead of deleting folders by hand; it recreates the
 peer directories and snapshot roots before restarting processes.
+
+If startup fails during config integrity checks, compare the rendered peer
+config with the validator-safe defaults Mochi now pins automatically:
+
+- `nexus.enabled = false` for local permissioned profiles unless you explicitly
+  enable Nexus.
+- `confidential.enabled = true` for validator peers.
+- `sumeragi.consensus_mode` must match the genesis block consensus mode Mochi
+  asked Kagami to generate.
+- `[torii.mcp]` should be enabled with `profile = "writer"` on local sandboxes.
+- `[torii.transport.norito_rpc]` should have `enabled = true`,
+  `require_mtls = false`, and `stage = "ga"` for the local SDK/RPC path.
+
+When you explicitly enable Nexus, Mochi now rejects permissioned profiles before
+launch and requires `sumeragi.consensus_mode = "npos"`.
 
 ### Tuning automatic restarts
 
@@ -109,9 +178,7 @@ to tighten the retry window for CI jobs that must fail fast.
    - restart peers with the preserved CLI/environment overrides.
 3. If you must do this manually:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
-   # Note the actual root printed above, then:
-   rm -rf /tmp/mochi/four-peer-bft
+   MOCHI_WORKSPACE_ROOT=/tmp/mochi-app MOCHI_PROFILE=four-peer-bft scripts/mochi_local_sandbox.sh reset
    ```
    Afterwards, restart MOCHI so `NetworkPaths::ensure` recreates the tree.
 

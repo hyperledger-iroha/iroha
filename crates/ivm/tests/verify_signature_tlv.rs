@@ -22,6 +22,56 @@ fn ed25519_test_key(tag: u8) -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[tag; 32])
 }
 
+fn run_syscall_verify_signature_ed25519(message_type: PointerType, message: &[u8], key_tag: u8) {
+    use ed25519_dalek::Signer;
+
+    let sk = ed25519_test_key(key_tag);
+    let pk_bytes = sk.verifying_key().to_bytes();
+    let sig = sk.sign(message);
+    let msg_payload = match message_type {
+        PointerType::Json => {
+            let raw = std::str::from_utf8(message).expect("json message utf8");
+            let json = iroha_primitives::json::Json::from_str_norito(raw).expect("valid json");
+            norito::to_bytes(&json).expect("encode json payload")
+        }
+        _ => message.to_vec(),
+    };
+
+    let msg_tlv = make_tlv(message_type as u16, &msg_payload);
+    let sig_tlv = make_tlv(PointerType::Blob as u16, &sig.to_bytes());
+    let pk_tlv = make_tlv(PointerType::Blob as u16, &pk_bytes);
+
+    let mut vm = IVM::new(10_000);
+    vm.memory.preload_input(0, &msg_tlv).expect("preload input");
+    let p_msg = Memory::INPUT_START;
+    let p_sig = p_msg + msg_tlv.len() as u64 + 8;
+    let p_pk = p_sig + sig_tlv.len() as u64 + 8;
+    vm.memory
+        .preload_input(msg_tlv.len() as u64 + 8, &sig_tlv)
+        .expect("preload input");
+    vm.memory
+        .preload_input((msg_tlv.len() + sig_tlv.len()) as u64 + 16, &pk_tlv)
+        .expect("preload input");
+
+    vm.set_register(10, p_msg);
+    vm.set_register(11, p_sig);
+    vm.set_register(12, p_pk);
+    vm.set_register(13, 1); // scheme 1 = Ed25519
+
+    let halt = encoding::wide::encode_halt();
+    let syscall = encoding::wide::encode_sys(
+        instruction::wide::system::SCALL,
+        ivm::syscalls::SYSCALL_VERIFY_SIGNATURE as u8,
+    );
+    let mut prog = Vec::new();
+    prog.extend_from_slice(&syscall.to_le_bytes());
+    prog.extend_from_slice(&halt.to_le_bytes());
+    let prog = assemble(&prog);
+    vm.load_program(&prog).unwrap();
+    vm.run().unwrap();
+    assert_eq!(vm.register(10), 1);
+}
+
 #[test]
 fn syscall_verify_signature_secp256k1_via_tlv() {
     use iroha_crypto::{EcdsaSecp256k1Sha256, KeyGenOption};
@@ -66,7 +116,7 @@ fn syscall_verify_signature_secp256k1_via_tlv() {
 
 #[test]
 fn syscall_verify_signature_dilithium_via_tlv() {
-    use pqcrypto_dilithium::dilithium3 as dilithium;
+    use pqcrypto_mldsa::mldsa65 as dilithium;
     use pqcrypto_traits::sign::{DetachedSignature, PublicKey};
     let (pk, sk) = dilithium::keypair();
     let msg = b"ivm-dilithium";
@@ -281,7 +331,7 @@ fn secp256k1_verify_rejects_high_s_signature() {
 
 #[test]
 fn opcode_verify_dilithium_via_tlv() {
-    use pqcrypto_dilithium::dilithium3 as dilithium;
+    use pqcrypto_mldsa::mldsa65 as dilithium;
     use pqcrypto_traits::sign::{DetachedSignature, PublicKey};
     let (pk, sk) = dilithium::keypair();
     let msg = b"ivm-op-dilithium";
@@ -316,49 +366,18 @@ fn opcode_verify_dilithium_via_tlv() {
 
 #[test]
 fn syscall_verify_signature_ed25519_via_tlv() {
-    use ed25519_dalek::Signer;
-
-    // Generate key and signature
-    let sk = ed25519_test_key(5);
-    let pk_bytes = sk.verifying_key().to_bytes();
     let msg = b"ivm-ed25519";
-    let sig = sk.sign(msg);
+    run_syscall_verify_signature_ed25519(PointerType::Blob, msg, 5);
+}
 
-    // Prepare TLVs in INPUT: message, signature, public key
-    let msg_tlv = make_tlv(PointerType::Blob as u16, msg);
-    let sig_tlv = make_tlv(PointerType::Blob as u16, &sig.to_bytes());
-    let pk_tlv = make_tlv(PointerType::Blob as u16, &pk_bytes);
+#[test]
+fn syscall_verify_signature_accepts_norito_message_tlv() {
+    let message = br#"{"amount":123,"dpn_id":"dpn-live"}"#;
+    run_syscall_verify_signature_ed25519(PointerType::NoritoBytes, message, 6);
+}
 
-    let mut vm = IVM::new(10_000);
-    // Preload TLVs with spacing
-    vm.memory.preload_input(0, &msg_tlv).expect("preload input");
-    let p_msg = Memory::INPUT_START;
-    let p_sig = p_msg + msg_tlv.len() as u64 + 8;
-    let p_pk = p_sig + sig_tlv.len() as u64 + 8;
-    vm.memory
-        .preload_input(msg_tlv.len() as u64 + 8, &sig_tlv)
-        .expect("preload input");
-    vm.memory
-        .preload_input((msg_tlv.len() + sig_tlv.len()) as u64 + 16, &pk_tlv)
-        .expect("preload input");
-
-    // Place pointers in registers
-    vm.set_register(10, p_msg);
-    vm.set_register(11, p_sig);
-    vm.set_register(12, p_pk);
-    vm.set_register(13, 1); // scheme 1 = Ed25519
-
-    // Program: SCALL VERIFY_SIGNATURE; HALT
-    let halt = encoding::wide::encode_halt();
-    let syscall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        ivm::syscalls::SYSCALL_VERIFY_SIGNATURE as u8,
-    );
-    let mut prog = Vec::new();
-    prog.extend_from_slice(&syscall.to_le_bytes());
-    prog.extend_from_slice(&halt.to_le_bytes());
-    let prog = assemble(&prog);
-    vm.load_program(&prog).unwrap();
-    vm.run().unwrap();
-    assert_eq!(vm.register(10), 1);
+#[test]
+fn syscall_verify_signature_accepts_json_message_tlv() {
+    let message = br#"{"amount":456,"dpn_id":"dpn-json"}"#;
+    run_syscall_verify_signature_ed25519(PointerType::Json, message, 7);
 }

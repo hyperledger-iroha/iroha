@@ -13,41 +13,51 @@ Overview
 - If `authority` and `private_key` are provided (or `private_key` on ballot DTOs), Torii signs and submits the transaction and still returns `tx_instructions`.
 - Otherwise, clients assemble a SignedTransaction using their authority and chain_id, then sign and POST to `/transaction`.
 - SDK coverage:
-- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`, `ToriiClient.get_governance_unlock_stats_typed` returns `GovernanceUnlockStats`, and `ToriiClient.list_governance_instances_typed` returns `GovernanceInstancesPage`, enforcing typed access across the governance surface with README usage examples.
+- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, and `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`.
 - Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
-- JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for proposals, referenda, tallies, locks, unlock stats, and now `listGovernanceInstances(namespace, options)` plus the council endpoints (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) so Node.js clients can paginate `/v1/gov/instances/{ns}` and drive VRF-backed workflows alongside the existing contract-instance listing. `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror the Python helpers by always returning a structured draft (synthesising the empty skeleton when Torii responds with `204 No Content`), which keeps automation from branching on `null` before queueing transactions or triggers. `getGovernanceLocksTyped` now normalises `404 Not Found` responses into `{found: false, locks: {}, referendum_id: <id>}` so JS callers get the same shaped result as the Python helper when a referendum has no locks.
+- JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for proposals, referenda, tallies, locks, unlock stats, and the council endpoints (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`). `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror the Python helpers by always returning a structured draft (synthesising the empty skeleton when Torii responds with `204 No Content`), which keeps automation from branching on `null` before queueing transactions or triggers.
 
 Endpoints
 
 - POST `/v1/gov/proposals/deploy-contract`
   - Request (JSON):
     {
-      "namespace": "apps",
-      "contract_id": "my.contract.v1",
+      "contract_alias": "router::universal"?,
+      "contract_address": "tairac1..."?,
       "code_hash": "blake2b32:…" | "…64hex",
       "abi_hash": "blake2b32:…" | "…64hex",
       "abi_version": "1",
       "window": { "lower": 12345, "upper": 12400 },
-      "authority": "i105...?",
+      "mode": "Zk" | "Plain",
+      "limits": { … }?,
+      "manifest_provenance": { … }?,
+      "authority": "<i105-account-id>?",
       "private_key": "…?"
     }
   - Response (JSON):
     { "ok": true, "proposal_id": "…64hex", "tx_instructions": [{ "wire_id": "…", "payload_hex": "…" }] }
-  - Validation: nodes canonicalise `abi_hash` for the provided `abi_version` and reject mismatches. For `abi_version = "v1"`, the expected value is `hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`.
+  - Validation:
+    - exactly one of `contract_address` or `contract_alias` must be provided;
+    - aliases resolve to the current active canonical contract address before the proposal id is derived;
+    - `code_hash` and `abi_hash` are canonicalised to 32-byte lowercase hex;
+    - only `abi_version = "1"` is accepted, and `abi_hash` must equal the canonical ABI hash for that version (`hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))`);
+    - `window.upper` must be `>= window.lower`; and
+    - `mode`, when supplied, must be `Zk` or `Plain`.
+  - Submission model: this endpoint is draft-first. `authority`/`private_key` are only accepted as a legacy pair and currently fail closed because governance server-side signing is disabled, so clients should consume `tx_instructions`, sign locally, and submit via `/transaction`.
 
 Contracts API (deploy)
 - POST `/v1/contracts/deploy`
-  - Request: { "authority": "i105...", "private_key": "…", "code_b64": "…" }
-  - Behavior: Computes `code_hash` from the IVM program body and `abi_hash` from the header `abi_version`, then submits `RegisterSmartContractCode` (manifest) and `RegisterSmartContractBytes` (full `.to` bytes) on behalf of `authority`.
-  - Response: { "ok": true, "code_hash_hex": "…", "abi_hash_hex": "…" }
+  - Request: { "authority": "<i105-account-id>", "private_key": "…", "code_b64": "…", "contract_alias": "router::universal", "lease_expiry_ms": 1735689600000? }
+  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes `code_hash` from the full artifact body after the fixed IVM header and `abi_hash` from the enforced ABI policy, derives a fresh immutable `contract_address` from `(chain_discriminant, authority, deploy_nonce, dataspace(contract_alias))`, then submits `RegisterSmartContractCode`, `RegisterSmartContractBytes`, `ActivateContractInstance`, `SetContractAlias::bind`, and the deploy-nonce bump on behalf of `authority`.
+  - Redeploying the same `contract_alias` is the public upgrade path: Torii clears the old alias binding, deactivates the retired address, binds the alias to the new address, and reports `previous_contract_address` plus `upgraded = true`.
+  - Response: `DeployContractBundleReceiptDto`; the single-contract shortcut returns the canonical bundle receipt with one entry in `contracts[]`.
   - Related:
     - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
     - GET `/v1/contracts/code-bytes/{code_hash}` → returns `{ code_b64 }`
-- POST `/v1/contracts/instance`
-  - Request: { "authority": "i105...", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "…" }
-  - Behavior: Deploys the supplied bytecode and immediately activates the `(namespace, contract_id)` mapping via `ActivateContractInstance`.
-  - Response: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "…", "abi_hash_hex": "…" }
-
+  - Notes:
+    - this public shortcut is alias-first and is intended for public/unprotected dataspaces;
+    - runtime calls no longer resend bytecode or manifests on each invocation; once deployed, `/v1/contracts/call` references the active contract by address; and
+    - protected-namespace deployment remains governed by the proposal/metadata flow (`gov_contract_address`, enacted proposal tuple, quorum metadata) rather than by a separate public `/v1/contracts/instance*` shortcut.
 Alias Service
 - POST `/v1/aliases/voprf/evaluate`
   - Request: { "blinded_element_hex": "…" }
@@ -56,13 +66,17 @@ Alias Service
   - Notes: Deterministic mock evaluator that applies Blake2b512 with domain separation `iroha.alias.voprf.mock.v1`. Meant for test tooling until the production VOPRF pipeline is wired through Iroha.
   - Errors: HTTP `400` on malformed hex input. Torii returns a Norito `ValidationFail::QueryFailed::Conversion` envelope with the decoder error message.
 - POST `/v1/aliases/resolve`
-  - Request: { "alias": "GB82 WEST 1234 5698 7654 32" }
-  - Response: { "alias": "GB82WEST12345698765432", "account_id": "i105...", "index": 0, "source": "iso_bridge" }
-  - Notes: Requires the ISO bridge runtime staging (`[iso_bridge.account_aliases]` in `iroha_config`). Torii normalises aliases by stripping whitespace and upper-casing before lookup. Returns 404 when the alias is absent and 503 when the ISO bridge runtime is disabled.
+  - Request: { "alias": "merchant@paynet" }
+  - Response: { "alias": "merchant@paynet", "account_id": "<i105-account-id>", "index": 12, "source": "on_chain" }
+  - Notes: Torii routes the lookup through the Nexus read proxy using the alias dataspace encoded in the literal, so `merchant@paynet` can be resolved through any configured Nexus ingress instead of only the PAYNET-local Torii surface. Public/unsigned requests remain allowed for ordinary public alias resolution. Returns HTTP `403` with `ErrorEnvelope.code = "permission_denied"` only when the routed dataspace blocks the lookup and no allowed route can resolve it; returns `404` when reachable routes miss and `503` when no route can be reached.
 - POST `/v1/aliases/resolve_index`
   - Request: { "index": 0 }
-  - Response: { "index": 0, "alias": "GB82WEST12345698765432", "account_id": "i105...", "source": "iso_bridge" }
-  - Notes: Alias indices are assigned deterministically from configuration order (0-based). Clients can cache responses offline to build audit trails for alias attestation events.
+  - Response: { "index": 0, "alias": "merchant@paynet", "account_id": "<i105-account-id>", "source": "fanout" }
+  - Notes: Because the index alone does not encode a dataspace, Torii fans this lookup out across every configured dataspace route, dedupes identical results, and returns `source = "fanout"` when the response comes from multi-route merging. Returns `409 route_conflict` if multiple dataspaces return incompatible bindings for the same index, `403 permission_denied` if only blocked routes could resolve it, `404` when all reachable routes miss, and `503` when no route can be reached.
+- POST `/v1/aliases/by_account`
+  - Request: { "account_id": "<i105-account-id>", "dataspace": "paynet"?, "domain": "merchant"?" }
+  - Response: { "account_id": "<i105-account-id>", "total": 2, "items": [{ "alias": "merchant@paynet", "dataspace": "paynet", "domain": null, "is_primary": false }], "source": "fanout" }
+  - Notes: Torii routes the lookup through the target-account dataspace set, merges deduplicated alias rows across reachable dataspaces, and recomputes `total` after merging. If one or more routes are denied but another route succeeds, Torii still returns `200` and includes the usual routing diagnostics headers plus an HTTP `Warning` header. Returns `403 permission_denied` only when no allowed route can return aliases, `404` when reachable routes miss, and `503` when no route can be reached.
 
 Code Size Cap
 - Custom parameter: `max_contract_code_bytes` (JSON u64)
@@ -71,7 +85,7 @@ Code Size Cap
   - Operators can adjust by submitting `SetParameter(Custom)` with `id = "max_contract_code_bytes"` and a numeric payload.
 
 - POST `/v1/gov/ballots/zk`
-  - Request: { "authority": "i105...", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
+  - Request: { "authority": "<i105-account-id>", "private_key": "…?", "chain_id": "…", "election_id": "e1", "proof_b64": "…", "public": {…} }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
   - Notes:
     - When the circuit’s public inputs include `owner`, `amount`, and `duration_blocks`, and the proof verifies against the configured VK, the node creates or extends a governance lock for `election_id` with that `owner`. Direction remains hidden (`unknown`) unless hinted; only amount/expiry are updated. Re-votes are monotonic: amount and expiry only increase (the node applies max(amount, prev.amount) and max(expiry, prev.expiry)).
@@ -80,12 +94,12 @@ Code Size Cap
     - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` prior to enqueuing `SubmitBallot`; hosts enforce a one-shot latch.
 
 - POST `/v1/gov/ballots/plain`
-  - Request: { "authority": "i105...", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "i105...", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - Request: { "authority": "<i105-account-id>", "private_key": "…?", "chain_id": "…", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
   - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing lock’s amount or expiry. The `owner` must equal the transaction authority. Minimum duration is `conviction_step_blocks`.
 
 - POST `/v1/gov/finalize`
-  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "i105...?", "private_key": "…?" }
+  - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "<i105-account-id>?", "private_key": "…?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…FinalizeReferendum", "payload_hex": "…" }] }
   - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
   - Notes:
@@ -94,7 +108,7 @@ Code Size Cap
     - Turnout checks use approve+reject only; abstain does not count toward turnout.
 
 - POST `/v1/gov/enact`
-  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "i105...?", "private_key": "…?" }
+  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "<i105-account-id>?", "private_key": "…?" }
   - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }
   - Notes: Torii submits the signed transaction when `authority`/`private_key` are provided; otherwise it returns a skeleton for clients to sign and submit. The preimage is optional and currently informational.
 
@@ -132,17 +146,17 @@ The council fallback used by Torii when no persisted roster exists is parameteri
   approval_q_num = 1
   approval_q_den = 2
   min_turnout = 0
-  voting_asset_id = "xor#sora"         # governance bond asset (Sora Nexus default)
+  voting_asset_id = "61CtjvNd9T3THAR65GsMVHr82Bjc"         # governance bond asset (Sora Nexus default)
   min_bond_amount = 150                # smallest units of voting_asset_id
-  bond_escrow_account = "i105..."
-  slash_receiver_account = "i105..."
+  bond_escrow_account = "<i105-account-id>"
+  slash_receiver_account = "<i105-account-id>"
   slash_double_vote_bps = 0            # percentage (basis points) to slash on double-vote attempts
   slash_invalid_proof_bps = 0          # percentage (basis points) to slash on invalid ballot proofs
   slash_ineligible_proof_bps = 0       # percentage (basis points) to slash on stale/invalid eligibility proofs
   parliament_committee_size = 21
   parliament_term_blocks = 43200
   parliament_min_stake = 1
-  parliament_eligibility_asset_id = "SORA#stake"
+  parliament_eligibility_asset_id = "79jULkZVMgnbzxBe6NvqeDxVEeEk"
 ```
 
 Equivalent environment overrides:
@@ -150,17 +164,17 @@ Equivalent environment overrides:
 ```
 GOV_VK_BACKEND=halo2/ipa
 GOV_VK_NAME=ballot_v1
-GOV_VOTING_ASSET_ID=xor#sora
+GOV_VOTING_ASSET_ID=61CtjvNd9T3THAR65GsMVHr82Bjc
 GOV_MIN_BOND_AMOUNT=150
-GOV_BOND_ESCROW_ACCOUNT=i105...
-GOV_SLASH_RECEIVER_ACCOUNT=i105...
+GOV_BOND_ESCROW_ACCOUNT=<i105-account-id>
+GOV_SLASH_RECEIVER_ACCOUNT=<i105-account-id>
 GOV_SLASH_DOUBLE_VOTE_BPS=2500
 GOV_SLASH_INVALID_PROOF_BPS=5000
 GOV_SLASH_INELIGIBLE_PROOF_BPS=1500
 GOV_PARLIAMENT_COMMITTEE_SIZE=21
 GOV_PARLIAMENT_TERM_BLOCKS=43200
 GOV_PARLIAMENT_MIN_STAKE=1
-GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID=SORA#stake
+GOV_PARLIAMENT_ELIGIBILITY_ASSET_ID=79jULkZVMgnbzxBe6NvqeDxVEeEk
 GOV_ALIAS_TEU_MINIMUM=0
 GOV_ALIAS_FRONTIER_TELEMETRY=true
 ```
@@ -176,7 +190,7 @@ Governance VK verification has no bypass: ballot verification always requires an
 
 RBAC
 - On-chain execution requires permissions:
-  - Proposals: `CanProposeContractDeployment{ contract_id }`
+  - Proposals: `CanProposeContractDeployment{ contract_address }`
   - Ballots: `CanSubmitGovernanceBallot{ referendum_id }`
   - Enactment: `CanEnactGovernance`
   - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`
@@ -187,14 +201,12 @@ RBAC
 
 Protected Namespaces
 - Custom parameter `gov_protected_namespaces` (JSON array of strings) enables admission gating for deploys into listed namespaces.
-- Clients must include transaction metadata keys for deploys targeting protected namespaces:
-  - `gov_namespace`: the target namespace (e.g., `"apps"`)
-  - `gov_contract_id`: the logical contract id within the namespace
-- `gov_manifest_approvers`: optional JSON array of i105... account IDs. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
-- Telemetry exposes holistic admission counters via `governance_manifest_admission_total{result}` so operators can distinguish successful admits from `missing_manifest`, `non_i105..._authority`, `quorum_rejected`, `protected_namespace_rejected`, and `runtime_hook_rejected` paths.
+- Clients must include transaction metadata key `gov_contract_address` for deploys targeting protected namespaces.
+- `gov_manifest_approvers`: optional JSON array of <i105-account-id> account IDs. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
+- Telemetry exposes holistic admission counters via `governance_manifest_admission_total{result}` so operators can distinguish successful admits from `missing_manifest`, `non_<i105-account-id>_authority`, `quorum_rejected`, `protected_namespace_rejected`, and `runtime_hook_rejected` paths.
 - Telemetry surfaces the enforcement path via `governance_manifest_quorum_total{outcome}` (values `satisfied` / `rejected`) so operators can audit missing approvals.
-- Lanes enforce the namespace allowlist published in their manifests. Any transaction that sets `gov_namespace` must provide `gov_contract_id`, and the namespace must appear in the manifest's `protected_namespaces` set. `RegisterSmartContractCode` submissions without this metadata are rejected when protection is enabled.
-- Admission enforces that an Enacted governance proposal exists for the tuple `(namespace, contract_id, code_hash, abi_hash)`; otherwise validation fails with a NotPermitted error.
+- Lanes enforce the namespace allowlist published in their manifests. Any transaction that sets `gov_contract_address` must resolve into a protected dataspace alias present in the manifest's `protected_namespaces` set. `RegisterSmartContractCode` submissions without this metadata are rejected when protection is enabled.
+- Admission enforces that an Enacted governance proposal exists for the tuple `(contract_address, code_hash, abi_hash)`; otherwise validation fails with a NotPermitted error.
 
 Runtime Upgrade Hooks
 - Lane manifests may declare `hooks.runtime_upgrade` to gate runtime upgrade instructions (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`).
@@ -205,7 +217,7 @@ Runtime Upgrade Hooks
   - `allowed_ids` (array of strings): optional allowlist of metadata values (after trimming). Rejects when the provided value is not listed.
 - When the hook is present, queue admission enforces the metadata policy before the transaction enters the queue. Missing metadata, blank values, or values outside the allowlist produce a deterministic `NotPermitted` error.
 - Telemetry tracks enforcement outcomes via `governance_manifest_hook_total{hook="runtime_upgrade", outcome="allowed|rejected"}`.
-- Transactions satisfying the hook must include metadata `gov_upgrade_id=<value>` (or the manifest-defined key) alongside any i105... approvals required by the manifest quorum.
+- Transactions satisfying the hook must include metadata `gov_upgrade_id=<value>` (or the manifest-defined key) alongside any <i105-account-id> approvals required by the manifest quorum.
 
 Convenience Endpoint
 - POST `/v1/gov/protected-namespaces` — applies `gov_protected_namespaces` directly on the node.
@@ -214,35 +226,27 @@ Convenience Endpoint
   - Notes: Intended for admin/testing; requires API token if configured. For production, prefer submitting a signed transaction with `SetParameter(Custom)`.
 
 CLI Helpers
-- `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
-  - Fetches contract instances for the namespace and cross-checks that:
-    - Torii stores bytecode for each `code_hash`, and its Blake2b-32 digest matches the `code_hash`.
+- `iroha --output-format text app gov deploy audit --contract-address tairac1...`
+  - Fetches the active binding for the governed contract address and cross-checks that:
+    - Torii stores bytecode for the active `code_hash`, and its Blake2b-32 digest matches the `code_hash`.
     - The manifest stored under `/v1/contracts/code/{code_hash}` reports matching `code_hash` and `abi_hash` values.
-    - An enacted governance proposal exists for `(namespace, contract_id, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
-  - Outputs a JSON report with `results[]` per contract (issues, manifest/code/proposal summaries) plus a one-line summary unless suppressed (`--no-summary`).
-  - Useful for auditing protected namespaces or verifying governance-controlled deploy workflows.
-- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver i105... --approver i105...]`
-  - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including optional `gov_manifest_approvers` for satisfying manifest quorum rules.
-- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner i105... --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
-  - Validates canonical account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
+    - An enacted governance proposal exists for `(contract_address, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
+- `iroha app gov deploy meta --contract-address tairac1... [--approver <i105-account-id> --approver <i105-account-id>]`
+  - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including `gov_contract_address` and optional `gov_manifest_approvers` for satisfying manifest quorum rules.
+- `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner <i105-account-id> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
+  - Validates canonical I105 account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
   - The one-line summary now surfaces a deterministic `fingerprint=<hex>` derived from the encoded `CastZkBallot` along with any decoded hints (`owner`, `amount`, `duration_blocks`, `direction` when provided).
   - CLI responses annotate `tx_instructions[]` with `payload_fingerprint_hex` plus decoded fields so downstream tooling can verify the skeleton without reimplementing Norito decoding.
   - When any lock hint is provided, ZK ballots must supply `owner`, `amount`, and `duration_blocks`; partial hints are rejected. When `min_bond_amount > 0`, lock hints are required. Direction remains optional and is treated as a hint only.
-- `iroha app gov vote --mode plain --referendum-id <id> --owner i105... --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
+- `iroha app gov vote --mode plain --referendum-id <id> --owner <i105-account-id> --amount <u128> --duration-blocks <u64> --direction <Aye|Nay|Abstain>`
   - `--owner` accepts canonical I105 literals; Pass domain context through the surrounding scoped interface when required.
   - Aliases `--lock-amount`/`--lock-duration-blocks` mirror the ZK flag names for scripting parity.
   - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
 
-Instances Listing
-- GET `/v1/gov/instances/{ns}` — lists active contract instances for a namespace.
-  - Query params:
-    - `contains`: filter by substring of `contract_id` (case-sensitive)
-    - `hash_prefix`: filter by hex prefix of `code_hash_hex` (lowercase)
-    - `offset` (default 0), `limit` (default 100, max 10_000)
-    - `order`: one of `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
-  - Response: { "namespace": "ns", "instances": [{ "contract_id": "…", "code_hash_hex": "…" }, …], "total": N, "offset": n, "limit": m }
-  - SDK helper: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) or `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
+Governed Contract Lookup
+- GET `/v1/gov/contracts/{contract_address}` — returns the active governance binding for a canonical contract address.
+  - Response: { "found": bool, "contract_address": "tairac1...", "dataspace": "universal", "code_hash_hex": "…" ? }
 
 Unlock Sweep (Operator/Audit)
 - GET `/v1/gov/unlocks/stats`
@@ -251,7 +255,7 @@ Unlock Sweep (Operator/Audit)
 - POST `/v1/gov/ballots/zk-v1`
   - Request (v1-style DTO):
     {
-      "authority": "i105...",
+      "authority": "<i105-account-id>",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "…?",
       "election_id": "ref-1",
@@ -270,7 +274,7 @@ Unlock Sweep (Operator/Audit)
   - Accepts a `BallotProof` JSON directly and returns a `CastZkBallot` skeleton.
   - Request:
     {
-      "authority": "i105...",
+      "authority": "<i105-account-id>",
       "chain_id": "00000000-0000-0000-0000-000000000000",
       "private_key": "…?",
       "election_id": "ref-1",
@@ -313,7 +317,7 @@ CastZkBallot Verification Path
 
 ### Slashing and Jailing Workflow
 
-Consensus emits Norito-encoded `Evidence` whenever a i105... violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Records older than `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) are rejected so the archive remains bounded, but the rejection is logged for operators. Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties before they apply.
+Consensus emits Norito-encoded `Evidence` whenever a <i105-account-id> violates the protocol. Each payload lands in the in-memory `EvidenceStore` and, if unseen, is materialised into the WSV-backed `consensus_evidence` map. Records older than `sumeragi.npos.reconfig.evidence_horizon_blocks` (default `7200` blocks) are rejected so the archive remains bounded, but the rejection is logged for operators. Evidence within the horizon obeys the joint-consensus staging rule (`mode_activation_height requires next_mode to be set in the same block`), the activation delay (`sumeragi.npos.reconfig.activation_lag_blocks`, default `1`), and the slashing delay (`sumeragi.npos.reconfig.slashing_delay_blocks`, default `259200`) so governance can cancel penalties before they apply.
 
 Recognised offences map one-to-one to `EvidenceKind`; the discriminants are stable and enforced by the data model:
 
@@ -333,7 +337,7 @@ for (expected, kind) in offences.iter().enumerate() {
 }
 ```
 
-- **DoublePrepare/DoubleCommit** — the i105... signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
+- **DoublePrepare/DoubleCommit** — the <i105-account-id> signed conflicting hashes for the same `(phase,height,view,epoch)` tuple.
 - **InvalidQc** — an aggregator gossiped a commit QC whose shape fails deterministic checks (e.g., empty signer bitmap).
 - **InvalidProposal** — a leader proposed a block that fails structural validation (e.g., breaks the locked-chain rule).
 - **Censorship** — signed submission receipts show a transaction that was never proposed/committed.
@@ -350,12 +354,12 @@ Governance must treat the evidence bytes as canonical proof:
 1. **Collect the payload** before it ages out. Archive the raw Norito bytes alongside height/view metadata.
 2. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload before `slashing_delay_blocks` elapses; the record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, and no slashing applies.
 3. **Stage the penalty** by embedding the payload in a referendum or sudo instruction (e.g., `Unregister::peer`). Execution re-validates the payload; malformed nor stale evidence is rejected deterministically.
-4. **Schedule the follow-up topology** so the offending i105... cannot immediately rejoin. Typical flows queue `SetParameter(Sumeragi::NextMode)` and `SetParameter(Sumeragi::ModeActivationHeight)` with the updated roster.
+4. **Schedule the follow-up topology** so the offending <i105-account-id> cannot immediately rejoin. Typical flows queue `SetParameter(Sumeragi::NextMode)` and `SetParameter(Sumeragi::ModeActivationHeight)` with the updated roster.
 5. **Audit results** via `/v1/sumeragi/evidence` and `/v1/sumeragi/status` to ensure the evidence counter advanced and governance enacted the removal.
 
 ### Joint-Consensus Sequencing
 
-Joint consensus guarantees that the outgoing i105... set finalises the boundary block before the new set starts proposing. The runtime enforces the rule via paired parameters:
+Joint consensus guarantees that the outgoing <i105-account-id> set finalises the boundary block before the new set starts proposing. The runtime enforces the rule via paired parameters:
 
 - `SumeragiParameter::NextMode` and `SumeragiParameter::ModeActivationHeight` must be committed in the **same block**. `mode_activation_height` must be strictly greater than the block height that carried the update, providing at least one-block lag.
 - `sumeragi.npos.reconfig.activation_lag_blocks` (default `1`) is the configuration guard that prevents zero-lag hand-offs:
@@ -366,13 +370,13 @@ use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_
 assert_eq!(RECONFIG_ACTIVATION_LAG_BLOCKS, 1);
 ```
 
-- The runtime and CLI expose staged parameters through `/v1/sumeragi/params` and `iroha sumeragi params --summary`, so operators can confirm activation heights and i105... rosters.
+- The runtime and CLI expose staged parameters through `/v1/sumeragi/params` and `iroha sumeragi params --summary`, so operators can confirm activation heights and <i105-account-id> rosters.
 - Governance automation should always:
   1. Finalise the evidence-backed removal (or reinstatement) decision.
   2. Queue a follow-up reconfiguration with `mode_activation_height = h_current + activation_lag_blocks`.
   3. Monitor `/v1/sumeragi/status` until `effective_consensus_mode` flips at the expected height.
 
-Any script that rotates i105...s or applies slashing **must not** attempt zero-lag activation or omit the hand-off parameters; such transactions are rejected and leave the network in the previous mode.
+Any script that rotates <i105-account-id>s or applies slashing **must not** attempt zero-lag activation or omit the hand-off parameters; such transactions are rejected and leave the network in the previous mode.
 
 ## Telemetry surfaces
 

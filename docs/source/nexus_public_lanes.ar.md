@@ -1,117 +1,114 @@
 ---
-lang: ar
-direction: rtl
-source: docs/source/nexus_public_lanes.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: f9bb3a13cec7d80bfd1729709eb0744a5a062954002ada5d48608f62f8907668
-source_last_modified: "2025-12-08T18:48:53.874766+00:00"
-translation_last_reviewed: 2026-01-01
+title: Nexus Public Lane Staking
+description: NX-9 specification for permissionless validator admission, stake accounting, and reward records.
 ---
 
-<div dir="rtl">
+# Nexus Public Lane Staking (NX-9)
 
-<!-- الترجمة العربية لـ docs/source/nexus_public_lanes.md -->
+Status: 🈺 In Progress → **runtime + operator docs aligned** (Apr 2026)  
+Owners: Economics WG / Governance WG / Core Runtime  
+Roadmap ref: NX-9 – Public lane staking & reward module
 
-# رهن المسارات العامة في Nexus (NX-9)
+This note captures the canonical data model, instruction surface, governance
+controls, and operational hooks for the Nexus public-lane staking program. The
+goal is to let permissionless validators join the public lanes, bond stake,
+service blocks, and receive rewards while governance maintains deterministic
+slashing/runbook levers.
 
-الحالة: 🈺 قيد التنفيذ → **مواءمة runtime ووثائق المشغلين** (ابريل 2026)
-المالكون: Economics WG / Governance WG / Core Runtime
-مرجع خارطة الطريق: NX-9 – Public lane staking & reward module
+The code scaffolding now lives in:
 
-تلتقط هذه المذكرة نموذج البيانات القياسي وسطح التعليمات وضوابط الحوكمة وخطافات التشغيل
-لبرنامج رهن المسارات العامة في Nexus. الهدف هو تمكين المدققين دون تصريح من الانضمام
-الى المسارات العامة وربط الحصص وخدمة الكتل وتلقي المكافآت، بينما تحافظ الحوكمة على
-ادوات slashing/runbook الحتمية.
-
-يقع هيكل الكود حاليا في:
-
-- انواع نموذج البيانات: `crates/iroha_data_model/src/nexus/staking.rs`
-- تعريفات ISI: `crates/iroha_data_model/src/isi/staking.rs`
-- هيكل تنفيذي اساسي (يرجع خطأ حتميا حتى يصل منطق NX-9):
+- Data model types: `crates/iroha_data_model/src/nexus/staking.rs`
+- ISI definitions: `crates/iroha_data_model/src/isi/staking.rs`
+- Core executor stub (returns a deterministic guard error until NX-9 logic lands):
   `crates/iroha_core/src/smartcontracts/isi/staking.rs`
 
-يمكن لـ Torii/SDKs البدء بتمرير حمولات Norito قبل اكتمال تنفيذ runtime؛ تعليمات الرهن
-تقوم الان بقفل اصل الرهن عبر السحب من `stake_account`/`staker` الى حساب escrow
-مرتبط (`nexus.staking.stake_escrow_account_id`). تقوم slashes بخصم escrow
-وائتمان sink المهيأ (`nexus.staking.slash_sink_account_id`)، وتعيد unbonds الاموال
-الى الحساب الاصلي عند انتهاء المؤقت.
+Torii/SDKs can begin plumbing the Norito payloads ahead of the full runtime
+implementation; stake instructions now lock the configured staking asset by
+withdrawing from the `stake_account`/`staker` into a bonded escrow account
+(`nexus.staking.stake_escrow_account_id`). Slashes debit the escrow and credit
+the configured sink (`nexus.staking.slash_sink_account_id`), and unbonds return
+funds to the originating account once the timer expires.
 
-## 1. حالة الدفتر وانواعه
+## 1. Ledger State & Types
 
-### 1.1 سجلات المدققين
+### 1.1 Validator Records
 
-يتتبع `PublicLaneValidatorRecord` الحالة القياسية لكل مدقق:
+`PublicLaneValidatorRecord` tracks the canonical state for each validator:
 
-| الحقل | الوصف |
-|-------|-------|
-| `lane_id: LaneId` | المسار الذي يخدمه المدقق. |
-| `validator: AccountId` | الحساب الذي يوقع رسائل الاجماع. |
-| `stake_account: AccountId` | الحساب الذي يوفر self-bond (قد يختلف عن هوية المدقق). |
-| `total_stake: Numeric` | الحصة الذاتية + التفويضات المعتمدة. |
-| `self_stake: Numeric` | الحصة التي يقدمها المدقق. |
-| `metadata: Metadata` | نسبة العمولة، معرفات التلِمتري، اعلام الاختصاص، معلومات الاتصال. |
-| `status: PublicLaneValidatorStatus` | دورة الحياة (pending/active/jailed/exiting/etc.). حمولة `PendingActivation` ترمز الى العصر المستهدف. |
-| `activation_epoch: Option<u64>` | العصر الذي اصبح فيه المدقق نشطا (يثبت عند التفعيل). |
-| `activation_height: Option<u64>` | ارتفاع الكتلة المسجل عند التفعيل. |
-| `last_reward_epoch: Option<u64>` | العصر الذي صدر فيه اخر دفع. |
+| Field | Description |
+|-------|-------------|
+| `lane_id: LaneId` | Lane the validator services. |
+| `validator: AccountId` | Account that signs consensus messages. |
+| `stake_account: AccountId` | Account that supplies the self-bond (may differ from the validator identity). |
+| `total_stake: Numeric` | Self stake + approved delegations. |
+| `self_stake: Numeric` | Stake provided by the validator. |
+| `metadata: Metadata` | Commission %, telemetry ids, jurisdiction flags, contact info. |
+| `status: PublicLaneValidatorStatus` | Lifecycle (pending/active/jailed/exiting/etc.). The `PendingActivation` payload encodes the target epoch. |
+| `activation_epoch: Option<u64>` | Epoch when the validator became active (set on activation). |
+| `activation_height: Option<u64>` | Block height recorded at activation. |
+| `last_reward_epoch: Option<u64>` | Epoch that last produced a payout. |
 
-يسرد `PublicLaneValidatorStatus` مراحل دورة الحياة:
+`PublicLaneValidatorStatus` enumerates lifecycle phases:
 
-- `PendingActivation(epoch)` — انتظار عصر التفعيل المحدد من الحوكمة؛ حمولة الترتيب تخزن
-  ابكر عصر تفعيل محسوب كـ `current_epoch + 1` (genesis bootstrap uses `current_epoch`)
-  (تستخرج العصور من `epoch_length_blocks`).
-- `Active` — يشارك في الاجماع ويمكنه تحصيل المكافآت.
-- `Jailed { reason }` — تعليق مؤقت (تعطل، خرق تلِمتري، الخ).
-- `Exiting { releases_at_ms }` — unbonding؛ تتوقف المكافآت عن التراكم.
-- `Exited` — تمت الازالة من المجموعة.
-- `Slashed { slash_id }` — حدث slashing مسجل للتدقيق.
+- `PendingActivation(epoch)` — waiting for the governance-specified activation epoch; the tuple payload stores the earliest activation epoch (usually `current_epoch + 1`, derived from `epoch_length_blocks`; genesis bootstrap registrations target `current_epoch` so validators can activate in the genesis block).
+- `Active` — participates in consensus and can collect rewards.
+- `Jailed { reason }` — temporarily suspended (downtime, telemetry breach, etc.).
+- `Exiting { releases_at_ms }` — unbonding; rewards stop accruing.
+- `Exited` — removed from the set.
+- `Slashed { slash_id }` — governance slashing event recorded for audits.
 
-بيانات التفعيل احادية الاتجاه: `activation_epoch`/`activation_height` تثبت عند اول تفعيل
-لمدقق pending، واي محاولة لاعادة التفعيل بعصر/ارتفاع اقدم ترفض. تتم ترقية المدققين
-pending تلقائيا عند بداية اول كتلة يصل فيها العصر الى الحد المجدول، ويسجل عداد
-تفعيل المدققين (`nexus_public_lane_validator_activation_total`) الترقية مع تغيير الحالة.
+Activation metadata is monotonic: `activation_epoch`/`activation_height` are set the first time a
+pending validator becomes active and any attempt to reactivate at an earlier epoch/height is rejected.
+Pending validators are promoted automatically at the start of the first block whose epoch meets the
+scheduled boundary, and the activation metrics counter (`nexus_public_lane_validator_activation_total`)
+records the promotion alongside the status change.
 
-تحافظ النشرات المصرح بها على roster الخاص بـ genesis peers فعالا حتى قبل وجود رهن
-لمدققي المسارات العامة: طالما ان لديهم مفاتيح اجماع نشطة، يعود runtime الى genesis peers
-كمجموعة مدققين. هذا يمنع تعطل bootstrap اثناء تعطيل او طرح رهن staking.
+Permissioned deployments keep the genesis peer roster active even before any
+public-lane validator stake exists: as long as the peers have live consensus
+keys, the runtime falls back to the genesis peers for the validator set. This
+avoids a bootstrap deadlock while staking admission is disabled or still being
+rolled out.
 
-### 1.2 حصص الرهن و unbonding
+### 1.2 Stake Shares & Unbonding
 
-يتم تمثيل المفوضين (وكذلك المدققين الذين يعززون bond الخاص بهم) عبر
+Delegators (and validators topping up their own bond) are modelled via
 `PublicLaneStakeShare`:
 
-- `bonded: Numeric` — المبلغ المربوط الفعال.
-- `pending_unbonds: BTreeMap<Hash, PublicLaneUnbonding>` — سحوبات معلقة مرتبطة بـ `request_id` من العميل.
-- `metadata` تخزن اشارات UX/back-office (مثل ارقام مرجعية لمكتب الحفظ).
+- `bonded: Numeric` — live bonded amount.
+- `pending_unbonds: BTreeMap<Hash, PublicLaneUnbonding>` — pending withdrawals keyed by a
+  client-supplied `request_id`.
+- `metadata` stores UX/back-office hints (e.g., custody desk reference numbers).
 
-تحتوي `PublicLaneUnbonding` على جدول السحب الحتمي (`amount`, `release_at_ms`). ويعرض Torii
-الحصص الفعالة والسحوبات المعلقة عبر `GET /v1/nexus/public_lanes/{lane}/stake` حتى تعرض
-المحافظ المؤقتات دون RPCs مخصصة.
+`PublicLaneUnbonding` holds the deterministic withdrawal schedule
+(`amount`, `release_at_ms`). Torii now exposes the live shares and pending
+withdrawals via `GET /v1/nexus/public_lanes/{lane}/stake` so wallets can show
+timers without bespoke RPCs.
 
-خطافات دورة الحياة (تطبيق runtime):
+Lifecycle hooks (runtime enforced):
 
-- تنتقل إدخالات `PendingActivation(epoch)` تلقائيا الى `Active` عندما يصل العصر الحالي الى `epoch`.
-  يسجل التفعيل `activation_epoch` و`activation_height`، ويتم رفض التراجعات سواء في التفعيل التلقائي
-  او في استدعاءات `ActivatePublicLaneValidator` الصريحة.
-- تنتقل إدخالات `Exiting(releases_at_ms)` الى `Exited` عندما يتجاوز timestamp الكتلة `releases_at_ms`،
-  مع تنظيف صفوف حصص الرهن لاستعادة السعة دون تنظيف يدوي.
-- يرفض تسجيل المكافآت حصص المدققين ما لم يكن المدقق `Active`، لمنع تراكم المكافآت للمدققين
-  pending/exiting/jailed.
+- `PendingActivation(epoch)` entries automatically flip to `Active` once the
+  current epoch reaches `epoch`. Activation records `activation_epoch` and
+  `activation_height`, and regressions are rejected both for auto-activation
+  and explicit `ActivatePublicLaneValidator` calls.
+- `Exiting(releases_at_ms)` entries transition to `Exited` when the block
+  timestamp passes `releases_at_ms`, clearing stake-share rows so validator
+  capacity can be reclaimed without manual cleanup.
+- Reward recording rejects validator shares unless the validator is `Active`,
+  keeping pending/exiting/jailed validators from accruing payouts.
 
-### 1.3 سجلات المكافآت
+### 1.3 Reward Records
 
-تستخدم توزيعات المكافآت `PublicLaneRewardRecord` و `PublicLaneRewardShare`:
+Reward distributions use `PublicLaneRewardRecord` and `PublicLaneRewardShare`:
 
 ```norito
 {
   "lane_id": 1,
   "epoch": 4242,
-  "asset": "xor#wonderland",
+  "asset": "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
   "total_reward": "250.0000",
   "shares": [
-    { "account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw", "role": "Validator", "amount": "150" },
-    { "account": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", "role": "Nominator", "amount": "100" }
+    { "account": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE", "role": "Validator", "amount": "150" },
+    { "account": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE", "role": "Nominator", "amount": "100" }
   ],
   "metadata": {
     "telemetry_epoch_root": "0x4afe…",
@@ -120,31 +117,32 @@ pending تلقائيا عند بداية اول كتلة يصل فيها الع�
 }
 ```
 
-توفر السجلات ادلة حتمية لكل عملية دفع للمدققين ولوحات المتابعة. تتدفق بنية المكافآت
-الى ISI `RecordPublicLaneRewards`.
+Records give auditors and dashboards deterministic evidence for each payout. The
+reward struct flows into the `RecordPublicLaneRewards` ISI.
 
-حمايات runtime:
+Runtime guards:
 
-- يجب تفعيل Nexus builds؛ ترفض offline/stub builds تسجيل المكافآت.
-- تتقدم عصور المكافآت بشكل احادي لكل lane؛ ترفض العصور القديمة او المكررة.
-- يجب ان تتطابق اصول المكافآت مع fee sink المهيأ (`nexus.fees.fee_sink_account_id` /
-  `nexus.fees.fee_asset_id`) وان يغطي رصيد sink كامل `total_reward`.
-- يجب ان تكون كل حصة موجبة وتلتزم بالمواصفة العددية للاصل؛ يجب ان يساوي مجموع الحصص `total_reward`.
+- Nexus builds must be enabled; offline/stub builds reject reward recording.
+- Reward epochs advance monotonically per lane; stale or duplicate epochs are rejected.
+- Reward assets must match the configured fee sink (`nexus.fees.fee_sink_account_id` /
+  `nexus.fees.fee_asset_id`) and the sink balance must fully cover `total_reward`.
+- Each share must be positive and respect the reward asset’s numeric spec; share totals must
+  equal `total_reward`.
 
-## 2. كتالوج التعليمات
+## 2. Instruction Catalog
 
-كل التعليمات تقع تحت `iroha_data_model::isi::staking`. وهي تشتق encoders/decoders من Norito
-لتتمكن SDKs من ارسال الحمولات دون codecs مخصصة.
+All instructions live under `iroha_data_model::isi::staking`. They derive Norito
+encoders/decoders so SDKs can submit the payloads without bespoke codecs.
 
 ### 2.1 `RegisterPublicLaneValidator`
 
-يسجل مدققا ويربط رهن ابتدائي:
+Registers a validator and bonds an initial stake:
 
 ```norito
 {
   "lane_id": 1,
-  "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-  "stake_account": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+  "validator": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+  "stake_account": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
   "initial_stake": "150000",
   "metadata": {
     "commission_bps": 750,
@@ -154,124 +152,52 @@ pending تلقائيا عند بداية اول كتلة يصل فيها الع�
 }
 ```
 
-قواعد التحقق:
+Validation rules:
 
-- `initial_stake` >= `min_self_stake` (معامل حوكمة).
-- يجب ان تتضمن metadata خطافات الاتصال/التلِمتري قبل التفعيل.
-- توافق الحوكمة او ترفض الادخال؛ حتى ذلك الحين تكون الحالة `PendingActivation` ويقوم runtime بترقية
-  المدقق الى `Active` عند حد العصر التالي بعد بلوغ العصر المستهدف
-  (`current_epoch + 1` (genesis bootstrap uses `current_epoch`) عند التسجيل).
+- `initial_stake` ≥ `min_self_stake` (governance parameter).
+- Metadata MUST include contact/telemetry hooks before activation.
+- Governance approves/denies the entry; until then the status is `PendingActivation` and the runtime promotes the validator to `Active` at the next epoch boundary once the target activation epoch (`current_epoch + 1` at registration, or `current_epoch` for genesis bootstrap) is reached.
 
 ### 2.2 `BondPublicLaneStake`
 
-يربط رهن اضافيا (self-bond للمدقق او مساهمة مفوض).
+Bonds additional stake (validator self-bond or delegator contribution).
 
-الحقول الاساسية: `staker`, `amount`, و metadata اختيارية للبيانات. يجب على runtime تطبيق
-حدود خاصة بكل lane (`max_delegators`, `min_bond`, `commission caps`).
+Key fields: `staker`, `amount`, optional metadata for statements. Runtime must
+enforce lane-specific limits (`max_delegators`, `min_bond`, `commission caps`).
 
 ### 2.3 `SchedulePublicLaneUnbond`
 
-يبدأ مؤقت unbonding. يقدم المرسلون `request_id` حتميا (توصية: `blake2b(invoice)`)، و`amount`
-و`release_at_ms`. يجب على runtime التحقق من `amount` <= الحصة المربوطة وضبط `release_at_ms`
-على فترة unbonding المهيأة.
+Starts the unbonding timer. Submitters provide a deterministic `request_id`
+(recommendation: `blake2b(invoice)`), `amount`, and `release_at_ms`. Runtime must
+verify the amount ≤ bonded stake and clamp `release_at_ms` to the configured
+unbonding period.
 
 ### 2.4 `FinalizePublicLaneUnbond`
 
-بعد انتهاء المؤقت، يقوم هذا ISI بفك الرهن المعلق واعادته الى `staker`. يتحقق المنفذ
-من request id، ويتأكد ان timestamp الفك في الماضي، ويصدر تحديث `PublicLaneStakeShare`
-ويسجل التلِمتري.
+After the timer expires, this ISI unlocks the pending stake and returns it to
+`staker`. The executor validates the request id, ensures the unlock timestamp is
+in the past, emits a `PublicLaneStakeShare` update, and records telemetry.
 
 ### 2.5 `SlashPublicLaneValidator`
 
-تستخدم الحوكمة هذه التعليمة لخصم الرهن وسجن/اخراج المدققين.
+Governance uses this instruction to debit stake and jail/eject validators.
 
-- `slash_id` يربط الحدث بالتلِمتري + مستندات الحوادث.
-- `reason_code` سلسلة enum مستقرة (مثل `double_sign`, `downtime`, `safety_violation`).
-- `metadata` تخزن hashes لحزم الادلة، مراجع runbook، او IDs للمنظمين.
+- `slash_id` ties the event to telemetry + incident docs.
+- `reason_code` is a stable enum string (e.g., `double_sign`, `downtime`,
+  `safety_violation`).
+- `metadata` stores hashes of evidence bundles, runbook pointers, or regulator IDs.
 
-تنتقل slashes الى المفوضين وفق سياسة الحوكمة (خسارة نسبية او validator-first).
-ستصدر منطق runtime تعليقات `PublicLaneRewardRecord` عند توفر NX-9.
+Slashes ripple to delegators based on governance policy (proportional or
+validator-first loss). Runtime logic will emit `PublicLaneRewardRecord`
+annotations once NX-9 lands.
 
 ### 2.6 `RecordPublicLaneRewards`
 
-يسجل الدفع لعصر محدد. الحقول:
+Records the payout for an epoch. Fields:
 
-- `reward_asset`: الاصل الموزع (افتراضي `xor#nexus`).
-- `total_reward`: اجمالي minted/transferred.
-- `shares`: قائمة `PublicLaneRewardShare`.
-- `metadata`: مراجع معاملات الدفع او root hashes او dashboards.
-
-هذه التعليمة idempotent لكل `(lane_id, epoch)` وتدعم المحاسبة الليلية.
-
-## 3. العمليات ودورة الحياة والادوات
-
-- **دورة الحياة + الاوضاع:** يتم تفعيل lanes stake-elected عبر
-  `nexus.staking.public_validator_mode = stake_elected` بينما تبقى lanes المقيدة admin-managed
-  (`nexus.staking.restricted_validator_mode = admin_managed`). تحافظ النشرات المصرح بها على
-  genesis peers نشطين حتى يوجد stake؛ ولمسارات stake-elected ما زلنا نطلب وجود peer مسجل
-  بمفتاح اجماع نشط في commit topology قبل نجاح `RegisterPublicLaneValidator`. تحدد
-  genesis fingerprints و`use_stake_snapshot_roster` ما اذا كان runtime يستمد roster من
-  لقطات stake او يعود الى genesis peers.
-- **عمليات التفعيل/الخروج:** تدخل التسجيلات `PendingActivation` بهدف
-  `current_epoch + 1` (genesis bootstrap uses `current_epoch`) وتترقى تلقائيا في اول كتلة
-  يصل فيها العصر الى الحد (`epoch_length_blocks`). يمكن للمشغلين ايضا استدعاء
-  `ActivatePublicLaneValidator` بعد الحد لفرض الترقية. تنقل المخارج المدققين الى
-  `Exiting(release_at_ms)` ولا تتحرر السعة الا عندما يصل timestamp الكتلة الى
-  `release_at_ms`؛ اعادة التسجيل بعد slash تتطلب الخروج لتمييز السجل `Exited`
-  واستعادة السعة. تستخدم فحوصات السعة `nexus.staking.max_validators` وتعمل بعد
-  finalizer الخروج، لذا تمنع المخارج المستقبلية التسجيلات الجديدة حتى انتهاء المؤقت.
-- **مفاتيح الاعداد:** `nexus.staking.min_validator_stake`, `nexus.staking.stake_asset_id`,
-  `nexus.staking.stake_escrow_account_id`, `nexus.staking.slash_sink_account_id`,
-  `nexus.staking.unbonding_delay`, `nexus.staking.withdraw_grace`,
-  `nexus.staking.max_validators`,
-  `nexus.staking.max_slash_bps`, `nexus.staking.reward_dust_threshold`، ومفاتيح وضع المدققين اعلاه.
-  مررها عبر `iroha_config::parameters::actual::Nexus` واعرضها في `status.md` بعد اعتماد قيم GA.
-- **Torii/CLI quickstart:**
-  - `iroha app nexus lane-report --summary` يعرض مدخلات كتالوج lanes، readiness للـ manifest،
-    واوضاع المدققين (stake-elected مقابل admin-managed) حتى يتأكد المشغلون من تفعيل قبول الرهن.
-  - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
-    يعرض مؤشرات دورة الحياة/التفعيل (العصر المستهدف المعلق، `activation_epoch` / `activation_height`,
-    release للخروج، و slash id) مع رهن bonded/self.
-    `iroha_cli app nexus public-lane stake --lane <id> [--validator i105...] [--summary]`
-    يعكس endpoint `/stake` مع hints pending-unbond لكل زوج `(validator, staker)`.
-  - لقطات Torii للوحات المتابعة و SDKs:
-    - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
-      (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation epoch/height,
-      release timers, bonded stake, اخر reward epoch.
-      `canonical I105 literal rendering` يتحكم بعرض literals (I105 هو المفضل؛ I105 هو الخيار الثاني لسورا فقط).
-    - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
-      `staker`, bonded amount) مع pending unbond timers. `?validator=i105...`
-      يرشح الاستجابة للوحة تركز على مدقق واحد؛ `canonical I105 rendering` يطبق على جميع literals.
-  - تستخدم ISIs دورة الحياة المسار القياسي للمعاملات (Torii `/v1/transactions`
-    او pipeline تعليمات CLI). امثلة حمولة Norito JSON:
-
-    ```jsonc
-    [
-      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw" } },
-      {
-        "ExitPublicLaneValidator": {
-          "lane_id": 1,
-          "validator": "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
-          "release_at_ms": 1730000000000
-        }
-      }
-    ]
-    ```
-- **التلِمتري و runbooks:** تكشف المقاييس عن عدد المدققين، stake المربوط والمعلق، اجمالي المكافآت،
-  وعدادات slash ضمن عائلة `nexus_public_lane_*`. اوصل لوحات المتابعة بنفس مجموعة البيانات التي تستخدم
-  في اختبارات قبول NX-9 حتى تبقى فروقات المدققين وادلة reward/slash قابلة للتدقيق. تعليمات slashing
-  تبقى محصورة بالحوكمة؛ يجب ان يثبت تسجيل المكافآت اجمالي payout (hash دفعة الدفع).
-
-## 4. مواءمة خارطة الطريق
-
-- ✅ تنفذ Runtime و WSV storages دورة حياة مدققي NX-9؛ تغطي الاختبارات توقيت التفعيل، متطلبات peers،
-  الخروج المؤجل، واعادة التسجيل بعد slashes.
-- ✅ يعرض Torii `/v1/nexus/public_lanes/{lane}/{validators,stake,rewards/pending}` بترميز Norito JSON
-  حتى تتمكن SDKs ولوحات المتابعة من مراقبة حالة lane دون RPCs مخصصة.
-- ✅ تم توثيق مفاتيح الاعداد والتلِمتري؛ تحافظ النشرات المختلطة على عزل lanes stake-elected و
-  admin-managed لضمان حتمية rosters المدققين.
-
-</div>
+- `reward_asset`: asset distributed (default `xor#nexus`).
+- `total_reward`: minted/transferred total.
+- `shares`: vector of `PublicLaneRewardShare` entries.
 
 ### 2.7 `CancelConsensusEvidencePenalty`
 
@@ -279,3 +205,94 @@ Cancels consensus slashing before the delayed penalty applies.
 
 - `evidence`: the Norito-encoded `Evidence` payload that was recorded in `consensus_evidence`.
 - The record is marked `penalty_cancelled` and `penalty_cancelled_at_height`, preventing slashing when `slashing_delay_blocks` elapses.
+- `metadata`: references to payout transactions, root hashes, or dashboards.
+
+This ISI is idempotent per `(lane_id, epoch)` and underpins nightly accounting.
+
+## 3. Operations, lifecycle, and tooling
+
+- **Lifecycle + modes:** stake-elected lanes are enabled via
+  `nexus.staking.public_validator_mode = stake_elected` while restricted lanes
+  stay admin-managed (`nexus.staking.restricted_validator_mode = admin_managed`).
+  Permissioned deployments keep genesis peers active until stake exists; for
+  stake-elected lanes we still require a registered peer with a live consensus
+  key present in the commit topology before `RegisterPublicLaneValidator`
+  succeeds. Genesis fingerprints and `use_stake_snapshot_roster` decide whether
+  the runtime derives the roster from stake snapshots or falls back to genesis
+  peers.
+- **Activation/exit operations:** registrations land in `PendingActivation` for
+  `current_epoch + 1` (genesis bootstrap registrations use `current_epoch`) and
+  auto-promote at the first block whose epoch meets that boundary (epochs are
+  derived from `epoch_length_blocks`). Operators can also call
+  `ActivatePublicLaneValidator` after the boundary to force promotion. Exits
+  move validators to `Exiting(release_at_ms)` and free capacity only once the
+  block timestamp reaches `release_at_ms`; re-registration after a slash still
+  requires exiting so the record is marked `Exited` and capacity is reclaimed.
+  Capacity checks use `nexus.staking.max_validators` and run after the exit
+  finalizer, so future-dated exits block new registrations until the timer
+  elapses.
+- **Config knobs:** `nexus.staking.min_validator_stake`,
+  `nexus.staking.stake_asset_id`, `nexus.staking.stake_escrow_account_id`,
+  `nexus.staking.slash_sink_account_id`, `nexus.staking.unbonding_delay`,
+  `nexus.staking.withdraw_grace`, `nexus.staking.max_validators`,
+  `nexus.staking.max_slash_bps`, `nexus.staking.reward_dust_threshold`, and the
+  validator-mode switches above.
+  Thread them through
+  `iroha_config::parameters::actual::Nexus` and surface them in `status.md`
+  once GA values are ratified.
+- **Torii/CLI quickstart:**
+  - `iroha app nexus lane-report --summary` shows lane catalog entries, manifest
+    readiness, and validator modes (stake-elected vs admin-managed) so operators
+    can confirm whether staking admission is enabled for a lane.
+  - `iroha_cli app nexus public-lane validators --lane <id> [--summary]`
+    surfaces lifecycle/activation markers (pending target epoch, `activation_epoch` /
+    `activation_height`, exit release, slash id) alongside bonded/self stake.
+    `iroha_cli app nexus public-lane stake --lane <id> [--validator <i105-account-id>] [--summary]`
+    mirrors the `/stake` endpoint with pending-unbond hints per `(validator, staker)` pair.
+  - Torii snapshots for dashboards and SDKs:
+    - `GET /v1/nexus/public_lanes/{lane}/validators` – metadata, status
+      (`PendingActivation`/`Active`/`Exiting`/`Exited`/`Slashed`), activation
+      epoch/height, release timers, bonded stake, last reward epoch.
+      Optional `canonical I105 literal rendering` controls the literal rendering
+      (canonical I105 output only).
+    - `GET /v1/nexus/public_lanes/{lane}/stake` – stake shares (`validator`,
+      `staker`, bonded amount) plus pending unbond timers. Optional
+      `?validator=<i105-account-id>` filters the response for dashboards that focus
+      on a single validator; `canonical I105 rendering` applies to all literals.
+    - `GET /v1/nexus/public_lanes/{lane}/rewards/pending` – pending rewards per
+      asset for the requested account. Requires `account=<i105-account-id>` and accepts
+      optional `asset_id` and `upto_epoch` filters; `canonical I105 rendering` applies to
+      the account literal in the response.
+  - Lifecycle ISIs use the standard transaction path (Torii
+    `/v1/transactions` or the CLI instruction pipeline). Example Norito JSON
+    payloads:
+
+    ```jsonc
+    [
+      { "ActivatePublicLaneValidator": { "lane_id": 1, "validator": "<i105-account-id>" } },
+      {
+        "ExitPublicLaneValidator": {
+          "lane_id": 1,
+          "validator": "<i105-account-id>",
+          "release_at_ms": 1730000000000
+        }
+      }
+    ]
+    ```
+- **Telemetry + runbooks:** metrics expose validator counts, bonded and pending
+  stake, reward totals, and slash counters under the
+  `nexus_public_lane_*` family. Wire dashboards to the same data set used by
+  NX-9 acceptance tests so validator deltas and reward/slash evidence remain
+  auditable. Slashing instructions remain governance-only; reward recording must
+  prove payout totals (hash of payout batch).
+
+## 4. Roadmap alignment
+
+- ✅ Runtime and WSV storages implement the NX-9 validator lifecycle; regressions
+  cover activation timing, peer prerequisites, delayed exits, and
+  re-registration after slashes.
+- ✅ Torii exposes `/v1/nexus/public_lanes/{lane}/{validators,stake,rewards/pending}` with
+  Norito JSON so SDKs and dashboards can monitor lane state without custom RPCs.
+- ✅ Config and telemetry knobs are documented; mixed deployments keep
+  stake-elected and admin-managed lanes isolated so validator rosters stay
+  deterministic.

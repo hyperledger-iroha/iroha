@@ -2,150 +2,147 @@
 lang: mn
 direction: ltr
 source: docs/source/contract_deployment.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 0f2b1d7d027d715eac5a3ca8be29dea8f0e76013e948947a4de66108ac561f34
-source_last_modified: "2026-01-22T14:58:53.689594+00:00"
-translation_last_reviewed: 2026-02-07
+status: needs-update
 title: Contract Deployment (.to) — API & Workflow
 translator: machine-google-reviewed
+source_hash: d3aefb7ebdeb3b9b2d41a3a04ca6c7007e2eb6ac9580a85b7fbdeb9392375660
+source_last_modified: "2026-04-04T12:14:12.575161+00:00"
+translation_last_reviewed: 2026-04-05
 ---
 
-Статус: Torii, CLI болон элсэлтийн үндсэн шалгалтаар (2025 оны 11-р сар) хэрэгжүүлж, хэрэгжүүлсэн.
+> Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-## Тойм
+Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 2025).
 
-- Эмхэтгэсэн IVM байт кодыг (`.to`) Torii-д илгээх эсвэл олгох замаар байрлуулна.
-  `RegisterSmartContractCode`/`RegisterSmartContractBytes` заавар
-  шууд.
-- Зангилаанууд `code_hash` болон каноник ABI хэшийг дотооддоо дахин тооцоолдог; таарахгүй
-  тодорхойлон үгүйсгэх.
-- Хадгалагдсан олдворууд нь `contract_manifests` гинжин хэлхээний дор амьдардаг ба
-  `contract_code` бүртгэлүүд. Зөвхөн лавлагааны хэшийг харуулах ба жижиг хэвээр байна;
-  кодын байт нь `code_hash`-ээр түлхүүрлэгдсэн байдаг.
-- Хамгаалагдсан нэрийн орон зай нь өмнө нь батлагдсан засаглалын саналыг шаардаж болно a
-  байршуулахыг зөвшөөрч байна. Элсэлтийн зам нь саналын ачаалал болон
-  үед `(namespace, contract_id, code_hash, abi_hash)` тэгш байдлыг хэрэгжүүлдэг
-  нэрийн орон зай хамгаалагдсан.
+## Overview
 
-## Хадгалагдсан олдворууд ба хадгалалт
+- Deploy compiled IVM bytecode (`.to`) by submitting it to Torii or by issuing
+  `RegisterSmartContractCode`/`RegisterSmartContractBytes` instructions
+  directly.
+- Contract `.to` artifacts are self-describing: the required `CNTR` section
+  embeds the contract interface ahead of the executable stream, and Torii
+  derives the on-chain `ContractManifest` from that section after verification.
+- Nodes recompute `code_hash` and the canonical ABI hash locally; mismatches
+  reject deterministically.
+- Stored artifacts live under the on-chain `contract_manifests` and
+  `contract_code` registries. Manifests reference hashes only and remain small;
+  code bytes are keyed by `code_hash`.
+- Protected namespaces can require an enacted governance proposal before a
+  deployment is admitted. The admission path looks up the proposal payload and
+  enforces `(contract_address, code_hash, abi_hash)` equality when the
+  namespace is protected.
 
-- `RegisterSmartContractCode` өгөгдсөн манифестийг оруулна/дарж бичнэ
-  `code_hash`. Ижил хэш аль хэдийн байгаа бол шинээр солигдоно
-  манифест.
-- `RegisterSmartContractBytes` хөрвүүлсэн програмыг доор хадгалдаг
-  `contract_code[code_hash]`. Хэрэв хэшийн байт аль хэдийн байгаа бол тэдгээр нь таарах ёстой
-  яг; ялгаатай байт нь өөрчлөгдөөгүй зөрчлийг үүсгэдэг.
-- Кодын хэмжээг `max_contract_code_bytes` захиалгат параметрээр хязгаарласан
-  (өгөгдмөл 16 МБ). Өмнө нь `SetParameter(Custom)` гүйлгээгээр үүнийг хүчингүй болго
-  томоохон олдворуудыг бүртгэх.
-- Хадгалах нь хязгааргүй: манифестууд болон кодууд тодорхой болтол боломжтой хэвээр байна
-  ирээдүйн засаглалын ажлын урсгалд хасагдсан. TTL эсвэл автомат GC байхгүй.
+## Stored Artifacts & Retention
 
-## Элсэлтийн хоолой
+- `RegisterSmartContractCode` inserts/overwrites the manifest for a given
+  `code_hash`. When the same hash already exists, it is replaced with the new
+  manifest.
+- `RegisterSmartContractBytes` stores the compiled program under
+  `contract_code[code_hash]`. If bytes for a hash already exist they must match
+  exactly; differing bytes raise an invariant violation.
+- Code size is capped by the custom parameter `max_contract_code_bytes`
+  (default 16 MiB). Override it with a `SetParameter(Custom)` transaction before
+  registering larger artifacts.
+- Retention is unbounded: manifests and code remain available until explicitly
+  removed in a future governance workflow. There is no TTL or automatic GC.
 
-- Баталгаажуулагч нь IVM толгой хэсгийг задлан шинжилж, `version_major == 1`-г мөрдүүлж, шалгана.
-  `abi_version == 1`. Үл мэдэгдэх хувилбарууд нэн даруй татгалздаг; ажиллах хугацаа байхгүй
-  солих.
-- `code_hash`-д манифест аль хэдийн байгаа бол баталгаажуулалт нь
-  Хадгалсан `code_hash`/`abi_hash` нь ирүүлсэн мэдээллээс тооцоолсон утгатай тэнцүү байна.
-  хөтөлбөр. Тохиромжгүй байдал нь `Manifest{Code,Abi}HashMismatch` алдаа үүсгэдэг.
-- Хамгаалагдсан нэрийн орон зайд чиглэсэн гүйлгээ нь мета өгөгдлийн түлхүүрүүдийг агуулсан байх ёстой
-  `gov_namespace` ба `gov_contract_id`. Элсэлтийн зам нь тэдгээрийг харьцуулдаг
-  батлагдсан `DeployContract` саналуудын эсрэг; Хэрэв тохирох санал байхгүй бол
-  гүйлгээг `NotPermitted` татгалзсан.
+## Admission pipeline
 
-## Torii төгсгөлийн цэгүүд (`app_api` онцлог)- `POST /v1/contracts/deploy`
-  - Хүсэлтийн үндсэн хэсэг: `DeployContractDto` (талбарын дэлгэрэнгүйг `docs/source/torii_contracts_api.md` хэсгээс үзнэ үү).
-  - Torii base64-ийн ачааллыг тайлж, хоёр хэшийг тооцоолж, манифест үүсгэдэг,
-    мөн `RegisterSmartContractCode` нэмэхийг илгээнэ
-    нэрийн өмнөөс гарын үсэг зурсан гүйлгээнд `RegisterSmartContractBytes`
-    дуудагч.
-  - Хариулт: `{ ok, code_hash_hex, abi_hash_hex }`.
-  - Алдаа: хүчингүй base64, дэмжигдээгүй ABI хувилбар, зөвшөөрөл дутуу
-    (`CanRegisterSmartContractCode`), хэмжээ хязгаар хэтэрсэн, засаглалын гарц.
-- `POST /v1/contracts/code`
-  - `RegisterContractCodeDto` (эрх мэдэл, хувийн түлхүүр, манифест) хүлээн зөвшөөрч, зөвхөн илгээнэ
-    `RegisterSmartContractCode`. Манифестуудыг дараахаас тусад нь хийх үед хэрэглэнэ
-    байт код.
-- `POST /v1/contracts/instance`
-  - `DeployAndActivateInstanceDto` (эрх мэдэл, хувийн түлхүүр, нэрийн зай/гэрээний_id, `code_b64`, нэмэлт манифест хүчингүй болгох) -ийг хүлээн авч, байрлуулж + атомаар идэвхжүүлнэ.
-- `POST /v1/contracts/instance/activate`
-  - `ActivateInstanceDto` (эрх мэдэл, хувийн түлхүүр, нэрийн зай, contract_id, `code_hash`)-г хүлээн зөвшөөрч, зөвхөн идэвхжүүлэх зааварчилгааг илгээнэ.
+- Contract deployment parses the artifact, requires IVM `1.1`, requires the
+  embedded `CNTR` section, and verifies the embedded interface against the
+  decoded executable stream before any manifest is stored.
+- Verification fails closed on malformed sections, duplicate/invalid
+  entrypoints, invalid `entry_pc` targets, invalid trigger callbacks, feature
+  / ABI mismatches, or unsupported metadata.
+- The canonical manifest is built from the verified `CNTR` payload, signed by
+  the submitting key, and then stored together with the uploaded bytecode.
+- Transactions targeting protected namespaces must include metadata key
+  `gov_contract_address`. The admission path compares the derived dataspace and
+  address against enacted `DeployContract` proposals; if no matching proposal
+  exists the transaction is rejected with `NotPermitted`.
+
+## Torii endpoints (feature `app_api`)
+
+- `POST /v1/contracts/deploy`
+  - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
+  - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
+    derives the manifest from the artifact itself, allocates a fresh immutable
+    `contract_address`, binds the requested stable `contract_alias` to that
+    address, prepends a domainless self-registration for the authority, and
+    submits the resulting transaction on behalf of the caller.
+  - Redeploying the same `contract_alias` performs an in-place upgrade:
+    Torii deploys a new address, rebinds the alias atomically, and deactivates
+    the previous address.
+  - Response: `DeployContractBundleReceiptDto` with bundle metadata plus one entry in `contracts[]` for this single-contract shortcut.
+  - Errors: invalid base64, invalid contract artifact, size cap exceeded,
+    governance gating for protected namespaces, or fee/balance failures.
 - `GET /v1/contracts/code/{code_hash}`
-  - `{ manifest: { code_hash, abi_hash } }`-г буцаана.
-    Нэмэлт манифест талбарууд дотооддоо хадгалагдсан боловч энд орхигдуулсан
-    тогтвортой API.
+  - Returns `{ manifest: { code_hash, abi_hash } }`.
+    Additional manifest fields are preserved internally but omitted here for a
+    stable API.
 - `GET /v1/contracts/code-bytes/{code_hash}`
-  - `{ code_b64 }`-г base64 гэж кодлогдсон `.to` зургийн хамт буцаана.
+  - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
 
-Гэрээний бүх амьдралын мөчлөгийн төгсгөлийн цэгүүд нь тусгайлан тохируулсан байршуулах хязгаарлагчийг хуваалцдаг
-`torii.deploy_rate_per_origin_per_sec` (секундэд жетон) ба
-`torii.deploy_burst_per_origin` (тэсрэлтийн жетон). Өгөгдмөл нь тэсрэлттэй 4 req/s байна
-`X-API-Token`, алсын IP эсвэл төгсгөлийн цэгийн сануулгаас авсан токен/түлхүүр тус бүрд 8.
-Итгэмжлэгдсэн операторуудын хязгаарлагчийг идэвхгүй болгохын тулд аль нэг талбарыг `null` болгож тохируулна уу. Хэзээ
-хязгаарлагч гал гарч, Torii нэмэгдэнэ
-`torii_contract_throttled_total{endpoint="code|deploy|instance|activate"}` телеметрийн тоолуур болон
-HTTP 429-г буцаана; аливаа зохицуулагчийн алдааны өсөлт
-Анхааруулахын тулд `torii_contract_errors_total{endpoint=…}`.
+All contract lifecycle endpoints share a dedicated deploy limiter configured via
+`torii.deploy_rate_per_origin_per_sec` (tokens per second) and
+`torii.deploy_burst_per_origin` (burst tokens). Defaults are 4 req/s with a burst of
+8 for each token/key derived from `X-API-Token`, the remote IP, or the endpoint hint.
+Set either field to `null` to disable the limiter for trusted operators. When the
+limiter fires, Torii increments the
+`torii_contract_throttled_total{endpoint="deploy"}` telemetry counter and
+returns HTTP 429; any handler error increments
+`torii_contract_errors_total{endpoint=…}` for alerting.
 
-## Засаглалын нэгдэл ба хамгаалагдсан нэрийн орон зай- `gov_protected_namespaces` (нэрийн зайны JSON массив) захиалгат параметрийг тохируулах
-  strings) элсэлтийн гарцыг идэвхжүүлэх. Torii туслагчдыг доор харуулав
-  `/v1/gov/protected-namespaces` ба CLI нь тэдгээрийг дамжуулан тусгадаг
+## Governance integration & protected namespaces
+
+- Set the custom parameter `gov_protected_namespaces` (JSON array of namespace
+  strings) to enable admission gating. Torii exposes helpers under
+  `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
-- `ProposeDeployContract` (эсвэл Torii) ашиглан үүсгэсэн саналууд
-  `/v1/gov/proposals/deploy-contract` төгсгөлийн цэг) авах
-  `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
-- Ард нийтийн санал асуулга баталсны дараа `EnactReferendum` саналыг баталж, баталж байна.
-  элсэлт нь тохирох мета өгөгдөл болон код агуулсан байршуулалтыг хүлээн авна.
-- Гүйлгээнд `gov_namespace=a namespace` болон мета өгөгдлийн хосыг агуулсан байх ёстой
-  `gov_contract_id=an identifier` (мөн `contract_namespace` тохируулах ёстой /
-  `contract_id`, дуудлагын цагийг холбох). CLI туслахууд эдгээрийг дүүргэдэг
-  автоматаар та `--namespace`/`--contract-id` дамжих үед.
-- Хамгаалагдсан нэрийн орон зайг идэвхжүүлсэн үед дараалалд орох оролдлого татгалздаг
-  одоо байгаа `contract_id`-г өөр нэрийн талбарт дахин холбох; батлагдсаныг ашиглах
-  санал болгох эсвэл өөр газар байрлуулахаас өмнө өмнөх хүчин зүйлийг цуцлах.
-- Хэрэв эгнээний манифест нь нэгээс дээш баталгаажуулагч чуулга тогтоосон бол оруулна уу
-  `gov_manifest_approvers` (JSON баталгаажуулагч дансны ID массив) тул дарааллыг тоолох боломжтой
-  гүйлгээний эрх бүхий байгууллагын хамт нэмэлт зөвшөөрөл. Lanes мөн татгалздаг
-  манифестэд байхгүй нэрийн орон зайд хамаарах мета өгөгдөл
-  `protected_namespaces` багц.
+- Unprotected namespaces are public: any signer may register code bytes,
+  register manifests, and deploy alias-backed public contracts there.
+- Proposals created with `ProposeDeployContract` (or the Torii
+  `/v1/gov/proposals/deploy-contract` endpoint) capture
+  `(contract_address, code_hash, abi_hash, abi_version)`.
+- Once the referendum passes, `EnactReferendum` marks the proposal Enacted and
+  admission will accept deployments that carry matching metadata and code.
+- Transactions must include `gov_contract_address=<contract-address>`. CLI
+  helpers populate the governance metadata automatically when you pass
+  `--contract-address` or `--contract-alias`.
+- If the lane manifest sets a validator quorum above one, include
+  `gov_manifest_approvers` (JSON array of validator account IDs) so the queue can count
+  the additional approvals alongside the transaction authority. Lanes also reject
+  metadata that references namespaces not present in the manifest's
+  `protected_namespaces` set.
 
-## CLI туслахууд
+## CLI helpers
 
-- `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path>`
-  Torii байршуулах хүсэлтийг илгээдэг (хэшийг шууд тооцоолох).
-- `iroha_cli app contracts deploy-activate --authority <id> --private-key <hex> --namespace <ns> --contract-id <id> --code-file <path>`
-  манифест бүтээх (өгөгдсөн түлхүүрээр гарын үсэг зурсан), байт + манифестыг бүртгэх,
-  мөн нэг гүйлгээнд `(namespace, contract_id)` холболтыг идэвхжүүлдэг. Ашиглах
-  `--dry-run` нь тооцоолсон хэш болон зааврын тоог хэвлэхгүйгээр
-  илгээж, гарын үсэг зурсан манифест JSON-г хадгалахын тулд `--manifest-out`.
-- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` тооцоолно
-  `code_hash`/`abi_hash` эмхэтгэсэн `.to` ба сонголтоор манифестт гарын үсэг зурна,
-  JSON хэвлэх эсвэл `--out` руу бичих.
+- `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path> --contract-alias <name::dataspace>`
+  submits the alias-first Torii deploy request (computing hashes on the fly).
+- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
+  `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
+  embedded `CNTR`, and optionally signs it for inspection, printing JSON or
+  writing to `--out`.
 - `iroha_cli app contracts simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
-  офлайн VM дамжуулалтыг ажиллуулж, ABI/хэш метадата болон дараалалд байгаа ISI-г мэдээлдэг
-  (тоо ба зааврын ids) сүлжээнд хүрэлгүйгээр. Хавсаргах
-  `--namespace/--contract-id` дуудлагын цагийн мета өгөгдлийг тусгах.
-- `iroha_cli app contracts manifest get --code-hash <hex>` нь Torii-ээр дамжуулан манифест татаж авдаг
-  мөн сонголтоор диск рүү бичнэ.
-- `iroha_cli app contracts code get --code-hash <hex> --out <path>` татагдсан
-  хадгалагдсан `.to` дүрс.
-- `iroha_cli app contracts instances --namespace <ns> [--table]` жагсаалт идэвхжсэн
-  гэрээний тохиолдлууд (манифест + мета өгөгдөлд тулгуурласан).
-- Засаглалын туслахууд (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
-  `iroha_cli app gov protected set/get`) хамгаалагдсан нэрийн орон зайн ажлын урсгалыг зохион байгуулж,
-  JSON олдворуудыг аудит хийх.
+  runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
+  (counts and instruction ids) without touching the network.
+- `iroha_cli app contracts manifest get --code-hash <hex>` fetches the manifest via Torii
+  and optionally writes it to disk.
+- `iroha_cli app contracts code get --code-hash <hex> --out <path>` downloads
+  the stored `.to` image.
+- Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
+  `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and
+  expose JSON artefacts for auditing.
 
-## Туршилт ба хамрах хүрээ
+## Testing & coverage
 
-- `crates/iroha_core/tests/contract_code_bytes.rs` кодын дагуу нэгжийн туршилт
-  хадгалах, idempotency, болон хэмжээ хязгаар.
-- `crates/iroha_core/tests/gov_enact_deploy.rs` манифест оруулгыг дамжуулан баталгаажуулдаг
-  хууль тогтоомж, `crates/iroha_core/tests/gov_protected_gate.rs` дасгалууд
-  хамгаалагдсан нэрийн орон зайг төгсгөлөөс нь хүртэл хүлээн авах.
-- Torii чиглүүлэлтүүд нь хүсэлт/хариу нэгжийн тестүүдийг багтаасан бөгөөд CLI командууд нь
-  JSON-ийн хоёр талын аяллыг тогтвортой байлгахын тулд интеграцийн туршилтууд.
+- Unit tests under `crates/iroha_core/tests/contract_code_bytes.rs` cover code
+  storage, idempotency, and the size cap.
+- `crates/iroha_core/tests/gov_enact_deploy.rs` validates manifest insertion via
+  enactment, and `crates/iroha_core/tests/gov_protected_gate.rs` exercises
+  protected-namespace admission end-to-end.
+- Torii routes include request/response unit tests, and the CLI commands have
+  integration tests ensuring JSON round-trips remain stable.
 
-Ард нийтийн санал асуулгын дэлгэрэнгүй ачааллыг `docs/source/governance_api.md` болон
-саналын хуудасны ажлын урсгал.
+Refer to `docs/source/governance_api.md` for detailed referendum payloads and
+ballot workflows.

@@ -48,7 +48,7 @@ Le parseur exige la ligne d'en-tete suivante (l'ordre est flexible):
 | `suffix_id` | Oui | Identifiant numerique de suffixe (decimal ou `0x` hex). |
 | `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Entier `1..=255`. |
-| `payment_asset_id` | Oui | Actif de settlement (par exemple `xor#sora`). |
+| `payment_asset_id` | Oui | Actif de settlement (par exemple `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Oui | Entiers non signes representant des unites natives de l'actif. |
 | `settlement_tx` | Oui | Valeur JSON ou chaine litterale decrivant la transaction de paiement ou hash. |
 | `payment_payer` | Oui | AccountId qui a autorise le paiement. |
@@ -87,18 +87,18 @@ En cas de succes le script ecrit un manifeste agrege:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -124,7 +124,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -144,9 +144,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- L'helper emet un `POST /v1/sns/registrations` par requete et s'arrete au premier
+- L'helper emet un `POST /v1/sns/names` par requete et s'arrete au premier
   erreur HTTP. Les reponses sont ajoutees au log comme enregistrements NDJSON.
-- `--poll-status` re-interroge `/v1/sns/registrations/{selector}` apres chaque
+- `--poll-status` re-interroge `/v1/sns/names/{namespace}/{literal}` apres chaque
   soumission (jusqu'a `--poll-attempts`, defaut 5) pour confirmer que
   l'enregistrement est visible. Fournissez `--suffix-map` (JSON de `suffix_id`
   vers des valeurs "suffix") pour que l'outil derive les litteraux
@@ -239,7 +239,7 @@ suivantes:
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -263,7 +263,7 @@ auditeurs puissent se concentrer sur une seule execution CSV.
   references a des fichiers sont resolues relativement a l'emplacement du CSV.
   Les metadata non-objet produisent une erreur de validation.
 - **Controllers:** les cellules vides respectent `--default-controllers`. Fournissez
-  des listes explicites (par exemple `i105...;i105...`) quand vous deleguez a des
+  des listes explicites (par exemple `<i105-account-id>;<i105-account-id>`) quand vous deleguez a des
   acteurs non owner.
 
 Les echecs sont signales avec des numeros de ligne contextuels (par exemple

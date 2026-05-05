@@ -107,15 +107,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | Конечная точка | Метод | Полезная нагрузка | Описание |
 |----------|--------|---------|-----------|
-| `/v1/sns/registrations` | ПОСТ | `RegisterNameRequestV1` | Регистратор или восстановите имя. Примите решение о предварительном уровне, проверите платежные документы/управление, опубликуйте события регистрации. |
-| `/v1/sns/registrations/{selector}/renew` | ПОСТ | `RenewNameRequestV1` | Estende o termo. Aplica janelas де благодати/искупления да политика. |
-| `/v1/sns/registrations/{selector}/transfer` | ПОСТ | `TransferNameRequestV1` | Передача собственности после одобрения управления в форме анексадас. |
-| `/v1/sns/registrations/{selector}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | Замена или соединение контроллеров; действительный результат убийства. |
-| `/v1/sns/registrations/{selector}/freeze` | ПОСТ | `FreezeNameRequestV1` | Заморозка опекуна/совета. Запросите опекуна по билетам и справочную информацию о досье правительства. |
-| `/v1/sns/registrations/{selector}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | Разморозить после исправления; гарантия отмены регистрации в совете. |
+| `/v1/sns/names` | ПОСТ | `RegisterNameRequestV1` | Регистратор или восстановите имя. Примите решение о предварительном уровне, проверите платежные документы/управление, опубликуйте события регистрации. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | ПОСТ | `RenewNameRequestV1` | Estende o termo. Aplica janelas де благодати/искупления да политика. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | ПОСТ | `TransferNameRequestV1` | Передача собственности после одобрения управления в форме анексадас. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | Замена или соединение контроллеров; действительный результат убийства. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | ПОСТ | `FreezeNameRequestV1` | Заморозка опекуна/совета. Запросите опекуна по билетам и справочную информацию о досье правительства. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | Разморозить после исправления; гарантия отмены регистрации в совете. |
 | `/v1/sns/reserved/{selector}` | ПОСТ | `ReservedAssignmentRequestV1` | Зарезервированные имена для стюарда/совета. |
 | `/v1/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | Busca `SuffixPolicyV1` настоящий (cacheavel). |
-| `/v1/sns/registrations/{selector}` | ПОЛУЧИТЬ | -- | Retorna `NameRecordV1` atual + estado efetivo (Актив, Грейс и т. д.). |**Кодификация селектора:** или сегмент `{selector}` с кодом I105, включающим или шестнадцатеричное каноническое соответствие ADDR-5; Torii нормализуется через `NameSelectorV1`.
+| `/v1/sns/names/{namespace}/{literal}` | ПОЛУЧИТЬ | -- | Retorna `NameRecordV1` atual + estado efetivo (Актив, Грейс и т. д.). |**Кодификация селектора:** или сегмент `{selector}` с кодом i105, включающим или шестнадцатеричное каноническое соответствие ADDR-5; Torii нормализуется через `NameSelectorV1`.
 
 **Модель ошибок:** все конечные точки ОС повторно называются Norito JSON com `code`, `message`, `details`. Коды ОС включают `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -128,7 +128,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -153,7 +153,7 @@ Veja `crates/iroha_cli/src/commands/sns.rs` для реализации; Ком�
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -161,7 +161,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -176,7 +176,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` deve conter um registro `GovernanceHookV1` valido (идентификатор предложения, хэши голосов, управляющий/опекун assinaturas). Простой командой выберите конечную точку `/v1/sns/registrations/{selector}/...`, которая соответствует бета-версии, а также поверхностному интерфейсу Torii, который работает с SDK.
+`--governance-json` deve conter um registro `GovernanceHookV1` valido (идентификатор предложения, хэши голосов, управляющий/опекун assinaturas). Простой командой выберите конечную точку `/v1/sns/names/{namespace}/{literal}/...`, которая соответствует бета-версии, а также поверхностному интерфейсу Torii, который работает с SDK.
 
 ## 4. Сервис gRPC
 
@@ -221,7 +221,7 @@ Torii проверено как подтверждение конференци�
 
 ### 6.1 Регистрационный номер1. Проконсультируйтесь с клиентом `/v1/sns/policies/{suffix_id}`, чтобы получить предварительные условия, льготы и доступные уровни.
 2. Клиент Монта `RegisterNameRequestV1`:
-   - `selector` является производным от метки I105 (предпочтительно) или стандартно (второй вариант).
+   - `selector` является производным от метки i105 (предпочтительно) или стандартно (второй вариант).
    - `term_years` в пределах границ политики.
    - `payment` ссылается на передачу разделителя tesouraria/steward.
 3. Проверка Torii:
@@ -246,7 +246,7 @@ Torii проверено как подтверждение конференци�
 
 1. Guardian отправляет `FreezeNameRequestV1` ссылку на билет с идентификатором инцидента.
 2. Torii переместите реестр для пункта `NameStatus::Frozen`, создайте `NameFrozen`.
-3. В случае исправления ситуации совет может отменить решение; o оператор envia DELETE `/v1/sns/registrations/{selector}/freeze` com `GovernanceHookV1`.
+3. В случае исправления ситуации совет может отменить решение; o оператор envia DELETE `/v1/sns/names/{namespace}/{literal}/freeze` com `GovernanceHookV1`.
 4. Torii действителен или переопределен, выдайте `NameUnfrozen`.
 
 ## 7. Проверка и коды ошибок

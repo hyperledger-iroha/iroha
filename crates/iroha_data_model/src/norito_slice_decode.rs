@@ -38,6 +38,7 @@ impl_decode_from_slice_via_archived! {
     crate::asset::id::AssetDefinitionId,
     crate::asset::alias::AssetDefinitionAlias,
     crate::nft::NftId,
+    crate::rwa::RwaId,
     crate::trigger::TriggerId,
     crate::role::RoleId,
     crate::parameter::CustomParameterId,
@@ -126,6 +127,7 @@ impl_decode_from_slice_via_archived! {
     crate::confidential::ConfidentialFeatureDigest,
     crate::asset::value::Asset,
     crate::nft::Nft,
+    crate::rwa::Rwa,
     crate::permission::Permission,
     crate::parameter::system::Parameter,
     // Triggers and actions
@@ -133,9 +135,7 @@ impl_decode_from_slice_via_archived! {
     crate::trigger::action::Action,
     crate::trigger::data::DataTriggerStep,
     // Transactions, blocks and query outputs
-    crate::transaction::signed::TransactionEntrypoint,
     crate::transaction::signed::TransactionResult,
-    crate::block::SignedBlock,
     crate::query::CommittedTransaction,
     crate::query::QueryOutputBatchBox,
     // Taikai metadata and envelopes
@@ -179,11 +179,15 @@ impl_decode_from_slice_via_archived! {
     crate::soradns::ResolverDirectoryRecordV1,
     crate::soradns::ResolverRevocationRecordV1,
     crate::soradns::RadRevokeReason,
-    crate::offline::AggregateProofEnvelope,
-    crate::offline::AndroidIntegrityPolicy,
-    crate::offline::OfflineVerdictSnapshot,
-    crate::offline::OfflinePlatformTokenSnapshot,
-    crate::offline::PoseidonDigest,
+    crate::offline::OfflineNoteAuditBundleV2,
+    crate::offline::OfflineNoteAuditPublicInputsV2,
+    crate::offline::OfflineNoteIssueV2,
+    crate::offline::OfflineNoteIssuedClaimV2,
+    crate::offline::OfflineNoteKeyCertificatePayloadV2,
+    crate::offline::OfflineNoteKeyCertificateV2,
+    crate::offline::OfflineNoteRecursiveProofV2,
+    crate::offline::OfflineNoteRedeemPublicInputsV2,
+    crate::offline::OfflineNoteRedeemV2,
 }
 
 // Governance types (feature-gated, but default-enabled)

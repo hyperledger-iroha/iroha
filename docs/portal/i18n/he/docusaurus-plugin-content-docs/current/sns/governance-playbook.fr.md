@@ -61,7 +61,7 @@ Enumerees dans `roadmap.md` ב-reliant workflow chaque aux preuves requises,
 | תרשים + תוספות KPI | `docs/source/sns/governance_addenda/` | חתימות רשומות בעלות שליטה בגרסה, אמנות KPI והחלטות ממשל מצביעות על הצבעות CLI. |
 | Schema du registre | [`registry-schema.md`](./registry-schema.md) | מבנים Norito canoniques (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Contrat du registrar | [`registrar-api.md`](./registrar-api.md) | מטענים REST/gRPC, מדדים `sns_registrar_status_total` ו-attentes des hooks de governance. |
-| מדריך UX d'adresses | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus canoniques I105 (מועדף) וקומפרס (בחירה שניה) משחזרים עבור ארנקים/חוקרים. |
+| מדריך UX d'adresses | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus canoniques i105 (מועדף) וקומפרס (בחירה שניה) משחזרים עבור ארנקים/חוקרים. |
 | Docs SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | הגזירה קובעת את המארחים, זרימת העבודה עם התאמה של שקיפות ותקנות. |
 | תזכירי תקנון | `docs/source/sns/regulatory/` | הערות לשמירה על שיפוט (לדוגמה, DSA של האיחוד האירופי), מנהל תודות, נספחים דגם. |
 | Journal de drill | `ops/drill-log.md` | כתב העת לחזרות כאוס ו-IR דורשים מיונים מהפאזה. |
@@ -104,7 +104,7 @@ tableau ci-dessus afin que les auditeurs puissent reconstruire la trace de
    etat GAR/zone s'est propage (voir 4.5).
 6. **לקוח גילוי:** Mettre a jour le Ledger oriented client (ארנק/חוקר)
    via les fixtures partages dans [`address-display-guidelines.md`](./address-display-guidelines.md),
-   en s'assurant que les rendus I105 et compresses correspondent aux guides copy/QR.
+   en s'assurant que les rendus i105 et compresses correspondent aux guides copy/QR.
 
 ### 4.3 חידושים, עיבוד ופיוס- **זרימת עבודה של חידוש:** Les registrars appliquent la fenetre de grace de
   30 ז'ור + la fenetre de redemption de 60 jours specifiees dans `SuffixPolicyV1`.
@@ -136,11 +136,11 @@ tableau ci-dessus afin que les auditeurs puissent reconstruire la trace de
 | שלב | קניין | Action et preuve | SLA |
 |-------|--------------|----------------|-----|
 | Demande de gel soft | דייל / תמיכה | מפקיד את כרטיס `SNS-DF-<id>` עם קדם תשלום, אסמכתא של בונד ליטיג ובחר/ים משפיעים. | <=4 שעות לפני הפתיחה. |
-| אפוטרופוס כרטיס | אפוטרופוס קונסיל | `sns governance freeze --selector <I105> --reason <text> --until <ts>` produit `GuardianFreezeTicketV1`. Stocker le JSON du ticket sous `artifacts/sns/guardian/<id>.json`. | <=30 דקות ACK, <=2 שעות ביצוע. |
+| אפוטרופוס כרטיס | אפוטרופוס קונסיל | `sns governance freeze --selector <i105> --reason <text> --until <ts>` produit `GuardianFreezeTicketV1`. Stocker le JSON du ticket sous `artifacts/sns/guardian/<id>.json`. | <=30 דקות ACK, <=2 שעות ביצוע. |
 | Ratification du conseil | Conseil de Governance | Approuver ou rejeter les gels, documenter la decision avec lien vers le ticket guardian et le digest du bond de litige. | Prochaine session du conseil אתה מצביע אסינכרוני. |
 | פאנל ד'ארביטראז' | קונפורמית + דייל | Convoquer un פאנל של 7 מושבעים (סלון מפת דרכים) עם גיבוב של עלונים דרך `sns governance dispute ballot`. Joindre les recus de vote אנונימיז au paquet d'incident. | פסק דין <=7 ז'ור אפר דיפו דו בונד. |
 | אפל | שומר + קונסיל | Les appels doublent le bond et repetent le processus des מושבעים; רשום le manifeste Norito `DisputeAppealV1` et referencer le ticket primaire. | <=10 ימים. |
-| דגל ותיקון | רשם + פותר פעולות | המבצע `sns governance unfreeze --selector <I105> --ticket <id>`, עם תקנון של הרשם, ומפיץ את ההבדלים GAR/פותר. | מיידית לפני פסק הדין. |Les canons d'urgence (ג'לים מדכאים לשומר <=72 שעות) suivent le meme flux
+| דגל ותיקון | רשם + פותר פעולות | המבצע `sns governance unfreeze --selector <i105> --ticket <id>`, עם תקנון של הרשם, ומפיץ את ההבדלים GAR/פותר. | מיידית לפני פסק הדין. |Les canons d'urgence (ג'לים מדכאים לשומר <=72 שעות) suivent le meme flux
 mais exigent une revue retroactive du conseil et une note de transparence sous
 `docs/source/sns/regulatory/`.
 

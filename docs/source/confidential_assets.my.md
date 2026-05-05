@@ -89,7 +89,7 @@ Swift SDK များသည် စိတ်ကြိုက် JSON ကော်
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ Swift SDK များသည် စိတ်ကြိုက် JSON ကော်
 - အကောင့်တစ်ခုချင်းသော့ဆင်းသက်လာမှု အထက်တန်းအဆင့်-
   - `sk_spend` → `nk` ( nullifier key), `ivk` (အဝင်ကြည့်ရှုသောကီး), `ovk` (အထွက်ကြည့်ရှုသော့), `fvk`။
 - ကုဒ်ဝှက်ထားသော မှတ်စု ပေးဆောင်မှုများသည် ECDH မှရရှိသော မျှဝေသောသော့များဖြင့် AEAD ကို အသုံးပြုသည်။ ရွေးချယ်နိုင်သော စာရင်းစစ်ကြည့်ရှုမှုသော့များကို ပိုင်ဆိုင်မှုမူဝါဒအလိုက် အထွက်များနှင့် တွဲထားနိုင်သည်။
-- CLI ထပ်တိုးမှုများ- `confidential create-keys`၊ `confidential send`၊ `confidential export-view-key`၊ စာရင်းစစ်မှတ်စုစာဝှက်ခြင်းအတွက် စာရင်းစစ်ကိရိယာနှင့် `iroha app zk envelope` အကူအညီပေးသူ Prometheus Torii သည် `POST /v1/confidential/derive-keyset` မှတစ်ဆင့် တူညီသော ဆင်းသက်လာခြင်းကို ဖော်ထုတ်ပြီး hex နှင့် base64 ဖောင်များ နှစ်မျိုးလုံးကို ပြန်ပေးသောကြောင့် ပိုက်ဆံအိတ်များသည် သော့အဆင့်ဆင့်ကို ပရိုဂရမ်ကျကျဖြင့် ရယူနိုင်သည်။
+- CLI ထပ်တိုးမှုများ- `confidential create-keys`၊ `confidential send`၊ `confidential export-view-key`၊ စာရင်းစစ်မှတ်စုစာဝှက်ခြင်းအတွက် စာရင်းစစ်ကိရိယာနှင့် `iroha app zk envelope` အကူအညီပေးသူ Prometheus
 
 ## ဓာတ်ငွေ့၊ ကန့်သတ်ချက်များနှင့် DoS ထိန်းချုပ်မှုများ
 - သတ်မှတ်ဓာတ်ငွေ့အချိန်ဇယား-
@@ -391,7 +391,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -423,8 +423,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -455,7 +455,7 @@ Grafana ကို ဝါယာမဆက်မီ စက်တွင်းရှ�
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 မှတ်တမ်းများကို ချုံ့လိုက်သည့်အခါမှသာ ဖယ်ရှားမှုကောင်တာများ တိုးလာသော်လည်း ကတိကဝတ်အသစ်များဖြင့် အနက်တိုးလာသည်ကို အတည်ပြုရန် ၎င်းကို `rg 'iroha_confidential_tree_depth'` နှင့် တွဲပါ။ ဤတန်ဖိုးများသည် သင်အုပ်ချုပ်မှုဆိုင်ရာ အထောက်အထားအစုအဝေးတွင် ပူးတွဲပါရှိသော Grafana ဒက်ရှ်ဘုတ်ထုတ်ယူမှုနှင့် ကိုက်ညီရပါမည်။

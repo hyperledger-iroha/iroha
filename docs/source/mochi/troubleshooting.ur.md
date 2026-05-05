@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 
 1. ڈیٹا کی جڑ پر قبضہ کریں جو موچی استعمال کررہا ہے۔ پہلے سے طے شدہ مندرجہ ذیل ہے
    `$TMPDIR/mochi/<profile-slug>` ؛ UI ٹائٹل بار اور میں کسٹم راہیں ظاہر ہوتی ہیں
-   `cargo run -p mochi-ui-egui -- --data-root ...` کے ذریعے۔
+   `cargo run -p mochi-ui -- --data-root ...` کے ذریعے۔
 2. ورک اسپیس روٹ سے `./ci/check_mochi.sh` چلائیں۔ یہ بنیادی کو توثیق کرتا ہے ،
    UI ، اور انضمام کریٹس سے پہلے کہ آپ تشکیلات میں ترمیم کرنا شروع کردیں۔
 3. پیش سیٹ (`single-peer` یا `four-peer-bft`) نوٹ کریں۔ پیدا شدہ ٹوپولوجی
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 مشہور اچھی بائنریز میں:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ cargo run -p mochi-ui-egui -- \
 واضح اڈوں کے ساتھ:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 بلڈر ان اڈوں سے ترتیب وار بندرگاہوں کا پرستار کرے گا ، لہذا ایک حد محفوظ کریں
@@ -119,7 +119,7 @@ CI ملازمتوں کے لئے دوبارہ کوشش کرنے والی ونڈو
    - محفوظ سی ایل آئی/ماحولیات کے اوور رائڈز کے ساتھ ساتھیوں کو دوبارہ شروع کریں۔
 3. اگر آپ کو یہ دستی طور پر کرنا چاہئے:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

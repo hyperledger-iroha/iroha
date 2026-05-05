@@ -8,6 +8,7 @@ import requests
 from requests.structures import CaseInsensitiveDict
 
 from iroha_python import ToriiClient, account_query_envelope, asset_holders_query_envelope
+from iroha_python.address import AccountAddress, AccountAddressError
 
 
 class StubResponse(requests.Response):
@@ -117,6 +118,69 @@ def test_query_asset_holders_omits_canonical_i105() -> None:
 
     body = json.loads(session.calls[0]["data"].decode("utf-8"))
     assert "canonical_i105" not in body
+
+
+def test_i105_roundtrip_uses_halfwidth_iroha_poem_alphabet() -> None:
+    address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
+    literal = address.to_i105(0x02F1)
+
+    parsed = AccountAddress.parse_encoded(literal, expected_discriminant=0x02F1)
+
+    payload = literal.removeprefix("sora")
+    assert any(ch.isascii() and ch.isalnum() for ch in payload)
+    assert any(ch in "ｲﾛﾊﾆﾎﾍﾄﾁﾘﾇﾙｦﾜｶﾖﾀﾚｿﾂﾈﾅﾗﾑｳヰﾉｵｸﾔﾏｹﾌｺｴﾃｱｻｷﾕﾒﾐｼヱﾋﾓｾｽ" for ch in payload)
+    assert parsed.to_i105(0x02F1) == literal
+
+
+def test_i105_parse_without_expected_discriminant_accepts_literal_prefix() -> None:
+    address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
+    literal = address.to_i105(0x0171)
+
+    parsed = AccountAddress.parse_encoded(literal)
+
+    assert literal.startswith("test")
+    assert parsed.to_i105(0x0171) == literal
+    assert AccountAddress.from_i105(literal).to_i105(0x0171) == literal
+    with pytest.raises(AccountAddressError, match="unexpected i105 chain discriminant"):
+        AccountAddress.parse_encoded(literal, expected_discriminant=0x02F1)
+
+
+def test_i105_numeric_discriminant_must_fit_u16() -> None:
+    address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
+    valid = address.to_i105(0xFFFF)
+    payload = address.to_i105(0x02F1).removeprefix("sora")
+
+    assert valid.startswith("n65535")
+    assert AccountAddress.parse_encoded(valid).to_i105(0xFFFF) == valid
+    for discriminant in (-1, 0x10000, 70000):
+        with pytest.raises(AccountAddressError, match="between 0 and 65535"):
+            address.to_i105(discriminant)
+    for literal in (f"n65536{payload}", f"n70000{payload}"):
+        with pytest.raises(AccountAddressError, match="between 0 and 65535"):
+            AccountAddress.parse_encoded(literal)
+
+
+def test_i105_rejects_fullwidth_sentinel_literal() -> None:
+    address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
+    literal = address.to_i105(0x02F1)
+    noncanonical = literal.replace("sora", "ｓｏｒａ", 1)
+
+    with pytest.raises(AccountAddressError, match="missing the expected"):
+        AccountAddress.parse_encoded(noncanonical, expected_discriminant=0x02F1)
+
+
+def test_i105_rejects_noncanonical_fullwidth_kana_payload() -> None:
+    address = AccountAddress.from_account(domain="wonderland", public_key=bytes([0x11] * 32))
+    literal = address.to_i105(0x02F1)
+    noncanonical = literal
+    for halfwidth, fullwidth in (("ﾛ", "ロ"), ("ﾊ", "ハ"), ("ﾆ", "ニ"), ("ﾎ", "ホ")):
+        if halfwidth in noncanonical:
+            noncanonical = noncanonical.replace(halfwidth, fullwidth, 1)
+            break
+    assert noncanonical != literal
+
+    with pytest.raises(AccountAddressError, match="invalid i105 alphabet symbol"):
+        AccountAddress.parse_encoded(noncanonical, expected_discriminant=0x02F1)
 
 
 def test_query_asset_holders_rejects_removed_canonical_i105_arg() -> None:

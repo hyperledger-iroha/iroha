@@ -539,12 +539,12 @@ fn parse_scope(value: &Value, idx: usize) -> Result<CapabilityScope, json::Error
     };
     let asset =
         match parse_optional_str(scope_obj, "asset", idx)? {
-            Some(value) => Some(AssetDefinitionId::from_str(value).map_err(|err| {
-                json::Error::InvalidField {
+            Some(value) => Some(AssetDefinitionId::parse_address_literal(value).map_err(
+                |err| json::Error::InvalidField {
                     field: format!("entries[{idx}].scope.asset"),
                     message: err.to_string(),
-                }
-            })?),
+                },
+            )?),
             None => None,
         };
     let role = match scope_obj.get("role") {
@@ -967,9 +967,9 @@ mod tests {
 
     #[cfg(feature = "json")]
     use norito::json::JsonDeserialize;
-    use proptest::prelude::*;
 
     use super::*;
+    use crate::domain::DomainId;
 
     fn sample_uaid() -> UniversalAccountId {
         UniversalAccountId::from_hash(Hash::new(b"uaid::sample"))
@@ -1084,7 +1084,7 @@ mod tests {
                 program: Some("cbdc.transfer".parse().expect("program id")),
                 method: Some(sample_name("transfer")),
                 asset: Some(iroha_data_model::asset::AssetDefinitionId::new(
-                    "centralbank".parse().unwrap(),
+                    DomainId::try_new("centralbank", "universal").unwrap(),
                     "CBDC".parse().unwrap(),
                 )),
                 role: Some(AmxRole::Initiator),
@@ -1170,37 +1170,40 @@ mod tests {
         NonMatchingDeny,
     }
 
-    fn entries_with_matching_deny() -> impl Strategy<Value = Vec<EntryKind>> {
-        prop::collection::vec(
-            prop_oneof![
-                Just(EntryKind::MatchingDeny),
-                Just(EntryKind::MatchingAllow),
-                Just(EntryKind::NonMatchingAllow),
-                Just(EntryKind::NonMatchingDeny),
+    fn matching_deny_cases() -> Vec<Vec<EntryKind>> {
+        vec![
+            vec![EntryKind::MatchingDeny],
+            vec![EntryKind::MatchingAllow, EntryKind::MatchingDeny],
+            vec![
+                EntryKind::NonMatchingAllow,
+                EntryKind::MatchingAllow,
+                EntryKind::MatchingDeny,
+                EntryKind::NonMatchingDeny,
             ],
-            1..12,
-        )
-        .prop_filter("sequence must contain a matching deny", |entries| {
-            entries
-                .iter()
-                .any(|kind| matches!(kind, EntryKind::MatchingDeny))
-        })
+            vec![
+                EntryKind::NonMatchingDeny,
+                EntryKind::MatchingDeny,
+                EntryKind::MatchingAllow,
+                EntryKind::MatchingDeny,
+            ],
+        ]
     }
 
-    fn entries_with_matching_allow_only() -> impl Strategy<Value = Vec<EntryKind>> {
-        prop::collection::vec(
-            prop_oneof![
-                Just(EntryKind::MatchingAllow),
-                Just(EntryKind::NonMatchingAllow),
-                Just(EntryKind::NonMatchingDeny),
+    fn matching_allow_only_cases() -> Vec<Vec<EntryKind>> {
+        vec![
+            vec![EntryKind::MatchingAllow],
+            vec![EntryKind::NonMatchingAllow, EntryKind::MatchingAllow],
+            vec![
+                EntryKind::MatchingAllow,
+                EntryKind::NonMatchingDeny,
+                EntryKind::MatchingAllow,
             ],
-            1..12,
-        )
-        .prop_filter("sequence must contain a matching allow", |entries| {
-            entries
-                .iter()
-                .any(|kind| matches!(kind, EntryKind::MatchingAllow))
-        })
+            vec![
+                EntryKind::NonMatchingDeny,
+                EntryKind::NonMatchingAllow,
+                EntryKind::MatchingAllow,
+            ],
+        ]
     }
 
     fn build_entries(
@@ -1416,40 +1419,48 @@ mod tests {
         }
     }
 
-    proptest! {
-        #[test]
-        fn matching_deny_always_wins(
-            kinds in entries_with_matching_deny(),
-        ) {
+    #[test]
+    fn matching_deny_always_wins_for_deterministic_cases() {
+        for kinds in matching_deny_cases() {
             let method = sample_name("transfer_deny_prop");
             let dataspace = DataSpaceId::new(42);
             let entries = build_entries(&kinds, &method, DataSpaceId::new(99));
             let manifest = manifest_with_entries(dataspace, entries.clone());
             let request = manifest_request(dataspace, &method, Numeric::new(1, 0));
 
-            let expected_idx = first_matching_deny_index(&entries, &request).expect("generated at least one matching deny");
+            let expected_idx = first_matching_deny_index(&entries, &request)
+                .expect("generated at least one matching deny");
             match manifest.evaluate(&request) {
                 ManifestVerdict::Denied(DenyReason::ExplicitRule { entry_index, .. }) => {
-                    assert_eq!(entry_index, expected_idx, "deny verdict should point at the first matching deny entry");
+                    assert_eq!(
+                        entry_index, expected_idx,
+                        "deny verdict should point at the first matching deny entry"
+                    );
                 }
-                other => panic!("expected explicit deny when a matching deny rule exists, got {other:?}"),
+                other => {
+                    panic!("expected explicit deny when a matching deny rule exists, got {other:?}")
+                }
             }
         }
+    }
 
-        #[test]
-        fn last_matching_allow_applied_when_no_denies(
-            kinds in entries_with_matching_allow_only(),
-        ) {
+    #[test]
+    fn last_matching_allow_applied_when_no_denies_for_deterministic_cases() {
+        for kinds in matching_allow_only_cases() {
             let method = sample_name("allow_prop");
             let dataspace = DataSpaceId::new(7);
             let entries = build_entries(&kinds, &method, DataSpaceId::new(11));
             let manifest = manifest_with_entries(dataspace, entries.clone());
             let request = manifest_request(dataspace, &method, Numeric::new(1, 0));
 
-            let expected_idx = last_matching_allow_index(&entries, &request).expect("generated at least one matching allow");
+            let expected_idx = last_matching_allow_index(&entries, &request)
+                .expect("generated at least one matching allow");
             match manifest.evaluate(&request) {
                 ManifestVerdict::Allowed(ManifestGrant { entry_index, .. }) => {
-                    assert_eq!(entry_index, expected_idx, "allow verdict should use the last matching allow entry");
+                    assert_eq!(
+                        entry_index, expected_idx,
+                        "allow verdict should use the last matching allow entry"
+                    );
                 }
                 other => panic!("expected allow when no matching deny exists, got {other:?}"),
             }

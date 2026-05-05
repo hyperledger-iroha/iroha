@@ -32,7 +32,7 @@ translator: machine-google-reviewed
   オプションで単一の資産定義にスコープを設定します。 CLI の例:
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - ポリシーのメタデータと保留中の移行は、以下から入手できます。

@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/try-it-console.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d38bbaedc2d75fc67e3f027c46834fb5a94d5fccd845014f829f3defcbc782b5
-source_last_modified: "2025-11-20T15:21:55.938588+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: 2b1c75d262ff579d7b04df9122c9a9c55cd8d694a04cd326d3138717f396cfe7
+source_last_modified: "2026-03-26T11:40:25.614954+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -81,7 +81,7 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 4. Выберите тип контента `application/x-norito` в панели "Try it", нажмите **Choose File** и выберите свой пейлоад. Прокси переписывает запрос на `/proxy/v1/pipeline/submit` и помечает его `X-TryIt-Client=docs-portal-rapidoc`.
 5. Чтобы скачать ответы Norito, установите `Accept: application/x-norito`. Swagger/RapiDoc показывают селектор заголовка в той же панели и стримят бинарные данные обратно через прокси.
 
-Для маршрутов только с JSON встроенный Try it sandbox часто быстрее: введите путь (например, `/v1/accounts/i105.../assets`), выберите HTTP-метод, вставьте JSON-тело при необходимости и нажмите **Send request**, чтобы сразу увидеть заголовки, длительность и пейлоады.
+Для маршрутов только с JSON встроенный Try it sandbox часто быстрее: введите путь (например, `/v1/accounts/<i105-account-id>/assets`), выберите HTTP-метод, вставьте JSON-тело при необходимости и нажмите **Send request**, чтобы сразу увидеть заголовки, длительность и пейлоады.
 
 ## Устранение неполадок
 

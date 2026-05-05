@@ -1,3 +1,5 @@
+//! Regression guard for IVM AXT descriptor builder parity with the canonical fixture.
+
 use hex::encode;
 use iroha_data_model::nexus::DataSpaceId;
 use ivm::axt::{AxtDescriptor, TouchManifest, compute_binding};
@@ -12,11 +14,15 @@ struct FixtureManifest {
 #[derive(Debug, Clone, json::Serialize, json::Deserialize)]
 struct DescriptorFixture {
     descriptor: AxtDescriptor,
-    touch_manifests: Vec<FixtureManifest>,
+    descriptor_hex: String,
+    touch_manifest: Vec<FixtureManifest>,
     binding_hex: String,
 }
 
-const FIXTURE: &str = include_str!("fixtures/axt_descriptor_multi_ds.json");
+const FIXTURE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json"
+));
 
 #[test]
 fn builder_matches_fixture_and_binding() {
@@ -25,15 +31,17 @@ fn builder_matches_fixture_and_binding() {
 
     let (descriptor, binding) = AxtDescriptor::builder()
         // Intentionally shuffled inputs; builder must canonicalize ordering.
-        .touch(
-            DataSpaceId::new(7),
-            ["manifests/", "proofs/", "da/"],
-            ["proofs/"],
-        )
+        .dataspace(DataSpaceId::new(7))
+        .dataspace(DataSpaceId::new(1))
         .touch(
             DataSpaceId::new(1),
-            ["reports/agg/", "accounts/"],
-            ["reports/out/"],
+            ["payments/", "orders/", "orders/"],
+            ["ledger/"],
+        )
+        .touch(
+            DataSpaceId::new(7),
+            ["reports/"],
+            ["audits/", "aggregates/", "audits/"],
         )
         .build_with_binding()
         .expect("descriptor should be valid");
@@ -67,13 +75,13 @@ fn descriptor_fixture_roundtrips() {
         "descriptor binding changed; refresh fixture intentionally if this is expected"
     );
 
-    let manifest_value = json::to_value(&fixture.touch_manifests).expect("manifest value");
+    let manifest_value = json::to_value(&fixture.touch_manifest).expect("manifest value");
     assert_eq!(
         manifest_value,
         fixture_value
-            .get("touch_manifests")
+            .get("touch_manifest")
             .cloned()
-            .expect("touch_manifests missing"),
+            .expect("touch_manifest missing"),
         "touch manifest schema drifted; refresh fixture intentionally if this is expected"
     );
 }

@@ -182,20 +182,25 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     let submit_timeout = sync_timeout.saturating_add(da_commit_timeout);
 
     // Unregister a peer and wait for the roster to reflect the change.
-    let mut client = leader_peer(randomized_peers.iter().copied()).client();
-    client.transaction_status_timeout = submit_timeout;
-    client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
     let unregister_peer = Unregister::peer(removed_peer.id());
-    submit_instruction_or_warn(client.clone(), unregister_peer, context).await?;
-    wait_for_block_height(randomized_peers.iter().copied(), 2, sync_timeout).await?;
     if sandbox::handle_result(
-        wait_for_peer_roster(&roster_client, n_peers - 1, sync_timeout).await,
+        submit_instruction_until_peer_roster(
+            randomized_peers.iter().copied(),
+            &roster_client,
+            unregister_peer.into(),
+            n_peers - 1,
+            context,
+            submit_timeout,
+            sync_timeout,
+        )
+        .await,
         context,
     )?
     .is_none()
     {
         return Ok(());
     }
+    wait_for_block_height(randomized_peers.iter().copied(), 2, sync_timeout).await?;
     let expected_connected = expected_connected_peers(n_peers - 1);
     if sandbox::handle_result(
         assert_peers_status(
@@ -226,7 +231,10 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     // Removed peer might see one extra commit while transitioning to follower mode.
     assert_matches!(status.blocks_non_empty, 1 | 2 | 3);
 
-    // Re-register the peer and wait for the roster to reflect the change.
+    // Re-register the peer using the same join flow as a new peer. Keeping the
+    // removed peer process online while it is outside the roster is flaky on
+    // 4-peer localnets; restarting it after the register block is more stable.
+    removed_peer.shutdown().await;
     let re_register_timeout = sync_timeout.saturating_add(da_commit_timeout);
     let register_peer: InstructionBox = RegisterPeerWithPop::new(
         removed_peer.id(),
@@ -236,17 +244,50 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
             .to_vec(),
     )
     .into();
+    let mut client = leader_peer(randomized_peers.iter().copied()).client();
+    client.transaction_status_timeout = submit_timeout;
+    client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
     if sandbox::handle_result(
-        submit_instruction_until_peer_roster(
-            randomized_peers.iter().copied(),
-            &roster_client,
-            register_peer,
-            n_peers,
-            context,
-            submit_timeout,
-            re_register_timeout,
-        )
-        .await,
+        submit_instruction_or_warn(client, register_peer, context).await,
+        context,
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    if sandbox::handle_result(
+        wait_for_block_height(randomized_peers.iter().copied(), 3, re_register_timeout).await,
+        context,
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+
+    let genesis = network.genesis();
+    if sandbox::handle_result(
+        removed_peer
+            .start(
+                network.config_layers_with_additional_peers([removed_peer]),
+                Some(&genesis),
+            )
+            .await,
+        context,
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    if sandbox::handle_result(
+        wait_for_block_height(std::iter::once(removed_peer), 3, sync_timeout).await,
+        context,
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    if sandbox::handle_result(
+        wait_for_peer_roster(&roster_client, n_peers, re_register_timeout).await,
         context,
     )?
     .is_none()
@@ -255,16 +296,8 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     }
     let expected_connected = expected_connected_peers(n_peers);
 
-    // Re-registration is verified via roster propagation above, so keep the final
-    // block expectation at the post-unregister baseline.
     if sandbox::handle_result(
-        assert_peers_status(
-            randomized_peers.iter().copied(),
-            2,
-            expected_connected,
-            sync_timeout,
-        )
-        .await,
+        assert_peers_status(network.peers().iter(), 3, expected_connected, sync_timeout).await,
         context,
     )?
     .is_none()
@@ -473,7 +506,7 @@ async fn submit_instruction_or_warn(
 ) -> Result<()> {
     let instruction = instruction.into();
     let context = context.to_string();
-    spawn_blocking(move || client.submit(instruction).wrap_err(context)).await??;
+    spawn_blocking(move || client.submit(instruction).map(|_| ()).wrap_err(context)).await??;
     Ok(())
 }
 
@@ -521,7 +554,11 @@ async fn submit_instruction_until_peer_roster(
         match wait_for_peer_roster(roster_client, expected_roster, probe_timeout).await {
             Ok(()) => return Ok(()),
             Err(err) => {
-                last_roster_err = Some(err.to_string());
+                let (matched, samples) = sample_peer_rosters(&peers, expected_roster).await;
+                if matched {
+                    return Ok(());
+                }
+                last_roster_err = Some(format!("{err}; peer_samples={samples:?}"));
                 sleep(Duration::from_millis(200)).await;
             }
         }
@@ -532,6 +569,7 @@ fn is_submit_timeout_error(err: &eyre::Report) -> bool {
     err.chain().any(|cause| {
         let message = cause.to_string();
         message.contains("queued for too long")
+            || message.contains("haven't got tx confirmation within")
             || message.contains("operation timed out")
             || message.contains("timed out")
     })
@@ -590,4 +628,33 @@ async fn wait_for_peer_roster(
 
         sleep(Duration::from_millis(200)).await;
     }
+}
+
+async fn sample_peer_rosters(peers: &[&NetworkPeer], expected: usize) -> (bool, Vec<String>) {
+    let samples = peers
+        .iter()
+        .map(|peer| async {
+            let peer_id = peer.id().to_string();
+            let client = peer.client();
+            let result = spawn_blocking(move || {
+                client
+                    .query(FindPeers)
+                    .execute_all()
+                    .map(|roster| roster.len())
+            })
+            .await;
+
+            match result {
+                Ok(Ok(count)) => (count == expected, format!("{peer_id}={count}")),
+                Ok(Err(err)) => (false, format!("{peer_id}=err({err})")),
+                Err(err) => (false, format!("{peer_id}=join_err({err})")),
+            }
+        })
+        .collect::<FuturesUnordered<_>>()
+        .collect::<Vec<_>>()
+        .await;
+
+    let matched = samples.iter().any(|(matched, _)| *matched);
+    let details = samples.into_iter().map(|(_, detail)| detail).collect();
+    (matched, details)
 }

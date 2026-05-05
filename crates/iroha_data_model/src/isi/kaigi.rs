@@ -11,6 +11,15 @@ isi! {
     pub struct CreateKaigi {
         /// Template describing the call to create.
         pub call: NewKaigi,
+        /// Commitment describing the host (privacy mode only).
+        pub commitment: Option<KaigiParticipantCommitment>,
+        /// Nullifier preventing proof replay (privacy mode only).
+        pub nullifier: Option<KaigiParticipantNullifier>,
+        /// Merkle root the host used when generating the proof (privacy mode only).
+        pub roster_root: Option<Hash>,
+        /// Proof bytes attesting ownership of the commitment (privacy mode only).
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        pub proof: Option<Vec<u8>>,
     }
 }
 
@@ -59,6 +68,15 @@ isi! {
         pub call_id: KaigiId,
         /// Optional timestamp in milliseconds when the call ended.
         pub ended_at_ms: Option<u64>,
+        /// Commitment describing the host (privacy mode only).
+        pub commitment: Option<KaigiParticipantCommitment>,
+        /// Nullifier preventing proof replay (privacy mode only).
+        pub nullifier: Option<KaigiParticipantNullifier>,
+        /// Merkle root the host used when generating the proof (privacy mode only).
+        pub roster_root: Option<Hash>,
+        /// Proof bytes attesting ownership of the commitment (privacy mode only).
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        pub proof: Option<Vec<u8>>,
     }
 }
 

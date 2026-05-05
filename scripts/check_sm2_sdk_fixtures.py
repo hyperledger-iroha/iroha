@@ -51,6 +51,7 @@ _EXPECTED_TOP_LEVEL: Dict[str, str] = {
 # Expected subset for each structured vector entry.
 _EXPECTED_VECTORS: Dict[str, Dict[str, str]] = {
     "sm2-fixture-default-v1": {
+        "curve": "sm2p256v1",
         "distid": _EXPECTED_TOP_LEVEL["distid"],
         "seed_hex": _EXPECTED_TOP_LEVEL["seed_hex"],
         "message_hex": _EXPECTED_TOP_LEVEL["message_hex"],
@@ -59,6 +60,7 @@ _EXPECTED_VECTORS: Dict[str, Dict[str, str]] = {
         "signature": _EXPECTED_TOP_LEVEL["signature"],
     },
     "sm2-rust-sdk-fixture-v1": {
+        "curve": "sm2p256v1",
         "distid": "iroha-sdk-sm2-fixture",
         "seed_hex": (
             "69726F68612D727573742D73646B2D736D322D64657465726D696E69737469632D66697874757265"
@@ -71,6 +73,7 @@ _EXPECTED_VECTORS: Dict[str, Dict[str, str]] = {
         ),
     },
     "gm-t-0003-annex-d-example1": {
+        "curve": "gm-t-0003-annex-d-fp256",
         "distid": "ALICE123@YAHOO.COM",
         "message_hex": "6D65737361676520646967657374",
         "signature": (

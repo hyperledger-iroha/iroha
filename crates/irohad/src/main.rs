@@ -13,7 +13,17 @@
 mod genesis_bootstrap;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
+/// Embedded Soracloud runtime-manager reconciliation.
+#[cfg(feature = "embedded-soracloud-runtime")]
+#[path = "soracloud_runtime.rs"]
+mod soracloud_runtime;
+/// No-op Soracloud runtime used when the full embedded runtime is disabled.
+#[cfg(not(feature = "embedded-soracloud-runtime"))]
+#[path = "soracloud_runtime_stub.rs"]
+mod soracloud_runtime;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -31,6 +41,9 @@ use std::{
 };
 
 use crate::genesis_bootstrap::GenesisBootstrapper;
+use crate::soracloud_runtime::{
+    QueuedSoracloudRuntimeMutationSink, SoracloudRuntimeManager, SoracloudRuntimeManagerHandle,
+};
 use clap::Parser;
 use error_stack::{Report, ResultExt};
 use eyre::Result as EyreResult;
@@ -38,7 +51,11 @@ use fastpq_prover::MetalOverrides;
 use iroha_config::{
     base::{WithOrigin, read::ConfigReader, util::Emitter},
     parameters::{
-        actual::{FastpqExecutionMode, FastpqPoseidonMode, Root as Config},
+        actual::{
+            FastpqExecutionMode, FastpqPoseidonMode, NexusStorageAutoDefault,
+            NexusStorageAutoDefaultFilesystemGroup, NexusStorageBudgetComponent,
+            NexusStorageBudgetSource, Root as Config,
+        },
         user::Root as UserConfig,
     },
 };
@@ -99,6 +116,31 @@ use tokio::{
     task,
 };
 
+fn startup_trace_enabled() -> bool {
+    env::var_os("IROHA_STARTUP_TRACE").is_some()
+}
+
+fn log_startup_trace(stage: &'static str, started_at: Instant) {
+    if startup_trace_enabled() {
+        iroha_logger::info!(
+            stage,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "startup trace"
+        );
+    }
+}
+
+fn torii_receipt_signer_or_ephemeral(receipt_signer: Option<KeyPair>) -> KeyPair {
+    receipt_signer.unwrap_or_else(|| {
+        let key = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        iroha_logger::info!(
+            algorithm = ?key.public_key().algorithm(),
+            "torii receipt signer not configured; generated ephemeral secp256k1 key"
+        );
+        key
+    })
+}
+
 #[derive(Clone, Debug, JsonDeserialize)]
 struct ConsensusHandshakeMeta {
     mode: String,
@@ -148,6 +190,56 @@ fn decode_consensus_handshake_meta(
     parse_handshake_meta_str(payload.get()).map_err(|_| {
         norito::Error::Message("failed to decode consensus_handshake_meta payload".to_string())
     })
+}
+
+fn build_shared_sorafs_provider_cache(
+    config: &Config,
+) -> Option<Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>> {
+    let discovery = &config.torii.sorafs_discovery;
+    if !discovery.discovery_enabled {
+        return None;
+    }
+
+    let Some(admission_cfg) = discovery.admission.as_ref() else {
+        if config.torii.sorafs_gateway.enforce_admission {
+            iroha_logger::warn!(
+                "torii.sorafs.admission_envelopes_dir not configured; shared SoraFS discovery cache disabled"
+            );
+        }
+        return None;
+    };
+
+    let admission =
+        match iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir) {
+            Ok(registry) => Arc::new(registry),
+            Err(err) => {
+                iroha_logger::error!(
+                    ?err,
+                    dir = ?admission_cfg.envelopes_dir,
+                    "failed to load shared SoraFS provider admission registry"
+                );
+                return None;
+            }
+        };
+
+    let mut capabilities = Vec::new();
+    for name in &discovery.known_capabilities {
+        match iroha_torii::sorafs::parse_capability_name(name) {
+            Some(capability) => capabilities.push(capability),
+            None => {
+                panic!("unknown SoraFS capability `{name}` in torii.sorafs.known_capabilities");
+            }
+        }
+    }
+
+    assert!(
+        !capabilities.is_empty(),
+        "torii.sorafs.known_capabilities must include at least one capability"
+    );
+
+    Some(Arc::new(tokio::sync::RwLock::new(
+        iroha_torii::sorafs::ProviderAdvertCache::new(capabilities, admission),
+    )))
 }
 
 #[cfg(test)]
@@ -592,6 +684,8 @@ pub struct Iroha {
     kura: Arc<Kura>,
     /// State of blockchain
     state: Arc<State>,
+    /// Embedded Soracloud runtime-manager handle.
+    soracloud_runtime: SoracloudRuntimeManagerHandle,
     /// Streaming session manager
     streaming: iroha_core::streaming::StreamingHandle,
     /// P2P network handle used for outbound control frames (e.g., streaming manifests).
@@ -867,17 +961,22 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::Qc(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_)
+                | BlockMessage::FetchBlockBody(_)
                 | BlockMessage::FetchPendingBlock(_)
                 | BlockMessage::ProposalHint(_)
                 | BlockMessage::Proposal(_)
                 | BlockMessage::BlockCreated(_) => IngressPolicy::critical(),
                 BlockMessage::RbcInit(_)
+                | BlockMessage::RbcInitRequest(_)
+                | BlockMessage::RbcChunkRequest(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_) => IngressPolicy::critical_with_rbc_sessions(),
-                BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_) => {
-                    IngressPolicy::bulk()
+                BlockMessage::RbcChunk(_)
+                | BlockMessage::RbcChunkCompact(_)
+                | BlockMessage::BlockBodyResponse(_) => IngressPolicy::bulk(),
+                BlockMessage::ConsensusParams(_) | BlockMessage::KuraReplicaAdvert(_) => {
+                    IngressPolicy::limited()
                 }
-                BlockMessage::ConsensusParams(_) => IngressPolicy::limited(),
                 BlockMessage::BlockSyncUpdate(_) | BlockMessage::ExecWitness(_) => {
                     IngressPolicy::bulk()
                 }
@@ -1077,12 +1176,14 @@ impl ConsensusIngressLimiter {
         };
         match block.as_ref().as_ref() {
             RbcInit(init) => Some((init.block_hash, init.height, init.view)),
+            RbcInitRequest(request) => Some((request.block_hash, request.height, request.view)),
             RbcChunk(chunk) => Some((chunk.block_hash, chunk.height, chunk.view)),
             RbcChunkCompact(chunk) => Some((
                 chunk.block_hash,
                 u64::from(chunk.height),
                 u64::from(chunk.view),
             )),
+            RbcChunkRequest(request) => Some((request.block_hash, request.height, request.view)),
             RbcReady(ready) => Some((ready.block_hash, ready.height, ready.view)),
             RbcDeliver(deliver) => Some((deliver.block_hash, deliver.height, deliver.view)),
             _ => None,
@@ -1295,17 +1396,255 @@ impl TokenBucket {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RelayReceiverKind {
+    High,
+    Payload,
+    Chunk,
+    Low,
+}
+
+impl RelayReceiverKind {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Payload => "payload",
+            Self::Chunk => "chunk",
+            Self::Low => "low",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RelayBurstRecv<T> {
+    Skip,
+    Message(T),
+    Disconnected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RelayIngressLoopExit {
+    ReceiverClosed(RelayReceiverKind),
+    WorkerClosed(RelayReceiverKind),
+}
+
 fn try_recv_after_burst<T>(
     receiver: &mut mpsc::Receiver<T>,
     high_budget: &mut usize,
     high_burst: usize,
-) -> Option<T> {
+) -> RelayBurstRecv<T> {
     if *high_budget != 0 {
-        return None;
+        return RelayBurstRecv::Skip;
     }
-    let msg = receiver.try_recv().ok();
     *high_budget = high_burst;
-    msg
+    match receiver.try_recv() {
+        Ok(msg) => RelayBurstRecv::Message(msg),
+        Err(mpsc::error::TryRecvError::Empty) => RelayBurstRecv::Skip,
+        Err(mpsc::error::TryRecvError::Disconnected) => RelayBurstRecv::Disconnected,
+    }
+}
+
+fn spawn_network_relay_worker(
+    shared: Arc<NetworkRelayShared>,
+    worker_limit: usize,
+    work_high_cap: usize,
+    work_payload_cap: usize,
+    work_chunk_cap: usize,
+    work_low_cap: usize,
+) -> (
+    mpsc::Sender<RelayWorkItem>,
+    mpsc::Sender<RelayWorkItem>,
+    mpsc::Sender<RelayWorkItem>,
+    mpsc::Sender<RelayWorkItem>,
+) {
+    let (work_high_tx, mut work_high_rx) = mpsc::channel::<RelayWorkItem>(work_high_cap);
+    let (work_payload_tx, mut work_payload_rx) = mpsc::channel::<RelayWorkItem>(work_payload_cap);
+    let (work_chunk_tx, mut work_chunk_rx) = mpsc::channel::<RelayWorkItem>(work_chunk_cap);
+    let (work_low_tx, mut work_low_rx) = mpsc::channel::<RelayWorkItem>(work_low_cap);
+    let worker_sem = Arc::new(tokio::sync::Semaphore::new(worker_limit));
+    let shared_for_workers = Arc::clone(&shared);
+    let worker_sem_for_workers = Arc::clone(&worker_sem);
+    tokio::spawn(async move {
+        loop {
+            let msg = tokio::select! {
+                biased;
+                Some(msg) = work_high_rx.recv() => Some(msg),
+                Some(msg) = work_payload_rx.recv() => Some(msg),
+                Some(msg) = work_chunk_rx.recv() => Some(msg),
+                Some(msg) = work_low_rx.recv() => Some(msg),
+                else => None,
+            };
+            let Some(msg) = msg else {
+                break;
+            };
+            let permit = match worker_sem_for_workers.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => break,
+            };
+            let shared = Arc::clone(&shared_for_workers);
+            tokio::spawn(async move {
+                shared
+                    .handle_message(msg.peer, msg.payload, msg.payload_bytes)
+                    .await;
+                drop(permit);
+            });
+        }
+    });
+
+    (work_high_tx, work_payload_tx, work_chunk_tx, work_low_tx)
+}
+
+fn try_enqueue_relay_work(
+    tx: &mpsc::Sender<RelayWorkItem>,
+    msg: RelayWorkItem,
+    kind: RelayReceiverKind,
+    drops: &mut u64,
+) -> Result<(), RelayIngressLoopExit> {
+    match tx.try_send(msg) {
+        Ok(()) => Ok(()),
+        Err(mpsc::error::TrySendError::Full(msg)) => {
+            *drops = drops.saturating_add(1);
+            if *drops == 1 || (*drops).is_multiple_of(1024) {
+                iroha_logger::warn!(
+                    peer = %msg.peer,
+                    topic = ?msg.payload.topic(),
+                    drops = *drops,
+                    queue = kind.label(),
+                    "relay work queue full; dropping message"
+                );
+            }
+            Ok(())
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => Err(RelayIngressLoopExit::WorkerClosed(kind)),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn drive_network_relay_ingress(
+    mut high_receiver: mpsc::Receiver<RelayWorkItem>,
+    mut payload_receiver: mpsc::Receiver<RelayWorkItem>,
+    mut chunk_receiver: mpsc::Receiver<RelayWorkItem>,
+    mut low_receiver: mpsc::Receiver<RelayWorkItem>,
+    work_high_tx: &mpsc::Sender<RelayWorkItem>,
+    work_payload_tx: &mpsc::Sender<RelayWorkItem>,
+    work_chunk_tx: &mpsc::Sender<RelayWorkItem>,
+    work_low_tx: &mpsc::Sender<RelayWorkItem>,
+) -> RelayIngressLoopExit {
+    let mut high_budget = RELAY_HIGH_BURST;
+    let mut high_drops: u64 = 0;
+    let mut payload_drops: u64 = 0;
+    let mut chunk_drops: u64 = 0;
+    let mut low_drops: u64 = 0;
+
+    loop {
+        match try_recv_after_burst(&mut payload_receiver, &mut high_budget, RELAY_HIGH_BURST) {
+            RelayBurstRecv::Message(msg) => {
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_payload_tx,
+                    msg,
+                    RelayReceiverKind::Payload,
+                    &mut payload_drops,
+                ) {
+                    return exit;
+                }
+                continue;
+            }
+            RelayBurstRecv::Disconnected => {
+                return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Payload);
+            }
+            RelayBurstRecv::Skip => {}
+        }
+        match try_recv_after_burst(&mut chunk_receiver, &mut high_budget, RELAY_HIGH_BURST) {
+            RelayBurstRecv::Message(msg) => {
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_chunk_tx,
+                    msg,
+                    RelayReceiverKind::Chunk,
+                    &mut chunk_drops,
+                ) {
+                    return exit;
+                }
+                continue;
+            }
+            RelayBurstRecv::Disconnected => {
+                return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Chunk);
+            }
+            RelayBurstRecv::Skip => {}
+        }
+        match try_recv_after_burst(&mut low_receiver, &mut high_budget, RELAY_HIGH_BURST) {
+            RelayBurstRecv::Message(msg) => {
+                if let Err(exit) =
+                    try_enqueue_relay_work(work_low_tx, msg, RelayReceiverKind::Low, &mut low_drops)
+                {
+                    return exit;
+                }
+                continue;
+            }
+            RelayBurstRecv::Disconnected => {
+                return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Low);
+            }
+            RelayBurstRecv::Skip => {}
+        }
+        tokio::select! {
+            biased;
+            msg = high_receiver.recv() => {
+                let Some(msg) = msg else {
+                    return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::High);
+                };
+                high_budget = high_budget.saturating_sub(1);
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_high_tx,
+                    msg,
+                    RelayReceiverKind::High,
+                    &mut high_drops,
+                ) {
+                    return exit;
+                }
+            }
+            msg = payload_receiver.recv() => {
+                let Some(msg) = msg else {
+                    return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Payload);
+                };
+                high_budget = RELAY_HIGH_BURST;
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_payload_tx,
+                    msg,
+                    RelayReceiverKind::Payload,
+                    &mut payload_drops,
+                ) {
+                    return exit;
+                }
+            }
+            msg = chunk_receiver.recv() => {
+                let Some(msg) = msg else {
+                    return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Chunk);
+                };
+                high_budget = RELAY_HIGH_BURST;
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_chunk_tx,
+                    msg,
+                    RelayReceiverKind::Chunk,
+                    &mut chunk_drops,
+                ) {
+                    return exit;
+                }
+            }
+            msg = low_receiver.recv() => {
+                let Some(msg) = msg else {
+                    return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Low);
+                };
+                high_budget = RELAY_HIGH_BURST;
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_low_tx,
+                    msg,
+                    RelayReceiverKind::Low,
+                    &mut low_drops,
+                ) {
+                    return exit;
+                }
+            }
+        }
+    }
 }
 
 impl NetworkRelay {
@@ -1335,52 +1674,14 @@ impl NetworkRelay {
         let payload_cap = base_cap.saturating_mul(2).max(base_cap);
         let chunk_cap = base_cap;
         let low_cap = base_cap;
-        let (high_sender, mut high_receiver) = mpsc::channel(high_cap);
-        let (payload_sender, mut payload_receiver) = mpsc::channel(payload_cap);
-        let (chunk_sender, mut chunk_receiver) = mpsc::channel(chunk_cap);
-        let (low_sender, mut low_receiver) = mpsc::channel(low_cap);
         let work_high_cap = high_cap.saturating_mul(2);
         let work_payload_cap = payload_cap.saturating_mul(2);
         let work_chunk_cap = chunk_cap;
         let work_low_cap = low_cap;
-        let (work_high_tx, mut work_high_rx) = mpsc::channel::<RelayWorkItem>(work_high_cap);
-        let (work_payload_tx, mut work_payload_rx) =
-            mpsc::channel::<RelayWorkItem>(work_payload_cap);
-        let (work_chunk_tx, mut work_chunk_rx) = mpsc::channel::<RelayWorkItem>(work_chunk_cap);
-        let (work_low_tx, mut work_low_rx) = mpsc::channel::<RelayWorkItem>(work_low_cap);
         let worker_limit = std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
             .unwrap_or(1)
             .clamp(1, 8);
-        let worker_sem = Arc::new(tokio::sync::Semaphore::new(worker_limit));
-        let shared_for_workers = Arc::clone(&shared);
-        let worker_sem_for_workers = Arc::clone(&worker_sem);
-        tokio::spawn(async move {
-            loop {
-                let msg = tokio::select! {
-                    biased;
-                    Some(msg) = work_high_rx.recv() => Some(msg),
-                    Some(msg) = work_payload_rx.recv() => Some(msg),
-                    Some(msg) = work_chunk_rx.recv() => Some(msg),
-                    Some(msg) = work_low_rx.recv() => Some(msg),
-                    else => None,
-                };
-                let Some(msg) = msg else {
-                    break;
-                };
-                let permit = match worker_sem_for_workers.clone().acquire_owned().await {
-                    Ok(permit) => permit,
-                    Err(_) => break,
-                };
-                let shared = Arc::clone(&shared_for_workers);
-                tokio::spawn(async move {
-                    shared
-                        .handle_message(msg.peer, msg.payload, msg.payload_bytes)
-                        .await;
-                    drop(permit);
-                });
-            }
-        });
 
         let high_filter = SubscriberFilter::topics([Topic::Consensus, Topic::Control]);
         let payload_filter = SubscriberFilter::topics([Topic::ConsensusPayload, Topic::BlockSync]);
@@ -1394,11 +1695,25 @@ impl NetworkRelay {
             Topic::Other,
         ]);
 
-        let mut high_sender = Some(high_sender);
-        let mut payload_sender = Some(payload_sender);
-        let mut chunk_sender = Some(chunk_sender);
-        let mut low_sender = Some(low_sender);
         loop {
+            let (high_sender, high_receiver) = mpsc::channel(high_cap);
+            let (payload_sender, payload_receiver) = mpsc::channel(payload_cap);
+            let (chunk_sender, chunk_receiver) = mpsc::channel(chunk_cap);
+            let (low_sender, low_receiver) = mpsc::channel(low_cap);
+            let (work_high_tx, work_payload_tx, work_chunk_tx, work_low_tx) =
+                spawn_network_relay_worker(
+                    Arc::clone(&shared),
+                    worker_limit,
+                    work_high_cap,
+                    work_payload_cap,
+                    work_chunk_cap,
+                    work_low_cap,
+                );
+
+            let mut high_sender = Some(high_sender);
+            let mut payload_sender = Some(payload_sender);
+            let mut chunk_sender = Some(chunk_sender);
+            let mut low_sender = Some(low_sender);
             if let Some(sender) = high_sender.take() {
                 match shared
                     .network
@@ -1464,158 +1779,36 @@ impl NetworkRelay {
                 && chunk_sender.is_none()
                 && low_sender.is_none()
             {
-                break;
+                let exit = drive_network_relay_ingress(
+                    high_receiver,
+                    payload_receiver,
+                    chunk_receiver,
+                    low_receiver,
+                    &work_high_tx,
+                    &work_payload_tx,
+                    &work_chunk_tx,
+                    &work_low_tx,
+                )
+                .await;
+                match exit {
+                    RelayIngressLoopExit::ReceiverClosed(kind) => {
+                        iroha_logger::warn!(
+                            receiver = kind.label(),
+                            "relay subscriber channel closed; restarting subscriptions"
+                        );
+                    }
+                    RelayIngressLoopExit::WorkerClosed(kind) => {
+                        iroha_logger::warn!(
+                            queue = kind.label(),
+                            "relay worker queue closed; restarting dispatcher"
+                        );
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-
-        // Ensure payload, chunk, and low-priority queues make progress without stalling consensus traffic.
-        let mut high_budget = RELAY_HIGH_BURST;
-        let mut high_drops: u64 = 0;
-        let mut payload_drops: u64 = 0;
-        let mut chunk_drops: u64 = 0;
-        let mut low_drops: u64 = 0;
-        loop {
-            if let Some(msg) =
-                try_recv_after_burst(&mut payload_receiver, &mut high_budget, RELAY_HIGH_BURST)
-            {
-                match work_payload_tx.try_send(msg) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(msg)) => {
-                        payload_drops = payload_drops.saturating_add(1);
-                        if payload_drops == 1 || payload_drops.is_multiple_of(1024) {
-                            iroha_logger::warn!(
-                                peer = %msg.peer,
-                                topic = ?msg.payload.topic(),
-                                drops = payload_drops,
-                                "relay work queue full; dropping payload message"
-                            );
-                        }
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => break,
-                }
-                continue;
-            }
-            if let Some(msg) =
-                try_recv_after_burst(&mut chunk_receiver, &mut high_budget, RELAY_HIGH_BURST)
-            {
-                match work_chunk_tx.try_send(msg) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(msg)) => {
-                        chunk_drops = chunk_drops.saturating_add(1);
-                        if chunk_drops == 1 || chunk_drops.is_multiple_of(1024) {
-                            iroha_logger::warn!(
-                                peer = %msg.peer,
-                                topic = ?msg.payload.topic(),
-                                drops = chunk_drops,
-                                "relay work queue full; dropping chunk message"
-                            );
-                        }
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => break,
-                }
-                continue;
-            }
-            if let Some(msg) =
-                try_recv_after_burst(&mut low_receiver, &mut high_budget, RELAY_HIGH_BURST)
-            {
-                match work_low_tx.try_send(msg) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(msg)) => {
-                        low_drops = low_drops.saturating_add(1);
-                        if low_drops == 1 || low_drops.is_multiple_of(1024) {
-                            iroha_logger::warn!(
-                                peer = %msg.peer,
-                                topic = ?msg.payload.topic(),
-                                drops = low_drops,
-                                "relay work queue full; dropping low-priority message"
-                            );
-                        }
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => break,
-                }
-                continue;
-            }
-            tokio::select! {
-                biased;
-                Some(msg) = high_receiver.recv() => {
-                    high_budget = high_budget.saturating_sub(1);
-                    match work_high_tx.try_send(msg) {
-                        Ok(()) => {}
-                        Err(mpsc::error::TrySendError::Full(msg)) => {
-                            high_drops = high_drops.saturating_add(1);
-                            if high_drops == 1 || high_drops.is_multiple_of(1024) {
-                                iroha_logger::warn!(
-                                    peer = %msg.peer,
-                                    topic = ?msg.payload.topic(),
-                                    drops = high_drops,
-                                    "relay work queue full; dropping high-priority message"
-                                );
-                            }
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => break,
-                    }
-                }
-                Some(msg) = payload_receiver.recv() => {
-                    high_budget = RELAY_HIGH_BURST;
-                    match work_payload_tx.try_send(msg) {
-                        Ok(()) => {}
-                        Err(mpsc::error::TrySendError::Full(msg)) => {
-                            payload_drops = payload_drops.saturating_add(1);
-                            if payload_drops == 1 || payload_drops.is_multiple_of(1024) {
-                                iroha_logger::warn!(
-                                    peer = %msg.peer,
-                                    topic = ?msg.payload.topic(),
-                                    drops = payload_drops,
-                                    "relay work queue full; dropping payload message"
-                                );
-                            }
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => break,
-                    }
-                }
-                Some(msg) = chunk_receiver.recv() => {
-                    high_budget = RELAY_HIGH_BURST;
-                    match work_chunk_tx.try_send(msg) {
-                        Ok(()) => {}
-                        Err(mpsc::error::TrySendError::Full(msg)) => {
-                            chunk_drops = chunk_drops.saturating_add(1);
-                            if chunk_drops == 1 || chunk_drops.is_multiple_of(1024) {
-                                iroha_logger::warn!(
-                                    peer = %msg.peer,
-                                    topic = ?msg.payload.topic(),
-                                    drops = chunk_drops,
-                                    "relay work queue full; dropping chunk message"
-                                );
-                            }
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => break,
-                    }
-                }
-                Some(msg) = low_receiver.recv() => {
-                    high_budget = RELAY_HIGH_BURST;
-                    match work_low_tx.try_send(msg) {
-                        Ok(()) => {}
-                        Err(mpsc::error::TrySendError::Full(msg)) => {
-                            low_drops = low_drops.saturating_add(1);
-                            if low_drops == 1 || low_drops.is_multiple_of(1024) {
-                                iroha_logger::warn!(
-                                    peer = %msg.peer,
-                                    topic = ?msg.payload.topic(),
-                                    drops = low_drops,
-                                    "relay work queue full; dropping low-priority message"
-                                );
-                            }
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => break,
-                    }
-                }
-                else => {
-                    break;
-                }
-            }
-        }
-        iroha_logger::debug!("Exiting the network relay");
     }
 }
 
@@ -1784,10 +1977,19 @@ impl NetworkRelayShared {
             SoranetPowConfig(bytes) => {
                 self.apply_remote_pow_update(&bytes).await;
             }
-            GenesisRequest(_) | GenesisResponse(_) | Health | Connect(_) => {
+            msg @ (SoracloudLocalReadProxyRequest(_)
+            | SoracloudLocalReadProxyResponse(_)
+            | ToriiProxyRequest(_)
+            | ToriiProxyResponse(_)
+            | GenesisRequest(_)
+            | GenesisResponse(_)
+            | Health
+            | Connect(_)) => {
+                debug_assert!(Self::is_handled_by_dedicated_subscriber(&msg));
                 // Genesis bootstrap is handled by the dedicated bootstrapper listener.
-                // Health frames are handled elsewhere. Connect frames go to Torii via its own
-                // subscriber when the `connect` feature is enabled.
+                // Health frames are handled elsewhere. Connect, Soracloud local-read proxy,
+                // and Torii proxy frames go to Torii via its own subscriber tasks when those
+                // surfaces are enabled.
             }
             TimePing(p) => {
                 iroha_core::time::handle_message(
@@ -1806,6 +2008,17 @@ impl NetworkRelayShared {
                 .await;
             }
         }
+    }
+
+    fn is_handled_by_dedicated_subscriber(msg: &iroha_core::NetworkMessage) -> bool {
+        msg.is_torii_proxy_control_message()
+            || matches!(
+                msg,
+                iroha_core::NetworkMessage::GenesisRequest(_)
+                    | iroha_core::NetworkMessage::GenesisResponse(_)
+                    | iroha_core::NetworkMessage::Health
+                    | iroha_core::NetworkMessage::Connect(_)
+            )
     }
 
     fn should_apply_low_priority_ingress(msg: &iroha_core::NetworkMessage) -> bool {
@@ -1910,14 +2123,24 @@ impl NetworkRelayShared {
             VrfReveal(_) => ("VrfReveal", None, None),
             ExecWitness(witness) => ("ExecWitness", Some(witness.height), Some(witness.view)),
             RbcInit(init) => ("RbcInit", Some(init.height), Some(init.view)),
+            RbcInitRequest(request) => ("RbcInitRequest", Some(request.height), Some(request.view)),
             RbcChunk(chunk) => ("RbcChunk", Some(chunk.height), Some(chunk.view)),
             RbcChunkCompact(chunk) => (
                 "RbcChunk",
                 Some(u64::from(chunk.height)),
                 Some(u64::from(chunk.view)),
             ),
+            RbcChunkRequest(request) => {
+                ("RbcChunkRequest", Some(request.height), Some(request.view))
+            }
             RbcReady(ready) => ("RbcReady", Some(ready.height), Some(ready.view)),
             RbcDeliver(deliver) => ("RbcDeliver", Some(deliver.height), Some(deliver.view)),
+            FetchBlockBody(request) => ("FetchBlockBody", Some(request.height), Some(request.view)),
+            BlockBodyResponse(response) => (
+                "BlockBodyResponse",
+                Some(response.height),
+                Some(response.view),
+            ),
             FetchPendingBlock(_request) => ("FetchPendingBlock", None, None),
             ProposalHint(hint) => ("ProposalHint", Some(hint.height), Some(hint.view)),
             Proposal(proposal) => (
@@ -1925,6 +2148,7 @@ impl NetworkRelayShared {
                 Some(proposal.header.height),
                 Some(proposal.header.view),
             ),
+            KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
         }
     }
 
@@ -2120,6 +2344,8 @@ fn sumeragi_block_message_requires_blocking(
             | BlockMessage::QcVote(_)
             | BlockMessage::Qc(_)
             | BlockMessage::RbcInit(_)
+            | BlockMessage::RbcInitRequest(_)
+            | BlockMessage::RbcChunkRequest(_)
             | BlockMessage::RbcReady(_)
             | BlockMessage::RbcDeliver(_)
     )
@@ -2146,6 +2372,12 @@ mod network_relay_tests {
                 BlockMessage, BlockMessageWire, BlockSyncUpdate, ConsensusParamsAdvert, ControlFlow,
             },
         },
+        torii_proxy::{
+            TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV2,
+            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
+            ToriiReadProxyRequestV1, ToriiRouteHintV1,
+        },
         tx::AcceptedTransaction,
     };
     use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
@@ -2153,6 +2385,7 @@ mod network_relay_tests {
         AccountId, ChainId, Level,
         block::{BlockHeader, BlockSignature, SignedBlock},
         isi::Log,
+        nexus::{DataSpaceId, LaneId},
         peer::{Peer, PeerId},
         transaction::TransactionBuilder,
     };
@@ -2215,6 +2448,11 @@ mod network_relay_tests {
             roster: vec![PeerId::new(KeyPair::random().public_key().clone())],
             roster_hash: Hash::prehashed([0x11; 32]),
             total_chunks: 1,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            chunk_size_bytes: 0,
+            payload_size_bytes: 0,
+            data_shards: 0,
+            parity_shards: 0,
             chunk_digests: vec![[0x22; 32]],
             payload_hash: Hash::prehashed([0x33; 32]),
             chunk_root: Hash::prehashed([0x44; 32]),
@@ -2460,6 +2698,39 @@ mod network_relay_tests {
         iroha_core::NetworkMessage::BlockSync(Box::new(msg))
     }
 
+    fn torii_proxy_request_msg() -> iroha_core::NetworkMessage {
+        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: Hash::prehashed([0x41; 32]),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
+                endpoint: ToriiReadEndpointV1::AccountsList,
+                expected_route: ToriiRouteHintV1 {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+                path_args: Vec::new(),
+                query_string: None,
+                body: Vec::new(),
+                response_format: ToriiProxyResponseFormatV1::Json,
+            }),
+        }))
+    }
+
+    fn torii_proxy_response_msg() -> iroha_core::NetworkMessage {
+        iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id: Hash::prehashed([0x42; 32]),
+            response: ToriiProxyHttpResponseV1 {
+                status_code: 200,
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+        }))
+    }
+
     fn qc_vote_msg() -> iroha_core::NetworkMessage {
         use iroha_core::sumeragi::consensus::{Phase, Vote};
 
@@ -2547,6 +2818,11 @@ mod network_relay_tests {
             roster: Vec::new(),
             roster_hash: Hash::prehashed([0x11; 32]),
             total_chunks: 1,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            chunk_size_bytes: 0,
+            payload_size_bytes: 0,
+            data_shards: 0,
+            parity_shards: 0,
             chunk_digests: vec![[0x22; 32]],
             payload_hash: Hash::prehashed([0x33; 32]),
             chunk_root: Hash::prehashed([0x44; 32]),
@@ -2960,6 +3236,22 @@ mod network_relay_tests {
     }
 
     #[test]
+    fn dedicated_subscriber_message_set_includes_torii_proxy_frames() {
+        let request = torii_proxy_request_msg();
+        let response = torii_proxy_response_msg();
+
+        assert!(NetworkRelayShared::is_handled_by_dedicated_subscriber(
+            &request
+        ));
+        assert!(NetworkRelayShared::is_handled_by_dedicated_subscriber(
+            &response
+        ));
+        assert!(!NetworkRelayShared::is_handled_by_dedicated_subscriber(
+            &consensus_params_msg()
+        ));
+    }
+
+    #[test]
     fn consensus_ingress_rbc_session_limit_counts_unique_sessions() {
         let peer = sample_peer();
         let mut limiter = ConsensusIngressLimiter::new(
@@ -3193,6 +3485,7 @@ fn snapshot_read_error_is_recoverable(error: &TryReadSnapshotError) -> bool {
         TryReadSnapshotError::NotFound => true,
         TryReadSnapshotError::IO(_, _) => false,
         TryReadSnapshotError::ChainIdMismatch { .. } => false,
+        TryReadSnapshotError::MismatchedHeight { .. } => false,
         _ => true,
     }
 }
@@ -3298,7 +3591,7 @@ mod snapshot_read_error_tests {
             }
         ));
 
-        assert!(snapshot_read_error_is_recoverable(
+        assert!(!snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MismatchedHeight {
                 snapshot_height: 2,
                 kura_height: 1,
@@ -3307,6 +3600,10 @@ mod snapshot_read_error_tests {
 
         assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MissingBlock { height: 1 }
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::MissingSpaceDirectoryManifestSection { snapshot_height: 608 }
         ));
 
         assert!(snapshot_read_error_is_recoverable(
@@ -3343,6 +3640,8 @@ impl Iroha {
         StartError,
     > {
         let mut supervisor = Supervisor::new();
+        let startup_trace_started_at = Instant::now();
+        log_startup_trace("irohad.start.enter", startup_trace_started_at);
 
         // Log detailed backtraces if a lock-order deadlock occurs so we can
         // diagnose stalls during long-running scenarios (e.g., integration tests).
@@ -3479,17 +3778,24 @@ impl Iroha {
             Err(TryReadSnapshotError::NotFound) => {
                 iroha_logger::info!("Didn't find a state snapshot; creating an empty state");
                 let genesis_public_key = effective_genesis_public_key.clone();
-                let world = World::with(
+                let mut world = World::with(
                     [genesis_domain(genesis_public_key.clone())],
                     [genesis_account(genesis_public_key)],
                     [],
                 );
+                if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
+                    iroha_core::sns::seed_genesis_alias_bootstrap(
+                        &mut world,
+                        &genesis_block.0,
+                        &config.nexus.dataspace_catalog,
+                    );
+                }
                 State::new(
                     world,
                     Arc::clone(&kura),
                     live_query_store.clone(),
                     #[cfg(feature = "telemetry")]
-                    state_telemetry,
+                    state_telemetry.clone(),
                 )
             }
             Err(error) if snapshot_read_error_is_recoverable(&error) => {
@@ -3498,23 +3804,35 @@ impl Iroha {
                     "Failed to load state snapshot; rebuilding state by replaying Kura blocks"
                 );
                 let genesis_public_key = effective_genesis_public_key.clone();
-                let world = World::with(
+                let mut world = World::with(
                     [genesis_domain(genesis_public_key.clone())],
                     [genesis_account(genesis_public_key)],
                     [],
                 );
+                if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
+                    iroha_core::sns::seed_genesis_alias_bootstrap(
+                        &mut world,
+                        &genesis_block.0,
+                        &config.nexus.dataspace_catalog,
+                    );
+                }
                 State::new(
                     world,
                     Arc::clone(&kura),
                     live_query_store.clone(),
                     #[cfg(feature = "telemetry")]
-                    state_telemetry,
+                    state_telemetry.clone(),
                 )
             }
             Err(error) => {
                 return Err(Report::new(error).change_context(StartError::InitKura));
             }
         };
+        if snapshot_missing_public_lane_state(&state, stored_genesis_block.as_ref()) {
+            iroha_logger::warn!(
+                "Loaded snapshot is missing public-lane staking state; accepting snapshot to avoid replaying an existing Taira ledger from genesis"
+            );
+        }
         #[cfg(feature = "telemetry")]
         {
             kura.attach_telemetry(state.telemetry.clone());
@@ -3646,18 +3964,18 @@ impl Iroha {
         }
 
         let config_caps = build_consensus_config_caps(&config.sumeragi)?;
-        let consensus_caps_override = if block_count.0 == 0 {
-            genesis.as_ref().and_then(|block| {
-                consensus_caps_from_genesis(
-                    block,
-                    &config.common.chain,
-                    &config_caps,
-                    &config.sumeragi,
-                )
-            })
-        } else {
-            None
-        };
+        let consensus_caps_override =
+            stored_genesis_block
+                .as_ref()
+                .or(genesis.as_ref())
+                .and_then(|block| {
+                    consensus_caps_from_genesis(
+                        block,
+                        &config.common.chain,
+                        &config_caps,
+                        &config.sumeragi,
+                    )
+                });
         let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
 
         // Compute consensus handshake caps for gating peers
@@ -3686,18 +4004,23 @@ impl Iroha {
 
         if let Some(genesis_block) = genesis.as_ref() {
             let metadata_genesis = stored_genesis_block.as_ref().unwrap_or(genesis_block);
-            verify_genesis_metadata(
+            if let Err(err) = verify_genesis_metadata(
                 metadata_genesis,
                 &config,
                 &consensus_caps,
                 &computed_mode_tag,
                 &computed_bls_domain,
                 proto,
-            )
-            .map_err(|err| {
-                iroha_logger::error!(?err, "genesis consensus metadata validation failed");
-                Report::new(StartError::InitKura).attach(err)
-            })?;
+            ) {
+                if stored_genesis_block.is_none() && block_count.0 == 0 {
+                    iroha_logger::error!(?err, "genesis consensus metadata validation failed");
+                    return Err(Report::new(StartError::InitKura).attach(err));
+                }
+                iroha_logger::warn!(
+                    ?err,
+                    "stored genesis consensus metadata does not match runtime consensus caps; continuing with existing Kura state"
+                );
+            }
         }
 
         // If a genesis manifest JSON is provided via CLI, validate consensus fields.
@@ -3857,8 +4180,7 @@ impl Iroha {
                     );
                 } else {
                     let expected_hash = config.genesis.expected_hash;
-                    let genesis_account = AccountId::new(effective_genesis_public_key.clone(),
-                    );
+                    let genesis_account = AccountId::new(effective_genesis_public_key.clone());
                     match bootstrapper
                         .fetch_genesis(&candidates, &genesis_account, expected_hash)
                         .await
@@ -3931,8 +4253,7 @@ impl Iroha {
                     "non-empty block store detected; using stored genesis for restart",
                 );
             } else {
-                let genesis_account = AccountId::new(effective_genesis_public_key.clone(),
-                );
+                let genesis_account = AccountId::new(effective_genesis_public_key.clone());
                 if let Err(err) = iroha_core::validate_genesis_block(
                     &genesis_block.0,
                     &genesis_account,
@@ -3972,10 +4293,18 @@ impl Iroha {
                                 .collect();
                         }
                         let me = config.common.peer.id();
-                        if !validator_roster.iter().any(|p| p == me) {
-                            validator_roster.push(me.clone());
+                        let is_validator = matches!(
+                            config.sumeragi.role,
+                            iroha_config::parameters::actual::NodeRole::Validator
+                        );
+                        if is_validator {
+                            if !validator_roster.iter().any(|p| p == me) {
+                                validator_roster.push(me.clone());
+                            }
+                        } else {
+                            validator_roster.retain(|p| p != me);
                         }
-                        if validator_roster.is_empty() {
+                        if validator_roster.is_empty() && is_validator {
                             validator_roster.push(me.clone());
                         }
                         validator_roster
@@ -4026,15 +4355,8 @@ impl Iroha {
                             config.sumeragi.consensus_mode,
                             iroha_config::parameters::actual::ConsensusMode::Npos
                         ) {
-                            let (active_bls, active_total, pending, total) = {
-                                let world = state.world_view();
-                                npos_validator_status_counts(
-                                    world
-                                        .public_lane_validators()
-                                        .iter()
-                                        .map(|(_, record)| record),
-                                )
-                            };
+                            let (active_bls, active_total, pending, total) =
+                                effective_npos_validator_status_counts(&state);
                             if active_bls == 0 {
                                 let stake_asset_id = config.nexus.staking.stake_asset_id.as_str();
                                 iroha_logger::error!(
@@ -4046,7 +4368,7 @@ impl Iroha {
                                     "NPoS genesis did not activate any BLS validators"
                                 );
                                 let err_msg = format!(
-                                    "NPoS genesis did not activate any BLS validators (active_total={active_total}, pending={pending}, total={total}). Ensure genesis registers validators with PoPs and stakes {stake_asset_id} for each topology peer (for example via `kagami localnet` or `kagami genesis sign --topology ... --peer-pop ...`)."
+                                    "NPoS genesis did not activate any BLS validators (active_total={active_total}, pending={pending}, total={total}). Ensure genesis either registers stake-elected validators with PoPs and stakes {stake_asset_id} for each topology peer (for example via `kagami localnet` or `kagami genesis sign --topology ... --peer-pop ...`) or provides live BLS peer consensus keys for admin-managed lanes."
                                 );
                                 return Err(Report::new(StartError::InitKura).attach(err_msg));
                             }
@@ -4123,6 +4445,7 @@ impl Iroha {
         if let Err(err) = streaming.load_snapshots() {
             iroha_logger::warn!(?err, "Failed to load streaming session snapshots");
         }
+        log_startup_trace("irohad.streaming.ready", startup_trace_started_at);
 
         iroha_core::streaming::set_global_handle(streaming.clone());
 
@@ -4134,6 +4457,8 @@ impl Iroha {
 
         #[cfg(feature = "telemetry")]
         start_telemetry(&logger, &config, &mut supervisor).await?;
+        #[cfg(feature = "telemetry")]
+        log_startup_trace("irohad.telemetry.ready", startup_trace_started_at);
 
         // Thread tiered state, pipeline, and ZK (Halo2) preferences from config into runtime state.
         // Use cloned config values to keep `config` borrowable later.
@@ -4158,6 +4483,7 @@ impl Iroha {
         state.set_settlement(settlement_cfg);
         state.set_gov(gov_cfg);
         state.set_merge_ledger_cache_capacity(merge_cache_capacity);
+        log_startup_trace("irohad.state.runtime_config_applied", startup_trace_started_at);
         // Recovery: scan recent persisted pipeline sidecars and log DAG fingerprint mismatches (best-effort).
         #[cfg(feature = "dag-recovery-verify")]
         {
@@ -4336,6 +4662,7 @@ impl Iroha {
             supervisor.shutdown_signal(),
         );
         supervisor.monitor(child);
+        log_startup_trace("irohad.peers_gossiper.ready", startup_trace_started_at);
 
         // Background poster worker for Sumeragi frames; overflow falls back to inline posts.
         let background_post_tx = if config.sumeragi.debug.disable_background_worker {
@@ -4468,6 +4795,7 @@ impl Iroha {
             genesis
         };
         let sumeragi_cfg = config.sumeragi.clone();
+        log_startup_trace("irohad.sumeragi.starting", startup_trace_started_at);
         let (sumeragi, child) = SumeragiStartArgs {
             config: sumeragi_cfg.clone(),
             common_config: config.common.clone(),
@@ -4520,6 +4848,7 @@ impl Iroha {
         }
         .start(supervisor.shutdown_signal());
         supervisor.monitor(child);
+        log_startup_trace("irohad.sumeragi.started", startup_trace_started_at);
 
         let block_sync_frame_cap = {
             let global_plaintext = iroha_p2p::frame_plaintext_cap(config.network.max_frame_bytes);
@@ -4548,6 +4877,7 @@ impl Iroha {
             kura.clone(),
             config.common.peer.clone(),
             trusted_peers,
+            trusted.pops.clone(),
             network.clone(),
             Arc::clone(&state),
             block_sync_telemetry,
@@ -4577,18 +4907,61 @@ impl Iroha {
             supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
         }
 
+        let sorafs_node = sorafs_node::NodeHandle::new_with_policies(
+            sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage),
+            sorafs_node::config::RepairConfig::from_repair_and_policy(
+                &config.torii.sorafs_repair,
+                &state.gov.sorafs_repair_escalation,
+            ),
+            sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc),
+        );
+        let shared_sorafs_cache = build_shared_sorafs_provider_cache(&config);
+
+        let chain_id = Arc::new(config.common.chain.clone());
+        let local_validator_account_id =
+            AccountId::new(config.common.key_pair.public_key().clone());
+        let local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
+        let runtime_mutation_sink = Arc::new(QueuedSoracloudRuntimeMutationSink::new(
+            Arc::clone(&chain_id),
+            Arc::clone(&queue),
+            Arc::clone(&state),
+            local_validator_account_id.clone(),
+            config.common.key_pair.clone(),
+        ));
+        let runtime_manager = SoracloudRuntimeManager::new(
+            soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
+                &config.soracloud_runtime,
+            )
+            .with_local_host_identity(local_validator_account_id, local_peer_id),
+            Arc::clone(&state),
+        )
+        .with_mutation_sink(runtime_mutation_sink)
+        .with_sorafs_node(sorafs_node.clone());
+        let runtime_manager = if let Some(cache) = shared_sorafs_cache.clone() {
+            runtime_manager.with_sorafs_provider_cache(cache)
+        } else {
+            runtime_manager
+        };
+        let (soracloud_runtime, child) = runtime_manager.start(supervisor.shutdown_signal());
+        state.set_soracloud_runtime(Some(Arc::new(soracloud_runtime.clone())));
+        supervisor.monitor(child);
+
         ensure_operator_node_key_allowlisted(&mut config);
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
 
-        let receipt_signer = config.torii.receipt_signer.clone().unwrap_or_else(|| {
-            let key = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            iroha_logger::info!(
-                algorithm = ?key.public_key().algorithm(),
-                "torii receipt signer not configured; generated ephemeral key"
-            );
-            key
-        });
+        let receipt_signer = torii_receipt_signer_or_ephemeral(config.torii.receipt_signer.clone());
+        let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
+            .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
+            .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
+            .with_sorafs_node(sorafs_node)
+            .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
+            .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
+        let runtime_deps = if let Some(cache) = shared_sorafs_cache {
+            runtime_deps.with_sorafs_cache(cache)
+        } else {
+            runtime_deps
+        };
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
             kiso.clone(),
@@ -4601,10 +4974,11 @@ impl Iroha {
             receipt_signer,
             iroha_torii::OnlinePeersProvider::new(network.online_peers_receiver()),
             Some(sumeragi.clone()),
-            torii_telemetry,
+            runtime_deps,
         );
         let torii = torii.with_rbc_store_dir(rbc_store_dir.clone());
         let torii = torii.with_p2p(network.clone());
+        let torii = torii.with_local_peer_id(config.common.peer.id.clone());
         let torii_run = torii.start(supervisor.shutdown_signal());
         let shutdown_on_failure = supervisor.shutdown_signal();
         supervisor.monitor(Child::new(
@@ -4688,6 +5062,7 @@ impl Iroha {
             Self {
                 kura,
                 state,
+                soracloud_runtime,
                 streaming: streaming.clone(),
                 network: network.clone(),
             },
@@ -4707,6 +5082,11 @@ impl Iroha {
     /// Access to the block storage handle.
     pub fn kura(&self) -> &Arc<Kura> {
         &self.kura
+    }
+
+    /// Access the embedded Soracloud runtime-manager handle.
+    pub fn soracloud_runtime(&self) -> &SoracloudRuntimeManagerHandle {
+        &self.soracloud_runtime
     }
 
     /// Streaming handle used for Torii and telemetry ingress.
@@ -5171,13 +5551,43 @@ fn genesis_public_key_from_genesis_block(
 
 fn genesis_account(public_key: PublicKey) -> Account {
     let genesis_account_id = AccountId::new(public_key);
-    Account::new(genesis_account_id.to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()))
-        .build(&genesis_account_id)
+    Account::new(genesis_account_id.clone()).build(&genesis_account_id)
 }
 
 fn genesis_domain(public_key: PublicKey) -> Domain {
-    let genesis_account = genesis_account(public_key);
-    Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account.id)
+    let genesis_account_id = AccountId::new(public_key);
+    Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id)
+}
+
+fn genesis_bootstraps_public_lane_validators(block: &GenesisBlock) -> bool {
+    block.0.external_transactions().any(|tx| {
+        let Executable::Instructions(batch) = tx.instructions() else {
+            return false;
+        };
+        batch.iter().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>()
+                .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::staking::ActivatePublicLaneValidator>()
+                    .is_some()
+        })
+    })
+}
+
+fn snapshot_missing_public_lane_state(
+    state: &State,
+    stored_genesis: Option<&GenesisBlock>,
+) -> bool {
+    stored_genesis.is_some_and(genesis_bootstraps_public_lane_validators)
+        && state
+            .world_view()
+            .public_lane_validators()
+            .iter()
+            .next()
+            .is_none()
 }
 
 #[cfg(test)]
@@ -5198,6 +5608,15 @@ mod genesis_key_tests {
             genesis_public_key_from_genesis_block(&genesis_block).expect("derive genesis pubkey");
         assert_eq!(&derived, keypair.public_key());
     }
+
+    #[test]
+    fn genesis_domain_owner_matches_genesis_authority() {
+        let keypair = iroha_crypto::KeyPair::random();
+        let expected_owner = AccountId::new(keypair.public_key().clone());
+        let domain = genesis_domain(keypair.public_key().clone());
+
+        assert_eq!(domain.owned_by(), &expected_owner);
+    }
 }
 
 /// Errors raised while reading configuration and genesis data.
@@ -5205,6 +5624,8 @@ mod genesis_key_tests {
 pub enum ConfigError {
     /// Failed to read configuration from disk or environment.
     ReadConfig,
+    /// Failed to persist configuration updates back to disk.
+    WriteConfig,
     /// Configuration contents failed validation.
     ParseConfig,
     /// Failed to load the genesis file.
@@ -5234,6 +5655,8 @@ pub enum ConfigError {
     NexusMultilaneDisabled,
     /// Joining Sora profile is mandatory but missing.
     SoraProfileRequired,
+    /// Nexus auto-derived storage defaults require a writable config path.
+    NexusStorageBudgetPersistenceRequired,
 }
 
 impl core::fmt::Display for ConfigError {
@@ -5243,6 +5666,7 @@ impl core::fmt::Display for ConfigError {
                 f,
                 "Error occurred while reading configuration from file(s) and environment"
             ),
+            Self::WriteConfig => write!(f, "Error occurred while writing configuration to disk"),
             Self::ParseConfig => {
                 write!(f, "Error occurred while validating configuration integrity")
             }
@@ -5282,6 +5706,10 @@ impl core::fmt::Display for ConfigError {
                     "Sora Nexus features require `irohad --sora`; remove the Sora-only config overrides or rerun with the flag"
                 )
             }
+            Self::NexusStorageBudgetPersistenceRequired => write!(
+                f,
+                "Nexus auto-derived storage defaults require a writable configuration file path"
+            ),
         }
     }
 }
@@ -5397,7 +5825,6 @@ pub fn read_config_and_genesis(
     if args.sora {
         config.apply_sora_profile();
     }
-    config.apply_storage_budget();
 
     let sorafs_enabled = config.torii.sorafs_storage.enabled
         || config.torii.sorafs_discovery.discovery_enabled
@@ -5440,6 +5867,11 @@ pub fn read_config_and_genesis(
             )),
         );
     }
+
+    let storage_budget_filesystems =
+        reconcile_nexus_storage_budget(&mut config, args.config.as_deref())?;
+    config.apply_storage_budget();
+    warn_if_nexus_storage_budget_exceeds_available(&config, &storage_budget_filesystems);
 
     if let Some(mode) = args.fastpq_execution_mode {
         config.zk.fastpq.execution_mode = mode;
@@ -5519,6 +5951,661 @@ pub fn read_config_and_genesis(
     config.logger.terminal_colors = args.terminal_colors;
 
     Ok((config, genesis))
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StorageBudgetFilesystemProbe {
+    filesystem_id: String,
+    path: PathBuf,
+    available_bytes: u64,
+    components: Vec<NexusStorageBudgetComponent>,
+}
+
+fn reconcile_nexus_storage_budget(
+    config: &mut Config,
+    config_path: Option<&Path>,
+) -> ReportResult<Vec<StorageBudgetFilesystemProbe>, ConfigError> {
+    if !config.nexus.enabled {
+        return Ok(Vec::new());
+    }
+
+    match config.nexus.storage.budget_source {
+        NexusStorageBudgetSource::Unset => {
+            let config_path = require_nexus_storage_budget_config_path(
+                config_path,
+                "nexus.storage.local_budget_bytes is unset and the daemon must persist an auto-derived filesystem budget before startup can continue",
+            )?;
+            let filesystems = probe_nexus_storage_filesystems(config)?;
+            let auto_default = derive_auto_default_nexus_storage_budget(&filesystems);
+            persist_nexus_auto_storage_budget(config_path, &auto_default)?;
+            activate_auto_default_nexus_storage_budget(config, auto_default.clone());
+            iroha_logger::info!(
+                config_path = %config_path.display(),
+                aggregate_budget_bytes = auto_default.aggregate_budget_bytes,
+                filesystem_groups = auto_default.filesystem_groups.len(),
+                "persisted first-run nexus.storage.local_budget_bytes and auto-derived filesystem metadata into config"
+            );
+            Ok(filesystems)
+        }
+        NexusStorageBudgetSource::OperatorExplicit => {
+            match probe_nexus_storage_filesystems(config) {
+                Ok(filesystems) => Ok(filesystems),
+                Err(error) => {
+                    iroha_logger::warn!(
+                        ?error,
+                        "failed to probe Nexus storage filesystems for warning-only budget checks; continuing with operator-explicit budget"
+                    );
+                    Ok(Vec::new())
+                }
+            }
+        }
+        NexusStorageBudgetSource::AutoDerived => {
+            let filesystems = probe_nexus_storage_filesystems(config)?;
+            let Some(auto_default) = config.nexus.storage.auto_default.clone() else {
+                return Ok(filesystems);
+            };
+            if storage_layout_matches_auto_default(&filesystems, &auto_default) {
+                return Ok(filesystems);
+            }
+
+            let config_path = require_nexus_storage_budget_config_path(
+                config_path,
+                "the Nexus storage filesystem layout changed and the persisted auto-derived budget metadata must be rewritten",
+            )?;
+            let regenerated = derive_auto_default_nexus_storage_budget(&filesystems);
+            persist_nexus_auto_storage_budget(config_path, &regenerated)?;
+            activate_auto_default_nexus_storage_budget(config, regenerated.clone());
+            iroha_logger::info!(
+                config_path = %config_path.display(),
+                aggregate_budget_bytes = regenerated.aggregate_budget_bytes,
+                filesystem_groups = regenerated.filesystem_groups.len(),
+                "regenerated nexus.storage.auto_default after the storage filesystem layout changed"
+            );
+            Ok(filesystems)
+        }
+    }
+}
+
+fn require_nexus_storage_budget_config_path<'a>(
+    config_path: Option<&'a Path>,
+    detail: &'static str,
+) -> ReportResult<&'a Path, ConfigError> {
+    config_path.ok_or_else(|| {
+        Report::new(ConfigError::NexusStorageBudgetPersistenceRequired).attach(detail)
+    })
+}
+
+fn probe_nexus_storage_filesystems(
+    config: &Config,
+) -> ReportResult<Vec<StorageBudgetFilesystemProbe>, ConfigError> {
+    let mut groups = BTreeMap::<String, StorageBudgetFilesystemProbe>::new();
+
+    for (component, root) in effective_nexus_storage_component_roots(config) {
+        let normalized_root = normalize_budget_probe_path(root).ok_or_else(|| {
+            Report::new(ConfigError::ParseConfig).attach(format!(
+                "failed to resolve Nexus storage root for component `{}` against the current directory",
+                component.as_str()
+            ))
+        })?;
+        let probe_path = nearest_existing_ancestor(&normalized_root).ok_or_else(|| {
+            Report::new(ConfigError::ParseConfig).attach(format!(
+                "failed to find an existing ancestor for Nexus storage root `{}` (component `{}`)",
+                normalized_root.display(),
+                component.as_str()
+            ))
+        })?;
+        let filesystem_id = filesystem_identity(&probe_path).ok_or_else(|| {
+            filesystem_probe_config_error(format!(
+                "failed to determine the filesystem identity for `{}` (component `{}`)",
+                probe_path.display(),
+                component.as_str()
+            ))
+        })?;
+        let available_bytes = filesystem_available_bytes(&probe_path).ok_or_else(|| {
+            filesystem_probe_config_error(format!(
+                "failed to determine available free space for `{}` (component `{}`)",
+                probe_path.display(),
+                component.as_str()
+            ))
+        })?;
+
+        groups
+            .entry(filesystem_id.clone())
+            .and_modify(|group| {
+                if !group.components.contains(&component) {
+                    group.components.push(component);
+                }
+            })
+            .or_insert_with(|| StorageBudgetFilesystemProbe {
+                filesystem_id,
+                path: probe_path,
+                available_bytes,
+                components: vec![component],
+            });
+    }
+
+    let mut groups: Vec<_> = groups.into_values().collect();
+    for group in &mut groups {
+        group.components.sort_unstable();
+    }
+    groups.sort_by_key(|group| {
+        group.components.first().map_or(usize::MAX, |component| {
+            nexus_storage_component_order(*component)
+        })
+    });
+    Ok(groups)
+}
+
+fn effective_nexus_storage_component_roots(
+    config: &Config,
+) -> Vec<(NexusStorageBudgetComponent, PathBuf)> {
+    let mut roots = vec![(
+        NexusStorageBudgetComponent::Kura,
+        config.kura.store_dir.resolve_relative_path(),
+    )];
+
+    let tiered_state_root = config
+        .tiered_state
+        .da_store_root
+        .clone()
+        .or_else(|| config.tiered_state.cold_store_root.clone())
+        .or_else(|| {
+            (config.nexus.storage.max_wsv_memory_bytes.get() > 0).then(|| {
+                PathBuf::from(
+                    iroha_config::parameters::defaults::tiered_state::DEFAULT_COLD_STORE_ROOT,
+                )
+            })
+        });
+    if let Some(tiered_state_root) = tiered_state_root {
+        roots.push((NexusStorageBudgetComponent::WsvCold, tiered_state_root));
+    }
+
+    roots.push((
+        NexusStorageBudgetComponent::Sorafs,
+        config.torii.sorafs_storage.data_dir.clone(),
+    ));
+    roots.push((
+        NexusStorageBudgetComponent::SoranetSpool,
+        config.streaming.soranet.provision_spool_dir.clone(),
+    ));
+    roots.push((
+        NexusStorageBudgetComponent::SoravpnSpool,
+        config.streaming.soravpn.provision_spool_dir.clone(),
+    ));
+    roots
+}
+
+fn derive_auto_default_nexus_storage_budget(
+    filesystems: &[StorageBudgetFilesystemProbe],
+) -> NexusStorageAutoDefault {
+    let filesystem_groups: Vec<_> = filesystems
+        .iter()
+        .map(|filesystem| NexusStorageAutoDefaultFilesystemGroup {
+            filesystem_id: filesystem.filesystem_id.clone(),
+            budget_bytes: filesystem
+                .available_bytes
+                .saturating_mul(80)
+                .saturating_div(100),
+            components: filesystem.components.clone(),
+        })
+        .collect();
+    let aggregate_budget_bytes = filesystem_groups.iter().fold(0_u64, |total, filesystem| {
+        total.saturating_add(filesystem.budget_bytes)
+    });
+
+    NexusStorageAutoDefault {
+        version: NexusStorageAutoDefault::VERSION,
+        aggregate_budget_bytes,
+        filesystem_groups,
+    }
+}
+
+fn storage_layout_matches_auto_default(
+    filesystems: &[StorageBudgetFilesystemProbe],
+    auto_default: &NexusStorageAutoDefault,
+) -> bool {
+    let mut current_signature: Vec<_> = filesystems
+        .iter()
+        .map(|filesystem| {
+            (
+                filesystem.filesystem_id.clone(),
+                filesystem.components.clone(),
+            )
+        })
+        .collect();
+    let mut persisted_signature: Vec<_> = auto_default
+        .filesystem_groups
+        .iter()
+        .map(|filesystem| {
+            (
+                filesystem.filesystem_id.clone(),
+                filesystem.components.clone(),
+            )
+        })
+        .collect();
+
+    current_signature.sort_by(|left, right| {
+        left.1
+            .first()
+            .map_or(usize::MAX, |component| {
+                nexus_storage_component_order(*component)
+            })
+            .cmp(&right.1.first().map_or(usize::MAX, |component| {
+                nexus_storage_component_order(*component)
+            }))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    persisted_signature.sort_by(|left, right| {
+        left.1
+            .first()
+            .map_or(usize::MAX, |component| {
+                nexus_storage_component_order(*component)
+            })
+            .cmp(&right.1.first().map_or(usize::MAX, |component| {
+                nexus_storage_component_order(*component)
+            }))
+            .then_with(|| left.0.cmp(&right.0))
+    });
+
+    current_signature == persisted_signature
+}
+
+fn activate_auto_default_nexus_storage_budget(
+    config: &mut Config,
+    auto_default: NexusStorageAutoDefault,
+) {
+    config.nexus.storage.max_disk_usage_bytes =
+        iroha_config::base::util::Bytes(auto_default.aggregate_budget_bytes);
+    config.nexus.storage.budget_source = NexusStorageBudgetSource::AutoDerived;
+    config.nexus.storage.auto_default = Some(auto_default);
+}
+
+fn persist_nexus_auto_storage_budget(
+    config_path: &Path,
+    auto_default: &NexusStorageAutoDefault,
+) -> ReportResult<(), ConfigError> {
+    let config_text = fs::read_to_string(config_path)
+        .attach(format!(
+            "read config `{}` before persisting storage budget",
+            config_path.display()
+        ))
+        .change_context(ConfigError::WriteConfig)?;
+    let mut config_table: toml::Table = toml::from_str(&config_text)
+        .attach(format!(
+            "parse config `{}` before persisting storage budget",
+            config_path.display()
+        ))
+        .change_context(ConfigError::WriteConfig)?;
+    let persisted_budget = nexus_storage_budget_toml_integer(
+        auto_default.aggregate_budget_bytes,
+        "aggregate Nexus storage budget",
+        config_path,
+    )?;
+    iroha_config::base::toml::Writer::new(&mut config_table)
+        .write(["nexus", "storage", "local_budget_bytes"], persisted_budget);
+    let auto_default_table = nexus_storage_auto_default_to_toml(auto_default, config_path)?;
+    iroha_config::base::toml::Writer::new(&mut config_table).write(
+        ["nexus", "storage", "auto_default"],
+        toml::Value::Table(auto_default_table),
+    );
+    let encoded = toml::to_string(&config_table)
+        .attach(format!(
+            "encode config `{}` after persisting storage budget",
+            config_path.display()
+        ))
+        .change_context(ConfigError::WriteConfig)?;
+    write_bytes_atomic(config_path, encoded.as_bytes())
+        .attach(format!(
+            "write config `{}` after persisting storage budget",
+            config_path.display()
+        ))
+        .change_context(ConfigError::WriteConfig)?;
+    Ok(())
+}
+
+fn nexus_storage_auto_default_to_toml(
+    auto_default: &NexusStorageAutoDefault,
+    config_path: &Path,
+) -> ReportResult<toml::Table, ConfigError> {
+    let mut table = toml::Table::new();
+    table.insert(
+        "version".to_string(),
+        toml::Value::Integer(i64::from(auto_default.version)),
+    );
+    table.insert(
+        "aggregate_budget_bytes".to_string(),
+        toml::Value::Integer(nexus_storage_budget_toml_integer(
+            auto_default.aggregate_budget_bytes,
+            "aggregate Nexus storage budget",
+            config_path,
+        )?),
+    );
+
+    let filesystem_groups = auto_default
+        .filesystem_groups
+        .iter()
+        .map(|filesystem| {
+            let mut filesystem_table = toml::Table::new();
+            filesystem_table.insert(
+                "filesystem_id".to_string(),
+                toml::Value::String(filesystem.filesystem_id.clone()),
+            );
+            filesystem_table.insert(
+                "budget_bytes".to_string(),
+                toml::Value::Integer(nexus_storage_budget_toml_integer(
+                    filesystem.budget_bytes,
+                    "filesystem Nexus storage budget",
+                    config_path,
+                )?),
+            );
+            filesystem_table.insert(
+                "components".to_string(),
+                toml::Value::Array(
+                    filesystem
+                        .components
+                        .iter()
+                        .map(|component| toml::Value::String(component.as_str().to_owned()))
+                        .collect(),
+                ),
+            );
+            Ok(toml::Value::Table(filesystem_table))
+        })
+        .collect::<ReportResult<Vec<_>, ConfigError>>()?;
+    table.insert(
+        "filesystem_groups".to_string(),
+        toml::Value::Array(filesystem_groups),
+    );
+
+    Ok(table)
+}
+
+fn nexus_storage_budget_toml_integer(
+    budget_bytes: u64,
+    label: &'static str,
+    config_path: &Path,
+) -> ReportResult<i64, ConfigError> {
+    i64::try_from(budget_bytes)
+        .attach(format!(
+            "{label} {budget_bytes} does not fit into TOML integer range for `{}`",
+            config_path.display()
+        ))
+        .change_context(ConfigError::WriteConfig)
+}
+
+fn warn_if_nexus_storage_budget_exceeds_available(
+    config: &Config,
+    filesystems: &[StorageBudgetFilesystemProbe],
+) {
+    if filesystems.is_empty() || !config.nexus.enabled {
+        return;
+    }
+
+    match config.nexus.storage.budget_source {
+        NexusStorageBudgetSource::Unset => {}
+        NexusStorageBudgetSource::AutoDerived => {
+            let Some(auto_default) = config.nexus.storage.auto_default.as_ref() else {
+                return;
+            };
+            for filesystem in filesystems {
+                let Some(budget_bytes) = auto_default_budget_shortfall(auto_default, filesystem)
+                else {
+                    continue;
+                };
+                iroha_logger::warn!(
+                    filesystem_id = %filesystem.filesystem_id,
+                    path = %filesystem.path.display(),
+                    components = ?nexus_storage_component_labels(&filesystem.components),
+                    budget_bytes,
+                    available_bytes = filesystem.available_bytes,
+                    "stored auto-derived Nexus filesystem budget exceeds currently available free disk space"
+                );
+            }
+        }
+        NexusStorageBudgetSource::OperatorExplicit => {
+            for filesystem in filesystems {
+                let Some(assigned_budget) = operator_explicit_budget_shortfall(config, filesystem)
+                else {
+                    continue;
+                };
+                iroha_logger::warn!(
+                    filesystem_id = %filesystem.filesystem_id,
+                    path = %filesystem.path.display(),
+                    components = ?nexus_storage_component_labels(&filesystem.components),
+                    assigned_budget_bytes = assigned_budget,
+                    available_bytes = filesystem.available_bytes,
+                    "effective operator-configured Nexus storage caps exceed currently available free disk space on a filesystem"
+                );
+            }
+        }
+    }
+}
+
+fn auto_default_budget_shortfall(
+    auto_default: &NexusStorageAutoDefault,
+    filesystem: &StorageBudgetFilesystemProbe,
+) -> Option<u64> {
+    let stored_group = auto_default.filesystem_groups.iter().find(|stored_group| {
+        stored_group.filesystem_id == filesystem.filesystem_id
+            && stored_group.components == filesystem.components
+    })?;
+    (stored_group.budget_bytes > filesystem.available_bytes).then_some(stored_group.budget_bytes)
+}
+
+fn operator_explicit_budget_shortfall(
+    config: &Config,
+    filesystem: &StorageBudgetFilesystemProbe,
+) -> Option<u64> {
+    let assigned_budget = effective_assigned_budget_for_filesystem(config, filesystem);
+    (assigned_budget > filesystem.available_bytes).then_some(assigned_budget)
+}
+
+fn effective_assigned_budget_for_filesystem(
+    config: &Config,
+    filesystem: &StorageBudgetFilesystemProbe,
+) -> u64 {
+    filesystem
+        .components
+        .iter()
+        .fold(0_u64, |total, component| {
+            let component_budget = match component {
+                NexusStorageBudgetComponent::Kura => config.kura.max_disk_usage_bytes.get(),
+                NexusStorageBudgetComponent::WsvCold => config.tiered_state.max_cold_bytes.get(),
+                NexusStorageBudgetComponent::Sorafs => {
+                    config.torii.sorafs_storage.max_capacity_bytes.get()
+                }
+                NexusStorageBudgetComponent::SoranetSpool => {
+                    config.streaming.soranet.provision_spool_max_bytes.get()
+                }
+                NexusStorageBudgetComponent::SoravpnSpool => {
+                    config.streaming.soravpn.provision_spool_max_bytes.get()
+                }
+            };
+            total.saturating_add(component_budget)
+        })
+}
+
+fn nexus_storage_component_labels(components: &[NexusStorageBudgetComponent]) -> Vec<&'static str> {
+    components
+        .iter()
+        .map(|component| component.as_str())
+        .collect()
+}
+
+fn nexus_storage_component_order(component: NexusStorageBudgetComponent) -> usize {
+    NexusStorageBudgetComponent::ORDER
+        .iter()
+        .position(|ordered| ordered == &component)
+        .unwrap_or(usize::MAX)
+}
+
+fn normalize_budget_probe_path(path: PathBuf) -> Option<PathBuf> {
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        std::env::current_dir().ok().map(|cwd| cwd.join(path))
+    }
+}
+
+fn nearest_existing_ancestor(path: &Path) -> Option<PathBuf> {
+    let mut current = path.to_path_buf();
+    loop {
+        if current.exists() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path must have a parent")
+    })?;
+    fs::create_dir_all(parent)?;
+    let tmp_path = path.with_extension("tmp");
+    fs::write(&tmp_path, bytes)?;
+    fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
+fn filesystem_probe_config_error(detail: String) -> Report<ConfigError> {
+    let report = Report::new(ConfigError::ParseConfig).attach(detail);
+    #[cfg(not(any(unix, target_os = "windows")))]
+    let report = report.attach("Nexus storage filesystem probing is unsupported on this platform");
+    report
+}
+
+#[cfg(unix)]
+fn filesystem_identity(path: &Path) -> Option<String> {
+    let stats = rustix::fs::stat(path).ok()?;
+    Some(format!("dev:{}", stats.st_dev))
+}
+
+#[cfg(target_os = "windows")]
+fn filesystem_identity(path: &Path) -> Option<String> {
+    let volume_mount_point = windows_volume_mount_point(path)?;
+    let volume_name = windows_volume_name_for_mount_point(&volume_mount_point)?;
+    Some(normalize_windows_volume_identity(&volume_name))
+}
+
+#[cfg(unix)]
+fn filesystem_available_bytes(path: &Path) -> Option<u64> {
+    let stats = rustix::fs::statvfs(path).ok()?;
+    let fragment_size = stats.f_frsize.max(stats.f_bsize);
+    Some(stats.f_bavail.saturating_mul(fragment_size))
+}
+
+#[cfg(target_os = "windows")]
+fn filesystem_available_bytes(path: &Path) -> Option<u64> {
+    let wide_path = windows_wide_path(path);
+    let mut free_bytes_available = 0_u64;
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide_path.as_ptr(),
+            &mut free_bytes_available,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    (ok != 0).then_some(free_bytes_available)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn filesystem_available_bytes(_path: &Path) -> Option<u64> {
+    None
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+fn filesystem_identity(_path: &Path) -> Option<String> {
+    None
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn normalize_windows_volume_mount_point(volume_mount_point: &str) -> String {
+    let mut normalized = volume_mount_point.replace('/', "\\");
+    if !normalized.ends_with('\\') {
+        normalized.push('\\');
+    }
+    normalized
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn normalize_windows_volume_identity(volume_name: &str) -> String {
+    let mut normalized = normalize_windows_volume_mount_point(volume_name);
+    normalized.make_ascii_lowercase();
+    format!("volume:{normalized}")
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_string_from_wide_buffer(buffer: &[u16]) -> Option<String> {
+    let end = buffer.iter().position(|&unit| unit == 0)?;
+    Some(String::from_utf16_lossy(&buffer[..end]))
+}
+
+#[cfg(target_os = "windows")]
+const WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN: usize = 32_768;
+
+#[cfg(target_os = "windows")]
+#[allow(non_snake_case)]
+extern "system" {
+    fn GetDiskFreeSpaceExW(
+        lp_directory_name: *const u16,
+        lp_free_bytes_available_to_caller: *mut u64,
+        lp_total_number_of_bytes: *mut u64,
+        lp_total_number_of_free_bytes: *mut u64,
+    ) -> i32;
+    fn GetVolumeNameForVolumeMountPointW(
+        lpsz_volume_mount_point: *const u16,
+        lpsz_volume_name: *mut u16,
+        cch_buffer_length: u32,
+    ) -> i32;
+    fn GetVolumePathNameW(
+        lpsz_file_name: *const u16,
+        lpsz_volume_path_name: *mut u16,
+        cch_buffer_length: u32,
+    ) -> i32;
+}
+
+#[cfg(target_os = "windows")]
+fn windows_wide_path(path: &Path) -> Vec<u16> {
+    path.as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_wide_string(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_query_volume_string<F>(mut query: F) -> Option<String>
+where
+    F: FnMut(*mut u16, u32) -> i32,
+{
+    let mut buffer = vec![0_u16; WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN];
+    (query(buffer.as_mut_ptr(), buffer.len() as u32) != 0)
+        .then(|| windows_string_from_wide_buffer(&buffer))
+        .flatten()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_volume_mount_point(path: &Path) -> Option<String> {
+    let wide_path = windows_wide_path(path);
+    windows_query_volume_string(|buffer, len| unsafe {
+        GetVolumePathNameW(wide_path.as_ptr(), buffer, len)
+    })
+    .map(|mount_point| normalize_windows_volume_mount_point(&mount_point))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_volume_name_for_mount_point(volume_mount_point: &str) -> Option<String> {
+    let wide_mount_point = windows_wide_string(volume_mount_point);
+    windows_query_volume_string(|buffer, len| unsafe {
+        GetVolumeNameForVolumeMountPointW(wide_mount_point.as_ptr(), buffer, len)
+    })
 }
 
 pub(crate) fn apply_ivm_acceleration_config(
@@ -5657,7 +6744,7 @@ metadata = {}
     }
 
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "7f66b7a2fd69ea5ab9eacce7c3315a4a3b2fb1a5f110115f68594a54d94174a7";
+        "5eaf540791b06ee5ad37a0e6b7d9dcaf500aa48c49acdbb8b097b328ec0eb483";
 
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
@@ -5844,7 +6931,7 @@ metadata = {}
                 LaneConfig::default(),
                 LaneConfig {
                     id: LaneId::new(1),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     alias: "governance".to_string(),
                     description: Some("governance lane".to_string()),
                     ..LaneConfig::default()
@@ -6107,8 +7194,36 @@ mod accel_tests {
         0x15, 0xad,
     ];
 
+    struct AccelTestGuard {
+        original_config: ivm::AccelerationConfig,
+        original_simd_override: Option<ivm::SimdChoice>,
+        _simd_lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl AccelTestGuard {
+        fn new() -> Self {
+            let simd_lock = ivm::forced_simd_test_lock();
+            let original_config = ivm::acceleration_config();
+            let original_simd_override = ivm::set_forced_simd(None);
+
+            Self {
+                original_config,
+                original_simd_override,
+                _simd_lock: simd_lock,
+            }
+        }
+    }
+
+    impl Drop for AccelTestGuard {
+        fn drop(&mut self) {
+            ivm::set_acceleration_config(self.original_config);
+            ivm::set_forced_simd(self.original_simd_override);
+        }
+    }
+
     #[test]
     fn accel_config_disables_cuda_parity_holds() {
+        let _guard = AccelTestGuard::new();
         ivm::reset_cuda_backend_for_tests();
         let accel = iroha_config::parameters::actual::Acceleration {
             enable_simd: true,
@@ -6165,6 +7280,7 @@ mod accel_tests {
 
     #[test]
     fn accel_config_disables_simd_parity_holds() {
+        let _guard = AccelTestGuard::new();
         let original = ivm::acceleration_config();
         let accel = iroha_config::parameters::actual::Acceleration {
             enable_simd: false,
@@ -6210,6 +7326,7 @@ mod accel_tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn accel_config_disables_metal_parity_holds() {
+        let _guard = AccelTestGuard::new();
         ivm::reset_metal_backend_for_tests();
         if !ivm::metal_available() {
             return;
@@ -6265,7 +7382,28 @@ fn log_config_warning(message: &str) {
     iroha_logger::warn!(target: "config", "{message}");
 }
 
+#[cfg(test)]
+static INSTRUCTION_REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+fn instruction_registry_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    // `iroha_data_model` is linked into this unit-test binary as a normal
+    // dependency, so its instruction registry is process-global. Serialize the
+    // tests that intentionally clear the registry with the helpers that decode
+    // genesis, otherwise parallel test threads can observe an empty registry.
+    INSTRUCTION_REGISTRY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn read_genesis(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
+    #[cfg(test)]
+    let _registry_guard = instruction_registry_test_guard();
+
+    read_genesis_unlocked(path)
+}
+
+fn read_genesis_unlocked(path: &Path) -> ReportResult<GenesisBlock, ConfigError> {
     const PANIC_HELP: &str = concat!(
         "Genesis decode panicked. A common cause is an invalid `Name` (identifiers ",
         "must not contain whitespace or the characters `@`, `#`, `$`). ",
@@ -6960,12 +8098,17 @@ fn build_consensus_config_caps(
             "sumeragi.advanced.rbc.session_ttl exceeds handshake limits (must fit into u64 milliseconds)",
         )
     })?;
+    let rbc_data_shards = sumeragi.rbc.effective_data_shards();
+    let rbc_parity_shards = sumeragi.rbc.effective_parity_shards();
 
     Ok(iroha_p2p::ConsensusConfigCaps {
         collectors_k,
         redundant_send_r: sumeragi.collectors.redundant_send_r,
         da_enabled: sumeragi.da.enabled,
         rbc_chunk_max_bytes,
+        rbc_encoding: sumeragi.rbc.encoding,
+        rbc_rs16_data_shards: rbc_data_shards,
+        rbc_rs16_parity_shards: rbc_parity_shards,
         rbc_session_ttl_ms,
         rbc_store_max_sessions,
         rbc_store_soft_sessions,
@@ -7224,6 +8367,29 @@ fn npos_validator_status_counts<'a>(
     (active_bls, active_total, pending, total)
 }
 
+fn effective_npos_validator_status_counts(state: &State) -> (usize, usize, usize, usize) {
+    let raw_counts = {
+        let world = state.world_view();
+        npos_validator_status_counts(
+            world
+                .public_lane_validators()
+                .iter()
+                .map(|(_, record)| record),
+        )
+    };
+    let Some(roster) = state.epoch_validator_peer_ids_fast(0) else {
+        return raw_counts;
+    };
+    let active_total = roster.len();
+    let active_bls = roster
+        .iter()
+        .filter(|peer| peer.public_key().algorithm() == Algorithm::BlsNormal)
+        .count();
+    let pending = raw_counts.2;
+    let total = raw_counts.3.max(active_total.saturating_add(pending));
+    (active_bls, active_total, pending, total)
+}
+
 #[allow(clippy::too_many_lines)]
 fn verify_genesis_metadata(
     genesis: &GenesisBlock,
@@ -7238,6 +8404,11 @@ fn verify_genesis_metadata(
         match tx.instructions() {
             Executable::Instructions(batch) => {
                 instructions.extend(batch.iter().cloned());
+            }
+            Executable::ContractCall(_) => {
+                return Err(Report::new(MainError::Config).attach(
+                    "genesis transaction payload contains contract calls; expected instruction batches",
+                ));
             }
             Executable::Ivm(_) => {
                 return Err(Report::new(MainError::Config).attach(
@@ -7574,14 +8745,15 @@ fn verify_genesis_metadata(
             return Err(Report::new(MainError::Config)
                 .attach(format!("trusted peer {peer_id} must use a BLS-normal key")));
         }
-        let expected_pop = trusted.pops.get(bls_pk).ok_or_else(|| {
-            Report::new(MainError::Config).attach(format!(
-                "trusted peer {peer_id} missing PoP in configuration"
-            ))
-        })?;
-        if &entry.pop != expected_pop {
+        if let Some(expected_pop) = trusted.pops.get(bls_pk) {
+            if &entry.pop != expected_pop {
+                return Err(Report::new(MainError::Config).attach(format!(
+                    "genesis PoP for peer {peer_id} does not match configuration"
+                )));
+            }
+        } else if !trusted.pops.is_empty() {
             return Err(Report::new(MainError::Config).attach(format!(
-                "genesis PoP for peer {peer_id} does not match configuration"
+                "trusted peer {peer_id} missing PoP in configuration"
             )));
         }
         if let Err(err) = iroha_crypto::bls_normal_pop_verify(bls_pk, &entry.pop) {
@@ -7748,6 +8920,77 @@ mod tests {
         }
     }
 
+    mod torii_receipt_signer_selection {
+        use super::*;
+
+        #[test]
+        fn defaults_to_ephemeral_secp256k1() {
+            let signer = torii_receipt_signer_or_ephemeral(None);
+            assert_eq!(signer.algorithm(), Algorithm::Secp256k1);
+        }
+
+        #[test]
+        fn preserves_configured_receipt_signer() {
+            let configured = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let signer = torii_receipt_signer_or_ephemeral(Some(configured.clone()));
+            assert_eq!(signer.public_key(), configured.public_key());
+            assert_eq!(signer.algorithm(), Algorithm::Ed25519);
+        }
+    }
+
+    mod relay_ingress {
+        use super::*;
+        use iroha_core::torii_proxy::{
+            TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV2,
+            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
+            ToriiReadProxyRequestV1, ToriiRouteHintV1,
+        };
+        use iroha_crypto::Hash;
+        use iroha_data_model::nexus::{DataSpaceId, LaneId};
+
+        #[test]
+        fn torii_proxy_frames_are_not_low_priority() {
+            let route = ToriiRouteHintV1 {
+                lane_id: LaneId::new(0),
+                dataspace_id: DataSpaceId::new(0),
+            };
+            let request =
+                iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV2 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+                    request_id: Hash::new(b"torii-proxy-request"),
+                    hop_count: 1,
+                    max_hops: 3,
+                    visited_peer_ids: Vec::new(),
+                    request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
+                        endpoint: ToriiReadEndpointV1::AccountsList,
+                        expected_route: route,
+                        path_args: Vec::new(),
+                        query_string: None,
+                        body: Vec::new(),
+                        response_format: ToriiProxyResponseFormatV1::Json,
+                    }),
+                }));
+            let response =
+                iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
+                    schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+                    request_id: Hash::new(b"torii-proxy-response"),
+                    response: ToriiProxyHttpResponseV1 {
+                        status_code: 200,
+                        headers: Vec::new(),
+                        body: Vec::new(),
+                    },
+                }));
+
+            assert!(!NetworkRelayShared::should_apply_low_priority_ingress(
+                &request
+            ));
+            assert!(!NetworkRelayShared::should_apply_low_priority_ingress(
+                &response
+            ));
+        }
+    }
+
     mod norito_archive_len {
         use super::*;
 
@@ -7881,6 +9124,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: account_id.clone(),
+                peer_id: PeerId::from(keypair.public_key().clone()),
                 stake_account: account_id,
                 total_stake: stake.clone(),
                 self_stake: stake,
@@ -7926,7 +9170,7 @@ mod tests {
 
             let msg = try_recv_after_burst(&mut rx, &mut budget, 4);
 
-            assert!(msg.is_none());
+            assert_eq!(msg, RelayBurstRecv::Skip);
             assert_eq!(budget, 1);
             assert!(matches!(rx.try_recv(), Ok(7)));
         }
@@ -7939,7 +9183,7 @@ mod tests {
 
             let msg = try_recv_after_burst(&mut rx, &mut budget, 4);
 
-            assert!(matches!(msg, Some(9)));
+            assert!(matches!(msg, RelayBurstRecv::Message(9)));
             assert_eq!(budget, 4);
             assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
         }
@@ -7951,8 +9195,106 @@ mod tests {
 
             let msg = try_recv_after_burst(&mut rx, &mut budget, 4);
 
-            assert!(msg.is_none());
+            assert_eq!(msg, RelayBurstRecv::Skip);
             assert_eq!(budget, 4);
+        }
+
+        #[test]
+        fn try_recv_after_burst_reports_disconnected_receiver() {
+            let (tx, mut rx) = mpsc::channel::<u8>(1);
+            drop(tx);
+            let mut budget = 0;
+
+            let msg = try_recv_after_burst(&mut rx, &mut budget, 4);
+
+            assert_eq!(msg, RelayBurstRecv::Disconnected);
+            assert_eq!(budget, 4);
+        }
+
+        #[tokio::test]
+        async fn relay_ingress_requests_restart_when_receiver_closes() {
+            let (_high_tx, high_rx) = mpsc::channel(1);
+            let (payload_tx, payload_rx) = mpsc::channel(1);
+            let (chunk_tx, chunk_rx) = mpsc::channel(1);
+            let (low_tx, low_rx) = mpsc::channel(1);
+            let (work_high_tx, _work_high_rx) = mpsc::channel(1);
+            let (work_payload_tx, _work_payload_rx) = mpsc::channel(1);
+            let (work_chunk_tx, _work_chunk_rx) = mpsc::channel(1);
+            let (work_low_tx, _work_low_rx) = mpsc::channel(1);
+
+            drop(payload_tx);
+            let exit = tokio::time::timeout(
+                Duration::from_millis(100),
+                drive_network_relay_ingress(
+                    high_rx,
+                    payload_rx,
+                    chunk_rx,
+                    low_rx,
+                    &work_high_tx,
+                    &work_payload_tx,
+                    &work_chunk_tx,
+                    &work_low_tx,
+                ),
+            )
+            .await
+            .expect("relay ingress should notice closed receiver");
+
+            assert_eq!(
+                exit,
+                RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Payload)
+            );
+
+            drop(chunk_tx);
+            drop(low_tx);
+        }
+
+        #[tokio::test]
+        async fn relay_ingress_requests_restart_when_worker_queue_closes() {
+            let (_high_tx, high_rx) = mpsc::channel(1);
+            let (payload_tx, payload_rx) = mpsc::channel(1);
+            let (chunk_tx, chunk_rx) = mpsc::channel(1);
+            let (low_tx, low_rx) = mpsc::channel(1);
+            let (work_high_tx, _work_high_rx) = mpsc::channel(1);
+            let (work_payload_tx, work_payload_rx) = mpsc::channel(1);
+            let (work_chunk_tx, _work_chunk_rx) = mpsc::channel(1);
+            let (work_low_tx, _work_low_rx) = mpsc::channel(1);
+
+            drop(work_payload_rx);
+            let keypair = KeyPair::random();
+            payload_tx
+                .try_send(RelayWorkItem {
+                    peer: Peer::new(
+                        "127.0.0.1:0".parse().expect("socket address"),
+                        keypair.public_key().clone(),
+                    ),
+                    payload: iroha_core::NetworkMessage::Health,
+                    payload_bytes: 0,
+                })
+                .expect("enqueue payload message");
+
+            let exit = tokio::time::timeout(
+                Duration::from_millis(100),
+                drive_network_relay_ingress(
+                    high_rx,
+                    payload_rx,
+                    chunk_rx,
+                    low_rx,
+                    &work_high_tx,
+                    &work_payload_tx,
+                    &work_chunk_tx,
+                    &work_low_tx,
+                ),
+            )
+            .await
+            .expect("relay ingress should notice closed worker queue");
+
+            assert_eq!(
+                exit,
+                RelayIngressLoopExit::WorkerClosed(RelayReceiverKind::Payload)
+            );
+
+            drop(chunk_tx);
+            drop(low_tx);
         }
     }
 
@@ -8117,6 +9459,7 @@ mod tests {
 
         #[test]
         fn verify_genesis_metadata_rejects_crypto_mismatch_in_block() -> eyre::Result<()> {
+            let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let mut config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
@@ -8204,19 +9547,19 @@ mod tests {
             use iroha_data_model::{account::curve::CurveId, prelude::*};
             use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 
+            let _registry_guard = instruction_registry_test_guard();
+            iroha_genesis::init_instruction_registry();
+
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-            let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("valid domain id");
             let bls_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-            let bls_account_id =
-                AccountId::new(bls_keypair.public_key().clone());
+            let bls_account_id = AccountId::new(bls_keypair.public_key().clone());
 
             let tx = TransactionBuilder::new(chain_id.clone(), genesis_account_id.clone())
                 .with_instructions([
                     InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
-                    InstructionBox::from(Register::account(Account::new(
-                        bls_account_id.to_account_id(domain_id),
-                    ))),
+                    InstructionBox::from(Register::account(Account::new(bls_account_id.clone()))),
                 ])
                 .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
             let block = SignedBlock::genesis(
@@ -8335,10 +9678,28 @@ mod tests {
         }
 
         #[test]
+        fn build_consensus_config_caps_zero_plain_rbc_erasure_profile() {
+            let mut config = sample_config();
+            config.sumeragi.rbc.encoding = iroha_data_model::block::consensus::RbcEncoding::Plain;
+            config.sumeragi.rbc.data_shards = 4;
+            config.sumeragi.rbc.parity_shards = 2;
+
+            let caps =
+                build_consensus_config_caps(&config.sumeragi).expect("config caps should build");
+            assert_eq!(
+                caps.rbc_encoding,
+                iroha_data_model::block::consensus::RbcEncoding::Plain
+            );
+            assert_eq!(caps.rbc_rs16_data_shards, 0);
+            assert_eq!(caps.rbc_rs16_parity_shards, 0);
+        }
+
+        #[test]
         fn verify_genesis_metadata_rejects_consensus_mode_mismatch() -> eyre::Result<()> {
             use iroha_core::{kura::Kura, query::store::LiveQueryStore};
             use iroha_data_model::parameter::system::SumeragiConsensusMode;
 
+            let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let mut config = sample_config();
             config.sumeragi.consensus_mode =
@@ -8383,6 +9744,7 @@ mod tests {
         fn verify_genesis_metadata_rejects_fingerprint_mismatch() -> eyre::Result<()> {
             use iroha_core::{kura::Kura, query::store::LiveQueryStore};
 
+            let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
             let mut config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
@@ -8557,13 +9919,18 @@ mod tests {
             table
         }
 
-        fn load_config_with_overrides<F>(mut adjust: F) -> eyre::Result<(Config, tempfile::TempDir)>
+        fn load_config_with_overrides<F>(
+            mut adjust: F,
+        ) -> eyre::Result<(Config, tempfile::TempDir, PathBuf)>
         where
             F: FnMut(&mut toml::Table, &KeyPair),
         {
             let genesis_key_pair = KeyPair::random();
+            let chain_discriminant = iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT;
             let manifest_json = norito::json!({
                 "chain": "chain",
+                "chain_discriminant": chain_discriminant,
+                "executor": null,
                 "ivm_dir": ".",
                 "consensus_mode": "Permissioned",
                 "transactions": [
@@ -8610,7 +9977,7 @@ mod tests {
             std::fs::write(&executor_path, "")?;
 
             let (config, _genesis) = read_config_and_genesis(&Args {
-                config: Some(config_path),
+                config: Some(config_path.clone()),
                 genesis_manifest_json: None,
                 terminal_colors: false,
                 trace_config: false,
@@ -8624,7 +9991,42 @@ mod tests {
             })
             .map_err(|report| eyre::eyre!("{report:?}"))?;
 
-            Ok((config, dir))
+            Ok((config, dir, config_path))
+        }
+
+        fn parse_config_with_overrides<F>(
+            mut adjust: F,
+        ) -> eyre::Result<(Config, tempfile::TempDir, PathBuf)>
+        where
+            F: FnMut(&mut toml::Table, &KeyPair),
+        {
+            let genesis_key_pair = KeyPair::random();
+            let mut config = config_factory(genesis_key_pair.public_key());
+            iroha_config::base::toml::Writer::new(&mut config)
+                .write(["kura", "store_dir"], "../storage")
+                .write(["snapshot", "store_dir"], "../snapshots")
+                .write(["dev_telemetry", "out_file"], "../logs/telemetry");
+
+            adjust(&mut config, &genesis_key_pair);
+
+            let dir = tempfile::tempdir()?;
+            let config_dir = dir.path().join("config");
+            std::fs::create_dir_all(&config_dir)?;
+
+            let config_path = config_dir.join("config.toml");
+            std::fs::write(&config_path, toml::to_string(&config)?)?;
+
+            let mut reader = ConfigReader::new();
+            reader = reader
+                .read_toml_with_extends(&config_path)
+                .map_err(|report| eyre::eyre!("{report:?}"))?;
+            let config = reader
+                .read_and_complete::<UserConfig>()
+                .map_err(|report| eyre::eyre!("{report:?}"))?
+                .parse()
+                .map_err(|report| eyre::eyre!("{report:?}"))?;
+
+            Ok((config, dir, config_path))
         }
 
         #[test]
@@ -8632,8 +10034,11 @@ mod tests {
             // Given
 
             let genesis_key_pair = KeyPair::random();
+            let chain_discriminant = iroha_config::parameters::defaults::common::CHAIN_DISCRIMINANT;
             let manifest_json = norito::json!({
                 "chain": "chain",
+                "chain_discriminant": chain_discriminant,
+                "executor": null,
                 "ivm_dir": ".",
                 "consensus_mode": "Permissioned",
                 "transactions": [
@@ -8725,6 +10130,320 @@ mod tests {
         }
 
         #[test]
+        fn read_config_persists_first_run_nexus_storage_budget() -> eyre::Result<()> {
+            let (config, _dir, config_path) = load_config_with_overrides(|table, _genesis_key| {
+                iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
+            })?;
+
+            assert_eq!(
+                config.nexus.storage.budget_source,
+                NexusStorageBudgetSource::AutoDerived
+            );
+
+            let effective_budget = config.nexus.storage.max_disk_usage_bytes.get();
+            let auto_default = config
+                .nexus
+                .storage
+                .auto_default
+                .as_ref()
+                .expect("config auto_default");
+            assert_eq!(auto_default.aggregate_budget_bytes, effective_budget);
+            assert_eq!(auto_default.sum_budget_bytes(), effective_budget);
+
+            let persisted: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&config_path)?).expect("persisted config");
+            let persisted_budget = persisted
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .and_then(|nexus| nexus.get("storage"))
+                .and_then(toml::Value::as_table)
+                .and_then(|storage| storage.get("local_budget_bytes"))
+                .and_then(toml::Value::as_integer)
+                .expect("persisted local budget");
+            assert_eq!(persisted_budget, i64::try_from(effective_budget)?);
+            let persisted_auto_default = persisted
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .and_then(|nexus| nexus.get("storage"))
+                .and_then(toml::Value::as_table)
+                .and_then(|storage| storage.get("auto_default"))
+                .and_then(toml::Value::as_table)
+                .expect("persisted auto_default");
+            let persisted_auto_aggregate = persisted_auto_default
+                .get("aggregate_budget_bytes")
+                .and_then(toml::Value::as_integer)
+                .expect("persisted auto aggregate");
+            assert_eq!(persisted_auto_aggregate, persisted_budget);
+            let filesystem_groups = persisted_auto_default
+                .get("filesystem_groups")
+                .and_then(toml::Value::as_array)
+                .expect("persisted filesystem groups");
+            assert!(
+                !filesystem_groups.is_empty(),
+                "auto-derived metadata must persist at least one filesystem group"
+            );
+
+            let persisted_once = std::fs::read_to_string(&config_path)?;
+            let (_config_again, _genesis_again) = read_config_and_genesis(&Args {
+                config: Some(config_path.clone()),
+                genesis_manifest_json: None,
+                terminal_colors: false,
+                trace_config: false,
+                language: None,
+                sora: false,
+                fastpq_execution_mode: None,
+                fastpq_poseidon_mode: None,
+                fastpq_device_class: None,
+                fastpq_chip_family: None,
+                fastpq_gpu_kind: None,
+            })
+            .map_err(|report| eyre::eyre!("{report:?}"))?;
+            assert_eq!(std::fs::read_to_string(&config_path)?, persisted_once);
+
+            Ok(())
+        }
+
+        #[test]
+        fn read_config_does_not_persist_local_budget_when_legacy_alias_is_present()
+        -> eyre::Result<()> {
+            let (config, _dir, config_path) = load_config_with_overrides(|table, _genesis_key| {
+                iroha_config::base::toml::Writer::new(table)
+                    .write(["nexus", "enabled"], true)
+                    .write(["nexus", "storage", "max_disk_usage_bytes"], 4_096_i64);
+            })?;
+
+            assert_eq!(
+                config.nexus.storage.budget_source,
+                NexusStorageBudgetSource::OperatorExplicit
+            );
+            assert_eq!(config.nexus.storage.max_disk_usage_bytes.get(), 4_096);
+
+            let persisted: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&config_path)?).expect("persisted config");
+            let storage = persisted
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .and_then(|nexus| nexus.get("storage"))
+                .and_then(toml::Value::as_table)
+                .expect("storage table");
+            assert!(storage.get("local_budget_bytes").is_none());
+            assert!(storage.get("auto_default").is_none());
+            assert_eq!(
+                storage
+                    .get("max_disk_usage_bytes")
+                    .and_then(toml::Value::as_integer),
+                Some(4_096)
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn reconcile_nexus_storage_budget_requires_config_path_for_first_run_auto_default()
+        -> eyre::Result<()> {
+            let (mut config, _dir, _config_path) =
+                parse_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table).write(["nexus", "enabled"], true);
+                })?;
+
+            let err = reconcile_nexus_storage_budget(&mut config, None)
+                .expect_err("auto-derived first-run budget should require a writable config path");
+            assert!(matches!(
+                err.current_context(),
+                ConfigError::NexusStorageBudgetPersistenceRequired
+            ));
+
+            Ok(())
+        }
+
+        #[test]
+        fn read_config_regenerates_auto_default_when_storage_layout_changes() -> eyre::Result<()> {
+            let (config, _dir, config_path) = load_config_with_overrides(|table, _genesis_key| {
+                let mut filesystem_group = toml::Table::new();
+                filesystem_group.insert(
+                    "filesystem_id".to_string(),
+                    toml::Value::String("dev:fake".to_string()),
+                );
+                filesystem_group.insert("budget_bytes".to_string(), toml::Value::Integer(1_024));
+                filesystem_group.insert(
+                    "components".to_string(),
+                    toml::Value::Array(vec![
+                        toml::Value::String("kura".to_string()),
+                        toml::Value::String("wsv_cold".to_string()),
+                        toml::Value::String("sorafs".to_string()),
+                        toml::Value::String("soranet_spool".to_string()),
+                        toml::Value::String("soravpn_spool".to_string()),
+                    ]),
+                );
+                let mut auto_default = toml::Table::new();
+                auto_default.insert("version".to_string(), toml::Value::Integer(1));
+                auto_default.insert(
+                    "aggregate_budget_bytes".to_string(),
+                    toml::Value::Integer(1_024),
+                );
+                auto_default.insert(
+                    "filesystem_groups".to_string(),
+                    toml::Value::Array(vec![toml::Value::Table(filesystem_group)]),
+                );
+
+                let mut storage = toml::Table::new();
+                storage.insert(
+                    "local_budget_bytes".to_string(),
+                    toml::Value::Integer(1_024),
+                );
+                storage.insert("auto_default".to_string(), toml::Value::Table(auto_default));
+                let nexus = table
+                    .entry("nexus")
+                    .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+                    .as_table_mut()
+                    .expect("nexus table");
+                nexus.insert("enabled".to_string(), toml::Value::Boolean(true));
+                nexus.insert("storage".to_string(), toml::Value::Table(storage));
+            })?;
+
+            assert_eq!(
+                config.nexus.storage.budget_source,
+                NexusStorageBudgetSource::AutoDerived
+            );
+            assert_ne!(
+                config
+                    .nexus
+                    .storage
+                    .auto_default
+                    .as_ref()
+                    .and_then(|auto_default| auto_default.filesystem_groups.first())
+                    .map(|filesystem| filesystem.filesystem_id.as_str()),
+                Some("dev:fake")
+            );
+
+            let persisted: toml::Value =
+                toml::from_str(&std::fs::read_to_string(&config_path)?).expect("persisted config");
+            let persisted_auto_default = persisted
+                .get("nexus")
+                .and_then(toml::Value::as_table)
+                .and_then(|nexus| nexus.get("storage"))
+                .and_then(toml::Value::as_table)
+                .and_then(|storage| storage.get("auto_default"))
+                .and_then(toml::Value::as_table)
+                .expect("persisted auto_default");
+            let persisted_first_filesystem_id = persisted_auto_default
+                .get("filesystem_groups")
+                .and_then(toml::Value::as_array)
+                .and_then(|groups| groups.first())
+                .and_then(toml::Value::as_table)
+                .and_then(|group| group.get("filesystem_id"))
+                .and_then(toml::Value::as_str)
+                .expect("persisted filesystem id");
+            assert_ne!(persisted_first_filesystem_id, "dev:fake");
+
+            Ok(())
+        }
+
+        #[test]
+        fn auto_default_budget_shortfall_warns_only_when_budget_exceeds_available() {
+            let filesystem = StorageBudgetFilesystemProbe {
+                filesystem_id: "dev:1".to_string(),
+                path: PathBuf::from("/tmp/storage"),
+                available_bytes: 1_000,
+                components: vec![NexusStorageBudgetComponent::Kura],
+            };
+            let auto_default = NexusStorageAutoDefault {
+                version: NexusStorageAutoDefault::VERSION,
+                aggregate_budget_bytes: 2_000,
+                filesystem_groups: vec![NexusStorageAutoDefaultFilesystemGroup {
+                    filesystem_id: "dev:1".to_string(),
+                    budget_bytes: 2_000,
+                    components: vec![NexusStorageBudgetComponent::Kura],
+                }],
+            };
+
+            assert_eq!(
+                auto_default_budget_shortfall(&auto_default, &filesystem),
+                Some(2_000)
+            );
+
+            let mut no_shortfall = filesystem.clone();
+            no_shortfall.available_bytes = 2_000;
+            assert_eq!(
+                auto_default_budget_shortfall(&auto_default, &no_shortfall),
+                None
+            );
+        }
+
+        #[test]
+        fn operator_explicit_budget_shortfall_warns_only_when_assigned_caps_exceed_available()
+        -> eyre::Result<()> {
+            let (mut config, _dir, _config_path) =
+                parse_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table)
+                        .write(["nexus", "enabled"], true)
+                        .write(["nexus", "storage", "local_budget_bytes"], 2_000_i64);
+                })?;
+            config.apply_storage_budget();
+
+            let filesystem = StorageBudgetFilesystemProbe {
+                filesystem_id: "dev:1".to_string(),
+                path: PathBuf::from("/tmp/storage"),
+                available_bytes: 1_000,
+                components: vec![
+                    NexusStorageBudgetComponent::Kura,
+                    NexusStorageBudgetComponent::WsvCold,
+                    NexusStorageBudgetComponent::Sorafs,
+                    NexusStorageBudgetComponent::SoranetSpool,
+                    NexusStorageBudgetComponent::SoravpnSpool,
+                ],
+            };
+
+            assert_eq!(
+                operator_explicit_budget_shortfall(&config, &filesystem),
+                Some(2_000)
+            );
+
+            let mut no_shortfall = filesystem.clone();
+            no_shortfall.available_bytes = 2_000;
+            assert_eq!(
+                operator_explicit_budget_shortfall(&config, &no_shortfall),
+                None
+            );
+
+            Ok(())
+        }
+
+        #[test]
+        fn normalize_windows_volume_mount_point_adds_trailing_separator() {
+            assert_eq!(
+                normalize_windows_volume_mount_point(r"C:\nexus\storage"),
+                r"C:\nexus\storage\"
+            );
+            assert_eq!(
+                normalize_windows_volume_mount_point(
+                    r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
+                ),
+                r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
+            );
+        }
+
+        #[test]
+        fn normalize_windows_volume_identity_uses_lowercased_guid_path() {
+            assert_eq!(
+                normalize_windows_volume_identity(
+                    r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
+                ),
+                r"volume:\\?\volume{abcdef12-3456-7890-abcd-ef1234567890}\"
+            );
+        }
+
+        #[test]
+        fn windows_string_from_wide_buffer_stops_at_first_nul() {
+            let buffer: Vec<u16> = "Volume\0ignored".encode_utf16().collect();
+            assert_eq!(
+                windows_string_from_wide_buffer(&buffer).as_deref(),
+                Some("Volume")
+            );
+            assert_eq!(windows_string_from_wide_buffer(&[]), None);
+        }
+
+        #[test]
         fn fails_with_no_trusted_peers_and_submit_role() -> eyre::Result<()> {
             // Given
 
@@ -8768,17 +10487,18 @@ mod tests {
 
         #[test]
         fn validate_config_io_flags_lone_peer_and_address_conflict() -> eyre::Result<()> {
-            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
-                if let Some(genesis_table) =
-                    table.get_mut("genesis").and_then(toml::Value::as_table_mut)
-                {
-                    genesis_table.remove("file");
-                }
-                iroha_config::base::toml::Writer::new(table).write(
-                    ["torii", "address"],
-                    socket_addr!(127.0.0.1:1337).to_literal(),
-                );
-            })?;
+            let (config, _dir, _config_path) =
+                load_config_with_overrides(|table, _genesis_key| {
+                    if let Some(genesis_table) =
+                        table.get_mut("genesis").and_then(toml::Value::as_table_mut)
+                    {
+                        genesis_table.remove("file");
+                    }
+                    iroha_config::base::toml::Writer::new(table).write(
+                        ["torii", "address"],
+                        socket_addr!(127.0.0.1:1337).to_literal(),
+                    );
+                })?;
 
             let mut emitter = Emitter::new();
             validate_config_io(&mut emitter, &config);
@@ -8797,41 +10517,42 @@ mod tests {
 
         #[test]
         fn stack_budget_mismatch_warns_but_allows_config() -> eyre::Result<()> {
-            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
-                let mut cpu_balanced = toml::Table::new();
-                cpu_balanced.insert("max_cycles".to_owned(), toml::Value::Integer(10_000_000));
-                cpu_balanced.insert(
-                    "max_memory_bytes".to_owned(),
-                    toml::Value::Integer(256 * 1024 * 1024),
-                );
-                cpu_balanced.insert(
-                    "max_stack_bytes".to_owned(),
-                    toml::Value::Integer(8 * 1024 * 1024),
-                );
-                cpu_balanced.insert(
-                    "max_io_bytes".to_owned(),
-                    toml::Value::Integer(24 * 1024 * 1024),
-                );
-                cpu_balanced.insert(
-                    "max_egress_bytes".to_owned(),
-                    toml::Value::Integer(12 * 1024 * 1024),
-                );
-                cpu_balanced.insert("allow_gpu_hints".to_owned(), toml::Value::Boolean(true));
-                cpu_balanced.insert("allow_wasi".to_owned(), toml::Value::Boolean(true));
+            let (config, _dir, _config_path) =
+                load_config_with_overrides(|table, _genesis_key| {
+                    let mut cpu_balanced = toml::Table::new();
+                    cpu_balanced.insert("max_cycles".to_owned(), toml::Value::Integer(10_000_000));
+                    cpu_balanced.insert(
+                        "max_memory_bytes".to_owned(),
+                        toml::Value::Integer(256 * 1024 * 1024),
+                    );
+                    cpu_balanced.insert(
+                        "max_stack_bytes".to_owned(),
+                        toml::Value::Integer(8 * 1024 * 1024),
+                    );
+                    cpu_balanced.insert(
+                        "max_io_bytes".to_owned(),
+                        toml::Value::Integer(24 * 1024 * 1024),
+                    );
+                    cpu_balanced.insert(
+                        "max_egress_bytes".to_owned(),
+                        toml::Value::Integer(12 * 1024 * 1024),
+                    );
+                    cpu_balanced.insert("allow_gpu_hints".to_owned(), toml::Value::Boolean(true));
+                    cpu_balanced.insert("allow_wasi".to_owned(), toml::Value::Boolean(true));
 
-                let mut profiles = toml::Table::new();
-                profiles.insert("cpu-balanced".to_owned(), toml::Value::Table(cpu_balanced));
+                    let mut profiles = toml::Table::new();
+                    profiles.insert("cpu-balanced".to_owned(), toml::Value::Table(cpu_balanced));
 
-                iroha_config::base::toml::Writer::new(table)
-                    .write(["compute", "enabled"], true)
-                    .write(
-                        ["compute", "resource_profiles"],
-                        toml::Value::Table(profiles),
-                    )
-                    .write(["compute", "default_resource_profile"], "cpu-balanced")
-                    .write(["ivm", "memory_budget_profile"], "cpu-balanced")
-                    .write(["concurrency", "guest_stack_bytes"], 4_i64 * 1024 * 1024);
-            })?;
+                    iroha_config::base::toml::Writer::new(table)
+                        .write(["compute", "enabled"], true)
+                        .write(
+                            ["compute", "resource_profiles"],
+                            toml::Value::Table(profiles),
+                        )
+                        .write(["compute", "default_resource_profile"], "cpu-balanced")
+                        .write(["ivm", "memory_budget_profile"], "cpu-balanced")
+                        .write(["concurrency", "guest_stack_bytes"], 4_i64 * 1024 * 1024);
+                })?;
 
             validate_config(&config).map_err(|report| eyre::eyre!("{report:?}"))?;
 
@@ -8840,12 +10561,13 @@ mod tests {
 
         #[test]
         fn validator_requires_confidential_enabled() -> eyre::Result<()> {
-            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
-                iroha_config::base::toml::Writer::new(table)
-                    .write(["sumeragi", "role"], "validator")
-                    .write(["confidential", "enabled"], false)
-                    .write(["confidential", "assume_valid"], false);
-            })?;
+            let (config, _dir, _config_path) =
+                load_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table)
+                        .write(["sumeragi", "role"], "validator")
+                        .write(["confidential", "enabled"], false)
+                        .write(["confidential", "assume_valid"], false);
+                })?;
 
             let report = validate_config(&config).unwrap_err();
             assert_contains!(
@@ -8858,12 +10580,13 @@ mod tests {
 
         #[test]
         fn validate_config_runtime_rejects_validator_confidential_disabled() -> eyre::Result<()> {
-            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
-                iroha_config::base::toml::Writer::new(table)
-                    .write(["sumeragi", "role"], "validator")
-                    .write(["confidential", "enabled"], false)
-                    .write(["confidential", "assume_valid"], false);
-            })?;
+            let (config, _dir, _config_path) =
+                load_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table)
+                        .write(["sumeragi", "role"], "validator")
+                        .write(["confidential", "enabled"], false)
+                        .write(["confidential", "assume_valid"], false);
+                })?;
 
             let mut emitter = Emitter::new();
             validate_config_runtime(&mut emitter, &config);
@@ -8880,12 +10603,13 @@ mod tests {
 
         #[test]
         fn validator_cannot_assume_valid_confidential() -> eyre::Result<()> {
-            let (config, _dir) = load_config_with_overrides(|table, _genesis_key| {
-                iroha_config::base::toml::Writer::new(table)
-                    .write(["sumeragi", "role"], "validator")
-                    .write(["confidential", "enabled"], true)
-                    .write(["confidential", "assume_valid"], true);
-            })?;
+            let (config, _dir, _config_path) =
+                load_config_with_overrides(|table, _genesis_key| {
+                    iroha_config::base::toml::Writer::new(table)
+                        .write(["sumeragi", "role"], "validator")
+                        .write(["confidential", "enabled"], true)
+                        .write(["confidential", "assume_valid"], true);
+                })?;
 
             let report = validate_config(&config).unwrap_err();
             assert_contains!(
@@ -9006,6 +10730,8 @@ mod tests {
     fn read_genesis_initializes_instruction_registry() {
         use iroha_data_model::isi::{InstructionRegistry, set_instruction_registry};
 
+        let _registry_guard = instruction_registry_test_guard();
+
         // Start with an empty registry to simulate uninitialized state.
         set_instruction_registry(InstructionRegistry::new());
 
@@ -9015,7 +10741,7 @@ mod tests {
 
         // `read_genesis` should initialize the registry internally and simply
         // return a decode error for the bogus file instead of panicking.
-        let res = read_genesis(&path);
+        let res = read_genesis_unlocked(&path);
         assert!(res.is_err());
     }
 

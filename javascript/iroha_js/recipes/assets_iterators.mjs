@@ -10,7 +10,7 @@ function parsePositiveInt(value, fallback) {
 const toriiUrl = process.env.TORII_URL ?? "http://localhost:8080";
 const accountId =
   process.env.ACCOUNT_ID ??
-  "6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT";
+  "sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4";
 const nftId = process.env.NFT_ID ?? null;
 const pageSize = parsePositiveInt(process.env.PAGE_SIZE, 25);
 const maxItemsEnv = parsePositiveInt(process.env.MAX_ITEMS, null);

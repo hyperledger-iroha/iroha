@@ -2,6 +2,9 @@
 
 Iroha Client CLI is a "thin" wrapper around functionality exposed in the `iroha` crate. Specifically, it should be used as a reference for using `iroha`'s features, and not as a production-ready client. As such, the CLI client is not guaranteed to support all features supported by the client library. Check [Iroha 2 documentation](https://docs.iroha.tech/get-started/operate-iroha-2-via-cli.html) for a detailed tutorial on working with Iroha Client CLI.
 
+Within this workspace, `crates/iroha` is the reusable Rust client library and
+`crates/iroha_cli` is the crate that builds the `iroha` command-line binary.
+
 ## Installation
 
 **Requirements:** the stable [Rust toolchain](https://www.rust-lang.org/learn/get-started) (the project pins `stable` via `rust-toolchain.toml`), installed and configured.
@@ -19,6 +22,35 @@ Alternatively, check out the [documentation](https://docs.iroha.tech/get-started
 ## Usage
 The CLI will attempt to detect your system language for messages. Use `--language <CODE>` to override this selection.
 For automation, prefer `--output-format json --machine` to suppress startup chatter and fail fast when `client.toml` is missing.
+
+### Client configuration
+
+`client.toml` now owns canonical I105 parsing/rendering through `[account].chain_discriminant`.
+Known public chains infer their canonical prefix from `chain`, so Taira and Nexus configs do not
+need a second manual knob:
+
+```toml
+chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
+torii_url = "https://taira.sora.org/"
+
+[account]
+public_key = "..."
+private_key = "..."
+```
+
+Set `account.chain_discriminant` or `ACCOUNT_CHAIN_DISCRIMINANT` only for custom/private chains
+that are not in the built-in registry.
+
+### Transaction waits
+
+Use the built-in wait flow instead of shell polling:
+
+```bash
+iroha tx status --hash <SIGNED_TX_HASH> --wait
+iroha app contracts deploy --authority <ACCOUNT_ID> --private-key <HEX> --code-file ./contract.to --wait
+iroha app contracts call --contract-alias router::dex.universal --entrypoint swap --wait
+iroha app contracts call --contract-alias router::dex.universal --entrypoint swap --simulate
+```
 
 See [Command-Line Help](CommandLineHelp.md).
 
@@ -139,7 +171,7 @@ Build governance transaction skeletons and query governance state via Torii app 
 
 ```bash
 iroha app gov deploy propose \
-  --namespace apps --contract-id my.contract.v1 \
+  --contract-address tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7 \
   --code-hash 0123...ABCD --abi-hash 0123...ABCD \
   --abi-version v1 --window-lower 12345 --window-upper 12400 \
   --mode Plain
@@ -175,27 +207,19 @@ curl -sS -X POST -H 'Content-Type: application/json' \
 
   iroha app gov protected apply --namespaces apps,system
 
-- Build an ActivateContractInstance skeleton (pass `--blocking` to submit via CLI context):
+- Build governance metadata for protected-namespace admission:
 
-  iroha app gov instance activate --namespace apps --contract-id calc.v1 --code-hash 0xAA..AA [--blocking]
+  iroha app gov deploy meta --contract-address tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7
 
-- List active instances for a namespace (admin/testing):
+- Audit a governed contract binding by canonical address or alias:
 
-  iroha app gov instance list --namespace apps
+  iroha app gov deploy audit --contract-address tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7
 
 - Combined manifest command (prints or saves when --out is provided):
 
   iroha app contracts manifest get --code-hash 0xAA..AA
   iroha app contracts manifest get --code-hash 0xAA..AA --out manifest.json
 
-- List contract instances in a namespace (filters and pagination):
-
-  iroha app contracts instances --namespace apps \
-    [--contains calc] [--hash-prefix aabb] [--offset 0] [--limit 50] [--order cid_desc]
-
-  Add --table to render a clean table instead of raw JSON (columns: Namespace, Contract ID, Code Hash):
-
-  iroha app contracts instances --namespace apps --table [--short-hash]
 ```
 
 - Read governance state:
@@ -230,7 +254,7 @@ Register a verifying key (provide either `vk_bytes` as base64 or `commitment_hex
 ```bash
 cat >vk_register.json <<'JSON'
 {
-  "authority": "alice@wonderland",
+  "authority": "<authority_account_i105>",
   "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add",
@@ -248,7 +272,7 @@ Update an existing verifying key (version must increase). You may supply only th
 ```bash
 cat >vk_update.json <<'JSON'
 {
-  "authority": "alice@wonderland",
+  "authority": "<authority_account_i105>",
   "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add",
@@ -272,7 +296,7 @@ Deprecate a VK (removes the record in v1):
 ```bash
 cat >vk_deprecate.json <<'JSON'
 {
-  "authority": "alice@wonderland",
+  "authority": "<authority_account_i105>",
   "private_key": {"algorithm":"ed25519","payload":"..."},
   "backend": "halo2/ipa",
   "name": "vk_add"
@@ -316,7 +340,7 @@ iroha app zk attachments cleanup --content-type application/json --before-ms 172
 Shield public funds (append a shielded note commitment):
 
 ```
-iroha app zk shield --asset aid:2f17c72466f84a4bb8a8e24884fdcd2f --from <i105-account-id> \
+iroha app zk shield --asset <base58-asset-definition-id> --from <i105-account-id> \
   --amount 1000 --note-commitment 0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD0123ABCD
 ```
 
@@ -346,13 +370,13 @@ cat > fuzz/attachments/zk/unshield_proof.sample.json <<'JSON'
 }
 JSON
 
-iroha app zk unshield --asset aid:2f17c72466f84a4bb8a8e24884fdcd2f --to <i105-account-id> --amount 1000 \
+iroha app zk unshield --asset <base58-asset-definition-id> --to <i105-account-id> --amount 1000 \
   --inputs DEADBEEF...CAFE,0123ABCD...ABCD --proof-json fuzz/attachments/zk/unshield_proof.sample.json
 
 ### Register a ZK-capable asset (Hybrid)
 
 ```
-iroha app zk register-asset --asset aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+iroha app zk register-asset --asset <base58-asset-definition-id> \
   --allow-shield true --allow-unshield true \
   --vk-transfer halo2/ipa:vk_transfer --vk-unshield halo2/ipa:vk_unshield
 ```
@@ -404,7 +428,7 @@ iroha app zk vk update --json fuzz/attachments/zk/vk_update.json
 5) Bind VKs to an asset policy (Hybrid) using the new helper:
 
 ```
-iroha app zk register-asset --asset aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+iroha app zk register-asset --asset <base58-asset-definition-id> \
   --allow-shield true --allow-unshield true \
   --vk-transfer halo2/ipa:vk_transfer --vk-unshield halo2/ipa:vk_unshield
 ```
@@ -429,7 +453,7 @@ It runs the following:
 Environment variables you can set before running:
 - `CLI_CONFIG`: path to client config TOML
 - `AUTHORITY`, `PRIVATE_KEY`: used for VK ops
-- `BACKEND` (default `halo2/ipa`), `ASSET_ID` (default `aid:2f17c72466f84a4bb8a8e24884fdcd2f`)
+- `BACKEND` (default `halo2/ipa`), `ASSET_ID` (default `<base58-asset-definition-id>`)
 - `FROM`, `TO`, `AMOUNT`, `NOTE_COMMITMENT_HEX`
 - `RUN_UNSHIELD=1`, `PROOF_JSON=/path/to/proof.json` to attempt unshield
 
@@ -506,12 +530,11 @@ iroha ledger domain register --id "Soramitsu"
 
 ### Create new Account
 
-To create an account, specify the entity type (`account`) and the command (`register`). Then pass a canonical I105 `AccountId` via `--id` and the explicit account scope via `--domain`:
+To create an account, specify the entity type (`account`) and the command (`register`). Then pass a canonical I105 `AccountId` via `--id`:
 
 ```bash
 iroha ledger account register \
-  --id "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw" \
-  --domain "Soramitsu"
+  --id "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
 ```
 
 ### Mint Asset to Account
@@ -519,21 +542,21 @@ iroha ledger account register \
 To add assets to the account, you must first register an Asset Definition. Specify the `asset` entity and then use the `register` and `mint` commands respectively. Here is an example of adding Assets of the type `Quantity` to the account:
 
 ```bash
-iroha ledger asset register --id "XOR#Soramitsu" --type Numeric
-iroha ledger asset mint --id "XOR##6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw" --quantity 1010
+iroha ledger asset register --id "6UoZbEC1BVBbDo99CSvY7qud73yh" --type Numeric
+iroha ledger asset mint --id "<ASSET_ID>" --quantity 1010
 ```
 
-With this, you created `XOR#Soramitsu`, an asset of type `Numeric`, and then gave `1010` units of this asset to the account `6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw` within the `Soramitsu` domain scope.
+With this, you created an asset of type `Numeric` under the canonical asset-definition identifier `6UoZbEC1BVBbDo99CSvY7qud73yh`, and then gave `1010` units of that asset to a target account.
 
 ### Query Account Assets Quantity
 
 You can use Query API to check that your instructions were applied and the _world_ is in the desired state. For example, to know how many units of a particular asset an account has, use `asset get` with the specified account and asset:
 
 ```bash
-iroha ledger asset get --id "XOR##ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu"
+iroha ledger asset get --id "<ASSET_ID>"
 ```
 
-This query returns the quantity of `XOR#Soramitsu` asset for the `ed01204A3C5A6B77BBE439969F95F0AA4E01AE31EC45A0D68C131B2C622751FCC5E3B6@Soramitsu` account.
+This query returns the quantity of the selected account-scoped asset.
 
 You can also filter based on either account, asset or domain id by using the filtering API provided by the Iroha client CLI. Generally, filtering follows the `iroha ledger ENTITY list filter PREDICATE` pattern, where ENTITY is asset, account or domain and PREDICATE is condition used for filtering serialized using JSON (check `iroha::data_model::predicate::value::ValuePredicate` type).
 

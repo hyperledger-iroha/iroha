@@ -30,8 +30,8 @@ ID du compte que les avions utilisent. Le bundle par défaut inclut les comptes
 Démo des dérivés des touches :
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Confirmez les valeurs répertoriées dans les premières données :
@@ -48,7 +48,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dentro de wonderland (reemplaza --limit por un numero mayor si hace falta)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions que ya existen
@@ -64,7 +64,7 @@ Créer un nouvel actif infiniment accessible appelé `coffee` à l'intérieur du
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 La CLI imprime le hachage de la transaction envoyée (par exemple, `0x5f...`). Guardalo para consultar el estado mas tarde.
@@ -72,7 +72,7 @@ La CLI imprime le hachage de la transaction envoyée (par exemple, `0x5f...`). G
 ## 3. Acuna unidades en la cuenta del operador
 
 Les nombres d’actifs vivent sous le par `(asset definition, account)`. Acuna
-250 unités de `coffee#wonderland` et `$ADMIN_ACCOUNT` :
+250 unités de `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` et `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \

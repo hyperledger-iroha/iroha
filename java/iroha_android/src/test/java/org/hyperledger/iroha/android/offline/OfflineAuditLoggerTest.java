@@ -21,10 +21,10 @@ public final class OfflineAuditLoggerTest {
     final OfflineAuditLogger logger = new OfflineAuditLogger(logFile, true);
     logger.record(
         new OfflineAuditEntry(
-            "tx1", "alice@wonderland", "bob@wonderland", "usd#wonderland", "10", 1));
+            "tx1", "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "10", 1));
     logger.record(
         new OfflineAuditEntry(
-            "tx2", "carol@wonderland", "dave@wonderland", "usd#wonderland", "20", 2));
+            "tx2", "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB", "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "20", 2));
 
     final List<OfflineAuditEntry> entries = logger.entries();
     assert entries.size() == 2 : "entries size mismatch";
@@ -47,9 +47,9 @@ public final class OfflineAuditLoggerTest {
         [
           {
             "tx_id": "tx1",
-            "sender_id": "alice@wonderland",
-            "receiver_id": "bob@wonderland",
-            "asset_id": "usd#wonderland",
+            "sender_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            "receiver_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+            "asset_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             "amount": "10",
             "timestamp_ms": 1.5
           }

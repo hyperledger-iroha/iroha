@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/try-it-console.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5246118a539e2031dcafb8cf384ac7d20b8abc28b67ee1555e1b1211779fe390
-source_last_modified: "2026-01-22T16:26:46.508367+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 2b1c75d262ff579d7b04df9122c9a9c55cd8d694a04cd326d3138717f396cfe7
+source_last_modified: "2026-03-26T11:40:25.614954+00:00"
+translation_last_reviewed: 2026-04-08
 title: Norito Try-It Console
 description: Use the developer-portal proxy, Swagger, and RapiDoc widgets to send real Torii / Norito-RPC requests directly from the documentation site.
 translator: machine-google-reviewed
@@ -79,7 +79,7 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 4. 在“Try it”抽屉中选择 `application/x-norito` 内容类型，单击 **选择文件**，然后选择您的负载。代理将请求重写为 `/proxy/v1/pipeline/submit` 并用 `X-TryIt-Client=docs-portal-rapidoc` 对其进行标记。
 5. 要下载 Norito 响应，请设置 `Accept: application/x-norito`。 Swagger/RapiDoc 在同一个抽屉中公开标头选择器，并通过代理将二进制文件流回。
 
-对于纯 JSON 路由，嵌入式 Try it 沙箱通常更快：输入路径（例如 `/v1/accounts/i105.../assets`），选择 HTTP 方法，在需要时粘贴 JSON 正文，然后点击 **发送请求** 以内联检查标头、持续时间和有效负载。
+对于纯 JSON 路由，嵌入式 Try it 沙箱通常更快：输入路径（例如 `/v1/accounts/<i105-account-id>/assets`），选择 HTTP 方法，在需要时粘贴 JSON 正文，然后点击 **发送请求** 以内联检查标头、持续时间和有效负载。
 
 ## 故障排除
 

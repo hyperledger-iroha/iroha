@@ -27,18 +27,16 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
 #[test]
 fn register_contract_code_bytes_stores_and_idempotent() {
     use iroha_core::smartcontracts::Execute;
-    use iroha_data_model::{
-        isi::smart_contract_code::RegisterSmartContractBytes, permission, prelude::*,
-    };
+    use iroha_data_model::{isi::smart_contract_code::RegisterSmartContractBytes, prelude::*};
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let kp = iroha_crypto::KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
-    let dom: DomainId = "wonderland".parse().unwrap();
+    let dom: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let auth = AccountId::of(pubkey);
     let domain = Domain::new(dom.clone()).build(&auth);
-    let account = Account::new(auth.clone().to_account_id(dom)).build(&auth);
+    let account = Account::new(auth.clone()).build(&auth);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query);
 
@@ -52,13 +50,6 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
-    // Grant permission
-    let token = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
-    let perm: permission::Permission = token.into();
-    Grant::account_permission(perm, auth.clone())
-        .execute(&auth, &mut stx)
-        .expect("grant");
 
     // Prepare program and code hash
     let prog = minimal_ivm_program(1);
@@ -103,7 +94,6 @@ fn register_contract_code_bytes_respects_size_cap() {
     use iroha_data_model::{
         isi::smart_contract_code::RegisterSmartContractBytes,
         parameter::custom::{CustomParameter, CustomParameterId},
-        permission,
         prelude::*,
     };
 
@@ -111,10 +101,10 @@ fn register_contract_code_bytes_respects_size_cap() {
     let query = LiveQueryStore::start_test();
     let kp = iroha_crypto::KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
-    let dom: DomainId = "wonderland".parse().unwrap();
+    let dom: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let auth = AccountId::of(pubkey);
     let domain = Domain::new(dom.clone()).build(&auth);
-    let account = Account::new(auth.clone().to_account_id(dom)).build(&auth);
+    let account = Account::new(auth.clone()).build(&auth);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query);
 
@@ -128,13 +118,6 @@ fn register_contract_code_bytes_respects_size_cap() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-
-    // Grant permission
-    let token = iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
-    let perm: permission::Permission = token.into();
-    Grant::account_permission(perm, auth.clone())
-        .execute(&auth, &mut stx)
-        .expect("grant");
 
     // Set cap to a tiny value (8 bytes) via custom parameter
     let id = CustomParameterId("max_contract_code_bytes".parse().unwrap());

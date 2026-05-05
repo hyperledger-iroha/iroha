@@ -89,7 +89,7 @@ Swift SDK-ներն այժմ կարող են վահանի հրահանգներ ա
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ Swift SDK-ներն այժմ կարող են վահանի հրահանգներ ա
 - Մեկ հաշվի բանալիների ստացման հիերարխիա.
   - `sk_spend` → `nk` (չեղարկող բանալի), `ivk` (մուտքային դիտման բանալի), `ovk` (ելքային դիտման բանալի), `fvk`:
 - Գաղտնագրված գրառումների բեռները օգտագործում են AEAD-ը ECDH-ից ստացված համօգտագործվող բանալիների հետ; Աուդիտորի դիտման կամընտիր ստեղները կարող են կցվել յուրաքանչյուր ակտիվի քաղաքականության արդյունքներին:
-- CLI հավելումներ՝ `confidential create-keys`, `confidential send`, `confidential export-view-key`, աուդիտորական գործիքակազմ՝ հուշաթերթիկների վերծանման համար, և `iroha app zk envelope` օգնական՝ Grafana ինձ անջատված Grafana արտադրելու/ստուգելու համար: Torii-ը ցուցադրում է նույն ածանցյալ հոսքը `POST /v1/confidential/derive-keyset`-ի միջոցով՝ վերադարձնելով և՛ վեցանկյուն, և՛ base64 ձևերը, որպեսզի դրամապանակները կարողանան ծրագրային կերպով ստանալ հիմնական հիերարխիաները:
+- CLI հավելումներ՝ `confidential create-keys`, `confidential send`, `confidential export-view-key`, աուդիտորական գործիքակազմ՝ հուշաթերթիկների վերծանման համար, և `iroha app zk envelope` օգնական՝ Grafana ինձ անջատված Grafana արտադրելու/ստուգելու համար:
 
 ## Գազ, սահմանափակումներ և DoS վերահսկում
 - Գազի որոշիչ ժամանակացույց.
@@ -391,7 +391,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -423,8 +423,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -455,7 +455,7 @@ M2 փուլն այժմ արտահանում է CommitmentTree առողջությ
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Զուգակցեք սա `rg 'iroha_confidential_tree_depth'`-ի հետ նույն քերծվածքի վրա՝ հաստատելու համար, որ խորությունն աճում է նոր պարտավորություններով, մինչդեռ վտարման հաշվիչներն ավելանում են միայն այն դեպքում, երբ պատմությունը սահմանում է գրառումները: Այս արժեքները պետք է համապատասխանեն Grafana վահանակի արտահանմանը, որը դուք կցում եք կառավարման ապացույցների փաթեթներին:

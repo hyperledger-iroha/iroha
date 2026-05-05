@@ -10,7 +10,7 @@ compile a contract, dry-run it locally, then send it through Torii with the
 reference CLI.
 
 The example contract writes a key/value pair to the caller's account so you can
-verify the side effect immediately with `iroha_cli`.
+verify the side effect immediately with `iroha`.
 
 ## Prerequisites
 
@@ -18,7 +18,7 @@ verify the side effect immediately with `iroha_cli`.
   to start the sample peer defined in `defaults/docker-compose.single.yml`).
 - Rust toolchain (1.76+) for building the helper binaries if you do not download
   the published ones.
-- `koto_compile`, `ivm_run`, and `iroha_cli` binaries. You can build them from the
+- `koto_compile`, `ivm_run`, and `iroha` binaries. You can build them from the
   workspace checkout as shown below or download the matching release artifacts:
 
 ```sh
@@ -57,8 +57,14 @@ seiyaku Hello {
     info("Hello from Kotodama");
   }
 
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
   // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),
@@ -98,7 +104,7 @@ With the node still running, send the compiled bytecode to Torii using the CLI.
 The default development identity is derived from the public key in
 `defaults/client.toml`, so the account ID is
 ```
-i105...
+<i105-account-id>
 ```
 
 Use the config file to supply Torii URL, chain ID, and signing key:
@@ -120,7 +126,7 @@ Use the same CLI profile to fetch the account detail that the contract wrote:
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

@@ -2,12 +2,208 @@
 
 _Last refreshed via `python3 scripts/inventory_serde_usage.py --json docs/source/norito_json_inventory.json --md docs/source/norito_json_inventory.md`_
 
-Total matches: **644** · Flagged (production) matches: **0**
+Total matches: **733** · Flagged (production) matches: **197**
 Allowlist prefixes: _none_ (crates/norito is implicitly allowed)
 
 ## Flagged hotspots
-- None detected.
+- dependency: Cargo.toml:160 (prod) — dependencies:serde — `serde = "1.0.228"`
+- dependency: crates/fastpq_prover/Cargo.toml:28 (prod) — dependencies:serde — `serde = { version = "1.0.228", features = ["derive"] }`
+- dependency: crates/fastpq_prover/Cargo.toml:29 (prod) — dependencies:serde_json — `serde_json = "1.0"`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:28 (prod) — path — `use serde::{Deserialize, Serialize};`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:28 (prod) — use — `use serde::{Deserialize, Serialize};`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:57 (prod) — derive — `#[derive(Debug, Clone, Deserialize)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:59 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:61 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:63 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:65 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:67 (prod) — serde_attr — `#[serde(default = "default_sample_count")]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:70 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:72 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:76 (prod) — derive — `#[derive(Debug, Clone, Serialize)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:85 (prod) — derive — `#[derive(Debug, Clone, Serialize)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:98 (prod) — derive — `#[derive(Debug, Clone, Deserialize)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:100 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:103 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:105 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:107 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:115 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:117 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:119 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:121 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:123 (prod) — serde_attr — `#[serde(default = "default_relay_block_height")]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:125 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:129 (prod) — derive — `#[derive(Debug, Clone, Deserialize, Serialize)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:131 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:133 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:135 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:137 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:139 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:141 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:143 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:145 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:149 (prod) — derive — `#[derive(Debug, Clone, Serialize)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:169 (prod) — derive — `#[derive(Debug, Clone, Serialize)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:177 (prod) — derive — `#[derive(Debug, Clone, Deserialize)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:183 (prod) — derive — `#[derive(Debug, Clone, Serialize)]`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:226 (prod) — serde_json — `serde_json::from_str(&raw).map_err(|err| format!("failed to parse {}: {err}", path.display()))`
+- source: crates/fastpq_prover/src/bin/fastpq_json.rs:230 (prod) — serde_json — `let encoded = serde_json::to_string_pretty(payload)`
+- dependency: crates/iroha_cli/Cargo.toml:95 (prod) — dependencies:serde — `serde = { workspace = true, features = ["derive"] }`
+- source: crates/iroha_cli/src/contracts.rs:30 (prod) — path — `use serde::Deserialize;`
+- source: crates/iroha_cli/src/contracts.rs:30 (prod) — use — `use serde::Deserialize;`
+- source: crates/iroha_cli/src/contracts.rs:156 (prod) — derive — `#[derive(Debug, Deserialize)]`
+- source: crates/iroha_cli/src/contracts.rs:159 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:162 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:164 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:168 (prod) — derive — `#[derive(Debug, Deserialize)]`
+- source: crates/iroha_cli/src/contracts.rs:172 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:174 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:176 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:178 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:182 (prod) — derive — `#[derive(Debug, Deserialize)]`
+- source: crates/iroha_cli/src/contracts.rs:186 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:188 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:191 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:193 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:197 (prod) — derive — `#[derive(Debug, Deserialize)]`
+- source: crates/iroha_cli/src/contracts.rs:201 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:203 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_cli/src/contracts.rs:206 (prod) — serde_attr — `#[serde(default)]`
+- dependency: crates/iroha_core/Cargo.toml:143 (prod) — dependencies:serde — `serde = { version = "1.0.228", features = ["derive"] }`
+- source: crates/iroha_core/src/zk_stark.rs:22 (prod) — path — `use serde::{Deserialize, Serialize};`
+- source: crates/iroha_core/src/zk_stark.rs:22 (prod) — use — `use serde::{Deserialize, Serialize};`
+- dependency: crates/iroha_sccp/Cargo.toml:26 (prod) — dependencies:serde — `serde = { version = "1.0.228", default-features = false, features = ["derive"], optional = true }`
+- source: crates/iroha_sccp/src/lib.rs:108 (prod) — path — `use serde::{`
+- source: crates/iroha_sccp/src/lib.rs:108 (prod) — use — `use serde::{`
+- source: crates/iroha_sccp/src/lib.rs:291 (prod) — path — `decode_hex_fixed::<32>(&value).map_err(serde::de::Error::custom)`
+- source: crates/iroha_sccp/src/lib.rs:315 (prod) — path — `.map(|text| decode_hex_fixed::<32>(&text).map_err(serde::de::Error::custom))`
+- source: crates/iroha_sccp/src/lib.rs:337 (prod) — path — `decode_hex_vec(&value).map_err(serde::de::Error::custom)`
+- source: crates/iroha_sccp/src/lib.rs:365 (prod) — path — `.map(|value| decode_hex_vec(&value).map_err(serde::de::Error::custom))`
+- source: crates/iroha_sccp/src/lib.rs:409 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:429 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:449 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:464 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:482 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:500 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:520 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:549 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:567 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:583 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:601 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:613 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:623 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:635 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:663 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:683 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:693 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:706 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:717 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:741 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:758 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:777 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:794 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:806 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:820 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:828 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:834 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:845 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:862 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:882 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:895 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:916 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:943 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:957 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1004 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1019 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1034 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1049 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1068 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1080 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1091 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1105 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1135 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1150 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1164 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1174 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1184 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1254 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1298 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1315 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1334 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1350 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1367 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1392 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1409 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1433 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1455 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1473 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1493 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1513 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1533 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1553 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- source: crates/iroha_sccp/src/lib.rs:1572 (prod) — path — `#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]`
+- dependency: crates/iroha_torii/Cargo.toml:146 (prod) — dependencies:serde — `serde = { version = "1.0.228", features = ["derive"] }`
+- dependency: crates/iroha_torii/Cargo.toml:147 (prod) — dependencies:serde_json — `serde_json = "1.0"`
+- source: crates/iroha_torii/src/lib.rs:1178 (prod) — derive — `#[derive(Debug, serde::Deserialize)]`
+- source: crates/iroha_torii/src/lib.rs:1178 (prod) — path — `#[derive(Debug, serde::Deserialize)]`
+- source: crates/iroha_torii/src/lib.rs:1179 (prod) — serde_attr — `#[serde(untagged)]`
+- source: crates/iroha_torii/src/lib.rs:1186 (prod) — derive — `#[derive(Debug, serde::Deserialize)]`
+- source: crates/iroha_torii/src/lib.rs:1186 (prod) — path — `#[derive(Debug, serde::Deserialize)]`
+- source: crates/iroha_torii/src/lib.rs:41582 (prod) — serde_json — `serde_json::from_slice(&bytes).expect("decode json bundle");`
+- source: crates/iroha_torii/src/lib.rs:41736 (prod) — serde_json — `serde_json::from_slice(&bytes).expect("decode json bundle");`
+- source: crates/iroha_torii/src/lib.rs:41803 (prod) — serde_json — `serde_json::from_slice(&bytes).expect("decode json bundle");`
+- source: crates/iroha_torii/src/lib.rs:42019 (prod) — serde_json — `serde_json::from_slice(&json_bytes).expect("decode json capabilities");`
+- source: crates/iroha_torii/src/lib.rs:42140 (prod) — serde_json — `serde_json::from_slice(&json_bytes).expect("decode json manifests");`
+- source: crates/iroha_torii/src/lib.rs:51312 (prod) — derive — `#[derive(serde::Serialize)]`
+- source: crates/iroha_torii/src/lib.rs:51312 (prod) — path — `#[derive(serde::Serialize)]`
+- source: crates/iroha_torii/src/routing.rs:4936 (prod) — path — `T: norito::core::NoritoSerialize + serde::Serialize,`
+- source: crates/iroha_torii/src/routing.rs:4957 (prod) — serde_json — `let body = serde_json::to_vec_pretty(bundle).map_err(|err| {`
+- source: crates/iroha_torii/src/routing.rs:4968 (prod) — serde_json — `fn sccp_json_value_response(value: &serde_json::Value) -> Result<Response> {`
+- source: crates/iroha_torii/src/routing.rs:4969 (prod) — serde_json — `let body = serde_json::to_vec_pretty(value).map_err(|err| {`
+- source: crates/iroha_torii/src/routing.rs:4991 (prod) — serde_json — `json_value: serde_json::Value,`
+- source: crates/iroha_torii/src/routing.rs:4995 (prod) — path — `T: norito::core::NoritoSerialize + serde::Serialize,`
+- source: crates/iroha_torii/src/routing.rs:5059 (prod) — serde_json — `) -> serde_json::Value {`
+- source: crates/iroha_torii/src/routing.rs:5060 (prod) — serde_json — `serde_json::json!({`
+- source: crates/iroha_torii/src/routing.rs:5077 (prod) — serde_json — `) -> Result<serde_json::Value> {`
+- source: crates/iroha_torii/src/routing.rs:5078 (prod) — serde_json — `let mut value = serde_json::to_value(artifact).map_err(|err| {`
+- source: crates/iroha_torii/src/routing.rs:5099 (prod) — serde_json — `fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<serde_json::Value> {`
+- source: crates/iroha_torii/src/routing.rs:5100 (prod) — serde_json — `let mut value = serde_json::to_value(job).map_err(|err| {`
+- source: crates/iroha_torii/src/routing.rs:5124 (prod) — path — `serde::Deserialize,`
+- source: crates/iroha_torii/src/routing.rs:5125 (prod) — path — `serde::Serialize,`
+- source: crates/iroha_torii/src/routing.rs:5144 (prod) — path — `serde::Deserialize,`
+- source: crates/iroha_torii/src/routing.rs:5145 (prod) — path — `serde::Serialize,`
+- source: crates/iroha_torii/src/routing.rs:5168 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_torii/src/routing.rs:5181 (prod) — path — `serde::Deserialize,`
+- source: crates/iroha_torii/src/routing.rs:5182 (prod) — path — `serde::Serialize,`
+- source: crates/iroha_torii/src/routing.rs:5203 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_torii/src/routing.rs:5207 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_torii/src/routing.rs:5211 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_torii/src/routing.rs:5215 (prod) — serde_attr — `#[serde(default)]`
+- source: crates/iroha_torii/src/routing.rs:5244 (prod) — derive — `#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]`
+- source: crates/iroha_torii/src/routing.rs:5244 (prod) — path — `#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]`
+- source: crates/iroha_torii/src/routing.rs:5255 (prod) — derive — `#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]`
+- source: crates/iroha_torii/src/routing.rs:5255 (prod) — path — `#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]`
+- source: crates/iroha_torii/src/routing.rs:5294 (prod) — derive — `#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]`
+- source: crates/iroha_torii/src/routing.rs:5294 (prod) — path — `#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]`
+- source: crates/iroha_torii/src/routing.rs:5304 (prod) — path — `serde::Deserialize,`
+- source: crates/iroha_torii/src/routing.rs:5305 (prod) — path — `serde::Serialize,`
+- source: crates/iroha_torii/src/routing.rs:6195 (prod) — serde_json — `.and_then(serde_json::Value::as_object)`
+- source: crates/iroha_torii/src/routing.rs:6200 (prod) — serde_json — `summary.get("backend").and_then(serde_json::Value::as_str),`
+- source: crates/iroha_torii/src/routing.rs:6206 (prod) — serde_json — `.and_then(serde_json::Value::as_str),`
+- source: crates/iroha_torii/src/routing.rs:6210 (prod) — serde_json — `summary.get("vk_hash").and_then(serde_json::Value::as_str),`
+- source: crates/iroha_torii/src/routing.rs:6216 (prod) — serde_json — `.and_then(serde_json::Value::as_u64),`
+- source: crates/iroha_torii/src/routing.rs:6228 (prod) — serde_json — `.and_then(serde_json::Value::as_object)`
+- source: crates/iroha_torii/src/routing.rs:6232 (prod) — serde_json — `summary.get("backend").and_then(serde_json::Value::as_str),`
+- source: crates/iroha_torii/src/routing.rs:6238 (prod) — serde_json — `.and_then(serde_json::Value::as_str),`
+- source: crates/iroha_torii/src/routing.rs:12598 (prod) — serde_json — `serde_json::from_str::<NexusSccpBurnProofV1>(&raw)`
+- source: crates/iroha_torii/src/routing.rs:12606 (prod) — serde_json — `serde_json::from_str::<NexusSccpGovernanceProofV1>(&raw)`
+- source: crates/iroha_torii/src/routing.rs:12614 (prod) — serde_json — `serde_json::from_str::<NexusSccpMessageProofV1>(&raw)`
+- source: crates/iroha_torii/src/routing.rs:12843 (prod) — serde_json — `let message_bundle = serde_json::from_str::<NexusSccpMessageProofV1>(&raw)`
+- source: crates/iroha_torii/src/routing.rs:17223 (prod) — serde_json — `let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({`
+- source: crates/iroha_torii/src/routing.rs:17320 (prod) — serde_json — `let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({`
+- source: crates/iroha_torii/src/routing.rs:17739 (prod) — serde_json — `let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({`
+- source: crates/iroha_torii/src/routing.rs:21143 (prod) — derive — `#[derive(Debug, Clone, Default, serde::Deserialize)]`
+- source: crates/iroha_torii/src/routing.rs:21143 (prod) — path — `#[derive(Debug, Clone, Default, serde::Deserialize)]`
 
 ## Allowed references (tests/benches/docs/dev)
-- Allowed by scope counts — example: 1, test: 15, tool: 628
+- Allowed by scope counts — prod: 3, test: 29, tool: 504
 - Full details remain in the JSON inventory for audit trails.

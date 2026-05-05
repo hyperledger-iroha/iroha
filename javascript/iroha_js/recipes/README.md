@@ -39,7 +39,7 @@ Run with:
 ```bash
 npm install
 TORII_URL=http://127.0.0.1:8080 \
-ACCOUNT_ID=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
+ACCOUNT_ID=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
 TORII_AUTH_TOKEN=token \
 node ./recipes/nft_account_iteration.mjs
 ```
@@ -144,18 +144,17 @@ field.
 
 ## contracts.mjs
 
-- Automates `/v1/contracts/deploy` and `/v1/contracts/instance` so roadmap JS-06
+- Automates the alias-first `POST /v1/contracts/deploy` flow so roadmap JS-06
   deliverables have a reproducible CLI. Bytecode is read from
-  `CONTRACT_CODE_PATH`, optional manifest JSON is pulled from
-  `CONTRACT_MANIFEST_PATH` or `CONTRACT_MANIFEST_JSON`, and the helper enforces
-  the same validation rules as `ToriiClient.deployContract/Instance` (non-empty
-  namespace/contract IDs, 32-byte hashes, base64-encoded payloads).
-- `CONTRACT_STAGE=register|instance|both` selects whether to only upload
-  manifest/bytecode, only activate an instance, or perform both operations. The
+  `CONTRACT_CODE_PATH`, `CONTRACT_ALIAS` is required, and the helper enforces
+  the same validation rules as `ToriiClient.deployContract`.
+- `CONTRACT_LEASE_EXPIRY_MS` optionally stages a leased alias binding. The
   script also honours `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` and accepts private
   keys via `PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`.
-- Prints the Torii responses (code/ABI hashes, namespace bindings) so CI jobs
-  can archive evidence bundles alongside release artifacts.
+- Prints the Torii response including `contract_alias`, `contract_address`,
+  `previous_contract_address`, `upgraded`, `dataspace`, `tx_hash_hex`,
+  `code_hash_hex`, and `abi_hash_hex` so CI jobs can archive evidence bundles
+  alongside release artifacts.
 
 Run with:
 
@@ -163,21 +162,17 @@ Run with:
 npm install
 node ./recipes/contracts.mjs \
   TORII_URL=https://torii.devnet.example \
-  AUTHORITY=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
+  AUTHORITY=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
   PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
   CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
-  CONTRACT_MANIFEST_PATH=./artifacts/demo_manifest.json \
-  CONTRACT_STAGE=both \
-  CONTRACT_NAMESPACE=apps \
-  CONTRACT_ID=demo.contract
+  CONTRACT_ALIAS=demo_contract::universal
 ```
 
 Environment variables:
 
-- `CONTRACT_STAGE` — `register`, `instance`, or `both` (default) to control which REST calls run.
 - `CONTRACT_CODE_PATH` — path to the Kotodama `.to` artifact (required).
-- `CONTRACT_MANIFEST_PATH` / `CONTRACT_MANIFEST_JSON` — manifest source (optional but recommended).
-- `CONTRACT_NAMESPACE` / `CONTRACT_ID` — required when staging the `instance` leg.
+- `CONTRACT_ALIAS` — stable public alias for the deploy target (required).
+- `CONTRACT_LEASE_EXPIRY_MS` — optional lease-expiry override for the alias binding.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for locked-down deployments.
 - `PRIVATE_KEY` / `PRIVATE_KEY_HEX` — signer credentials; defaults to `ed25519` when unspecified.
 
@@ -221,8 +216,8 @@ Run with:
 ```bash
 npm install
 TORII_URL=http://localhost:8080 \
-ACCOUNT_ID=6cmzPVPX5ZhYaa7sushd7mC66PG1BrtMPRnpi9p3suF2mFeiR1ekAkT \
-NFT_ID=norito:4e52543000000002 \
+ACCOUNT_ID=sorauﾛ1Nﾀｾhjｾ7pZaG9L7ｴmBnｸbﾖ9ヰsｳ4dqmﾅｺmﾁﾎ24CｳｵEAE9L4 \
+NFT_ID=61CtjvNd9T3THAR65GsMVHr82Bjc#sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D \
 PAGE_SIZE=25 \
 MAX_ITEMS=100 \
 node ./recipes/assets_iterators.mjs
@@ -232,64 +227,10 @@ Environment variables:
 
 - `TORII_URL` — Torii endpoint (defaults to `http://localhost:8080`).
 - `ACCOUNT_ID` — account literal for asset iteration.
-- `NFT_ID` — optional encoded NFT id (`norito:<hex>`) to filter on (exact match).
+- `NFT_ID` — optional canonical NFT/asset-holding id (`<base58-asset-definition-id>#<i105-account-id>`) to filter on (exact match).
 - `PAGE_SIZE` / `MAX_ITEMS` — pagination controls.
 - `TORII_API_TOKEN` / `TORII_AUTH_TOKEN` — credentials for permissioned nodes.
 - `ALLOW_INSECURE=1` — allow HTTP while sending credentials (dev/test only).
-
-## offline_queue.mjs
-
-- Simulates Connect offline queueing with `ConnectQueueJournal`, replaying the oldest
-  app-to-wallet frame and emitting snapshots/metrics before exporting an evidence bundle.
-- Exercises the diagnostics helpers (`updateConnectQueueSnapshot`, `appendConnectQueueMetric`,
-  `exportConnectQueueEvidence`) used by the offline runbook so operators can gather audits without
-  hitting Torii.
-
-Run with:
-
-```bash
-npm install
-npm run example:offline
-```
-
-Environment variables:
-
-- `CONNECT_SESSION_ID` — Connect session id to seed the queue (base64url). Default:
-  `AQIDBAUGBwgJCgsMDQ4PEA`.
-- `CONNECT_QUEUE_ROOT` — where snapshots/metrics/evidence are written. Default:
-  `artifacts/js/connect_offline`.
-- `CONNECT_WARNING_WATERMARK` / `CONNECT_DROP_WATERMARK` — optional 0–1 floats applied to the
-  exported snapshot to mimic production watermarks.
-- `CONNECT_NOW_MS` — override the deterministic timestamp used for emitted frames and snapshots.
-- `CONNECT_APP_PAYLOAD` / `CONNECT_WALLET_PAYLOAD` — optional payload overrides for the staged
-  frames (defaults are deterministic strings).
-
-## offline_pipeline.mjs
-
-- Builds a signed transaction with the native Norito helpers, packages it into an offline envelope,
-  writes JSON to disk, and replays the stored envelope against Torii.
-- Defaults to an in-process mock Torii server to keep the flow deterministic; set
-  `OFFLINE_PIPELINE_USE_MOCK=0` and `TORII_BASE_URL` to target a live node.
-- Supports deterministic build-only validation with `OFFLINE_PIPELINE_SKIP_REPLAY=1`, which exits
-  after envelope build/parse/write and skips mock/live replay.
-- Logs the envelope hash, schema, and metadata so you can archive evidence alongside the stored
-  payload.
-
-Run with:
-
-```bash
-npm install
-npm run build:native
-npm run example:offline:pipeline
-```
-
-Environment variables:
-
-- `TORII_BASE_URL` — Torii endpoint used for replay; ignored when the mock server is enabled.
-- `OFFLINE_PIPELINE_OUT_DIR` — output directory for the stored envelope (default:
-  `artifacts/js/offline_pipeline`).
-- `OFFLINE_PIPELINE_USE_MOCK` — set to `0` to skip the mock server and use `TORII_BASE_URL`.
-- `OFFLINE_PIPELINE_SKIP_REPLAY` — set to `1` to stop after build/parse/write and skip replay.
 
 ## governance.mjs
 

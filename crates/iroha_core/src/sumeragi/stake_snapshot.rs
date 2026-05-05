@@ -127,6 +127,63 @@ pub fn stake_quorum_reached_for_world(
     Ok(signed_scaled >= total_scaled)
 }
 
+/// Return selected signer stake coverage in basis points for the provided roster.
+pub fn stake_coverage_bps_for_world(
+    world: &impl WorldReadOnly,
+    roster: &[PeerId],
+    signers: &BTreeSet<PeerId>,
+) -> Result<u16, StakeQuorumError> {
+    let fallback_stake = fallback_stake_for_world(world);
+    let mut stake_map = stake_map_from_world(world);
+    if stake_map.is_empty() {
+        for peer in roster {
+            stake_map.insert(peer.clone(), fallback_stake.clone());
+        }
+    } else {
+        for peer in roster {
+            stake_map
+                .entry(peer.clone())
+                .or_insert_with(|| fallback_stake.clone());
+        }
+    }
+
+    let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+    let mut total = Numeric::from(0_u64);
+    for peer in roster {
+        let Some(stake) = stake_map.get(peer) else {
+            return Err(StakeQuorumError::MissingStake);
+        };
+        total = total
+            .checked_add(stake.clone())
+            .ok_or(StakeQuorumError::Overflow)?;
+    }
+    if total.is_zero() {
+        return Err(StakeQuorumError::ZeroTotal);
+    }
+
+    let mut selected = Numeric::from(0_u64);
+    for peer in signers {
+        if !roster_set.contains(peer) {
+            return Err(StakeQuorumError::SignerOutOfRoster);
+        }
+        let Some(stake) = stake_map.get(peer) else {
+            return Err(StakeQuorumError::MissingStake);
+        };
+        selected = selected
+            .checked_add(stake.clone())
+            .ok_or(StakeQuorumError::Overflow)?;
+    }
+
+    let selected_scaled = selected
+        .checked_mul(Numeric::from(10_000_u64), NumericSpec::unconstrained())
+        .ok_or(StakeQuorumError::Overflow)?;
+    let bps = selected_scaled
+        .checked_div(total, NumericSpec::integer())
+        .and_then(|numeric| numeric.try_mantissa_u128())
+        .ok_or(StakeQuorumError::Overflow)?;
+    Ok(bps.min(10_000) as u16)
+}
+
 /// Determine whether 2/3 stake quorum is reached for the provided signers.
 #[cfg(test)]
 pub fn stake_quorum_reached_for_peers(
@@ -196,14 +253,11 @@ pub fn stake_quorum_reached_for_snapshot(
 #[must_use]
 pub(super) fn stake_map_from_world(world: &impl WorldReadOnly) -> BTreeMap<PeerId, Numeric> {
     let mut stake_map: BTreeMap<PeerId, Numeric> = BTreeMap::new();
-    for ((_lane_id, validator_id), record) in world.public_lane_validators().iter() {
+    for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
         if !matches!(record.status, PublicLaneValidatorStatus::Active) {
             continue;
         }
-        let Some(pk) = validator_id.try_signatory() else {
-            continue;
-        };
-        let peer_id = PeerId::from(pk.clone());
+        let peer_id = record.peer_id.clone();
         let entry = stake_map
             .entry(peer_id)
             .or_insert_with(|| record.total_stake.clone());
@@ -309,6 +363,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account_a.clone(),
+                    peer_id: peer_a.clone(),
                     stake_account: account_a.clone(),
                     total_stake: Numeric::new(10, 0),
                     self_stake: Numeric::new(10, 0),
@@ -324,6 +379,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(2),
                     validator: account_a.clone(),
+                    peer_id: peer_a.clone(),
                     stake_account: account_a.clone(),
                     total_stake: Numeric::new(25, 0),
                     self_stake: Numeric::new(25, 0),
@@ -339,6 +395,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(3),
                     validator: account_b.clone(),
+                    peer_id: peer_b.clone(),
                     stake_account: account_b.clone(),
                     total_stake: Numeric::new(15, 0),
                     self_stake: Numeric::new(15, 0),
@@ -386,6 +443,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account_active.clone(),
+                    peer_id: peer_active.clone(),
                     stake_account: account_active,
                     total_stake: Numeric::new(5, 0),
                     self_stake: Numeric::new(5, 0),
@@ -401,6 +459,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(2),
                     validator: account_pending.clone(),
+                    peer_id: peer_pending.clone(),
                     stake_account: account_pending,
                     total_stake: Numeric::new(9, 0),
                     self_stake: Numeric::new(9, 0),
@@ -458,6 +517,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account.clone(),
+                    peer_id: peer.clone(),
                     stake_account: account,
                     total_stake: Numeric::new(10, 0),
                     self_stake: Numeric::new(10, 0),
@@ -576,6 +636,29 @@ mod tests {
     }
 
     #[test]
+    fn stake_coverage_bps_for_world_reports_selected_coverage() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
+        let view = state.view();
+
+        let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+        let peer_d = PeerId::new(KeyPair::random().public_key().clone());
+        let roster = vec![peer_a.clone(), peer_b.clone(), peer_c.clone(), peer_d];
+        let mut selected = BTreeSet::new();
+        selected.insert(peer_a);
+        selected.insert(peer_b);
+        selected.insert(peer_c);
+
+        assert_eq!(
+            stake_coverage_bps_for_world(view.world(), &roster, &selected),
+            Ok(7_500)
+        );
+    }
+
+    #[test]
     fn stake_quorum_reached_for_peers_falls_back_for_missing_stakes() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -595,6 +678,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account_id.clone(),
+                    peer_id: peer_a.clone(),
                     stake_account: account_id,
                     total_stake: Numeric::new(10, 0),
                     self_stake: Numeric::new(10, 0),

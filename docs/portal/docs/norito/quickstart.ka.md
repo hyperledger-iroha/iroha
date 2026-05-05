@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e39dc94f52395bd9323177df1a7feeb7bbd4f9a3cdea07b02f9d60e7826e199e
-source_last_modified: "2026-01-22T16:26:46.506936+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
 title: Norito Quickstart
 description: Build, validate, and deploy a Kotodama contract with the release tooling and default single-peer network.
 slug: /norito/quickstart
@@ -19,7 +19,7 @@ Norito და Kotodama პირველად: ჩატვირთეთ გ
 მითითება CLI.
 
 მაგალითი კონტრაქტი წერს გასაღები/მნიშვნელობის წყვილს აბონენტის ანგარიშზე, ასე რომ თქვენ შეგიძლიათ
-დაუყოვნებლივ გადაამოწმეთ გვერდითი ეფექტი `iroha_cli`-ით.
+დაუყოვნებლივ გადაამოწმეთ გვერდითი ეფექტი `iroha`-ით.
 
 ## წინაპირობები
 
@@ -27,7 +27,7 @@ Norito და Kotodama პირველად: ჩატვირთეთ გ
   `defaults/docker-compose.single.yml`-ში განსაზღვრული ნიმუშის თანატოლის დასაწყებად).
 - Rust toolchain (1.76+) დამხმარე ბინარების შესაქმნელად, თუ არ ჩამოტვირთავთ
   გამოქვეყნებულები.
-- `koto_compile`, `ivm_run` და `iroha_cli` ბინარები. თქვენ შეგიძლიათ ააწყოთ ისინი
+- `koto_compile`, `ivm_run` და `iroha` ბინარები. თქვენ შეგიძლიათ ააწყოთ ისინი
   სამუშაო სივრცის გადახდა, როგორც ნაჩვენებია ქვემოთ, ან ჩამოტვირთეთ შესაბამისი გამოშვების არტეფაქტები:
 
 ```sh
@@ -66,8 +66,14 @@ seiyaku Hello {
     info("Hello from Kotodama");
   }
 
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
   // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),
@@ -107,7 +113,7 @@ ABI სათაური, ფუნქციის ბიტები და �
 განვითარების ნაგულისხმევი იდენტურობა მიღებულია საჯარო გასაღებიდან
 `defaults/client.toml`, ასე რომ, ანგარიშის ID არის
 ```
-i105...
+<i105-account-id>
 ```
 
 გამოიყენეთ კონფიგურაციის ფაილი Torii URL-ის, ჯაჭვის ID-ისა და ხელმოწერის გასაღების მოსაწოდებლად:
@@ -129,7 +135,7 @@ syscall ან მონიტორინგი CLI გამომავალ
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

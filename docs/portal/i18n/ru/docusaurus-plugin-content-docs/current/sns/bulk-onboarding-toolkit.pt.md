@@ -38,7 +38,7 @@ Espelha `docs/source/sns/bulk_onboarding_toolkit.md` для внешних оп�
 | `suffix_id` | Сим | Суфиксный цифровой идентификатор (десятичный или шестнадцатеричный `0x`). |
 | `owner` | Сим | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Сим | Интейро `1..=255`. |
-| `payment_asset_id` | Сим | Атива урегулирования (например, `xor#sora`). |
+| `payment_asset_id` | Сим | Атива урегулирования (например, `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Сим | Inteiros sem sinal представляют собой unidades nativas do ativo. |
 | `settlement_tx` | Сим | Используйте JSON или строковый литерал, расшифрованный для транзакции или хэша. |
 | `payment_payer` | Сим | AccountId, который авторизуется или публикуется. |
@@ -77,18 +77,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -112,7 +112,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -132,9 +132,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- О помощник, эмите um `POST /v1/sns/registrations` по запросу и прерыванию не в первую очередь
+- О помощник, эмите um `POST /v1/sns/names` по запросу и прерыванию не в первую очередь
   ошибка HTTP. В качестве ответов на запросы или журналы регистрации NDJSON.
-- `--poll-status` проконсультируйтесь с `/v1/sns/registrations/{selector}` после каждой отправки
+- `--poll-status` проконсультируйтесь с `/v1/sns/names/{namespace}/{literal}` после каждой отправки
   (ate `--poll-attempts`, по умолчанию 5) для подтверждения того, что регистрация является видимой.
   Forneca `--suffix-map` (JSON de `suffix_id` для значений «суффикс»), чтобы
   Ferramenta извлекает буквенные `{label}.{suffix}` для опроса.
@@ -220,7 +220,7 @@ que agora contem tudo или que agovanaca precisa para Audiia.
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -244,7 +244,7 @@ alinhados sobre или прогресс в массе. О квадро Grafana
   ссылки в архивах, соответствующие разрешению и локализации в формате CSV. Метаданные
   нет объекта производства с ошибкой валидации.
 - **Контроллеры:** указаны в официальном порядке `--default-controllers`. Форнека
-  Явные списки (например, `i105...;i105...`) делегируются владельцам.
+  Явные списки (например, `<i105-account-id>;<i105-account-id>`) делегируются владельцам.
 
 Сообщите о нескольких контекстных сообщениях (например,
 `error: row 12 term_years must be between 1 and 255`). O script sai com codigo

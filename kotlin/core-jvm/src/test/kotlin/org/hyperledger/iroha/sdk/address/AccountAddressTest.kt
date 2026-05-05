@@ -1,0 +1,72 @@
+package org.hyperledger.iroha.sdk.address
+
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
+
+class AccountAddressTest {
+    @Test
+    fun mixedI105LiteralRoundTripsToOriginalCanonicalPayload() {
+        val literal =
+            "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7"
+        val address = AccountAddress.fromI105(literal, AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        assertEquals(
+            "0x02000120bc717326224e4b4119298e7b1db8133cb27d6cdf6b3e04d75a6d27b29a34c1cf",
+            address.canonicalHex(),
+        )
+        assertEquals(literal, address.toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT))
+    }
+
+    @Test
+    fun rejectsNonCanonicalFullwidthKanaPayload() {
+        val literal =
+            "sorauﾛ1PﾜdﾎｼﾋﾉNｸdﾁﾑkiﾇ3ｵﾓaPBQDTｲKqｼqｵrﾗｶwSQ1ﾌﾅQU61Y7"
+        val nonCanonical = literal.replaceFirst("ﾛ", "ロ")
+
+        val error = assertFailsWith<AccountAddressException> {
+            AccountAddress.fromI105(nonCanonical, AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        }
+        assertEquals(AccountAddressErrorCode.INVALID_I105_CHAR, error.code)
+    }
+
+    @Test
+    fun curveRegistryCoversAllCryptoAlgorithms() {
+        assertEquals("secp256k1", algorithmForCurveId(0x04))
+        assertEquals("bls_normal", algorithmForCurveId(0x03))
+        assertEquals("bls_small", algorithmForCurveId(0x05))
+
+        val secpKey = ByteArray(33) { 0x02 }
+        val secpAddress = AccountAddress.fromAccount(secpKey, "secp256k1")
+        assertEquals(0x04, secpAddress.singleKeyPayload()?.curveId)
+
+        val blsKey = ByteArray(48) { 0x03 }
+        assertFailsWith<AccountAddressException> {
+            AccountAddress.fromAccount(blsKey, "bls_normal")
+        }
+        try {
+            AccountAddress.configureCurveSupport(CurveSupportConfig.builder().allowBls(true).build())
+            val blsAddress = AccountAddress.fromAccount(blsKey, "bls-normal")
+            assertEquals(0x03, blsAddress.singleKeyPayload()?.curveId)
+        } finally {
+            AccountAddress.configureCurveSupport(CurveSupportConfig.ed25519Only())
+        }
+
+        val encoded = encodePublicKeyMultihash(0x04, secpKey)
+        val decoded = assertNotNull(decodePublicKeyLiteral(encoded))
+        assertEquals(0x04, decoded.curveId)
+        assertEquals(secpKey.toList(), decoded.keyBytes.toList())
+    }
+
+    @Test
+    fun longGostLabelsAreAcceptedWhenGostSupportIsEnabled() {
+        val key = ByteArray(64) { 0x0A }
+        try {
+            AccountAddress.configureCurveSupport(CurveSupportConfig.builder().allowGost(true).build())
+            val address = AccountAddress.fromAccount(key, "gost3410-2012-256-paramset-a")
+            assertEquals(0x0A, address.singleKeyPayload()?.curveId)
+        } finally {
+            AccountAddress.configureCurveSupport(CurveSupportConfig.ed25519Only())
+        }
+    }
+}

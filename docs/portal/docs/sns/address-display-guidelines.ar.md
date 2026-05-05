@@ -1,241 +1,123 @@
 ---
-lang: ar
-direction: rtl
-source: docs/portal/docs/sns/address-display-guidelines.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: fe68de8593c0eac177dbf727e4f47adc98021c9a6eceb9f851abcabfa549fd23
-source_last_modified: "2025-12-14T10:43:49.840406+00:00"
-translation_last_reviewed: 2026-01-01
+id: address-display-guidelines
+title: Sora Address Display Guidelines
+sidebar_label: Address display
+description: UX and CLI requirements for canonical i105 account ids and on-chain aliases (ADDR-6).
 ---
 
 import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
-:::note المصدر القياسي
-تعكس هذه الصفحة `docs/source/sns/address_display_guidelines.md` وتعمل الان
-كمرجع بوابة موحد. يبقى ملف المصدر من اجل PRs الترجمة.
+:::note Canonical Source
+This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
+as the canonical portal copy. The source file sticks around for translation PRs.
 :::
 
-يجب ان تتعامل المحافظ والمستكشفات وامثلة SDK مع عناوين الحساب كحمولات ثابتة لا
-تتغير. يعرض مثال محفظة Android في
-`examples/android/retail-wallet` نمط UX المطلوب:
+Wallets, explorers, and SDK samples must treat the canonical I105
+literal as the only public account-id format. On-chain aliases are separate
+lookup keys:
 
-- **هدفا نسخ منفصلان.** وفر زرين واضحين للنسخ: I105 (المفضل) والصيغة
-  المضغوطة الخاصة بـ Sora (`sora...`، الخيار الثاني). I105 امن دائما للمشاركة خارجيا ويغذي
-  حمولة QR. يجب ان تتضمن الصيغة المضغوطة تحذيرا مضمنا لانها تعمل فقط داخل
-  تطبيقات واعية بـ Sora. مثال Android يربط زري Material وتلميحاتهما في
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`، ويطابق
-  عرض iOS SwiftUI نفس UX عبر `AddressPreviewCard` داخل
-  `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **خط ثابت ونص قابل للتحديد.** اعرض السلسلتين بخط monospace مع
-  `textIsSelectable="true"` حتى يتمكن المستخدمون من فحص القيم دون تشغيل IME.
-  تجنب الحقول القابلة للتحرير: يمكن لـ IME اعادة كتابة kana او حقن نقاط كود بعرض
-  صفر.
-- **اشارات النطاق الافتراضي الضمني.** عندما يشير المحدد الى النطاق الضمني
-  `default`، اعرض توضيحا يذكر المشغلين بان لا حاجة لاي لاحقة. يجب على
-  المستكشفات ايضا تمييز تسمية النطاق القانونية عندما يشفر المحدد digest.
-- **حمولات QR I105.** يجب ان ترمز رموز QR سلسلة I105. اذا فشل توليد QR، اعرض
-  خطا واضحا بدلا من صورة فارغة.
-- **رسائل الحافظة.** بعد نسخ الصيغة المضغوطة، ارسل toast او snackbar يذكر
-  المستخدمين انها خاصة بـ Sora ومعرضة لتشويه IME.
+- `name@dataspace`
+- `name@domain.dataspace`
 
-اتباع هذه الضوابط يمنع فساد Unicode/IME ويلبي معايير قبول خارطة الطريق ADDR-6
-لتجربة محافظ/مستكشفات.
+Those aliases resolve on-chain to the canonical i105 account id. They are not
+an alternate public account-id encoding.
 
-## لقطات مرجعية
+## Required UX
 
-استخدم اللقطات التالية خلال مراجعات الترجمة لضمان بقاء تسميات الازرار
-والتلميحات والتحذيرات متوافقة عبر المنصات:
+- **Copy/share only canonical i105.** Ship one primary copy action for the
+  canonical I105 account id. That same literal powers QR payloads,
+  deep links, and clipboard actions.
+- **Render aliases separately.** If a workflow includes an alias, show it in a
+  labeled field such as “Alias” or “Routing alias”. Do not concatenate it onto
+  the i105 literal.
+- **Monospace, selectable text.** Render the i105 literal with a monospace font
+  and `textIsSelectable="true"` so users can inspect it without invoking an
+  IME. Avoid editable fields: IMEs can rewrite kana or inject zero-width code
+  points.
+- **Confirm the exact copied value.** After copying the i105 form, emit a toast
+  or snackbar that quotes the canonical i105 literal.
+- **No alternate public encodings.** Canonical hex and legacy/non-canonical
+  address forms are tooling/debug inputs only and must not be marketed as
+  copy/share formats.
 
-- مرجع Android: `/img/sns/address_copy_android.svg`
+## Screenshot fixtures
 
-  ![مرجع نسخ مزدوج Android](/img/sns/address_copy_android.svg)
+Use the following fixtures during localization reviews to ensure button labels,
+tooltips, and warnings stay aligned across platforms:
 
-- مرجع iOS: `/img/sns/address_copy_ios.svg`
+- Android reference: `/img/sns/address_copy_android.svg`
 
-  ![مرجع نسخ مزدوج iOS](/img/sns/address_copy_ios.svg)
+  ![Android address copy reference](/img/sns/address_copy_android.svg)
 
-## مساعدات SDK
+- iOS reference: `/img/sns/address_copy_ios.svg`
 
-كل SDK يوفر مساعدا يعيد صيغتي I105 والمضغوطة مع سلسلة التحذير حتى تبقى طبقات UI
-متسقة:
+  ![iOS address copy reference](/img/sns/address_copy_ios.svg)
+
+## SDK helpers
+
+Each SDK exposes a convenience helper that returns canonical I105
+rendering plus warning text so UI layers can stay consistent:
 
 - JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
-- JavaScript inspector: `inspectAccountId(...)` يعيد سلسلة تحذير مضغوطة ويضيفها
-  الى `warnings` عندما يقدم المستدعون literal `sora...`، حتى يتمكن مستكشفو
-  المحافظ/لوحات التحكم من عرض تحذير Sora-only اثناء تدفقات اللصق/التحقق بدلا
-  من عرضه فقط عند توليد الصيغة المضغوطة ذاتيا.
 - Python: `AccountAddress.display_formats(network_prefix: int = 753)`
 - Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
 - Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
   (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
-استخدم هذه المساعدات بدلا من اعادة تنفيذ منطق الترميز في طبقات UI. يعرض مساعد
-JavaScript ايضا حمولة `selector` على `domainSummary` (`tag`, `digest_hex`,
-`registry_id`, `label`) حتى تتمكن واجهات UI من تحديد ما اذا كان المحدد Local-12
-او مدعوما بسجل دون اعادة تحليل الحمولة الخام.
+Use these helpers instead of reimplementing the encode logic in UI layers.
+Use alias-aware Torii endpoints when you need to resolve `name@dataspace` or
+`name@domain.dataspace` into the canonical i105 account id.
 
-## عرض حي لادوات المستكشف
+## Explorer instrumentation demo
 
 <ExplorerAddressCard />
 
-يجب ان تعكس المستكشفات اعمال القياس والاتاحة نفسها في المحافظ:
+Explorers should mirror the wallet telemetry and accessibility work:
 
-- طبق `data-copy-mode="i105|i105_default|qr"` على ازرار النسخ حتى تتمكن الواجهات
-  الامامية من اصدار عدادات الاستخدام بالتوازي مع مقياس Torii
-  `torii_address_format_total`. المكون التجريبي اعلاه يطلق حدث
-  `iroha:address-copy` مع `{mode,timestamp}` - اربط ذلك بخط تحليلاتك/تليمترتك
-  (مثل ارسالها الى Segment او جامع NORITO) حتى تتمكن لوحات المتابعة من ربط
-  استخدام صيغة العنوان على الخادم بوضع النسخ لدى العميل. اعكس ايضا عدادات نطاق
-  Torii (`torii_address_domain_total{domain_kind}`) في نفس التدفق حتى تتمكن
-  مراجعات تقاعد Local-12 من تصدير دليل 30 يوم `domain_kind="local12"` مباشرة من
-  لوحة `address_ingest` في Grafana.
-- اربط كل عنصر تحكم بتلميحات `aria-label`/`aria-describedby` مميزة تشرح ما اذا
-  كانت السلسلة امنة للمشاركة (I105) او خاصة بـ Sora (مضغوطة). ادرج تسمية
-  النطاق الضمني في الوصف حتى تعرض تقنيات المساعدة نفس السياق المرئي.
-- وفر منطقة اعلان حية (مثل `<output aria-live="polite">...</output>`) تعلن
-  نتائج النسخ والتحذيرات، بما يطابق سلوك VoiceOver/TalkBack الموصل بالفعل في
-  امثلة Swift/Android.
+- Apply `data-copy-mode="i105|alias|qr"` to copy buttons so front-ends can emit
+  usage counters alongside server-side account-literal metrics.
+- Pair every control with distinct `aria-label`/`aria-describedby` hints that
+  explain whether a control copies the canonical i105 account id, views the
+  alias, or shares the QR payload.
+- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
+  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
 
-هذه الاتاحة تحقق ADDR-6b عبر اثبات قدرة المشغلين على مراقبة كل من ادخال Torii
-واوضاع نسخ العميل قبل تعطيل محددات Local.
+## Enforcing canonical forms
 
-## عدة ترحيل Local -> Global
+Use the CLI workflow documented under ADDR-5:
 
-استخدم [عدة Local -> Global](local-to-global-toolkit.md) لادارة تدقيق وتحويل
-محددات Local القديمة. يصدر المساعد تقرير تدقيق JSON والقائمة المحولة
-I105/المضغوطة التي يرفقها المشغلون بتذاكر الجاهزية، بينما يربط دليل التشغيل
-لوحات Grafana وقواعد Alertmanager التي تضبط cutover في الوضع الصارم.
-
-## مرجع سريع للتخطيط الثنائي (ADDR-1a)
-
-عندما تعرض SDKs ادوات متقدمة للعناوين (المفتشون، تلميحات التحقق، بناة manifest)،
-اشِر المطورين الى صيغة wire القانونية في `docs/account_structure.md`. التخطيط
-دائما `header · selector · controller`، حيث بتات header هي:
-
-```
-bit index:   7        5 4      3 2      1 0
-             ┌─────────┬────────┬────────┬────┐
-payload bit: │version  │ class  │  norm  │ext │
-             └─────────┴────────┴────────┴────┘
-```
-
-- `addr_version = 0` (bits 7-5) اليوم؛ القيم غير الصفرية محجوزة ويجب ان تؤدي
-  الى `AccountAddressError::InvalidHeaderVersion`.
-- `addr_class` يميز بين المتحكم الفردي (`0`) والمتعدد التواقيع (`1`).
-- `norm_version = 1` يشفر قواعد محدد Norm v1. ستعيد المعايير المستقبلية استخدام
-  نفس الحقل المكون من 2 بت.
-- `ext_flag` دائما `0`؛ البتات المفعلة تشير الى امتدادات حمولة غير مدعومة.
-
-يتبع المحدد مباشرة الـ header:
-
-```
-┌──────────┬──────────────────────────────────────────────┐
-│ tag (u8) │ payload (depends on selector kind)           │
-└──────────┴──────────────────────────────────────────────┘
-```
-
-يجب ان تكون واجهات UI وSDKs جاهزة لعرض نوع المحدد:
-
-- `0x00` = نطاق افتراضي ضمني (بدون حمولة).
-- `0x01` = digest محلي (12-byte `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = مدخل سجل عالمي (`registry_id:u32` big-endian).
-
-امثلة hex قانونية يمكن لادوات المحافظ ربطها او ادراجها في docs/tests:
-
-| نوع المحدد | Hex قانوني |
-|---------------|---------------|
-| افتراضي ضمني | `0x020001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
-| digest محلي (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| سجل عالمي (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
-
-راجع `docs/source/references/address_norm_v1.md` لجدول المحدد/الحالة الكامل و
-`docs/account_structure.md` لمخطط البايتات الكامل.
-
-## فرض الصيغ القانونية
-
-يجب على المشغلين الذين يحولون ترميزات Local القديمة الى I105 قانوني او سلاسل
-مضغوطة اتباع مسار CLI الموثق تحت ADDR-5:
-
-1. `iroha tools address inspect` يصدر الان ملخص JSON منظم مع I105 والحمولة المضغوطة
-   والـ hex القانوني. يتضمن الملخص ايضا كائن `domain` مع حقول `kind`/`warning`
-   ويعكس اي نطاق مقدم عبر الحقل `input_domain`. عندما يكون `kind` هو `local12`
-   تطبع CLI تحذيرا على stderr ويعكس ملخص JSON نفس التوجيه حتى تتمكن خطوط CI و
-   SDKs من عرضه. مرر `legacy  suffix` متى اردت اعادة تشغيل الترميز المحول
-   كـ `<i105>@<domain>`.
-2. يمكن لـ SDKs عرض نفس التحذير/الملخص عبر مساعد JavaScript:
+1. Run `iroha tools address convert <address-or-account_id> --format json`.
+   The summary reports the detected format and canonical encodings (`i105`,
+   `canonical_hex`). Strict parser paths accept canonical I105 only.
+2. SDKs can surface the same summary via JavaScript:
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
 
-   const summary = inspectAccountId("sora...");
-   if (summary.domain.warning) {
-     console.warn(summary.domain.warning);
-   }
+   const summary = inspectAccountId(accountLiteral);
    console.log(summary.i105.value, summary.i105Warning);
    ```
-  يحافظ المساعد على بادئة I105 المكتشفة من literal ما لم تقدم `networkPrefix`
-  صراحة، لذا لا تعاد صياغة الملخصات للشبكات غير الافتراضية بصمت مع بادئة افتراضية.
+3. Resolve aliases through alias-aware APIs instead of feeding
+   `name@dataspace` or `name@domain.dataspace` into strict `AccountId`
+   parsers.
+4. Reuse `i105.value` from the summary (or request another encoding via
+   `--format`) in manifests and user-facing docs.
+4. For bulk data sets, run
+   `iroha tools address audit --input addresses.txt --network-prefix 753`.
+   Audit emits JSON/CSV summaries per row and fails on parse errors by default.
+   Use `--allow-errors` only for best-effort scans.
+5. For newline-to-newline rewrites, run
+   `iroha tools address normalize --input addresses.txt --network-prefix 753 --format i105`.
+   This rewrites each parsed row to the requested encoding
+   (canonical I105/hex/JSON). Pair with
+   `--allow-errors` for malformed dump triage.
 
-3. حول الحمولة القانونية عبر اعادة استخدام حقول `i105.value` او `i105_default`
-   من الملخص (او اطلب ترميزا اخر عبر `--format`). هذه السلاسل امنة بالفعل
-   للمشاركة خارجيا.
-4. حدث manifests والسجلات والوثائق المواجهة للعميل بالصيغ القانونية وابلغ
-   الاطراف المقابلة ان محددات Local سترفض بعد اكتمال cutover.
-5. لمجموعات البيانات الكبيرة، شغل
-   `iroha tools address audit --input addresses.txt --network-prefix 753`. يقرأ الامر
-   literals مفصولة باسطر جديدة (التعليقات التي تبدا بـ `#` يتم تجاهلها، و
-   `--input -` او عدم وجود علم يستخدم STDIN)، ويصدر تقرير JSON بملخصات
-   قانونية/I105/مضغوطة لكل ادخال، ويحسب اخطاء التحليل وتحذيرات نطاق Local. استخدم
-   `--allow-errors` عند تدقيق dumps القديمة التي تحتوي صفوفا مهملة، واضبط
-   الاتمتة عبر `strict CI post-check` حين يصبح المشغلون مستعدين لحظر محددات Local في CI.
-6. عندما تحتاج لاعادة كتابة سطر بسطر، استخدم
-  لملفات الجداول الخاصة بمعالجة محددات Local، استخدم
-  لتصدير CSV `input,status,format,...` يبرز الترميزات القانونية والتحذيرات
-  واخفاقات التحليل في مرور واحد. يتخطى المساعد الصفوف غير المحلية افتراضيا،
-  ويحول كل ادخال متبق الى الترميز المطلوب (I105/مضغوط/hex/JSON)، ويحافظ على
-  النطاق الاصلي عندما يتم تعيين `legacy  suffix`. اقرنه مع `--allow-errors`
-  لمواصلة الفحص حتى عند وجود literals تالفة.
-7. يمكن لاتمتة CI/lint تشغيل `ci/check_address_normalize.sh` الذي يستخرج محددات
-   Local من `fixtures/account/address_vectors.json`، ويحولها عبر
-   `iroha tools address normalize`، ويعيد تشغيل
-   `iroha tools address audit` لاثبات ان الاصدارات لم تعد تصدر digests
-   Local.
+### Release note snippet (wallet & explorer)
 
-`torii_address_local8_total{endpoint}` بالاضافة الى
-`torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}`, ولوحة Grafana
-`dashboards/grafana/address_ingest.json` توفر اشارة الالتزام: عندما تعرض لوحات
-الانتاج صفرا من عمليات ارسال Local الشرعية وصفرا من تصادمات Local-12 لمدة 30 يوما
-متتالية، سيحول Torii بوابة Local-8 الى فشل صارم على mainnet، يليه Local-12 بعد
-ان تمتلك النطاقات العالمية ادخالات سجل مطابقة. اعتبر مخرجات CLI الاشعار الموجه
-للمشغل لهذا التجميد - نفس سلسلة التحذير تستخدم عبر tooltips في SDK والاتمتة
-للحفاظ على التوافق مع معايير الخروج في خارطة الطريق. يستخدم Torii الان افتراضيا
-تشخيص regressions. استمر في عكس `torii_address_domain_total{domain_kind}` الى
-Grafana (`dashboards/grafana/address_ingest.json`) حتى يتمكن حزمة دليل ADDR-7 من
-اثبات ان `domain_kind="local12"` بقيت صفرا خلال نافذة 30 يوما المطلوبة قبل ان
-تعطل mainnet المحددات القديمة. حزمة Alertmanager
-(`dashboards/alerts/address_ingest_rules.yml`) تضيف ثلاث حواجز:
+Include the following bullet in wallet/explorer release notes when shipping the cutover:
 
-- `AddressLocal8Resurgence` يستدعي عندما يبلغ سياق عن زيادة Local-8 جديدة. اوقف
-  عمليات rollout للوضع الصارم، حدد سطح SDK المخالف في لوحة المتابعة، واضبط
-  الافتراضي (`true`).
-- `AddressLocal12Collision` يعمل عندما يقوم اسمان Local-12 بعمل hash الى نفس
-  digest. اوقف ترويج manifests، شغل عدة Local -> Global لتدقيق ربط digests، و
-  نسق مع حوكمة Nexus قبل اعادة اصدار ادخال السجل او اعادة تفعيل rollouts
-  downstream.
-- `AddressInvalidRatioSlo` يحذر عندما يتجاوز معدل عدم الصلاحية على مستوى
-  الاسطول (باستثناء رفض Local-8/strict-mode) نسبة 0.1% لمدة عشر دقائق. استخدم
-  `torii_address_invalid_total` لتحديد السياق/السبب المسؤول ونسق مع فريق SDK
-  المالك قبل اعادة تفعيل الوضع الصارم.
-
-### مقتطف مذكرة الاصدار (محفظة ومُستكشف)
-
-ادرج النقطة التالية في ملاحظات اصدار المحفظة/المستكشف عند تنفيذ cutover:
-
-> **العناوين:** تمت اضافة مساعد `iroha tools address normalize`
-> وربطه في CI (`ci/check_address_normalize.sh`) حتى تتمكن مسارات المحفظة/المستكشف
-> من تحويل محددات Local القديمة الى صيغ I105/مضغوطة قانونية قبل حظر Local-8/Local-12
-> على mainnet. حدث اي عمليات تصدير مخصصة لتشغيل الامر وارفق القائمة المعيارية
-> بحزمة دليل الاصدار.
+> **Addresses:** Copy/share flows now use canonical I105 account ids
+> only. On-chain aliases remain available as separate routing labels in
+> `name@dataspace` / `name@domain.dataspace` form and resolve to the same
+> canonical i105 account id.

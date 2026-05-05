@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e39dc94f52395bd9323177df1a7feeb7bbd4f9a3cdea07b02f9d60e7826e199e
-source_last_modified: "2026-01-22T16:26:46.506936+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
 title: Norito Quickstart
 description: Build, validate, and deploy a Kotodama contract with the release tooling and default single-peer network.
 slug: /norito/quickstart
@@ -19,7 +19,7 @@ Norito болон Kotodama нь анх удаа: тодорхойлогч нэг
 лавлагаа CLI.
 
 Гэрээний жишээ нь дуудлага хийгчийн дансанд түлхүүр/утга хос бичдэг тул та боломжтой
-`iroha_cli` ашиглан гаж нөлөөг нэн даруй шалгана уу.
+`iroha` ашиглан гаж нөлөөг нэн даруй шалгана уу.
 
 ## Урьдчилсан нөхцөл
 
@@ -27,7 +27,7 @@ Norito болон Kotodama нь анх удаа: тодорхойлогч нэг
   `defaults/docker-compose.single.yml`-д тодорхойлсон түүврийн үе тэнгийн загварыг эхлүүлэх).
 - Хэрэв та татаж авахгүй бол туслах хоёртын файлыг бүтээхэд зориулсан Rust toolchain (1.76+).
   хэвлэгдсэн нь.
-- `koto_compile`, `ivm_run`, `iroha_cli` хоёртын файлууд. Та тэдгээрийг дээрээс нь барьж болно
+- `koto_compile`, `ivm_run`, `iroha` хоёртын файлууд. Та тэдгээрийг дээрээс нь барьж болно
   Доор үзүүлсэн шиг ажлын талбарыг шалгах эсвэл тохирох хувилбарыг татаж авах:
 
 ```sh
@@ -66,8 +66,14 @@ seiyaku Hello {
     info("Hello from Kotodama");
   }
 
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
   // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),
@@ -107,7 +113,7 @@ ABI толгой хэсэг, онцлог битүүд болон экспорт
 Өгөгдмөл хөгжүүлэлтийн таних тэмдэг нь нийтийн түлхүүрээс үүсэлтэй
 `defaults/client.toml` тул дансны ID нь байна
 ```
-i105...
+<i105-account-id>
 ```
 
 Torii URL, гинжин ID болон гарын үсэг зурах түлхүүрийг оруулахын тулд тохиргооны файлыг ашиглана уу:
@@ -129,7 +135,7 @@ syscall эсвэл хийсэн гүйлгээний хэшийн CLI гарал
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

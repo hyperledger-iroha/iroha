@@ -30,7 +30,7 @@ MOCHI 分为两个主要 crate，位于新的 `/mochi` 目录中（请参阅
 [MOCHI 快速入门](mochi/quickstart.md) 用于构建和使用说明）：
 
 1. `mochi-core`：一个无头库，负责配置模板、密钥和创世材料生成、监督子进程、驱动 Torii 客户端以及管理文件系统状态。
-2. `mochi-ui-egui`：基于 `egui`/`eframe` 构建的桌面应用程序，用于呈现用户界面并通过 `mochi-core` API 委托所有编排。
+2. `mochi-ui`：基于 `egui`/`eframe` 构建的桌面应用程序，用于呈现用户界面并通过 `mochi-core` API 委托所有编排。
 
 其他前端（例如 Tauri shell）可以稍后连接到 `mochi-core`，而无需重新设计管理程序逻辑。
 
@@ -49,7 +49,7 @@ MOCHI 分为两个主要 crate，位于新的 `/mochi` 目录中（请参阅
 - **交易编辑器**：阶段铸造/转移指令草稿，将其批处理为签名交易，预览 Norito 有效负载，通过 `/transaction` 提交，并监控生成的事件；保险库签名挂钩仍然是未来的迭代。
 - **快照和重新创世**：编排 Kura 快照导出/导入、擦除存储并重新生成创世材料以进行快速重置。
 
-## UI 层 (`mochi-ui-egui`)
+## UI 层 (`mochi-ui`)
 
 - 使用 `egui`/`eframe` 传送单个本机可执行文件，无需外部运行时。
 - 布局包括：

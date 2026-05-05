@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7c9a8e27bb8f586eac6bf4925cc69357dfa6d3f94c3dcf9e032b916c27fadf21
-source_last_modified: "2025-11-07T12:25:50.867928+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -17,13 +17,13 @@ slug: /norito/quickstart
 
 Este recorrido refleja el flujo que esperamos que sigan los desarrolladores al aprender Norito y Kotodama por primera vez: arrancar una red determinista de un solo peer, compilar un contrato, hacer un dry-run local y luego enviarlo por Torii con el CLI de referencia.
 
-El contrato de ejemplo escribe un par clave/valor en la cuenta del llamador para que puedas verificar el efecto lateral de inmediato con `iroha_cli`.
+El contrato de ejemplo escribe un par clave/valor en la cuenta del llamador para que puedas verificar el efecto lateral de inmediato con `iroha`.
 
 ## Requisitos previos
 
 - [Docker](https://docs.docker.com/engine/install/) con Compose V2 habilitado (se usa para iniciar el peer de muestra definido en `defaults/docker-compose.single.yml`).
 - Toolchain de Rust (1.76+) para construir los binarios auxiliares si no descargas los publicados.
-- Binarios `koto_compile`, `ivm_run` e `iroha_cli`. Puedes construirlos desde el checkout del workspace como se muestra abajo o descargar los artifacts del release correspondiente:
+- Binarios `koto_compile`, `ivm_run` e `iroha`. Puedes construirlos desde el checkout del workspace como se muestra abajo o descargar los artifacts del release correspondiente:
 
 ```sh
 cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
@@ -58,8 +58,14 @@ seiyaku Hello {
     info("Hello from Kotodama");
   }
 
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
   // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),
@@ -91,7 +97,7 @@ El runner imprime el log `info("Hello from Kotodama")` y ejecuta el syscall `SET
 
 Con el nodo aun corriendo, envia el bytecode compilado a Torii usando el CLI. La identidad de desarrollo por defecto se deriva de la clave publica en `defaults/client.toml`, por lo que el ID de cuenta es
 ```
-i105...
+<i105-account-id>
 ```
 
 Usa el archivo de configuracion para suministrar la URL de Torii, el chain ID y la clave de firma:
@@ -111,7 +117,7 @@ Usa el mismo perfil del CLI para obtener el account detail que escribio el contr
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

@@ -103,17 +103,17 @@ Struct ReservedAssignmentRequestV1 {
 
 ## 3. REST эндпоинты| Réponse | Méthode | Charge utile | Description |
 |--------------|-------|---------|--------------|
-| `/v1/sns/registrations` | POSTER | `RegisterNameRequestV1` | Enregistrez-vous ou ouvrez-moi. Разрешает ценовой tier, проверяет доказательства платежа/управления, испускает события реестра. |
-| `/v1/sns/registrations/{selector}/renew` | POSTER | `RenewNameRequestV1` | Продлевает срок. La grâce/rédemption occupe une place importante dans la politique. |
-| `/v1/sns/registrations/{selector}/transfer` | POSTER | `TransferNameRequestV1` | Avant de procéder à la mise en service du système, veuillez procéder à l'installation. |
-| `/v1/sns/registrations/{selector}/controllers` | METTRE | `UpdateControllersRequestV1` | Заменяет набор contrôleurs; проверяет подписанные адреса аккаунтов. |
-| `/v1/sns/registrations/{selector}/freeze` | POSTER | `FreezeNameRequestV1` | Geler le gardien/conseil. Требует tuteur ticket и ссылку на gouvernance dossier. |
-| `/v1/sns/registrations/{selector}/freeze` | SUPPRIMER | `GovernanceHookV1` | Dégeler après l'utilisation ; убеждается, что le conseil outrepasse зафиксирован. |
+| `/v1/sns/names` | POSTER | `RegisterNameRequestV1` | Enregistrez-vous ou ouvrez-moi. Разрешает ценовой tier, проверяет доказательства платежа/управления, испускает события реестра. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POSTER | `RenewNameRequestV1` | Продлевает срок. La grâce/rédemption occupe une place importante dans la politique. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POSTER | `TransferNameRequestV1` | Avant de procéder à la mise en service du système, veuillez procéder à l'installation. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | METTRE | `UpdateControllersRequestV1` | Заменяет набор contrôleurs; проверяет подписанные адреса аккаунтов. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POSTER | `FreezeNameRequestV1` | Geler le gardien/conseil. Требует tuteur ticket и ссылку на gouvernance dossier. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | SUPPRIMER | `GovernanceHookV1` | Dégeler après l'utilisation ; убеждается, что le conseil outrepasse зафиксирован. |
 | `/v1/sns/reserved/{selector}` | POSTER | `ReservedAssignmentRequestV1` | Назначение réservé имен intendant/conseil. |
 | `/v1/sns/policies/{suffix_id}` | OBTENIR | -- | Получает текущую `SuffixPolicyV1` (кэшируемо). |
-| `/v1/sns/registrations/{selector}` | OBTENIR | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |
+| `/v1/sns/names/{namespace}/{literal}` | OBTENIR | -- | Возвращает текущий `NameRecordV1` + эффективное состояние (Active, Grace, и т. д.). |
 
-**Sélecteur de sélection :** le segment `{selector}` est composé d'I105, compressé (`sora`) ou hexadécimal canonique par ADDR-5 ; Torii est normalisé par rapport à `NameSelectorV1`.**Modèle d'ordinateur :** nos entreprises utilisent Norito JSON avec `code`, `message`, `details`. Les codes incluent `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+**Sélecteur de sélection :** le segment `{selector}` est composé d'i105, compressé (`sora`) ou hexadécimal canonique par ADDR-5 ; Torii est normalisé par rapport à `NameSelectorV1`.**Modèle d'ordinateur :** nos entreprises utilisent Norito JSON avec `code`, `message`, `details`. Les codes incluent `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
 ### 3.1 CLI помощники (требование ручного регистратора N0)
 
@@ -124,7 +124,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -149,7 +149,7 @@ Les personnes supplémentaires offrant des services, des parents et des tuteurs�
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -157,7 +157,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -172,7 +172,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` doit être corrigé en indiquant `GovernanceHookV1` (identifiant de proposition, hachages de vote, administrateur/tuteur). Cette commande va bientôt ouvrir le connecteur `/v1/sns/registrations/{selector}/...` que les opérateurs peuvent répéter à leur guise. Torii, vous pouvez utiliser le SDK.
+`--governance-json` doit être corrigé en indiquant `GovernanceHookV1` (identifiant de proposition, hachages de vote, administrateur/tuteur). Cette commande va bientôt ouvrir le connecteur `/v1/sns/names/{namespace}/{literal}/...` que les opérateurs peuvent répéter à leur guise. Torii, vous pouvez utiliser le SDK.
 
 ## 4. Service gRPC```text
 service Registrar {
@@ -215,7 +215,7 @@ Les tests récents concernent `sns_err_governance_missing`.
 
 ### 6.1 Enregistrement standard1. Le client choisit `/v1/sns/policies/{suffix_id}` pour pouvoir accéder aux niveaux de scène, de grâce et de livraison.
 2. Adresse client `RegisterNameRequestV1` :
-   - `selector` peut être utilisé avant l'étiquette I105 ou avant l'étiquette compressée (`sora`).
+   - `selector` peut être utilisé avant l'étiquette i105 ou avant l'étiquette compressée (`sora`).
    - `term_years` dans les politiques antérieures.
    - `payment` ссылается на перевод splitter trésor/intendant.
 3. Torii prouve :
@@ -240,7 +240,7 @@ Les fonctionnalités de Grace incluent des fonctionnalités standard et une dét
 
 1. Guardian utilise le ticket `FreezeNameRequestV1`, en s'appuyant sur l'identité de l'incident.
 2. Torii doit être installé dans `NameStatus::Frozen` pour obtenir `NameFrozen`.
-3. Après le conseil d'administration, la dérogation est prise; L'opérateur utilise SUPPRIMER `/v1/sns/registrations/{selector}/freeze` avec `GovernanceHookV1`.
+3. Après le conseil d'administration, la dérogation est prise; L'opérateur utilise SUPPRIMER `/v1/sns/names/{namespace}/{literal}/freeze` avec `GovernanceHookV1`.
 4. Torii vérifie la dérogation, en utilisant `NameUnfrozen`.## 7. Validation et codes d'accès
 
 | Code | Description | HTTP |

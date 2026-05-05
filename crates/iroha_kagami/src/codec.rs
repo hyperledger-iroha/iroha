@@ -16,7 +16,7 @@ use color_eyre::{
     eyre::{Result, eyre},
     owo_colors::OwoColorize,
 };
-use iroha_data_model::{account::NewAccount, domain::Domain, peer::Peer};
+use iroha_data_model::{account::NewAccount, asset::AssetId, domain::Domain, peer::Peer};
 use iroha_genesis::RawGenesisTransaction;
 use norito::{
     codec::{DecodeAll, Encode},
@@ -39,6 +39,7 @@ fn generate_map() -> ConverterMap {
     let mut map = ConverterMap::new();
 
     insert_converter::<NewAccount>(&mut map);
+    insert_converter::<AssetId>(&mut map);
     insert_converter::<Domain>(&mut map);
     insert_converter::<Peer>(&mut map);
 
@@ -381,13 +382,23 @@ mod tests {
     use std::{path::PathBuf, sync::Arc};
 
     use color_eyre::eyre::Result as EyreResult;
-    use iroha_data_model::{account::NewAccount, peer::Peer};
+    use iroha_data_model::{account::NewAccount, asset::AssetId, peer::Peer};
     use iroha_genesis::RawGenesisTransaction;
     use iroha_schema::{Compact, TypeId};
 
     use super::{
         Converter, ConverterImpl, ConverterMap, NoritoToRustArgs, NoritoToRustDecoder, generate_map,
     };
+
+    fn normalize_roundtrip_json(value: &mut norito::json::Value) {
+        let norito::json::Value::Object(map) = value else {
+            return;
+        };
+
+        if matches!(map.get("domain"), Some(norito::json::Value::Null)) {
+            map.remove("domain");
+        }
+    }
 
     #[test]
     fn json_norito_roundtrip() {
@@ -403,8 +414,10 @@ mod tests {
         let json_out = converter
             .norito_to_json(&norito)
             .expect("decode norito to json");
-        let expected: norito::json::Value = norito::json::from_str(&json).unwrap();
-        let actual: norito::json::Value = norito::json::from_str(&json_out).unwrap();
+        let mut expected: norito::json::Value = norito::json::from_str(&json).unwrap();
+        let mut actual: norito::json::Value = norito::json::from_str(&json_out).unwrap();
+        normalize_roundtrip_json(&mut expected);
+        normalize_roundtrip_json(&mut actual);
         assert_eq!(expected, actual);
     }
 
@@ -413,6 +426,7 @@ mod tests {
         let map = generate_map();
         let expected = [
             <NewAccount as TypeId>::id(),
+            <AssetId as TypeId>::id(),
             <Peer as TypeId>::id(),
             <RawGenesisTransaction as TypeId>::id(),
         ];

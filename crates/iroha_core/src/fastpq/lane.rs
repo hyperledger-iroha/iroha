@@ -183,12 +183,19 @@ fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob) {
         );
         return;
     }
+    let batch_count = batches.len();
+    let job_started = Instant::now();
+    let mut proved = 0usize;
+    let mut failed = 0usize;
+    let mut transition_count = 0usize;
     for (idx, batch) in batches.into_iter().enumerate() {
         let entry_hash = entry_hash_hex(idx, &job.witness, &batch);
+        transition_count = transition_count.saturating_add(batch.transitions.len());
         let started = Instant::now();
         match engine.prove(&batch) {
             Ok(()) => {
-                info!(
+                proved = proved.saturating_add(1);
+                debug!(
                     height = job.height,
                     view = job.view,
                     entry_hash,
@@ -198,6 +205,7 @@ fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob) {
                 );
             }
             Err(err) => {
+                failed = failed.saturating_add(1);
                 warn!(
                     height = job.height,
                     view = job.view,
@@ -208,6 +216,16 @@ fn process_job(engine: &Arc<dyn FastpqProofEngine>, job: &FastpqWitnessJob) {
             }
         }
     }
+    info!(
+        height = job.height,
+        view = job.view,
+        batch_count,
+        proved,
+        failed,
+        transition_count,
+        elapsed_ms = job_started.elapsed().as_secs_f64() * 1_000.0,
+        "fastpq lane: processed prover job"
+    );
 }
 
 fn entry_hash_hex(
@@ -238,6 +256,7 @@ mod tests {
     use crate::fastpq::{
         FastpqPublicInputsTemplate, authority_digest, batches_from_bundles, transition_batch_to_dto,
     };
+    use iroha_data_model::domain::DomainId;
     use iroha_data_model::fastpq::{
         TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle,
     };
@@ -333,7 +352,7 @@ mod tests {
                     from_account: (*ALICE_ID).clone(),
                     to_account: (*BOB_ID).clone(),
                     asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                        "wonderland".parse().unwrap(),
+                        DomainId::try_new("wonderland", "universal").unwrap(),
                         "rose".parse().unwrap(),
                     ),
                     amount: Numeric::from(10u32),

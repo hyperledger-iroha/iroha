@@ -1,24 +1,17 @@
 ---
 id: account-address-status
-lang: az
-direction: ltr
-source: docs/portal/docs/reference/account-address-status.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
 title: Account address compliance
 description: Summary of the ADDR-2 fixture workflow and how SDK teams stay in sync.
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
 ---
 
-Kanonik ADDR-2 paketi (`fixtures/account/address_vectors.json`) çəkir
-I105 (üstünlük verilir), sıxılmış (`sora`, ikinci ən yaxşı; yarım/tam eni), çox imzalı və mənfi qurğular.
-Hər SDK + Torii səthi eyni JSON-a əsaslanır ki, biz istənilən kodek aşkarlaya bilək
-istehsala çatmazdan qabaq sürünür. Bu səhifə daxili status brifinqini əks etdirir
-(kök deposunda `docs/source/account_address_status.md`) belə portal
-oxucular mono-repo qazmadan iş prosesinə istinad edə bilərlər.
+The canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) captures
+canonical I105, multisignature, and negative fixtures.
+Every SDK + Torii surface relies on the same JSON so we can detect any codec
+drift before it hits production. This page mirrors the internal status brief
+(`docs/source/account_address_status.md` in the root repository) so portal
+readers can reference the workflow without digging through the mono-repo.
 
-## Paketi bərpa edin və ya yoxlayın
+## Regenerate or verify the bundle
 
 ```bash
 # Refresh the canonical fixture (writes fixtures/account/address_vectors.json)
@@ -28,19 +21,19 @@ cargo xtask address-vectors --out fixtures/account/address_vectors.json
 cargo xtask address-vectors --verify
 ```
 
-Bayraqlar:
+Flags:
 
-- `--stdout` — ad-hoc yoxlama üçün JSON-u stdout-a buraxın.
-- `--out <path>` — fərqli yola yazın (məsələn, yerli dəyişiklikləri fərqləndirərkən).
-- `--verify` — işçi nüsxəni təzə yaradılmış məzmunla müqayisə edin (ola bilməz
-  `--stdout` ilə birləşdirilə bilər).
+- `--stdout` — emit the JSON to stdout for ad-hoc inspection.
+- `--out <path>` — write to a different path (e.g., when diffing changes locally).
+- `--verify` — compare the working copy against freshly generated content (cannot
+  be combined with `--stdout`).
 
-CI iş axını **Ünvan Vektor Drifti** `cargo xtask address-vectors --verify` ilə işləyir
-armatur, generator və ya sənədlər dərhal rəyçiləri xəbərdar etmək üçün dəyişdikdə.
+The CI workflow **Address Vector Drift** runs `cargo xtask address-vectors --verify`
+any time the fixture, generator, or docs change to alert reviewers immediately.
 
-## Aparatı kim istehlak edir?
+## Who consumes the fixture?
 
-| Səthi | Doğrulama |
+| Surface | Validation |
 |---------|------------|
 | Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` |
 | Torii (server) | `crates/iroha_torii/tests/account_address_vectors.rs` |
@@ -48,14 +41,14 @@ armatur, generator və ya sənədlər dərhal rəyçiləri xəbərdar etmək ü�
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-Hər bir gediş-gəliş kanonik bayt + I105 + sıxılmış (`sora`, ikinci ən yaxşı) kodlaşdırma və
-Norito tipli xəta kodlarının neqativ hallar üçün fikstürə uyğun olduğunu yoxlayır.
+Each harness round-trips canonical bytes + i105 encodings and
+checks that Norito-style error codes line up with the fixture for negative cases.
 
-## Avtomatlaşdırma lazımdır?
+## Need automation?
 
-Buraxılış alətləri köməkçi ilə fiksasiya yeniləmələrini yaza bilər
-`scripts/account_fixture_helper.py`, kanonikləri əldə edir və ya təsdiqləyir
-kopyalama/yapışdırma addımları olmadan paket:
+Release tooling can script fixture refreshes with the helper
+`scripts/account_fixture_helper.py`, which fetches or verifies the canonical
+bundle without copy/paste steps:
 
 ```bash
 # Download to a custom path (defaults to fixtures/account/address_vectors.json)
@@ -71,20 +64,20 @@ python3 scripts/account_fixture_helper.py check \
   --metrics-label android
 ```
 
-Köməkçi `--source` və ya `IROHA_ACCOUNT_FIXTURE_URL`-i ləğv edir
-mühit dəyişəni, beləliklə SDK CI işləri onların üstünlük verdiyi güzgüyə işarə edə bilər.
-`--metrics-out` verildikdə köməkçi yazır
-Kanonik ilə birlikdə `account_address_fixture_check_status{target=\"…\"}`
-SHA-256 həzm (`account_address_fixture_remote_info`) belə ki, Prometheus mətn faylı
-kollektorlar və Grafana tablosuna `account_address_fixture_status` sübut edə bilər
-hər səth sinxron qalır. Hədəf `0` məlumat verdikdə xəbərdar olun. üçün
-çox səthli avtomatlaşdırma `ci/account_fixture_metrics.sh` sarğı istifadə edin
-(təkrarlanan `--target label=path[::source]` qəbul edir) beləliklə, çağırış komandaları dərc edə bilər
-node-exporter mətn faylı kollektoru üçün birləşdirilmiş `.prom` faylı.
+The helper accepts `--source` overrides or the `IROHA_ACCOUNT_FIXTURE_URL`
+environment variable so SDK CI jobs can point at their preferred mirror.
+When `--metrics-out` is supplied the helper writes
+`account_address_fixture_check_status{target=\"…\"}` along with the canonical
+SHA-256 digest (`account_address_fixture_remote_info`) so Prometheus textfile
+collectors and Grafana dashboard `account_address_fixture_status` can prove
+every surface remains in sync. Alert whenever a target reports `0`. For
+multi-surface automation use the wrapper `ci/account_fixture_metrics.sh`
+(accepts repeated `--target label=path[::source]`) so on-call teams can publish
+one consolidated `.prom` file for the node-exporter textfile collector.
 
-## Tam qısa məlumat lazımdır?
+## Need the full brief?
 
-Tam ADDR-2 uyğunluq statusu (sahiblər, monitorinq planı, açıq fəaliyyət elementləri)
-boyunca depo daxilində `docs/source/account_address_status.md`-də yaşayır
-Ünvan Strukturu RFC (`docs/account_structure.md`) ilə. Bu səhifəni a kimi istifadə edin
-sürətli əməliyyat xatırlatma; ətraflı təlimat üçün repo sənədlərinə müraciət edin.
+The full ADDR-2 compliance status (owners, monitoring plan, open action items)
+lives in `docs/source/account_address_status.md` within the repository along
+with the Address Structure RFC (`docs/account_structure.md`). Use this page as a
+quick operational reminder; defer to the repo docs for in-depth guidance.

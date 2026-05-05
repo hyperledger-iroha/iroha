@@ -4,20 +4,20 @@ use iroha_data_model::prelude::PublicKey;
 use iroha_primitives::numeric::Numeric;
 use ivm::mock_wsv::{
     AccountId, AssetDefinitionId, DomainId, Mintable, MockWorldStateView, NftId, PermissionToken,
-    ScopedAccountId,
 };
 
 fn num(value: u64) -> Numeric {
     Numeric::from(value)
 }
 
-fn test_account(domain: &DomainId, public_key: PublicKey) -> ScopedAccountId {
-    ScopedAccountId::new(domain.clone(), public_key)
+fn test_account(domain: &DomainId, public_key: PublicKey) -> AccountId {
+    let _domain = domain;
+    AccountId::new(public_key)
 }
 
 #[test]
 fn test_mock_wsv_basic_ops() {
-    let d: DomainId = "domain".parse().unwrap();
+    let d: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -27,7 +27,7 @@ fn test_mock_wsv_basic_ops() {
     let acc1 = test_account(&d, pk1);
     let acc2 = test_account(&d, pk2);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -50,7 +50,7 @@ fn test_mock_wsv_basic_ops() {
 
 #[test]
 fn test_mock_wsv_rejects_scaled_numeric() {
-    let d: DomainId = "domain".parse().unwrap();
+    let d: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -60,7 +60,7 @@ fn test_mock_wsv_rejects_scaled_numeric() {
     let acc1 = test_account(&d, pk1);
     let acc2 = test_account(&d, pk2);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -84,13 +84,13 @@ fn test_mock_wsv_rejects_scaled_numeric() {
 
 #[test]
 fn test_register_and_mint_once() {
-    let d: DomainId = "domain".parse().unwrap();
+    let d: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
     let acc = test_account(&d, pk);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
     let mut wsv = MockWorldStateView::new();
@@ -109,13 +109,13 @@ fn test_register_and_mint_once() {
 
 #[test]
 fn test_register_and_mint_limited() {
-    let d: DomainId = "domain".parse().unwrap();
+    let d: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
     let acc = test_account(&d, pk);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "ticket".parse().unwrap(),
     );
     let mut wsv = MockWorldStateView::new();
@@ -135,13 +135,13 @@ fn test_register_and_mint_limited() {
 
 #[test]
 fn test_limited_asset_budget_exhaustion() {
-    let d: DomainId = "domain".parse().unwrap();
+    let d: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
     let acc = test_account(&d, pk);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "badge".parse().unwrap(),
     );
     let mut wsv = MockWorldStateView::new();
@@ -160,7 +160,7 @@ fn test_limited_asset_budget_exhaustion() {
 
 #[test]
 fn test_balance_permission() {
-    let d: DomainId = "domain".parse().unwrap();
+    let d: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -170,36 +170,30 @@ fn test_balance_permission() {
     let acc1 = test_account(&d, pk1);
     let acc2 = test_account(&d, pk2);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
     let mut wsv = MockWorldStateView::with_balances(&[((acc1.clone(), asset.clone()), num(100))]);
     wsv.add_account_unchecked(acc2.clone());
-    wsv.grant_permission(
-        &acc1,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&acc1)),
-    );
+    wsv.grant_permission(&acc1, PermissionToken::ReadAccountAssets(acc1.clone()));
 
     // acc2 should not see acc1's balance without permission
     assert_eq!(wsv.balance_checked(&acc2, &acc1, &asset), None);
     // grant permission to acc2
-    wsv.grant_permission(
-        &acc2,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&acc1)),
-    );
+    wsv.grant_permission(&acc2, PermissionToken::ReadAccountAssets(acc1.clone()));
     assert_eq!(wsv.balance_checked(&acc2, &acc1, &asset), Some(num(100)));
 }
 
 #[test]
 fn unregister_asset_after_burning_out() {
-    let d: DomainId = "domain".parse().unwrap();
+    let d: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
     let acc = test_account(&d, pk);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -211,7 +205,7 @@ fn unregister_asset_after_burning_out() {
 
 #[test]
 fn unregister_account_after_transferring_everything_out() {
-    let d: DomainId = "domain".parse().unwrap();
+    let d: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -221,7 +215,7 @@ fn unregister_account_after_transferring_everything_out() {
     let acc1 = test_account(&d, pk1);
     let acc2 = test_account(&d, pk2);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -236,8 +230,10 @@ fn unregister_account_after_transferring_everything_out() {
 
 #[test]
 fn unregister_account_detaches_subject_and_preserves_state_for_relink() {
-    let first_domain: DomainId = "domain".parse().unwrap();
-    let second_domain: DomainId = "domain-2".parse().unwrap();
+    let first_domain: DomainId =
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let second_domain: DomainId =
+        iroha_data_model::DomainId::try_new("domain-2", "universal").unwrap();
     let account_pk: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
@@ -250,7 +246,7 @@ fn unregister_account_detaches_subject_and_preserves_state_for_relink() {
     let account_relinked = test_account(&second_domain, account_pk);
     let admin = test_account(&first_domain, admin_pk);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
 
@@ -270,20 +266,20 @@ fn unregister_account_detaches_subject_and_preserves_state_for_relink() {
     assert!(wsv.grant_role(&account, "minter"));
     wsv.grant_permission(
         &account,
-        PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&account)),
+        PermissionToken::ReadAccountAssets(account.clone()),
     );
 
     assert!(wsv.has_permission(&account, &PermissionToken::MintAsset(asset.clone())));
     assert!(wsv.has_permission(
         &account,
-        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&account))
+        &PermissionToken::ReadAccountAssets(account.clone())
     ));
 
     assert!(wsv.unregister_account(&account));
     assert!(!wsv.has_permission(&account, &PermissionToken::MintAsset(asset.clone())));
     assert!(!wsv.has_permission(
         &account,
-        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&account))
+        &PermissionToken::ReadAccountAssets(account.clone())
     ));
 
     assert!(wsv.register_account(&admin, account_relinked.clone()));
@@ -293,14 +289,16 @@ fn unregister_account_detaches_subject_and_preserves_state_for_relink() {
     ));
     assert!(wsv.has_permission(
         &account_relinked,
-        &PermissionToken::ReadAccountAssets(ivm::mock_wsv::AccountId::from(&account_relinked))
+        &PermissionToken::ReadAccountAssets(account_relinked.clone())
     ));
 }
 
 #[test]
 fn unregister_domain_rejects_cross_domain_nfts() {
-    let nft_domain: DomainId = "nft-domain".parse().unwrap();
-    let holder_domain: DomainId = "holder-domain".parse().unwrap();
+    let nft_domain: DomainId =
+        iroha_data_model::DomainId::try_new("nft-domain", "universal").unwrap();
+    let holder_domain: DomainId =
+        iroha_data_model::DomainId::try_new("holder-domain", "universal").unwrap();
     let pk: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
@@ -321,9 +319,11 @@ fn unregister_domain_rejects_cross_domain_nfts() {
 }
 
 #[test]
-fn subject_links_can_span_multiple_domains_and_are_queryable() {
-    let first_domain: DomainId = "domain".parse().unwrap();
-    let second_domain: DomainId = "domain-2".parse().unwrap();
+fn account_domain_links_are_queryable_and_removed_with_account_unregister() {
+    let first_domain: DomainId =
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let second_domain: DomainId =
+        iroha_data_model::DomainId::try_new("domain-2", "universal").unwrap();
     let admin_pk: PublicKey =
         "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
             .parse()
@@ -336,23 +336,26 @@ fn subject_links_can_span_multiple_domains_and_are_queryable() {
     let admin = test_account(&first_domain, admin_pk);
     let scoped_first = test_account(&first_domain, subject_pk.clone());
     let scoped_second = test_account(&second_domain, subject_pk);
-    let admin_subject = AccountId::from(&admin);
-    let subject = AccountId::from(&scoped_first);
+    let admin_subject = admin.clone();
+    let subject = scoped_first.clone();
 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(admin.clone());
     wsv.grant_permission(&admin, PermissionToken::RegisterDomain);
     wsv.grant_permission(&admin, PermissionToken::RegisterAccount);
 
+    assert!(wsv.register_domain(&admin, first_domain.clone()));
     assert!(wsv.register_domain(&admin, second_domain.clone()));
     assert!(wsv.register_account(&admin, scoped_first.clone()));
-    assert!(wsv.register_account(&admin, scoped_second.clone()));
+    assert!(wsv.link_subject_to_domain(admin.clone(), first_domain.clone()));
+    assert!(wsv.link_subject_to_domain(subject.clone(), first_domain.clone()));
+    assert!(wsv.link_subject_to_domain(subject.clone(), second_domain.clone()));
 
     wsv.grant_permission(&scoped_first, PermissionToken::RegisterAssetDefinition);
     assert!(wsv.has_permission(&scoped_second, &PermissionToken::RegisterAssetDefinition));
 
     assert_eq!(
-        wsv.linked_domains_for_subject(&subject),
+        wsv.domains_for_account(&subject),
         vec![first_domain.clone(), second_domain.clone()]
     );
     let first_domain_subjects = wsv.linked_subjects_for_domain(&first_domain);
@@ -365,9 +368,6 @@ fn subject_links_can_span_multiple_domains_and_are_queryable() {
     );
 
     assert!(wsv.unregister_account(&scoped_first));
-    assert_eq!(
-        wsv.linked_domains_for_subject(&subject),
-        vec![second_domain.clone()]
-    );
-    assert!(wsv.has_permission(&scoped_second, &PermissionToken::RegisterAssetDefinition));
+    assert!(wsv.domains_for_account(&subject).is_empty());
+    assert!(!wsv.has_permission(&scoped_second, &PermissionToken::RegisterAssetDefinition));
 }

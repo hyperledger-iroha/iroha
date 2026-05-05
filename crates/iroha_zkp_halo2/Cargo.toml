@@ -24,12 +24,17 @@ parking_lot = { workspace = true }
 poseidon-primitives = "0.2.0"
 
 [dev-dependencies]
-hex-literal = { workspace = true }
 criterion = { workspace = true }
+hex-literal = { workspace = true }
 
 [features]
 default = []
+bench = []
 # Mirror Norito derive cfgs so the derive macro can see destination-crate features
 schema-structural = ["dep:iroha_schema"]
 parallel = ["dep:rayon"]
 goldilocks_backend = []
+
+[[bench]]
+name = "bench_ipa"
+harness = false

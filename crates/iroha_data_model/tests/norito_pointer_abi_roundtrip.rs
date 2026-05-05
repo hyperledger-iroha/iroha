@@ -38,9 +38,9 @@ fn manifest_pointer_roundtrip() {
         access_set_hints: Some(AccessSetHints {
             read_keys: vec![
                 format!("account:{account_id}"),
-                "asset:rose#wonderland".to_owned(),
+                "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM".to_owned(),
             ],
-            write_keys: vec!["asset.detail:rose#wonderland:balance".to_owned()],
+            write_keys: vec!["asset.detail:62Fk4FPcMuLvW5QjDGNF2a4jAmjM:balance".to_owned()],
         }),
         entrypoints: None,
         kotoba: None,
@@ -62,7 +62,7 @@ fn manifest_pointer_roundtrip() {
 fn nft_syscall_pointers_roundtrip() {
     let keypair = KeyPair::random();
     let (public_key, _) = keypair.into_parts();
-    let domain: DomainId = "wonderland".parse().expect("domain id");
+    let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let account_id = AccountId::new(public_key);
 
     let nft_name: Name = "collectible".parse().expect("valid name");

@@ -36,7 +36,7 @@ translator: manual
 - AEAD/סימטרי: ‏`aes-gcm`, ‏`chacha20poly1305`, ‏`aead` traits (RustCrypto) — בחירות קנוניות.
 - חתימות/ECC: ‏`ed25519-dalek`, ‏`x25519-dalek` (פרויקט dalek), ‏`k256` (RustCrypto), ‏`secp256k1` (קישוריות libsecp) — כולם לגיטימיים; מומלץ לצמצם לשכבה אחת (`k256` או `secp256k1`) כשאפשר כדי להפחית שטח קוד כפול.
 - BLS12-381/ZK: ‏`blstrs`, ‏`halo2_*` — מקובלים בשימוש בייצור בעולם ה-ZK.
-- PQ: ‏`pqcrypto-dilithium`, ‏`pqcrypto-traits` — קרייטים אמינים כייחוס.
+- PQ: ‏`pqcrypto-mldsa`, ‏`pqcrypto-traits` — קרייטים אמינים כייחוס.
 - TLS: ‏`rustls`, ‏`tokio-rustls`, ‏`hyper-rustls` — מחסנית TLS מודרנית ונפוצה ב-Rust.
 - Noise: ‏`snow` — מימוש תקני.
 - סריאליזציה: ‏`parity-scale-codec` הוא הסטנדרט ל-SCALE. Serde הוסרה מתלותי הייצור ברחבי המרחב; מחוללי/כותבי Norito מכסים את כל מסלולי הריצה. שאר ההפניות ל-Serde נשארות בתיעוד היסטורי, תסריטי הגנה או רשימות-הלבן של בדיקות בלבד.

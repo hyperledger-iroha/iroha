@@ -33,7 +33,17 @@ public final class CudaAcceleratorsNativeSmokeTests {
     assertPresent(
         CudaAccelerators.bn254Add(new long[] {1, 0, 0, 0}, new long[] {2, 0, 0, 0}), "bn254Add");
     assertPresent(
+        CudaAccelerators.bn254AddBatch(
+            new long[][] {{1, 0, 0, 0}, {2, 0, 0, 0}},
+            new long[][] {{2, 0, 0, 0}, {3, 0, 0, 0}}),
+        "bn254AddBatch");
+    assertPresent(
         CudaAccelerators.bn254Mul(new long[] {3, 0, 0, 0}, new long[] {7, 0, 0, 0}), "bn254Mul");
+    assertPresent(
+        CudaAccelerators.bn254MulBatch(
+            new long[][] {{3, 0, 0, 0}, {7, 0, 0, 0}},
+            new long[][] {{7, 0, 0, 0}, {3, 0, 0, 0}}),
+        "bn254MulBatch");
     System.out.println("[CudaAcceleratorsNativeSmokeTests] CUDA backend returned results successfully");
   }
 

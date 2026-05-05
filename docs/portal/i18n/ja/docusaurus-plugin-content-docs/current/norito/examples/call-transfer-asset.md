@@ -14,9 +14,9 @@ Kotodama のエントリポイントがホストの `transfer_asset` 命令を�
 
 ## 台帳ウォークスルー
 
-- コントラクトの権限者（例: `i105...`）に転送対象の資産を用意し、権限者に `CanTransfer` ロールまたは同等の権限を付与します。
-- `call_transfer_asset` エントリポイントを呼び出して、コントラクトアカウントから `i105...` に 5 単位を転送します。オンチェーン自動化がホスト呼び出しをラップする方法を反映しています。
-- `FindAccountAssets` または `iroha_cli ledger assets list --account i105...` で残高を確認し、イベントを調べてメタデータガードが転送コンテキストを記録したことを確かめます。
+- コントラクトの権限者（例: `<i105-account-id>`）に転送対象の資産を用意し、権限者に `CanTransfer` ロールまたは同等の権限を付与します。
+- `call_transfer_asset` エントリポイントを呼び出して、コントラクトアカウントから `<i105-account-id>` に 5 単位を転送します。オンチェーン自動化がホスト呼び出しをラップする方法を反映しています。
+- `FindAccountAssets` または `iroha_cli ledger assets list --account <i105-account-id>` で残高を確認し、イベントを調べてメタデータガードが転送コンテキストを記録したことを確かめます。
 
 ## 関連 SDK ガイド
 
@@ -31,9 +31,9 @@ Kotodama のエントリポイントがホストの `transfer_asset` 命令を�
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
-      asset_definition!("rose#wonderland"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
   }

@@ -50,7 +50,7 @@ fn envelope_hash_is_injected_into_enqueued_unshield() {
 
     // Build an Unshield instruction and pass via the vendor bridge
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let unshield = iroha_data_model::isi::zk::Unshield {
@@ -58,6 +58,7 @@ fn envelope_hash_is_injected_into_enqueued_unshield() {
         to: authority.clone(),
         public_amount: 5u128,
         inputs: vec![[0u8; 32]],
+        outputs: Vec::new(),
         proof: iroha_data_model::proof::ProofAttachment::new_inline(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![0x01, 0x02, 0x03]),

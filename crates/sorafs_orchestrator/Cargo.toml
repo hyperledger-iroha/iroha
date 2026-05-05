@@ -18,6 +18,7 @@ packed-struct = []
 packed-seq = []
 compact-len = []
 compression = []
+local-quic-proxy = ["dep:quinn", "dep:rcgen", "dep:sha2"]
 
 [dependencies]
 sorafs_car = { path = "../sorafs_car", features = ["manifest", "cli"] }
@@ -37,12 +38,13 @@ ivm = { path = "../ivm" }
 rand = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync", "net", "io-util", "fs"] }
 reqwest = { workspace = true, features = ["rustls-tls", "blocking"] }
-quinn = { version = "0.11.9", default-features = false, features = ["rustls", "runtime-tokio"] }
-rcgen = "=0.14.5"
+quinn = { version = "0.11.9", default-features = false, features = ["rustls", "runtime-tokio"], optional = true }
+rcgen = { version = "=0.14.5", optional = true }
 futures = { workspace = true }
-sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"], optional = true }
 sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
 url = { workspace = true }
+iroha_version = { path = "../iroha_version" }
 sorafs_chunker = { path = "../sorafs_chunker", optional = true }
 sorafs_manifest = { path = "../sorafs_manifest", optional = true }
 iroha_crypto = { path = "../iroha_crypto", optional = true }
@@ -53,7 +55,6 @@ futures = "0.3.31"
 tempfile = "3.23.0"
 hex = "0.4.3"
 blake3 = "1.8.2"
-rustls = { version = "0.23.35", default-features = false, features = ["std"] }
 assert_cmd = "2.1.1"
 httpmock = "0.8.2"
 sorafs_manifest = { path = "../sorafs_manifest" }

@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -163,82 +163,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Permisos sin conexión y metadatos de veredictoLas respuestas a las asignaciones sin conexión exponen los metadatos del libro mayor enriquecidos por adelantado:
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex` e `remaining_amount` se devuelven junto con el archivo sin formato.
-registre para que los paneles no tengan que decodificar las cargas útiles Norito integradas. el nuevo
-ayudantes de cuenta atrás (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) resalta la próxima fecha límite de vencimiento (actualizar → política
-→ certificado) para que las insignias de UI puedan advertir a los operadores cada vez que se haya asignado un permiso
-Quedan <24 h. El SDK
-refleja los filtros REST expuestos por `/v1/offline/allowances`:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` y el
-`requireVerdict` / `onlyMissingVerdict` booleanos. Combinaciones no válidas (para
-ejemplo `onlyMissingVerdict` + `verdictIdHex`) se rechazan localmente antes de Torii
-se llama.
+## Offline V2 readiness
+
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## Recargas sin conexión (emitir + registrarse)
-
-Utilice los ayudantes de recarga cuando desee emitir un certificado e inmediatamente
-registrarlo en el libro mayor. El SDK verifica el certificado emitido y registrado.
-Los ID coinciden antes de regresar y la respuesta incluye ambas cargas útiles. hay
-sin punto final de recarga dedicado; el ayudante encadena la emisión + registra llamadas. si
-ya tiene un certificado firmado, llame a `registerOfflineAllowance` (o
-`renewOfflineAllowance`) directamente.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii consultas y streaming (WebSockets)Los asistentes de consulta exponen el estado, las métricas Prometheus, las instantáneas de telemetría y los eventos
 transmisiones utilizando la gramática de filtro Norito. La transmisión se actualiza automáticamente a
 WebSockets y se reanuda cuando el presupuesto de reintento lo permite.
@@ -271,7 +220,7 @@ La telemetría de Explorer proporciona ayudas escritas para `/v1/explorer/metric
 puntos finales `/v1/explorer/accounts/{account_id}/qr` para que los paneles puedan reproducir el
 Las mismas instantáneas que alimentan el portal. `getExplorerMetrics()` normaliza el
 carga útil y devuelve `null` cuando la ruta está deshabilitada. Combínalo con
-`getExplorerAccountQr()` siempre que necesite literales I105 (preferido)/sora (segundo mejor) más en línea
+`getExplorerAccountQr()` siempre que necesite literales i105 (preferido)/sora (segundo mejor) más en línea
 SVG para botones de compartir.
 
 ```ts
@@ -286,7 +235,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -294,8 +243,8 @@ console.log(
 );
 ```
 
-Pasar `I105` refleja el comprimido predeterminado de Explorer
-selectores; omita la anulación para la salida I105 preferida o solicite `i105_qr`
+Pasar `i105` refleja el comprimido predeterminado de Explorer
+selectores; omita la anulación para la salida i105 preferida o solicite `i105_qr`
 cuando necesite la variante segura para QR. El literal comprimido es el segundo mejor.
 Opción exclusiva de Sora para UX. El ayudante siempre devuelve el identificador canónico,
 el literal seleccionado y los metadatos (prefijo de red, versión/módulos QR, error
@@ -506,7 +455,7 @@ canonicalizarlos antes de enviar solicitudes:- `getUaidPortfolio(uaid, { assetId
   agrupar tenencias de activos por ID de cuenta canónica; pase `assetId` para filtrar el
   cartera hasta una sola instancia de activo.
 - `getUaidBindings(uaid)` enumera cada espacio de datos ↔ cuenta
-  enlace (`I105` devuelve los literales `i105`).
+  enlace (`i105` devuelve los literales `i105`).
 - `getUaidManifests(uaid, { dataspaceId })` devuelve cada manifiesto de capacidad,
   estado del ciclo de vida y cuentas vinculadas para auditoría.
 
@@ -551,7 +500,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -561,7 +510,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

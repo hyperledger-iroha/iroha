@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -163,82 +163,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Allocations hors ligne et métadonnées de verdictLes réponses aux allocations hors ligne exposent dès le départ les métadonnées enrichies du grand livre :
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex` et `remaining_amount` sont renvoyés avec le brut
-enregistrez afin que les tableaux de bord n'aient pas à décoder les charges utiles Norito intégrées. Le nouveau
-aides au compte à rebours (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) mettre en évidence la prochaine échéance expirante (actualisation → politique
-→ certificat) afin que les badges d'assurance-chômage puissent avertir les opérateurs dès qu'une allocation est dépassée.
-<24h restantes. Le SDK
-reflète les filtres REST exposés par `/v1/offline/allowances` :
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` et le
-Booléens `requireVerdict` / `onlyMissingVerdict`. Combinaisons invalides (pour
-exemple `onlyMissingVerdict` + `verdictIdHex`) sont rejetés localement avant Torii
-est appelé.
+## Offline V2 readiness
+
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## Recharges hors ligne (problème + inscription)
-
-Utilisez les assistants de recharge lorsque vous souhaitez émettre un certificat et immédiatement
-enregistrez-le dans le grand livre. Le SDK vérifie le certificat émis et enregistré
-Les identifiants correspondent avant le retour et la réponse inclut les deux charges utiles. Il y a
-pas de point final de recharge dédié ; l'assistant enchaîne le problème + enregistre les appels. Si
-vous disposez déjà d'un certificat signé, appelez le `registerOfflineAllowance` (ou
-`renewOfflineAllowance`) directement.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii requêtes et streaming (WebSockets)Les assistants de requête exposent l'état, les métriques Prometheus, les instantanés de télémétrie et les événements
 flux utilisant la grammaire de filtre Norito. Le streaming est automatiquement mis à niveau vers
 WebSockets et reprend lorsque le budget de nouvelle tentative le permet.
@@ -271,7 +220,7 @@ La télémétrie Explorer fournit des aides typées pour le `/v1/explorer/metric
 Points de terminaison `/v1/explorer/accounts/{account_id}/qr` pour que les tableaux de bord puissent rejouer les
 mêmes instantanés qui alimentent le portail. `getExplorerMetrics()` normalise le
 charge utile et renvoie `null` lorsque la route est désactivée. Associez-le à
-`getExplorerAccountQr()` chaque fois que vous avez besoin des littéraux I105 (préféré)/sora (deuxième meilleur) plus en ligne
+`getExplorerAccountQr()` chaque fois que vous avez besoin des littéraux i105 (préféré)/sora (deuxième meilleur) plus en ligne
 SVG pour les boutons de partage.
 
 ```ts
@@ -286,7 +235,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -294,8 +243,8 @@ console.log(
 );
 ```
 
-Passer `I105` reflète la compression par défaut de l'Explorateur
-sélecteurs; omettez le remplacement de la sortie I105 préférée ou demandez `i105_qr`
+Passer `i105` reflète la compression par défaut de l'Explorateur
+sélecteurs; omettez le remplacement de la sortie i105 préférée ou demandez `i105_qr`
 lorsque vous avez besoin de la variante QR-safe. Le littéral compressé est le deuxième meilleur
 Option Sora uniquement pour l'UX. L'assistant renvoie toujours l'identifiant canonique,
 le littéral sélectionné et les métadonnées (préfixe réseau, version/modules QR, erreur
@@ -506,7 +455,7 @@ canonisez-les avant de soumettre des demandes :- `getUaidPortfolio(uaid, { asse
   regrouper les avoirs par identifiants de compte canoniques ; passer `assetId` pour filtrer le
   portefeuille jusqu’à une seule instance d’actif.
 - `getUaidBindings(uaid)` énumère chaque espace de données ↔ compte
-  liaison (`I105` renvoie les littéraux `i105`).
+  liaison (`i105` renvoie les littéraux `i105`).
 - `getUaidManifests(uaid, { dataspaceId })` renvoie chaque manifeste de capacité,
   l'état du cycle de vie et les comptes liés pour l'audit.
 
@@ -551,7 +500,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -561,7 +510,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

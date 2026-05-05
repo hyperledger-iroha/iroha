@@ -15,7 +15,7 @@ use iroha_data_model::{
     sorafs::gar::{GarEnforcementActionV1, GarEnforcementReceiptV1},
 };
 use norito::json::{self, Value};
-use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+use soranet_pq::{HedgedRngSeed, MlDsaSuite, generate_mldsa_keypair_from_seed};
 use tempfile::tempdir;
 
 #[test]
@@ -125,9 +125,9 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
             "usage": billing_usage,
             "catalog": billing_catalog,
             "guardrails": billing_guardrails,
-            "payer": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-            "treasury": "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C",
-            "asset": "xor#wonderland"
+            "payer": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+            "treasury": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+            "asset": "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
         },
         "compliance": {
             "receipts_dir": receipts_dir,
@@ -236,7 +236,12 @@ fn soranet_gateway_m2_pipeline_emits_beta_and_ga() {
 
 fn write_sample_srcv2(path: &Path) {
     let signing_key = SigningKey::from_bytes(&[0x11; 32]);
-    let mldsa_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65).expect("mldsa keypair");
+    let mldsa_keys = generate_mldsa_keypair_from_seed(
+        MlDsaSuite::MlDsa65,
+        HedgedRngSeed::from_entropy([0x65; 32]),
+        b"xtask:soranet-gateway-m2:srcv2",
+    )
+    .expect("mldsa keypair");
 
     let certificate = RelayCertificateV2 {
         relay_id: [0x11; 32],

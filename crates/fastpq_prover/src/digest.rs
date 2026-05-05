@@ -101,9 +101,13 @@ mod tests {
     use crate::{
         OperationKind, Planner, PublicInputs, StateTransition, TransitionBatch,
         backend::{self, ExecutionMode},
-        trace::{derive_polynomial_data, hash_columns_from_coefficients},
+        trace::{
+            ColumnDigests, RowUsage, TraceColumn, derive_polynomial_data,
+            hash_columns_from_coefficients,
+        },
     };
     use iroha_data_model::{
+        DomainId,
         asset::id::AssetDefinitionId,
         fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
     };
@@ -200,7 +204,7 @@ mod tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: AssetDefinitionId::new(
-                "fixture".parse().unwrap(),
+                DomainId::try_new("fixture", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
             amount: Numeric::from(75u32),
@@ -246,6 +250,124 @@ mod tests {
     fn numeric_to_bytes(value: &Numeric) -> Vec<u8> {
         let amount: u64 = value.clone().try_into().expect("numeric fits u64");
         amount.to_le_bytes().to_vec()
+    }
+
+    fn synthetic_trace() -> Trace {
+        Trace {
+            rows: 1,
+            padded_len: 1,
+            columns: vec![TraceColumn {
+                name: "synthetic".to_owned(),
+                values: vec![9],
+            }],
+            transfer_witnesses: Vec::new(),
+            row_usage: RowUsage {
+                total_rows: 1,
+                ..RowUsage::default()
+            },
+        }
+    }
+
+    #[test]
+    fn trace_commitment_rejects_parameter_mismatch_before_trace_build() {
+        let params = CANONICAL_PARAMETER_SETS
+            .iter()
+            .find(|set| set.name == "fastpq-lane-latency")
+            .copied()
+            .expect("canonical latency parameter set");
+        let batch = sample_batch();
+
+        let err = trace_commitment(&params, &batch).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::ParameterMismatch {
+                expected,
+                actual
+            } if expected == "fastpq-lane-latency" && actual == "fastpq-lane-balanced"
+        ));
+    }
+
+    #[test]
+    fn trace_commitment_from_digests_binds_parameter_name_trace_shape_and_leaves() {
+        let balanced = CANONICAL_PARAMETER_SETS
+            .iter()
+            .find(|set| set.name == "fastpq-lane-balanced")
+            .copied()
+            .expect("canonical balanced parameter set");
+        let latency = CANONICAL_PARAMETER_SETS
+            .iter()
+            .find(|set| set.name == "fastpq-lane-latency")
+            .copied()
+            .expect("canonical latency parameter set");
+        let trace = synthetic_trace();
+        let digests = ColumnDigests::new(vec![1, 2, 3], None);
+
+        let base =
+            trace_commitment_from_digests(&balanced, &trace, &digests).expect("base commitment");
+        let other_parameter =
+            trace_commitment_from_digests(&latency, &trace, &digests).expect("parameter change");
+        assert_ne!(base, other_parameter);
+
+        let mut row_changed = trace.clone();
+        row_changed.rows = 2;
+        let other_rows =
+            trace_commitment_from_digests(&balanced, &row_changed, &digests).expect("row change");
+        assert_ne!(base, other_rows);
+
+        let mut padded_changed = trace.clone();
+        padded_changed.padded_len = 2;
+        let other_padded = trace_commitment_from_digests(&balanced, &padded_changed, &digests)
+            .expect("padded length change");
+        assert_ne!(base, other_padded);
+
+        let mut column_changed = trace.clone();
+        column_changed.columns.push(TraceColumn {
+            name: "extra".to_owned(),
+            values: vec![0],
+        });
+        let other_columns = trace_commitment_from_digests(&balanced, &column_changed, &digests)
+            .expect("column count change");
+        assert_ne!(base, other_columns);
+
+        let other_leaves = trace_commitment_from_digests(
+            &balanced,
+            &trace,
+            &ColumnDigests::new(vec![1, 2, 4], None),
+        )
+        .expect("leaf change");
+        assert_ne!(base, other_leaves);
+    }
+
+    #[test]
+    fn trace_commitment_from_digests_uses_fused_parent_roots() {
+        let params = CANONICAL_PARAMETER_SETS
+            .iter()
+            .find(|set| set.name == "fastpq-lane-balanced")
+            .copied()
+            .expect("canonical balanced parameter set");
+        let trace = synthetic_trace();
+        let leaves = vec![11, 22, 33, 44];
+        let scalar = ColumnDigests::new(leaves.clone(), None);
+        let fused = ColumnDigests::new(leaves, Some(vec![55, 66]));
+
+        let scalar_commitment =
+            trace_commitment_from_digests(&params, &trace, &scalar).expect("scalar commitment");
+        let fused_commitment =
+            trace_commitment_from_digests(&params, &trace, &fused).expect("fused commitment");
+
+        assert_ne!(scalar_commitment, fused_commitment);
+    }
+
+    #[test]
+    fn append_length_prefixed_writes_little_endian_length_and_payload() {
+        let mut payload = vec![0xAA];
+
+        append_length_prefixed(&mut payload, b"fastpq").unwrap();
+
+        assert_eq!(payload[0], 0xAA);
+        assert_eq!(&payload[1..9], &6u64.to_le_bytes());
+        assert_eq!(&payload[9..], b"fastpq");
     }
 
     #[test]

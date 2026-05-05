@@ -4,12 +4,14 @@
 
 use std::{
     str::FromStr,
+    sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, Instant},
 };
 
 use eyre::{Context as _, ensure};
 use integration_tests::sandbox;
 use iroha::client::Client;
+use iroha::crypto::{Algorithm, KeyPair};
 use iroha::data_model::{
     Level,
     account::Account,
@@ -23,6 +25,7 @@ use iroha::data_model::{
     name::Name,
     prelude::*,
 };
+use iroha_config::parameters::defaults;
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,
@@ -36,10 +39,17 @@ const FINALITY_MARGIN: u64 = 2;
 const MIN_SELF_BOND: u64 = 1_000;
 const ELIGIBLE_STAKE: u64 = 2_000;
 const INELIGIBLE_STAKE: u64 = 100;
-const STAKE_DOMAIN_ID: &str = "ivm";
-const WAIT_HEIGHT: u64 = 16;
+const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
+const STAKE_DOMAIN_ID: &str = "ivm.universal";
+const WAIT_HEIGHT: u64 = EPOCH_LEN + FINALITY_MARGIN;
 const COLLECTOR_RETRY: Duration = Duration::from_secs(60);
 const COLLECTOR_POLL: Duration = Duration::from_millis(100);
+const HEIGHT_ADVANCE_RETRY: Duration = Duration::from_secs(120);
+const HEIGHT_ADVANCE_POLL: Duration = Duration::from_millis(200);
+const STAKE_ASSET_NAME: &str = "NPOS Stake";
+const NEXUS_FEE_ASSET_NAME: &str = "Nexus Fee";
+
+static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy)]
 enum StakeActivationProfile {
@@ -47,15 +57,191 @@ enum StakeActivationProfile {
     EntityCorrelationCap,
 }
 
+fn min_connected_peers_for_submit(peer_count: usize) -> u64 {
+    match peer_count {
+        0..=2 => 0,
+        _ => u64::try_from(peer_count.saturating_sub(2)).expect("peer count should fit into u64"),
+    }
+}
+
+fn pick_fallback_submit_peer_index(block_totals: &[u64], seed: usize) -> usize {
+    if block_totals.is_empty() {
+        return 0;
+    }
+    let best_total = block_totals.iter().copied().max().unwrap_or(0);
+    let best_indices = block_totals
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, total)| (*total == best_total).then_some(idx))
+        .collect::<Vec<_>>();
+    if best_indices.is_empty() {
+        return 0;
+    }
+    let offset = seed % best_indices.len();
+    best_indices[offset]
+}
+
+fn pick_submit_peer_index(
+    leader_index: Option<usize>,
+    leader_connected: bool,
+    block_totals: &[u64],
+    seed: usize,
+) -> usize {
+    let fallback = pick_fallback_submit_peer_index(block_totals, seed);
+    if leader_connected {
+        leader_index.unwrap_or(fallback)
+    } else {
+        fallback
+    }
+}
+
+fn ordered_submit_peer_indices(
+    leader_index: Option<usize>,
+    leader_connected: bool,
+    block_totals: &[u64],
+    seed: usize,
+) -> Vec<usize> {
+    if block_totals.is_empty() {
+        return Vec::new();
+    }
+
+    let fallback = pick_fallback_submit_peer_index(block_totals, seed);
+    let mut ordered = Vec::with_capacity(block_totals.len());
+    if leader_connected
+        && let Some(leader_index) = leader_index
+        && leader_index < block_totals.len()
+    {
+        ordered.push(leader_index);
+    }
+
+    for offset in 0..block_totals.len() {
+        let idx = (fallback + offset) % block_totals.len();
+        if !ordered.contains(&idx) {
+            ordered.push(idx);
+        }
+    }
+
+    ordered
+}
+
+fn submit_peer_indices_for_network(
+    network: &sandbox::SerializedNetwork,
+    probe: &Client,
+) -> Vec<usize> {
+    let peer_count = network.peers().len();
+    let status = network
+        .peers()
+        .iter()
+        .find_map(|peer| peer.client().get_status().ok())
+        .or_else(|| probe.get_status().ok());
+    let leader_index = status
+        .as_ref()
+        .and_then(|status| status.sumeragi.as_ref().map(|s| s.leader_index))
+        .and_then(|idx| usize::try_from(idx).ok())
+        .filter(|&idx| idx < peer_count);
+    let leader_is_connected = status
+        .as_ref()
+        .is_some_and(|status| status.peers >= min_connected_peers_for_submit(peer_count));
+    let fallback_totals = network
+        .peers()
+        .iter()
+        .map(|peer| {
+            peer.best_effort_block_height()
+                .map(|height| height.total)
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
+    let fallback_seed = NEXT_SUBMIT_PEER_INDEX.fetch_add(1, Ordering::Relaxed);
+    ordered_submit_peer_indices(
+        leader_index,
+        leader_is_connected,
+        &fallback_totals,
+        fallback_seed,
+    )
+}
+
+fn validator_account_id_for_index(index: usize) -> AccountId {
+    let key_pair = KeyPair::from_seed(
+        format!("integration_tests::sumeragi_npos_stake_activation::{index}").into_bytes(),
+        Algorithm::Ed25519,
+    );
+    AccountId::new(key_pair.public_key().clone())
+}
+
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        "nexus".parse().expect("nexus domain"),
+        DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
 
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
+}
+
+fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
+    defaults::nexus::fees::fee_asset_id()
+        .parse()
+        .expect("default nexus fee asset id")
+}
+
+fn nexus_fee_asset_id_literal() -> String {
+    nexus_fee_asset_definition_id().to_string()
+}
+
+#[test]
+fn min_connected_peers_for_submit_keeps_quorum_margin() {
+    assert_eq!(min_connected_peers_for_submit(0), 0);
+    assert_eq!(min_connected_peers_for_submit(1), 0);
+    assert_eq!(min_connected_peers_for_submit(2), 0);
+    assert_eq!(min_connected_peers_for_submit(3), 1);
+    assert_eq!(min_connected_peers_for_submit(4), 2);
+}
+
+#[test]
+fn pick_fallback_submit_peer_index_prefers_best_height_round_robin() {
+    let totals = [7, 11, 11, 3];
+
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 0), 1);
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 1), 2);
+    assert_eq!(pick_fallback_submit_peer_index(&totals, 2), 1);
+    assert_eq!(pick_fallback_submit_peer_index(&[], 42), 0);
+}
+
+#[test]
+fn pick_submit_peer_index_prefers_connected_leader() {
+    let totals = [4, 9, 9, 1];
+
+    assert_eq!(pick_submit_peer_index(Some(3), true, &totals, 0), 3);
+    assert_eq!(pick_submit_peer_index(Some(3), false, &totals, 0), 1);
+    assert_eq!(pick_submit_peer_index(None, true, &totals, 1), 2);
+}
+
+#[test]
+fn ordered_submit_peer_indices_prioritize_leader_then_fallback_cycle() {
+    let totals = [4, 9, 9, 1];
+
+    assert_eq!(
+        ordered_submit_peer_indices(Some(3), true, &totals, 0),
+        vec![3, 1, 2, 0]
+    );
+    assert_eq!(
+        ordered_submit_peer_indices(Some(3), false, &totals, 0),
+        vec![1, 2, 3, 0]
+    );
+    assert_eq!(
+        ordered_submit_peer_indices(None, true, &totals, 1),
+        vec![2, 3, 0, 1]
+    );
+}
+
+#[test]
+fn opaque_nexus_fee_asset_id_uses_explicit_fixture_name() {
+    let fee_asset_id = nexus_fee_asset_definition_id();
+    assert!(fee_asset_id.is_opaque_canonical());
+
+    let _definition = AssetDefinition::new(fee_asset_id, NumericSpec::default())
+        .with_name(NEXUS_FEE_ASSET_NAME.to_owned());
 }
 
 fn profile_for_index(index: usize, profile: StakeActivationProfile) -> (u64, Option<&'static str>) {
@@ -81,15 +267,20 @@ fn stake_genesis_post_topology_transactions(
     topology: &[PeerId],
     profile: StakeActivationProfile,
 ) -> Vec<Vec<InstructionBox>> {
-    let stake_domain: DomainId = STAKE_DOMAIN_ID.parse().expect("stake domain id");
-    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain id");
+    let stake_domain = DomainId::parse_fully_qualified(STAKE_DOMAIN_ID).expect("stake domain id");
+    let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain id");
     let stake_asset_id = stake_asset_definition_id();
+    let fee_asset_id = nexus_fee_asset_definition_id();
     let genesis_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
 
     let definition = {
-        let __asset_definition_id = stake_asset_id.clone();
-        AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
-            .with_name(__asset_definition_id.name().to_string())
+        AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
+            .with_name(STAKE_ASSET_NAME.to_owned())
+    }
+    .with_metadata(Metadata::default());
+    let fee_definition = {
+        AssetDefinition::new(fee_asset_id.clone(), NumericSpec::default())
+            .with_name(NEXUS_FEE_ASSET_NAME.to_owned())
     }
     .with_metadata(Metadata::default());
 
@@ -97,26 +288,43 @@ fn stake_genesis_post_topology_transactions(
         Register::domain(Domain::new(stake_domain.clone())).into(),
         Register::domain(Domain::new(nexus_domain.clone())).into(),
         Register::asset_definition(definition).into(),
+        Register::asset_definition(fee_definition).into(),
+        Mint::asset_numeric(
+            NEXUS_FEE_SEED_AMOUNT,
+            AssetId::new(fee_asset_id.clone(), ALICE_ID.clone()),
+        )
+        .into(),
     ];
-    for (index, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(peer.public_key().clone());
+    if genesis_account_id != ALICE_ID.clone() {
+        bootstrap_tx.push(
+            Mint::asset_numeric(
+                NEXUS_FEE_SEED_AMOUNT,
+                AssetId::new(fee_asset_id.clone(), genesis_account_id.clone()),
+            )
+            .into(),
+        );
+    }
+    for (index, _peer) in topology.iter().enumerate() {
+        let validator_id = validator_account_id_for_index(index);
         let (stake, _) = profile_for_index(index, profile);
         if validator_id != genesis_account_id {
-            bootstrap_tx.push(
-                Register::account(Account::new(
-                    validator_id.to_account_id(stake_domain.clone()),
-                ))
-                .into(),
-            );
+            bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
         }
         bootstrap_tx.push(
             Mint::asset_numeric(stake, AssetId::new(stake_asset_id.clone(), validator_id)).into(),
+        );
+        bootstrap_tx.push(
+            Mint::asset_numeric(
+                NEXUS_FEE_SEED_AMOUNT,
+                AssetId::new(fee_asset_id.clone(), validator_account_id_for_index(index)),
+            )
+            .into(),
         );
     }
 
     let mut validator_tx = Vec::new();
     for (index, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(peer.public_key().clone());
+        let validator_id = validator_account_id_for_index(index);
         let (stake, entity) = profile_for_index(index, profile);
         let mut metadata = Metadata::default();
         if let Some(entity_name) = entity {
@@ -129,6 +337,7 @@ fn stake_genesis_post_topology_transactions(
             RegisterPublicLaneValidator {
                 lane_id: LaneId::SINGLE,
                 validator: validator_id.clone(),
+                peer_id: PeerId::from(peer.public_key().clone()),
                 stake_account: validator_id.clone(),
                 initial_stake: Numeric::new(stake, 0),
                 metadata,
@@ -147,17 +356,123 @@ async fn advance_to_height(
     target_height: u64,
     log_prefix: &str,
 ) -> eyre::Result<()> {
-    loop {
+    let deadline = Instant::now() + HEIGHT_ADVANCE_RETRY;
+    let mut tick = 0_u64;
+    let mut last_height = 0;
+    wait_for_submit_connectivity(network, Duration::from_secs(30)).await?;
+
+    while Instant::now() <= deadline {
         let status = client.get_status()?;
+        last_height = last_height.max(status.blocks);
         if status.blocks >= target_height {
             return Ok(());
         }
-        let next = status.blocks.saturating_add(1);
-        client.submit(Log::new(Level::INFO, format!("{log_prefix} {next}")))?;
-        network
-            .ensure_blocks_with(move |height| height.total >= next)
-            .await?;
+
+        submit_progress_log(network, client, format!("{log_prefix} {tick}")).await?;
+        tick = tick.saturating_add(1);
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let probe_timeout = remaining.min(Duration::from_secs(15));
+        let target_next_height = status.blocks.saturating_add(1).min(target_height);
+        match wait_for_client_height(client, target_next_height, probe_timeout).await {
+            Ok(height) => last_height = last_height.max(height),
+            Err(_) => sleep(HEIGHT_ADVANCE_POLL).await,
+        }
     }
+
+    eyre::bail!(
+        "client height did not reach {target_height} for {log_prefix}; last observed height={last_height}"
+    );
+}
+
+async fn wait_for_client_height(
+    client: &Client,
+    target_height: u64,
+    timeout: Duration,
+) -> eyre::Result<u64> {
+    let deadline = Instant::now() + timeout;
+    let mut last_height = 0;
+
+    loop {
+        let status = client.get_status()?;
+        last_height = last_height.max(status.blocks);
+        if status.blocks >= target_height {
+            return Ok(status.blocks);
+        }
+        if Instant::now() >= deadline {
+            eyre::bail!(
+                "client height did not reach {target_height} within {:?}; last observed height={last_height}",
+                timeout
+            );
+        }
+        sleep(HEIGHT_ADVANCE_POLL).await;
+    }
+}
+
+async fn wait_for_submit_connectivity(
+    network: &sandbox::SerializedNetwork,
+    timeout: Duration,
+) -> eyre::Result<()> {
+    let deadline = Instant::now() + timeout;
+    let expected = min_connected_peers_for_submit(network.peers().len());
+    let mut last_snapshot = Vec::new();
+
+    loop {
+        let peer_counts = network
+            .peers()
+            .iter()
+            .filter_map(|peer| peer.client().get_status().ok().map(|status| status.peers))
+            .collect::<Vec<_>>();
+        if !peer_counts.is_empty() {
+            last_snapshot.clone_from(&peer_counts);
+            if peer_counts.iter().all(|count| *count >= expected) {
+                return Ok(());
+            }
+        }
+
+        if Instant::now() >= deadline {
+            eyre::bail!(
+                "peer connectivity did not reach {expected} connected peers within {:?}; last_snapshot={last_snapshot:?}",
+                timeout
+            );
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    }
+}
+
+async fn submit_progress_log(
+    network: &sandbox::SerializedNetwork,
+    probe: &Client,
+    message: String,
+) -> eyre::Result<()> {
+    let candidate_indices = submit_peer_indices_for_network(network, probe);
+    let transaction =
+        probe.build_transaction_from_items([Log::new(Level::INFO, message)], Metadata::default());
+
+    let mut accepted = false;
+    let mut errors = Vec::new();
+    for idx in candidate_indices {
+        let Some(peer) = network.peers().get(idx) else {
+            continue;
+        };
+        let peer_name = peer.mnemonic().to_owned();
+        let submit_client = peer.client();
+        let transaction = transaction.clone();
+        match tokio::task::spawn_blocking(move || submit_client.submit_transaction(&transaction))
+            .await
+        {
+            Ok(Ok(_)) => accepted = true,
+            Ok(Err(err)) => errors.push(format!("{peer_name}: {err:?}")),
+            Err(err) => errors.push(format!("{peer_name}: submit join error: {err}")),
+        }
+    }
+
+    ensure!(
+        accepted,
+        "progress log was not accepted by any candidate peer; errors={errors:?}"
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -172,6 +487,10 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
+                .write(
+                    ["nexus", "fees", "fee_asset_id"],
+                    nexus_fee_asset_id_literal(),
+                )
                 .write(
                     ["nexus", "staking", "stake_asset_id"],
                     stake_asset_id_literal(),
@@ -351,6 +670,10 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
             layer
                 .write(["sumeragi", "consensus_mode"], "npos")
                 .write(["nexus", "enabled"], true)
+                .write(
+                    ["nexus", "fees", "fee_asset_id"],
+                    nexus_fee_asset_id_literal(),
+                )
                 .write(
                     ["nexus", "staking", "stake_asset_id"],
                     stake_asset_id_literal(),

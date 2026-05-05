@@ -36,7 +36,7 @@ translation_last_reviewed: 2026-02-07
 | `suffix_id` | ہاں | عددی لاحقہ شناخت کنندہ (اعشاریہ یا `0x` ہیکس)۔ |
 | `owner` | ہاں | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | ہاں | انٹیجر `1..=255`۔ |
-| `payment_asset_id` | ہاں | تصفیہ کی اصل (جیسے `xor#sora`)۔ |
+| `payment_asset_id` | ہاں | تصفیہ کی اصل (جیسے `61CtjvNd9T3THAR65GsMVHr82Bjc`)۔ |
 | `payment_gross` / `payment_net` | ہاں | کارڈنلٹی کے اکائیوں کی نمائندگی کرنے والے دستخط شدہ عدد۔ |
 | `settlement_tx` | ہاں | ادائیگی کے لین دین ، ​​یا ہیش کو بیان کرنے والے JSON قدر یا لفظی تار۔ |
 | `payment_payer` | ہاں | اکاؤنٹڈ جس نے ادائیگی کا اختیار دیا۔ |
@@ -75,18 +75,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -111,7 +111,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -129,9 +129,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- مددگار ہر درخواست کے لئے `POST /v1/sns/registrations` جاری کرتا ہے اور پہلی HTTP غلطی پر رک جاتا ہے۔
+```- مددگار ہر درخواست کے لئے `POST /v1/sns/names` جاری کرتا ہے اور پہلی HTTP غلطی پر رک جاتا ہے۔
   جوابات کو لاگ پاتھ میں این ڈی جےسن ریکارڈ کے طور پر شامل کیا جاتا ہے۔
-- `--poll-status` ہر ایک کے بعد `/v1/sns/registrations/{selector}`
+- `--poll-status` ہر ایک کے بعد `/v1/sns/names/{namespace}/{literal}`
   اس بات کی تصدیق کرنے کے لئے کہ ریکارڈ ظاہر ہوتا ہے (`--poll-attempts` ، پہلے سے طے شدہ 5) بھیجیں۔ بچت کریں
   `--suffix-map` (JSON `suffix_id` کو "لاحقہ" اقدار میں تبدیل کرتا ہے) تاکہ آلے کا ٹول ہو سکے
   پولنگ کے وقت `{label}.{suffix}` لاحقہ لاحقہ کا اخذ۔
@@ -215,7 +215,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -233,7 +233,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - ** میٹا ڈیٹا یا گورننس تجزیہ: ** JSON ان لائن کو براہ راست تجزیہ کیا گیا ہے۔ اور یہ حل ہے
   CSV مقام سے متعلق فائل کے حوالہ جات۔ آبجیکٹ کے علاوہ میٹا ڈیٹا آبجیکٹ چیک کی خرابی پیدا کرتا ہے۔
 - **Controllers:** Empty cells commit `--default-controllers`. فہرستیں بنائیں
-  جب مالک کے علاوہ کسی اور فریقوں کو تفویض کرتے وقت واضح کنٹرولر (جیسے `i105...;i105...`)۔
+  جب مالک کے علاوہ کسی اور فریقوں کو تفویض کرتے وقت واضح کنٹرولر (جیسے `<i105-account-id>;<i105-account-id>`)۔
 
 غلطیوں کی اطلاع سیاق و سباق کی تعداد کے ساتھ کی جاتی ہے (جیسے
 `error: row 12 term_years must be between 1 and 255`)۔ اسکرپٹ کوڈ `1` کے ساتھ باہر ہے

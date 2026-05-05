@@ -16,8 +16,8 @@ translator: machine-google-reviewed
 በስዊፍት፣ አንድሮይድ እና ጃቫስክሪፕት ኤስዲኬዎች ላይ። ለመደገፍ የታሰበ ነው።
 ፌብሩዋሪ 2026 የኤስዲኬ አቋራጭ አውደ ጥናት እና ከመተግበሩ በፊት ክፍት ጥያቄዎችን ይያዙ።
 
-> መጨረሻ የዘመነው: 2026-01-29  
-> ደራሲያን፡ ስዊፍት ኤስዲኬ መሪ፣ አንድሮይድ ኔትዎርኪንግ ቲኤልኤል፣ ጄኤስ መሪ  
+> መጨረሻ የዘመነው: 2026-01-29
+> ደራሲያን፡ ስዊፍት ኤስዲኬ መሪ፣ አንድሮይድ ኔትዎርኪንግ ቲኤልኤል፣ ጄኤስ መሪ
 > ሁኔታ፡ የምክር ቤት ግምገማ ረቂቅ (አስጊ ሞዴል + የውሂብ ማቆየት አሰላለፍ 2026-03-12 ታክሏል)
 
 # ግቦች
@@ -106,17 +106,17 @@ translator: machine-google-reviewed
 
 ### የክፍለ ጊዜ መለያዎች እና ጨዎች
 
-- `sid` ከ `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` የተገኘ ባለ 32-ባይት መለያ ነው።  
+- `sid` ከ `BLAKE2b-256("iroha-connect|sid|" || chain_id || app_ephemeral_pk || nonce16)` የተገኘ ባለ 32-ባይት መለያ ነው።
   DApps ወደ `/v1/connect/session` ከመደወል በፊት ያሰሉት; የኪስ ቦርሳዎች በ`approve` ክፈፎች ውስጥ ያስተጋባሉ ስለዚህም ሁለቱም ወገኖች ቁልፍ መጽሔቶችን እና ቴሌሜትሪዎችን በተከታታይ ማድረግ ይችላሉ።
 - ኤስዲኬዎች ከአስተናጋጁ መድረክ በተሰበሰበው ኢንትሮፒ ላይ እንዳይተማመኑ ያው ጨው እያንዳንዱን የቁልፍ ማግኛ ደረጃ ይመገባል።
 
 ### የኢፌመር ቁልፍ አያያዝ
 
-- እያንዳንዱ ክፍለ ጊዜ ትኩስ X25519 ቁልፍ ቁሳቁስ ይጠቀማል።  
+- እያንዳንዱ ክፍለ ጊዜ ትኩስ X25519 ቁልፍ ቁሳቁስ ይጠቀማል።
   ስዊፍት በ Keychain/Secure Enclave በ`ConnectCrypto`፣የአንድሮይድ የኪስ ቦርሳ ነባሪ ወደ StrongBox (ወደ TEE የሚደገፉ የቁልፍ ማከማቻዎች መመለስ) እና JS ደህንነቱ የተጠበቀ አውድ WebCrypto ምሳሌ ወይም ቤተኛ `iroha_js_host` plug-in ያስፈልገዋል።
 - ክፍት ፍሬሞች የdApp ጊዜያዊ ህዝባዊ ቁልፍ እና አማራጭ የማረጋገጫ ቅርቅብ ያካትታሉ። የኪስ ቦርሳ ማፅደቆች የኪስ ቦርሳውን የህዝብ ቁልፍ እና ማንኛውም የሃርድዌር ማረጋገጫ ለተገዢነት ፍሰቶች ይመለሳሉ።
-- የማረጋገጫ ጭነቶች ተቀባይነት ያለውን እቅድ ይከተላሉ፡-  
-  `attestation { platform, evidence_b64, statement_hash }`.  
+- የማረጋገጫ ጭነቶች ተቀባይነት ያለውን እቅድ ይከተላሉ፡-
+  `attestation { platform, evidence_b64, statement_hash }`.
   አሳሾች እገዳውን ሊተዉት ይችላሉ; በሃርድዌር የተደገፉ ቁልፎች ጥቅም ላይ በሚውሉበት ጊዜ ሁሉ ቤተኛ የኪስ ቦርሳዎች ያካትቱታል።
 
 ### አቅጣጫ ቁልፎች እና AEAD
@@ -124,7 +124,7 @@ translator: machine-google-reviewed
 - የተጋሩ ሚስጥሮች በHKDF-SHA256 (በ Rust bridge ረዳቶች በኩል) እና በጎራ-የተለያዩ የመረጃ ሕብረቁምፊዎች ተዘርግተዋል፡
   - `iroha-connect|k_app` → መተግበሪያ → የኪስ ቦርሳ ትራፊክ።
   - `iroha-connect|k_wallet` → ቦርሳ → የመተግበሪያ ትራፊክ።
-- AEAD ለv1 ፖስታ ChaCha20-Poly1305 ነው (`connect_norito_bridge` ረዳቶችን በእያንዳንዱ መድረክ ላይ ያጋልጣል)።  
+- AEAD ለv1 ፖስታ ChaCha20-Poly1305 ነው (`connect_norito_bridge` ረዳቶችን በእያንዳንዱ መድረክ ላይ ያጋልጣል)።
   ተያያዥነት ያለው መረጃ ከ `("connect:v1", sid, dir, seq_le, kind=ciphertext)` ጋር እኩል ነው ስለዚህ ራስጌዎችን መጣስ ተገኝቷል።
 - ኖንስ ከ64-ቢት ተከታታይ ቆጣሪ (`nonce[0..4]=0`፣ `nonce[4..12]=seq_le`) የተገኙ ናቸው። የጋራ አጋዥ ሙከራዎች የBigInt/UInt ልወጣዎች በኤስዲኬዎች ላይ ተመሳሳይ ባህሪ እንዳላቸው ያረጋግጣሉ።
 
@@ -135,19 +135,19 @@ translator: machine-google-reviewed
 
 ## ፈቃዶች እና ማረጋገጫዎች
 
-- የፈቃድ መግለጫዎች በድልድዩ ወደ ውጭ በሚላከው የጋራ Norito መዋቅር በኩል ክብ ጉዞ ማድረግ አለባቸው።  
+- የፈቃድ መግለጫዎች በድልድዩ ወደ ውጭ በሚላከው የጋራ Norito መዋቅር በኩል ክብ ጉዞ ማድረግ አለባቸው።
   መስኮች፡
-  - `methods` — ግሶች (`sign_transaction`፣ `sign_raw`፣ `submit_proof`፣ …)።  
-  - `events` — dApp እንዲያያይዝ ተፈቅዶለታል።  
-  - `resources` — አማራጭ መለያ/ንብረት ማጣሪያዎች የኪስ ቦርሳዎች መዳረሻን ሊወስኑ ይችላሉ።  
+  - `methods` — ግሶች (`sign_transaction`፣ `sign_raw`፣ `submit_proof`፣ …)።
+  - `events` — dApp እንዲያያይዝ ተፈቅዶለታል።
+  - `resources` — አማራጭ መለያ/ንብረት ማጣሪያዎች የኪስ ቦርሳዎች መዳረሻን ሊወስኑ ይችላሉ።
   - `constraints` — የሰንሰለት መታወቂያ፣ ቲቲኤል፣ ወይም ብጁ የፖሊሲ ቁልፎች ከመፈረምዎ በፊት ቦርሳው የሚያስፈጽመው።
 - ተገዢ ሜታዳታ ከፈቃዶች ጋር አብሮ ይሄዳል፡-
-  - አማራጭ `attachments[]` የ Norito ተያያዥ ማጣቀሻዎችን (KYC ጥቅሎች፣ የቁጥጥር ደረሰኞች) ይይዛል።  
+  - አማራጭ `attachments[]` የ Norito ተያያዥ ማጣቀሻዎችን (KYC ጥቅሎች፣ የቁጥጥር ደረሰኞች) ይይዛል።
   - `compliance_manifest_id` ኦፕሬተሮች ፕሮቬንሽን ኦዲት ማድረግ እንዲችሉ ጥያቄውን ከዚህ ቀደም ከፀደቀ ማኒፌክት ጋር ያገናኛል።
 - የኪስ ቦርሳ ምላሾች የተስማሙትን ኮዶች ይጠቀማሉ፡-
-  - `user_declined`፣ `permissions_mismatch`፣ `compliance_failed`፣ `internal_error`።  
+  - `user_declined`፣ `permissions_mismatch`፣ `compliance_failed`፣ `internal_error`።
   እያንዳንዳቸው `localized_message` ለUI ፍንጮች እና በማሽን ሊነበብ የሚችል `reason_code` ሊይዙ ይችላሉ።
-- የማጽደቂያ ክፈፎች የተመረጠው መለያ/ተቆጣጣሪ፣ የፈቃድ ማሚቶ፣ የማረጋገጫ ጥቅል (ZK ማረጋገጫ ወይም ማረጋገጫ) እና ማንኛውም የመመሪያ መቀያየርን (ለምሳሌ፣ `offline_queue_enabled`) ያካትታሉ።  
+- የማጽደቂያ ክፈፎች የተመረጠው መለያ/ተቆጣጣሪ፣ የፈቃድ ማሚቶ፣ የማረጋገጫ ጥቅል (ZK ማረጋገጫ ወይም ማረጋገጫ) እና ማንኛውም የመመሪያ መቀያየርን (ለምሳሌ፣ `deferred_queue_enabled`) ያካትታሉ።
   ውድቅ ማድረጉ ከባዶ `proof` ጋር ተመሳሳይ ንድፍ ያንፀባርቃል ግን አሁንም `sid` ለኦዲትነት ይቀዳል።
 
 ## የኤስዲኬ የፊት ገጽታዎች
@@ -171,7 +171,7 @@ translator: machine-google-reviewed
 - የስህተት አያያዝ፡ ካርታ Norito የስህተት ኮዶች ወደ ኤስዲኬ-ተኮር ስህተቶች; ማካተት
   የጋራ ታክሶኖሚ (`Transport`፣ `Codec`፣ `Authorization`፣ `Timeout`፣ `QueueOverflow`፣ Norito፣ `Transport`፣ `Authorization`፣ `QueueOverflow`፣ Norito የስዊፍት መነሻ አተገባበር + የቴሌሜትሪ መመሪያ በ[`connect_error_taxonomy.md`](connect_error_taxonomy.md) ውስጥ ይኖራል እና የአንድሮይድ/JS እኩልነት ዋቢ ነው።
 - ለወረፋ ጥልቀት የቴሌሜትሪ መንጠቆዎችን ያመርቱ፣ ቆጠራዎችን እንደገና ያገናኙ እና የቆይታ ጊዜ ይጠይቁ (`connect.queue_depth`፣ `connect.reconnects_total`፣ `connect.latency_ms`)።
- 
+
 ## ተከታታይ ቁጥሮች እና ፍሰት መቆጣጠሪያ
 
 - እያንዳንዱ አቅጣጫ ክፍለ-ጊዜው ሲከፈት በዜሮ የሚጀምር 64-ቢት `sequence` ቆጣሪ ያቆያል። የተጋሩ አጋዥ ዓይነቶች ቆጣሪው ከመጠቅለሉ በፊት የመጨመሪያ ጭማሪ እና የ `ConnectError.sequenceOverflow` + ቁልፍ መጨባበጥ ያስነሳሉ።
@@ -294,7 +294,7 @@ translator: machine-google-reviewed
   - አንድሮይድ: `ConnectDiagnostics.snapshot()` + `exportJournalBundle(path)`.
   - JS: `ConnectQueueInspector.read()` ተመሳሳዩን መዋቅር እና የብሎብ እጀታ ይመልሳል
     ያ የዩአይ ኮድ ወደ Torii የድጋፍ መሳሪያዎች መስቀል ይችላል።
-- አንድ መተግበሪያ `offline_queue_enabled=false` ሲቀያየር ኤስዲኬዎች ወዲያውኑ ይደርቃሉ እና
+- አንድ መተግበሪያ `deferred_queue_enabled=false` ሲቀያየር ኤስዲኬዎች ወዲያውኑ ይደርቃሉ እና
   ሁለቱንም መጽሔቶች ያጽዱ፣ ግዛቱን እንደ `Disabled` ምልክት ያድርጉ እና ተርሚናል ይልቀቁ
   የቴሌሜትሪ ክስተት. ተጠቃሚው ፊት ለፊት ያለው ምርጫ በNorito ውስጥ ተንጸባርቋል
   የማጽደቅ ፍሬም እኩዮች የታሰሩ ክፈፎችን ከቆመበት መቀጠል እንደሚችሉ እንዲያውቁ።

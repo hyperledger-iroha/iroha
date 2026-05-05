@@ -44,7 +44,7 @@ fn fixture_account_in_domain(label: &str, _domain_id: &DomainId) -> AccountId {
 }
 
 fn bench_domain_id() -> DomainId {
-    "bench".parse().expect("bench domain id")
+    DomainId::try_new("bench", "universal").expect("bench domain id")
 }
 
 fn bench_account(label: &str) -> AccountId {
@@ -53,7 +53,7 @@ fn bench_account(label: &str) -> AccountId {
 
 fn bench_asset_def_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        "bench".parse().expect("bench domain"),
+        DomainId::try_new("bench", "universal").expect("bench domain"),
         "coin".parse().expect("bench asset definition name"),
     )
 }
@@ -72,7 +72,7 @@ fn build_state_with_accounts(n: usize) -> State {
     for i in 0..n {
         let acc_id = bench_account(&format!("user{i}"));
         // Use the account itself as the authority for building
-        let account = Account::new(acc_id.to_account_id(domain_id.clone())).build(&acc_id);
+        let account = Account::new(acc_id.clone()).build(&acc_id);
         accounts.push(account);
     }
 
@@ -170,16 +170,13 @@ fn bench_snapshot_vs_live_find_domains_first_batch(c: &mut Criterion) {
     let authority_id = bench_account("authority");
     let mut domains = Vec::with_capacity(10_000);
     for i in 0..10_000 {
-        let id: DomainId = format!("d{}", i).parse().unwrap();
+        let id = DomainId::try_new(format!("d{}", i), "universal").unwrap();
         domains.push(Domain::new(id).build(&authority_id));
     }
     let state = State::new_for_testing(
         World::with(
             domains,
-            [
-                Account::new(authority_id.to_account_id("d0".parse().unwrap()))
-                    .build(&authority_id),
-            ],
+            [Account::new(authority_id.clone()).build(&authority_id)],
             [],
         ),
         kura,
@@ -279,16 +276,16 @@ fn bench_snapshot_vs_live_find_assets_first_batch(c: &mut Criterion) {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
-    let domain_id: DomainId = "bench".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("bench", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "bench".parse().unwrap(),
+        DomainId::try_new("bench", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let mut accounts = Vec::with_capacity(1_000);
     let mut assets: Vec<iroha_data_model::asset::Asset> = Vec::with_capacity(1_000);
     for i in 0..1_000 {
         let acc_id = bench_account(&format!("user{i}"));
-        let acc = Account::new(acc_id.to_account_id(domain_id.clone())).build(&acc_id);
+        let acc = Account::new(acc_id.clone()).build(&acc_id);
         accounts.push(acc);
         let asset_id = AssetId::new(asset_def_id.clone(), acc_id.clone());
         assets.push(iroha_data_model::asset::Asset::new(
@@ -395,11 +392,13 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
     let auth = bench_account("authority");
-    let domain = Domain::new("bench".parse().unwrap()).build(&auth);
+    let domain = Domain::new(DomainId::try_new("bench", "universal").unwrap()).build(&auth);
     let mut defs = Vec::with_capacity(10_000);
     for i in 0..10_000 {
-        let id =
-            AssetDefinitionId::new("bench".parse().unwrap(), format!("ad{i}").parse().unwrap());
+        let id = AssetDefinitionId::new(
+            DomainId::try_new("bench", "universal").unwrap(),
+            format!("ad{i}").parse().unwrap(),
+        );
         let mut ad = AssetDefinition::numeric(id).build(&auth);
         let _ = ad.metadata_mut().insert(
             "rank".parse().unwrap(),
@@ -407,11 +406,7 @@ fn bench_snapshot_sorted_asset_defs_first_batch(c: &mut Criterion) {
         );
         defs.push(ad);
     }
-    let world = World::with(
-        [domain],
-        [Account::new(auth.to_account_id("bench".parse().unwrap())).build(&auth)],
-        defs,
-    );
+    let world = World::with([domain], [Account::new(auth.clone()).build(&auth)], defs);
     // Provide default telemetry only when enabled; otherwise call 3-arg ctor
     let state = {
         #[cfg(feature = "telemetry")]
@@ -550,7 +545,7 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
     definition_ids.push(base_def_id.clone());
     for j in 1..assets_per_account {
         definition_ids.push(AssetDefinitionId::new(
-            "bench".parse().unwrap(),
+            DomainId::try_new("bench", "universal").unwrap(),
             format!("coin{j}").parse().unwrap(),
         ));
     }
@@ -564,7 +559,7 @@ fn build_state_with_assets(n_accounts: usize, assets_per_account: usize) -> Stat
     let mut assets = Vec::with_capacity(n_accounts * definition_ids.len());
     for i in 0..n_accounts {
         let acc_id = bench_account(&format!("user{i}"));
-        let account = Account::new(acc_id.to_account_id(domain_id.clone())).build(&acc_id);
+        let account = Account::new(acc_id.clone()).build(&acc_id);
         for (j, definition_id) in definition_ids.iter().enumerate() {
             let asset_id = AssetId::new(definition_id.clone(), acc_id.clone());
             let value = Numeric::new(u128::from(j as u64 + 1), 0);
@@ -678,7 +673,7 @@ fn build_state_with_domains(n: usize) -> State {
     let authority_id = bench_account("authority");
     let mut domains = Vec::with_capacity(n);
     for i in 0..n {
-        let id: DomainId = format!("d{}", i).parse().expect("domain id");
+        let id = DomainId::try_new(format!("d{}", i), "universal").expect("domain id");
         domains.push(Domain::new(id).build(&authority_id));
     }
 
@@ -726,12 +721,12 @@ fn build_state_with_asset_definitions(n: usize) -> State {
     let domain_id = bench_domain_id();
     let authority_id = bench_account("authority");
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
-    let owner = Account::new(authority_id.to_account_id(domain_id)).build(&authority_id);
+    let owner = Account::new(authority_id.clone()).build(&authority_id);
 
     let mut defs = Vec::with_capacity(n);
     for i in 0..n {
         let def_id = AssetDefinitionId::new(
-            "bench".parse().expect("domain"),
+            DomainId::try_new("bench", "universal").expect("domain"),
             format!("coin{i}").parse().expect("ad id"),
         );
         defs.push(AssetDefinition::numeric(def_id).build(&authority_id));
@@ -809,7 +804,7 @@ fn build_state_with_triggers(n_time: usize, n_by_call: usize) -> State {
     Register::domain(Domain::new(domain_id.clone()))
         .execute(&authority_id, &mut stx)
         .expect("register domain");
-    Register::account(Account::new(authority_id.to_account_id(domain_id)))
+    Register::account(Account::new(authority_id.clone()))
         .execute(&authority_id, &mut stx)
         .expect("register account");
 

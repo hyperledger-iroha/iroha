@@ -86,7 +86,7 @@ Runner envoie le journal `info("Hello from Kotodama")` et active l'appel systèm
 
 ## 4. Ouvrir le clavier à partir de ToriiSi vous utilisez le robot, ouvrez le code de batterie de compilation dans Torii à partir de la CLI. L'identification du développeur s'effectue depuis la clé publique `defaults/client.toml`, avec l'ID de compte :
 ```
-i105...
+<i105-account-id>
 ```
 
 Utilisez le fichier de configuration pour télécharger l'URL Torii, l'ID de chaîne et le bouton ci-dessous :
@@ -106,7 +106,7 @@ Utilisez la CLI du profil pour afficher les détails du compte, en cliquant sur 
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

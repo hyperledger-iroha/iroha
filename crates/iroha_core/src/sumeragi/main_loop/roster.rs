@@ -8,8 +8,8 @@ use std::{
 use iroha_config::parameters::actual::ConsensusMode;
 use iroha_crypto::blake2::{Blake2b512, Digest as BlakeDigest, digest::Update as BlakeUpdate};
 use iroha_data_model::{
-    ChainId, Encode as _, consensus::ConsensusKeyRole, nexus::PublicLaneValidatorStatus,
-    peer::PeerId,
+    ChainId, Encode as _, consensus::ConsensusKeyRole, nexus::LaneId,
+    nexus::PublicLaneValidatorStatus, peer::PeerId,
 };
 use iroha_logger::prelude::*;
 use mv::storage::StorageReadOnly;
@@ -67,12 +67,12 @@ pub(super) fn compute_roster_indices_from_topology(
 
     if let Some(provider) = provider {
         let mut positions: BTreeMap<PeerId, u32> = BTreeMap::new();
-        for (idx, peer) in topology.iter().enumerate() {
+        for (idx, peer) in provider.peers().iter().enumerate() {
             if let Ok(idx_u32) = u32::try_from(idx) {
                 positions.insert(peer.clone(), idx_u32);
             } else {
                 warn!(
-                    roster_len = topology.len(),
+                    roster_len = provider.peers().len(),
                     idx, "validator roster index exceeds u32::MAX; omitting remaining peers"
                 );
                 return Vec::new();
@@ -81,7 +81,7 @@ pub(super) fn compute_roster_indices_from_topology(
 
         let mut missing = Vec::new();
         let mut indices = Vec::new();
-        for peer in provider.peers() {
+        for peer in topology {
             if let Some(idx) = positions.get(peer) {
                 indices.push(*idx);
             } else {
@@ -304,12 +304,19 @@ fn roster_member_has_live_consensus_key(
         if found_index_record {
             return false;
         }
+    } else {
+        return true;
     }
-    world.consensus_keys().iter().any(|(id, record)| {
+    let mut found_scan_record = false;
+    let live = world.consensus_keys().iter().any(|(id, record)| {
+        if record.public_key == *pk {
+            found_scan_record = true;
+        }
         id.role == ConsensusKeyRole::Validator
             && record.public_key == *pk
             && record.is_live_at(height, overlap_grace_blocks, expiry_grace_blocks)
-    })
+    });
+    live || !found_scan_record
 }
 
 pub(super) fn filter_roster_with_live_consensus_keys_at_height_world(
@@ -404,7 +411,43 @@ pub(super) fn derive_active_topology_for_mode_from_world(
     let use_commit = !commit_topology.is_empty();
     let next_height = height.saturating_add(1);
     if matches!(consensus_mode, ConsensusMode::Npos) {
-        let active_roster = stake_active_validator_roster_from_world(world);
+        let topology_lane_ids = if use_commit {
+            crate::state::validator_lane_ids_for_peers(world, commit_topology.iter())
+        } else {
+            BTreeSet::new()
+        };
+        let local_lane_ids = crate::state::validator_lane_ids_for_peer(world, me);
+        let (lane_scope, local_scope_fallback) = if topology_lane_ids.len() == 1 {
+            (topology_lane_ids, false)
+        } else if !local_lane_ids.is_empty() {
+            // A bootstrap/full commit topology can span multiple public lanes. Treat that as
+            // transport history, not a lane assignment, so local voting remains lane-scoped.
+            (local_lane_ids, true)
+        } else if !topology_lane_ids.is_empty() {
+            (topology_lane_ids, false)
+        } else {
+            (local_lane_ids, true)
+        };
+        let all_active_roster = stake_active_validator_roster_from_world(world);
+        let active_roster = if lane_scope.is_empty() {
+            all_active_roster
+        } else {
+            let local_lane_roster =
+                stake_active_validator_roster_for_lanes_from_world(world, &lane_scope);
+            if local_scope_fallback
+                && local_lane_roster.len() <= 1
+                && all_active_roster.len() > local_lane_roster.len()
+            {
+                iroha_logger::warn!(
+                    local_lane_roster_len = local_lane_roster.len(),
+                    active_roster_len = all_active_roster.len(),
+                    "local NPoS lane scope would produce a singleton roster; using full active validator roster"
+                );
+                all_active_roster
+            } else {
+                local_lane_roster
+            }
+        };
         if !active_roster.is_empty() {
             let mut roster = if use_commit {
                 let commit_set: BTreeSet<_> = commit_topology.iter().cloned().collect();
@@ -511,15 +554,33 @@ pub(super) fn derive_local_validator_index_for_mode_from_world(
 
 /// Return stake-active validator peers advertised in world state (NPoS source roster).
 pub(super) fn stake_active_validator_roster_from_world(world: &impl WorldReadOnly) -> Vec<PeerId> {
+    stake_active_validator_roster_from_world_with_lane_scope(world, None)
+}
+
+/// Return stake-active validator peers limited to the provided lane ids.
+pub(super) fn stake_active_validator_roster_for_lanes_from_world(
+    world: &impl WorldReadOnly,
+    lane_ids: &BTreeSet<LaneId>,
+) -> Vec<PeerId> {
+    if lane_ids.is_empty() {
+        return stake_active_validator_roster_from_world(world);
+    }
+    stake_active_validator_roster_from_world_with_lane_scope(world, Some(lane_ids))
+}
+
+fn stake_active_validator_roster_from_world_with_lane_scope(
+    world: &impl WorldReadOnly,
+    lane_ids: Option<&BTreeSet<LaneId>>,
+) -> Vec<PeerId> {
     let mut roster = BTreeSet::new();
-    for ((_lane_id, validator_id), record) in world.public_lane_validators().iter() {
+    for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
+        if lane_ids.is_some_and(|scope| !scope.contains(&record.lane_id)) {
+            continue;
+        }
         if !matches!(record.status, PublicLaneValidatorStatus::Active) {
             continue;
         }
-        let Some(pk) = validator_id.try_signatory() else {
-            continue;
-        };
-        let peer_id = PeerId::from(pk.clone());
+        let peer_id = record.peer_id.clone();
         if !roster_member_allowed_bls(&peer_id) {
             continue;
         }
@@ -555,17 +616,22 @@ pub(super) fn apply_roster_indices_to_manager(
     roster_len: usize,
     roster_indices: Vec<u32>,
 ) {
-    if roster_indices.is_empty() {
-        if let Ok(len_u32) = u32::try_from(roster_len) {
-            manager.set_validator_roster_indices(0..len_u32);
-        } else {
-            warn!(
-                roster_len,
-                "validator roster exceeds u32::MAX; skipping roster snapshot"
-            );
-        }
+    // VRF commit/reveal messages use signer indices relative to the active topology.
+    // Provider-derived roster indices can be sparse or global across worlds, so normalize
+    // back to the contiguous topology-local index space before validating live messages.
+    let effective_len = if roster_indices.is_empty() {
+        roster_len
     } else {
-        manager.set_validator_roster_indices(roster_indices);
+        roster_indices.len()
+    };
+
+    if let Ok(len_u32) = u32::try_from(effective_len) {
+        manager.set_validator_roster_indices(0..len_u32);
+    } else {
+        warn!(
+            roster_len = effective_len,
+            "validator roster exceeds u32::MAX; skipping roster snapshot"
+        );
     }
 }
 
@@ -660,6 +726,75 @@ mod tests {
 
         let indices = compute_roster_indices_from_topology(&topology, Some(&provider));
         assert_eq!(indices, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn roster_indices_ignore_provider_peers_outside_topology() {
+        let peer_a = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let peer_b = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let peer_c = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let foreign_1 = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let foreign_2 = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let topology = vec![peer_a.clone(), peer_b.clone(), peer_c.clone()];
+        let provider = Arc::new(WsvEpochRosterAdapter::from_peer_iter([
+            foreign_1, peer_a, foreign_2, peer_b, peer_c,
+        ]));
+
+        let indices = compute_roster_indices_from_topology(&topology, Some(&provider));
+        assert_eq!(indices, vec![1, 3, 4]);
+    }
+
+    #[test]
+    fn apply_roster_indices_normalizes_sparse_provider_positions() {
+        let chain = ChainId::from("iroha:test:runtime-roster-normalization");
+        let mut manager = EpochManager::new_from_chain(&chain);
+        manager.set_params(10, 3, 6);
+
+        apply_roster_indices_to_manager(&mut manager, 3, vec![1, 3, 4]);
+
+        assert_eq!(manager.test_current_roster_len(), Some(3));
+        assert_eq!(
+            manager.try_note_commit_at_height(
+                1,
+                crate::sumeragi::consensus::VrfCommit {
+                    epoch: 0,
+                    commitment: [7u8; 32],
+                    signer: 0,
+                },
+            ),
+            crate::sumeragi::epoch::VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            manager.try_note_commit_at_height(
+                1,
+                crate::sumeragi::consensus::VrfCommit {
+                    epoch: 0,
+                    commitment: [9u8; 32],
+                    signer: 4,
+                },
+            ),
+            crate::sumeragi::epoch::VrfNoteResult::RejectedUnknownSigner
+        );
     }
 
     #[test]
@@ -926,6 +1061,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account_active.clone(),
+                    peer_id: peer_active.clone(),
                     stake_account: account_active,
                     total_stake: Numeric::new(10, 0),
                     self_stake: Numeric::new(10, 0),
@@ -941,6 +1077,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(2),
                     validator: account_pending.clone(),
+                    peer_id: PeerId::new(keypair_pending.public_key().clone()),
                     stake_account: account_pending,
                     total_stake: Numeric::new(15, 0),
                     self_stake: Numeric::new(15, 0),
@@ -970,6 +1107,253 @@ mod tests {
     }
 
     #[test]
+    fn active_topology_for_npos_ignores_transport_only_trusted_peers() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let keypair_active = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let keypair_transport_only = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let account_active = AccountId::new(keypair_active.public_key().clone());
+        let peer_active = PeerId::new(keypair_active.public_key().clone());
+        let peer_transport_only = PeerId::new(keypair_transport_only.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(4), account_active.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(4),
+                    validator: account_active.clone(),
+                    peer_id: peer_active.clone(),
+                    stake_account: account_active,
+                    total_stake: Numeric::new(10, 0),
+                    self_stake: Numeric::new(10, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: make_peer(peer_active.clone(), 12_000),
+            others: vec![make_peer(peer_transport_only.clone(), 12_001)]
+                .into_iter()
+                .collect::<UniqueVec<_>>(),
+            pops: BTreeMap::new(),
+        };
+
+        let view = state.view();
+        let roster =
+            derive_active_topology_for_mode(&view, &trusted, &peer_active, ConsensusMode::Npos);
+
+        assert_eq!(roster, vec![peer_active]);
+    }
+
+    #[test]
+    fn active_topology_for_npos_stays_with_local_validator_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let lane4_local = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let lane4_peer_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let lane3_peer = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+
+        let lane4_local_account = AccountId::new(lane4_local.public_key().clone());
+        let lane4_peer_b_account = AccountId::new(lane4_peer_b.public_key().clone());
+        let lane3_account = AccountId::new(lane3_peer.public_key().clone());
+
+        let lane4_local_peer = PeerId::new(lane4_local.public_key().clone());
+        let lane4_peer_b_id = PeerId::new(lane4_peer_b.public_key().clone());
+        let lane3_peer_id = PeerId::new(lane3_peer.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            block.insert(
+                (LaneId::new(3), lane3_account.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(3),
+                    validator: lane3_account,
+                    peer_id: lane3_peer_id.clone(),
+                    stake_account: AccountId::new(lane3_peer.public_key().clone()),
+                    total_stake: Numeric::new(20, 0),
+                    self_stake: Numeric::new(20, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (LaneId::new(4), lane4_local_account.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(4),
+                    validator: lane4_local_account,
+                    peer_id: lane4_local_peer.clone(),
+                    stake_account: AccountId::new(lane4_local.public_key().clone()),
+                    total_stake: Numeric::new(30, 0),
+                    self_stake: Numeric::new(30, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.insert(
+                (LaneId::new(4), lane4_peer_b_account.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(4),
+                    validator: lane4_peer_b_account,
+                    peer_id: lane4_peer_b_id.clone(),
+                    stake_account: AccountId::new(lane4_peer_b.public_key().clone()),
+                    total_stake: Numeric::new(25, 0),
+                    self_stake: Numeric::new(25, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: make_peer(lane4_local_peer.clone(), 12_100),
+            others: vec![
+                make_peer(lane4_peer_b_id.clone(), 12_101),
+                make_peer(lane3_peer_id.clone(), 12_102),
+            ]
+            .into_iter()
+            .collect::<UniqueVec<_>>(),
+            pops: BTreeMap::new(),
+        };
+
+        let view = state.view();
+        let roster = derive_active_topology_for_mode(
+            &view,
+            &trusted,
+            &lane4_local_peer,
+            ConsensusMode::Npos,
+        );
+
+        assert_eq!(
+            roster,
+            canonicalize_roster(vec![lane4_local_peer, lane4_peer_b_id])
+        );
+    }
+
+    #[test]
+    fn active_topology_for_npos_prefers_commit_topology_lane_scope_over_local_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query);
+
+        let lane4_local = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let lane4_peer = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let lane3_peer_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let lane3_peer_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+
+        let lane4_local_account = AccountId::new(lane4_local.public_key().clone());
+        let lane4_peer_account = AccountId::new(lane4_peer.public_key().clone());
+        let lane3_account_a = AccountId::new(lane3_peer_a.public_key().clone());
+        let lane3_account_b = AccountId::new(lane3_peer_b.public_key().clone());
+
+        let lane4_local_peer = PeerId::new(lane4_local.public_key().clone());
+        let lane4_peer_id = PeerId::new(lane4_peer.public_key().clone());
+        let lane3_peer_id_a = PeerId::new(lane3_peer_a.public_key().clone());
+        let lane3_peer_id_b = PeerId::new(lane3_peer_b.public_key().clone());
+
+        {
+            let mut block = state.world.public_lane_validators.block();
+            for (lane_id, account, peer_id, stake) in [
+                (
+                    LaneId::new(3),
+                    lane3_account_a,
+                    lane3_peer_id_a.clone(),
+                    Numeric::new(20, 0),
+                ),
+                (
+                    LaneId::new(3),
+                    lane3_account_b,
+                    lane3_peer_id_b.clone(),
+                    Numeric::new(22, 0),
+                ),
+                (
+                    LaneId::new(4),
+                    lane4_local_account,
+                    lane4_local_peer.clone(),
+                    Numeric::new(30, 0),
+                ),
+                (
+                    LaneId::new(4),
+                    lane4_peer_account,
+                    lane4_peer_id.clone(),
+                    Numeric::new(28, 0),
+                ),
+            ] {
+                block.insert(
+                    (lane_id, account.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id,
+                        validator: account.clone(),
+                        peer_id,
+                        stake_account: account,
+                        total_stake: stake.clone(),
+                        self_stake: stake,
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            block.commit();
+        }
+        {
+            let mut block = state.commit_topology.block();
+            let mut tx = block.transaction();
+            *tx = vec![lane3_peer_id_b.clone(), lane3_peer_id_a.clone()];
+            tx.apply();
+            block.commit();
+        }
+
+        let trusted = iroha_config::parameters::actual::TrustedPeers {
+            myself: make_peer(lane4_local_peer.clone(), 12_200),
+            others: vec![
+                make_peer(lane4_peer_id.clone(), 12_201),
+                make_peer(lane3_peer_id_a.clone(), 12_202),
+                make_peer(lane3_peer_id_b.clone(), 12_203),
+            ]
+            .into_iter()
+            .collect::<UniqueVec<_>>(),
+            pops: BTreeMap::new(),
+        };
+
+        let view = state.view();
+        let roster = derive_active_topology_for_mode(
+            &view,
+            &trusted,
+            &lane4_local_peer,
+            ConsensusMode::Npos,
+        );
+
+        assert_eq!(
+            roster,
+            canonicalize_roster(vec![lane3_peer_id_a, lane3_peer_id_b]),
+            "NPoS live roster must follow the commit-topology lane scope instead of the local peer lane"
+        );
+    }
+
+    #[test]
     fn active_topology_for_npos_skips_incomplete_pops() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -996,6 +1380,7 @@ mod tests {
                     PublicLaneValidatorRecord {
                         lane_id,
                         validator: account.clone(),
+                        peer_id: peers[idx].clone(),
                         stake_account: account.clone(),
                         total_stake: Numeric::new(10, 0),
                         self_stake: Numeric::new(10, 0),
@@ -1059,6 +1444,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account_active.clone(),
+                    peer_id: peer_active.clone(),
                     stake_account: account_active,
                     total_stake: Numeric::new(10, 0),
                     self_stake: Numeric::new(10, 0),
@@ -1074,6 +1460,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account_inactive.clone(),
+                    peer_id: peer_inactive.clone(),
                     stake_account: account_inactive,
                     total_stake: Numeric::new(15, 0),
                     self_stake: Numeric::new(15, 0),
@@ -1136,6 +1523,7 @@ mod tests {
                     PublicLaneValidatorRecord {
                         lane_id: LaneId::new(1),
                         validator: account.clone(),
+                        peer_id: PeerId::from(account.signatory().clone()),
                         stake_account: account,
                         total_stake: stake.clone(),
                         self_stake: stake,
@@ -1194,6 +1582,7 @@ mod tests {
                     PublicLaneValidatorRecord {
                         lane_id: LaneId::new(1),
                         validator: account.clone(),
+                        peer_id: PeerId::from(account.signatory().clone()),
                         stake_account: account,
                         total_stake: Numeric::new(10, 0),
                         self_stake: Numeric::new(10, 0),
@@ -1210,6 +1599,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account_pending.clone(),
+                    peer_id: peer_pending.clone(),
                     stake_account: account_pending,
                     total_stake: Numeric::new(10, 0),
                     self_stake: Numeric::new(10, 0),
@@ -1264,6 +1654,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account_active.clone(),
+                    peer_id: peer_active.clone(),
                     stake_account: account_active,
                     total_stake: Numeric::new(8, 0),
                     self_stake: Numeric::new(8, 0),
@@ -1313,6 +1704,7 @@ mod tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::new(1),
                     validator: account_active.clone(),
+                    peer_id: peer_active.clone(),
                     stake_account: account_active,
                     total_stake: Numeric::new(8, 0),
                     self_stake: Numeric::new(8, 0),

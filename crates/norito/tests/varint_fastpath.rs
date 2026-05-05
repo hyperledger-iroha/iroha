@@ -1,9 +1,10 @@
 //! Fixed-width length header tests.
-use norito::core::{read_len_from_slice, write_len_to_vec};
+use norito::core::{DecodeFlagsGuard, read_len_from_slice, write_len_to_vec};
 
 #[test]
 fn fixed_width_roundtrip() {
     norito::core::reset_decode_state();
+    let _guard = DecodeFlagsGuard::enter(0);
     let values = [
         0u64,
         1,

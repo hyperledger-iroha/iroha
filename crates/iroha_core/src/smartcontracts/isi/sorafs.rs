@@ -17,7 +17,7 @@ use iroha_data_model::{
         },
         pin_registry::{
             ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord, ManifestDigest,
-            PinManifestRecord, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
+            PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
             ReplicationOrderStatus, StorageClass,
         },
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
@@ -37,7 +37,9 @@ use sorafs_manifest::{
     alias_cache::decode_alias_proof,
     capacity::{
         CAPACITY_DISPUTE_VERSION_V1, CapacityDeclarationV1, CapacityDisputeEvidenceV1,
-        CapacityDisputeKind, CapacityDisputeV1, CapacityMetadataEntry, ReplicationOrderV1,
+        CapacityDisputeKind, CapacityDisputeV1, CapacityMetadataEntry,
+        REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
+        ReplicationOrderV1,
     },
     validate_chunker_handle, validate_pin_policy,
 };
@@ -213,6 +215,7 @@ fn same_account_subject(left: &AccountId, right: &AccountId) -> bool {
 
 fn enforce_provider_owner(
     world: &impl crate::state::WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     authority: &AccountId,
     metadata: &Metadata,
     provider_hex: &str,
@@ -231,7 +234,9 @@ fn enforce_provider_owner(
     })?;
 
     let owner_literal = owner_str.trim();
-    if let Some(owner) = crate::block::parse_account_literal_with_world(world, owner_literal) {
+    if let Some(owner) =
+        crate::block::parse_account_literal_with_world(world, dataspace_catalog, owner_literal)
+    {
         if same_account_subject(&owner, authority) {
             return Ok(());
         }
@@ -245,7 +250,7 @@ fn enforce_provider_owner(
     }
 
     Err(invalid_parameter(format!(
-        "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must be a valid account id matching the submitting authority"
+        "capacity declaration metadata `{PROVIDER_OWNER_METADATA_KEY}` for provider {provider_hex} must be a canonical I105 account id or on-chain alias matching the submitting authority"
     )))
 }
 
@@ -253,9 +258,16 @@ fn ensure_provider_owner_matches_authority(
     authority: &AccountId,
     record: &CapacityDeclarationRecord,
     world: &impl crate::state::WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
 ) -> Result<(), InstructionExecutionError> {
     let provider_hex = hex::encode(record.provider_id.as_bytes());
-    enforce_provider_owner(world, authority, &record.metadata, &provider_hex)
+    enforce_provider_owner(
+        world,
+        dataspace_catalog,
+        authority,
+        &record.metadata,
+        &provider_hex,
+    )
 }
 
 fn ensure_provider_owner_registered(
@@ -372,8 +384,6 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        require_permission(state_transaction, authority, "CanRegisterSorafsPin")?;
-
         let Self {
             digest,
             chunker,
@@ -412,7 +422,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
             ));
         }
 
-        let record = PinManifestRecord::new(
+        let mut record = PinManifestRecord::new(
             digest,
             chunker,
             chunk_digest_sha3_256,
@@ -423,8 +433,40 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
             successor_of,
             Metadata::default(),
         );
+        record.approve(submitted_epoch, None);
+
+        if let Some(alias) = &record.alias {
+            ensure_alias_unique(
+                alias,
+                &state_transaction.world.pin_manifests,
+                &state_transaction.world.manifest_aliases,
+                Some(&digest),
+            )?;
+            bind_alias_record(
+                state_transaction,
+                alias,
+                &digest,
+                authority,
+                submitted_epoch,
+                record.policy.retention_epoch,
+            );
+        }
+
+        let auto_providers = select_auto_replication_providers(
+            state_transaction,
+            &record.chunker,
+            &record.policy,
+            submitted_epoch,
+        );
+        let auto_order = build_auto_replication_order(&record, authority, &auto_providers);
 
         state_transaction.world.pin_manifests.insert(digest, record);
+        if let Some(order) = auto_order {
+            state_transaction
+                .world
+                .replication_orders
+                .insert(order.order_id, order);
+        }
 
         Ok(())
     }
@@ -886,6 +928,156 @@ fn order_hex(order_id: &ReplicationOrderId) -> String {
     hex::encode(order_id.as_bytes())
 }
 
+const AUTO_REPLICATION_ORDER_NAMESPACE: &[u8] = b"sorafs:auto-replication-order:v1";
+const AUTO_REPLICATION_ORDER_SLICE_GIB: u64 = 1;
+const AUTO_REPLICATION_ORDER_EPOCH_SLACK: u64 = 1;
+const AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS: u32 = 86_400;
+const AUTO_REPLICATION_ORDER_AVAILABILITY_PERCENT_MILLI: u32 = 99_500;
+const AUTO_REPLICATION_ORDER_POR_SUCCESS_PERCENT_MILLI: u32 = 98_000;
+const AUTO_REPLICATION_ORDER_SECS_PER_EPOCH: u64 = 3_600;
+
+fn supports_chunker_profile(declaration: &CapacityDeclarationV1, profile: &str) -> bool {
+    declaration.chunker_commitments.iter().any(|commitment| {
+        commitment.profile_id == profile
+            || commitment
+                .profile_aliases
+                .as_ref()
+                .is_some_and(|aliases| aliases.iter().any(|alias| alias == profile))
+    })
+}
+
+fn select_auto_replication_providers(
+    state_transaction: &StateTransaction<'_, '_>,
+    chunker: &iroha_data_model::sorafs::pin_registry::ChunkerProfileHandle,
+    policy: &PinPolicy,
+    submitted_epoch: u64,
+) -> Vec<ProviderId> {
+    let required_replicas = usize::from(policy.min_replicas);
+    if required_replicas == 0 {
+        return Vec::new();
+    }
+
+    let canonical_profile = chunker.to_handle();
+    let default_storage_class = state_transaction
+        .world
+        .sorafs_pricing
+        .get()
+        .default_storage_class;
+    let mut providers = Vec::with_capacity(required_replicas);
+
+    for (provider_id, declaration_record) in state_transaction.world.capacity_declarations.iter() {
+        if providers.len() == required_replicas {
+            break;
+        }
+
+        if submitted_epoch < declaration_record.valid_from_epoch
+            || submitted_epoch > declaration_record.valid_until_epoch
+        {
+            continue;
+        }
+
+        if state_transaction
+            .world
+            .provider_owners
+            .get(provider_id)
+            .is_none()
+        {
+            continue;
+        }
+
+        let Ok(storage_class) =
+            storage_class_from_declaration_record(declaration_record, default_storage_class)
+        else {
+            continue;
+        };
+        if storage_class != policy.storage_class {
+            continue;
+        }
+
+        let Ok(declaration) =
+            decode_from_bytes::<CapacityDeclarationV1>(&declaration_record.declaration)
+        else {
+            continue;
+        };
+        if !supports_chunker_profile(&declaration, &canonical_profile) {
+            continue;
+        }
+
+        providers.push(*provider_id);
+    }
+
+    providers
+}
+
+fn auto_replication_order_id(
+    digest: &ManifestDigest,
+    assignments: &[ReplicationAssignmentV1],
+) -> ReplicationOrderId {
+    let mut seed = Vec::with_capacity(
+        AUTO_REPLICATION_ORDER_NAMESPACE.len() + digest.as_bytes().len() + assignments.len() * 32,
+    );
+    seed.extend_from_slice(AUTO_REPLICATION_ORDER_NAMESPACE);
+    seed.extend_from_slice(digest.as_bytes());
+    for assignment in assignments {
+        seed.extend_from_slice(&assignment.provider_id);
+    }
+    ReplicationOrderId::new(*blake3_hash(&seed).as_bytes())
+}
+
+fn build_auto_replication_order(
+    record: &PinManifestRecord,
+    issued_by: &AccountId,
+    assignments: &[ProviderId],
+) -> Option<ReplicationOrderRecord> {
+    if assignments.len() < usize::from(record.policy.min_replicas) {
+        return None;
+    }
+
+    let assignments: Vec<_> = assignments
+        .iter()
+        .take(usize::from(record.policy.min_replicas))
+        .map(|provider| ReplicationAssignmentV1 {
+            provider_id: *provider.as_bytes(),
+            slice_gib: AUTO_REPLICATION_ORDER_SLICE_GIB,
+            lane: None,
+        })
+        .collect();
+    let order_id = auto_replication_order_id(&record.digest, &assignments);
+    let issued_epoch = record.submitted_epoch;
+    let deadline_epoch = issued_epoch.saturating_add(AUTO_REPLICATION_ORDER_EPOCH_SLACK);
+    let issued_at = issued_epoch.saturating_mul(AUTO_REPLICATION_ORDER_SECS_PER_EPOCH);
+    let deadline_at =
+        issued_at.saturating_add(u64::from(AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS));
+    let order = ReplicationOrderV1 {
+        version: REPLICATION_ORDER_VERSION_V1,
+        order_id: *order_id.as_bytes(),
+        manifest_cid: record.digest.as_bytes().to_vec(),
+        manifest_digest: *record.digest.as_bytes(),
+        chunking_profile: record.chunker.to_handle(),
+        target_replicas: record.policy.min_replicas,
+        assignments,
+        issued_at,
+        deadline_at,
+        sla: ReplicationOrderSlaV1 {
+            ingest_deadline_secs: AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS,
+            min_availability_percent_milli: AUTO_REPLICATION_ORDER_AVAILABILITY_PERCENT_MILLI,
+            min_por_success_percent_milli: AUTO_REPLICATION_ORDER_POR_SUCCESS_PERCENT_MILLI,
+        },
+        metadata: Vec::new(),
+    };
+
+    let canonical_order = norito::to_bytes(&order).ok()?;
+    Some(ReplicationOrderRecord {
+        order_id,
+        manifest_digest: record.digest,
+        issued_by: issued_by.clone(),
+        issued_epoch,
+        deadline_epoch,
+        canonical_order,
+        status: ReplicationOrderStatus::Pending,
+    })
+}
+
 fn manifest_error(err: &ManifestValidationError) -> InstructionExecutionError {
     invalid_parameter(format!("manifest validation failed: {err}"))
 }
@@ -1241,8 +1433,6 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        require_permission(state_transaction, authority, "CanDeclareSorafsCapacity")?;
-
         let mut record: CapacityDeclarationRecord = self.record;
         let provider_id = record.provider_id;
         let provider_hex = hex::encode(provider_id.as_bytes());
@@ -1283,6 +1473,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
         )?;
         enforce_provider_owner(
             &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
             authority,
             &record.metadata,
             &provider_hex,
@@ -1334,8 +1525,6 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        require_permission(state_transaction, authority, "CanSubmitSorafsTelemetry")?;
-
         let record: CapacityTelemetryRecord = self.record;
         let provider_id = record.provider_id;
         let policy = &state_transaction.gov.sorafs_telemetry;
@@ -1390,6 +1579,7 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
             authority,
             declaration_record,
             &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
         )?;
         if let Some(owner) = state_transaction.world.provider_owners.get(&provider_id)
             && !same_account_subject(owner, authority)
@@ -2246,11 +2436,9 @@ mod sorafs_tests {
                 .expect("register domain for account");
         }
         if stx.world.accounts.get(account_id).is_none() {
-            Register::account(iroha_data_model::account::Account::new(
-                account_id.clone().to_account_id(domain_id.clone()),
-            ))
-            .execute(&alice(), stx)
-            .expect("register account");
+            Register::account(iroha_data_model::account::Account::new(account_id.clone()))
+                .execute(&alice(), stx)
+                .expect("register account");
         }
     }
 
@@ -2288,6 +2476,14 @@ mod sorafs_tests {
 
     pub(super) fn second_digest() -> ManifestDigest {
         ManifestDigest::new([0xBB; 32])
+    }
+
+    fn third_digest() -> ManifestDigest {
+        ManifestDigest::new([0xCC; 32])
+    }
+
+    fn fourth_digest() -> ManifestDigest {
+        ManifestDigest::new([0xDD; 32])
     }
 
     pub(super) fn alias_binding_for(
@@ -2342,7 +2538,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn register_pin_manifest_requires_permission() {
+    fn register_pin_manifest_allows_public_submission() {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
         let mut block = state.block(block_header());
@@ -2361,15 +2557,17 @@ mod sorafs_tests {
             successor_of: None,
         };
 
-        let error = register
+        register
             .execute(&alice(), &mut stx)
-            .expect_err("permissionless register must fail");
-        assert!(matches!(
-            error,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("CanRegisterSorafsPin")
-        ));
+            .expect("public register must succeed");
+
+        let record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored");
+        assert_eq!(record.submitted_by, alice());
+        assert_eq!(record.status, PinStatus::Approved(5));
     }
 
     #[test]
@@ -2454,12 +2652,13 @@ mod sorafs_tests {
         digest: ManifestDigest,
         chunk_digest: [u8; 32],
     ) {
+        let submitted_epoch = 5;
         let register = RegisterPinManifest {
             digest,
             chunker: default_chunker(),
             chunk_digest_sha3_256: chunk_digest,
             policy: default_policy(),
-            submitted_epoch: 5,
+            submitted_epoch,
             alias: None,
             successor_of: None,
         };
@@ -2476,11 +2675,45 @@ mod sorafs_tests {
 
         let approve = ApprovePinManifest {
             digest,
-            approved_epoch: 7,
+            approved_epoch: submitted_epoch,
             council_envelope: Some(envelope),
             council_envelope_digest: None,
         };
         approve.execute(&alice(), stx).expect("approve manifest");
+    }
+
+    fn insert_manifest_with_status(
+        stx: &mut crate::state::StateTransaction<'_, '_>,
+        digest: ManifestDigest,
+        chunk_digest: [u8; 32],
+        successor_of: Option<ManifestDigest>,
+        status: PinStatus,
+    ) {
+        let mut record = PinManifestRecord::new(
+            digest,
+            default_chunker(),
+            chunk_digest,
+            default_policy(),
+            alice(),
+            5,
+            None,
+            successor_of,
+            Metadata::default(),
+        );
+        match status {
+            PinStatus::Pending => {}
+            PinStatus::Approved(epoch) => record.approve(epoch, None),
+            PinStatus::Retired(epoch) => record.retire(epoch, None),
+        }
+        stx.world.pin_manifests.insert(digest, record);
+    }
+
+    fn insert_pending_manifest(
+        stx: &mut crate::state::StateTransaction<'_, '_>,
+        digest: ManifestDigest,
+        chunk_digest: [u8; 32],
+    ) {
+        insert_manifest_with_status(stx, digest, chunk_digest, None, PinStatus::Pending);
     }
 
     fn default_alias_binding() -> ManifestAliasBinding {
@@ -2752,7 +2985,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn capacity_declaration_requires_permission() {
+    fn capacity_declaration_is_permissionless_for_provider_owner() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -2764,51 +2997,31 @@ mod sorafs_tests {
         let err = RegisterCapacityDeclaration {
             record: declaration,
         }
-        .execute(&alice(), &mut stx)
-        .expect_err("permissionless declaration must fail");
-        assert!(matches!(
-            err,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("CanDeclareSorafsCapacity")
-        ));
+        .execute(&alice(), &mut stx);
+        assert!(err.is_ok(), "ordinary provider owner should be allowed");
     }
 
     #[test]
-    fn capacity_telemetry_requires_permission() {
+    fn capacity_telemetry_is_permissionless_for_provider_owner() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         remove_permission(&mut stx, "CanSubmitSorafsTelemetry");
+        let (provider, declaration) = sample_capacity_record();
+        RegisterCapacityDeclaration {
+            record: declaration,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("register capacity declaration");
 
         let telemetry = CapacityTelemetryRecord::new(
-            ProviderId::new([0xAA; 32]),
-            0,
-            1,
-            1,
-            1,
-            1,
-            0,
-            0,
-            10_000,
-            10_000,
-            0,
-            0,
-            0,
-            0,
-            0,
+            provider, 0, 1, 1, 1, 1, 0, 0, 10_000, 10_000, 0, 0, 0, 0, 0,
         )
         .with_nonce(1);
 
-        let err = RecordCapacityTelemetry { record: telemetry }
+        RecordCapacityTelemetry { record: telemetry }
             .execute(&alice(), &mut stx)
-            .expect_err("permissionless telemetry must fail");
-        assert!(matches!(
-            err,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("CanSubmitSorafsTelemetry")
-        ));
+            .expect("ordinary provider owner should be allowed");
     }
 
     #[test]
@@ -2877,6 +3090,27 @@ mod sorafs_tests {
         assert!(
             perms.contains(&permission),
             "repair worker permission should be granted"
+        );
+    }
+
+    #[test]
+    fn instruction_box_dispatches_capacity_declaration() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let (provider, declaration) = capacity_record_with_owner(&alice());
+
+        let instruction = InstructionBox::from(RegisterCapacityDeclaration {
+            record: declaration,
+        });
+        instruction
+            .execute(&alice(), &mut stx)
+            .expect("instruction box should dispatch SoraFS declaration");
+
+        assert_eq!(
+            stx.world.provider_owners.get(&provider),
+            Some(&alice()),
+            "instruction box execution should record the provider owner"
         );
     }
 
@@ -3128,7 +3362,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn register_manifest_inserts_record() {
+    fn register_manifest_activates_record_immediately() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -3151,9 +3385,10 @@ mod sorafs_tests {
             .pin_manifests
             .get(&default_digest())
             .expect("manifest stored");
-        assert!(matches!(stored.status, PinStatus::Pending));
+        assert_eq!(stored.status, PinStatus::Approved(5));
         assert_eq!(stored.chunk_digest_sha3_256, default_chunk_digest());
         assert!(stored.council_envelope_digest.is_none());
+        assert_eq!(stx.world.replication_orders.iter().count(), 0);
     }
 
     #[test]
@@ -3240,10 +3475,17 @@ mod sorafs_tests {
         let stored_alias = stored.alias.as_ref().expect("alias stored");
         assert_eq!(stored_alias.name, alias.name);
         assert_eq!(stored_alias.namespace, alias.namespace);
+        let alias_record = stx
+            .world
+            .manifest_aliases
+            .get(&ManifestAliasId::from(&alias))
+            .expect("alias binding stored");
+        assert!(alias_record.targets_manifest(&default_digest()));
+        assert_eq!(alias_record.bound_epoch, 5);
     }
 
     #[test]
-    fn approve_manifest_with_alias_records_binding() {
+    fn approve_manifest_with_alias_records_council_digest() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -3273,7 +3515,7 @@ mod sorafs_tests {
 
         ApprovePinManifest {
             digest: default_digest(),
-            approved_epoch: 9,
+            approved_epoch: 5,
             council_envelope: Some(envelope),
             council_envelope_digest: None,
         }
@@ -3287,8 +3529,59 @@ mod sorafs_tests {
             .get(&alias_id)
             .expect("alias record stored");
         assert!(alias_record.targets_manifest(&default_digest()));
-        assert_eq!(alias_record.bound_epoch, 9);
+        assert_eq!(alias_record.bound_epoch, 5);
         assert_eq!(alias_record.expiry_epoch, default_policy().retention_epoch);
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored after approval");
+        assert!(stored.council_envelope_digest.is_some());
+    }
+
+    #[test]
+    fn register_manifest_auto_issues_replication_order_for_matching_capacity() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let (provider, mut declaration) = capacity_record_with_owner(&alice());
+        declaration.valid_from_epoch = 4;
+        declaration.valid_until_epoch = 20;
+        stx.world.provider_owners.insert(provider, alice());
+        stx.world
+            .capacity_declarations
+            .insert(provider, declaration);
+
+        let mut policy = default_policy();
+        policy.min_replicas = 1;
+        RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy,
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("register manifest");
+
+        let (_order_id, order) = stx
+            .world
+            .replication_orders
+            .iter()
+            .next()
+            .expect("auto replication order stored");
+        assert_eq!(order.manifest_digest, default_digest());
+        assert_eq!(order.issued_epoch, 5);
+        assert_eq!(order.deadline_epoch, 6);
+
+        let decoded =
+            decode_from_bytes::<ReplicationOrderV1>(&order.canonical_order).expect("decode order");
+        assert_eq!(decoded.target_replicas, 1);
+        assert_eq!(decoded.assignments.len(), 1);
+        assert_eq!(decoded.assignments[0].provider_id, *provider.as_bytes());
+        assert_eq!(decoded.assignments[0].slice_gib, 1);
     }
 
     #[test]
@@ -3334,6 +3627,45 @@ mod sorafs_tests {
             ),
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn register_manifest_rejects_duplicate_digest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("first manifest registration succeeds");
+
+        let err = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: [0xEE; 32],
+            policy: default_policy(),
+            submitted_epoch: 6,
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("duplicate manifest digest must be rejected");
+        let message = match err {
+            InstructionExecutionError::InvariantViolation(message) => message.to_string(),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("already registered"),
+            "unexpected error message: {message}"
+        );
     }
 
     #[test]
@@ -3404,7 +3736,249 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn approve_manifest_updates_status() {
+    fn register_manifest_with_approved_predecessor_persists_successor_of() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        RegisterPinManifest {
+            digest: second_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: [0xEE; 32],
+            policy: default_policy(),
+            submitted_epoch: 4,
+            alias: None,
+            successor_of: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect("register predecessor manifest");
+
+        RegisterPinManifest {
+            digest: third_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: [0xEF; 32],
+            policy: default_policy(),
+            submitted_epoch: 6,
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect("register successor manifest");
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&third_digest())
+            .expect("successor manifest stored");
+        assert_eq!(stored.successor_of, Some(second_digest()));
+        assert_eq!(stored.status, PinStatus::Approved(6));
+    }
+
+    #[test]
+    fn register_manifest_rejects_self_successor_reference() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        let err = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: Some(default_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration must reject self successor");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("cannot declare itself as successor"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_unregistered_predecessor() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        let err = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration must reject missing predecessor");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("is not registered"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_pending_predecessor() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        insert_pending_manifest(&mut stx, second_digest(), [0xEE; 32]);
+
+        let err = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration must reject pending predecessor");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("must be approved before registering successor"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_retired_predecessor() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        insert_manifest_with_status(
+            &mut stx,
+            second_digest(),
+            [0xEE; 32],
+            None,
+            PinStatus::Retired(7),
+        );
+
+        let err = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 8,
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration must reject retired predecessor");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("was retired at epoch 7"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_successor_cycle_closure() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        insert_manifest_with_status(
+            &mut stx,
+            second_digest(),
+            [0xEE; 32],
+            Some(third_digest()),
+            PinStatus::Approved(5),
+        );
+
+        let err = RegisterPinManifest {
+            digest: third_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: [0xEF; 32],
+            policy: default_policy(),
+            submitted_epoch: 6,
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration must reject cycle closure");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("would create a cycle"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn register_manifest_rejects_existing_cycle_in_predecessor_chain() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        insert_manifest_with_status(
+            &mut stx,
+            second_digest(),
+            [0xEE; 32],
+            Some(third_digest()),
+            PinStatus::Approved(5),
+        );
+        insert_manifest_with_status(
+            &mut stx,
+            third_digest(),
+            [0xEF; 32],
+            Some(second_digest()),
+            PinStatus::Approved(5),
+        );
+
+        let err = RegisterPinManifest {
+            digest: fourth_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: [0xF0; 32],
+            policy: default_policy(),
+            submitted_epoch: 6,
+            alias: None,
+            successor_of: Some(second_digest()),
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("registration must reject malformed existing cycle");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("forms a cycle"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_records_council_digest_for_auto_approved_manifest() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -3438,7 +4012,7 @@ mod sorafs_tests {
 
         let approve = ApprovePinManifest {
             digest: default_digest(),
-            approved_epoch: 7,
+            approved_epoch: 5,
             council_envelope: Some(envelope),
             council_envelope_digest: None,
         };
@@ -3451,7 +4025,7 @@ mod sorafs_tests {
             .pin_manifests
             .get(&default_digest())
             .expect("manifest stored");
-        assert!(matches!(stored.status, PinStatus::Approved(7)));
+        assert!(matches!(stored.status, PinStatus::Approved(5)));
         assert_eq!(stored.council_envelope_digest, Some(expected_digest));
     }
 
@@ -3612,6 +4186,388 @@ mod sorafs_tests {
         };
         assert!(
             message.contains("approval digest mismatch"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_rejects_provided_digest_mismatch_with_envelope() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let stored_record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored")
+            .clone();
+        let council_key = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let (envelope, _) = build_envelope(&stored_record, &council_key);
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: Some(envelope),
+            council_envelope_digest: Some([0x24; 32]),
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("approval must reject provided digest mismatch with envelope");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("approval digest mismatch with provided envelope"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_rejects_unknown_manifest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("approval must reject unknown manifest");
+        let message = match err {
+            InstructionExecutionError::InvariantViolation(message) => message.to_string(),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("not registered"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_rejects_different_epoch_for_auto_approved_manifest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 7,
+            council_envelope: None,
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("approval must reject different epoch");
+        let message = match err {
+            InstructionExecutionError::InvariantViolation(message) => message.to_string(),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("already approved with different epoch"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_reapproval_accepts_stored_digest_without_payload() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let expected_digest = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored")
+            .council_envelope_digest
+            .expect("digest recorded");
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: None,
+        };
+        approve
+            .execute(&alice(), &mut stx)
+            .expect("re-approval should reuse stored digest");
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored");
+        assert_eq!(stored.council_envelope_digest, Some(expected_digest));
+        assert!(matches!(stored.status, PinStatus::Approved(5)));
+    }
+
+    #[test]
+    fn approve_manifest_reapproval_accepts_matching_stored_digest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let expected_digest = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored")
+            .council_envelope_digest
+            .expect("digest recorded");
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: Some(expected_digest),
+        };
+        approve
+            .execute(&alice(), &mut stx)
+            .expect("re-approval should accept matching stored digest");
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored");
+        assert_eq!(stored.council_envelope_digest, Some(expected_digest));
+        assert!(matches!(stored.status, PinStatus::Approved(5)));
+    }
+
+    #[test]
+    fn approve_manifest_reapproval_rejects_mismatched_stored_digest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: Some([0x77; 32]),
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("re-approval must reject mismatched stored digest");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("stored digest"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_reapproval_requires_payload_without_stored_digest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("re-approval must require payload when no digest is stored");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("re-approval requires council envelope payload"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_pending_manifest_accepts_provided_digest_without_envelope() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 9,
+            council_envelope: None,
+            council_envelope_digest: Some([0x66; 32]),
+        };
+        approve
+            .execute(&alice(), &mut stx)
+            .expect("pending approval should accept provided digest");
+
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest stored");
+        assert!(matches!(stored.status, PinStatus::Approved(9)));
+        assert_eq!(stored.council_envelope_digest, Some([0x66; 32]));
+    }
+
+    #[test]
+    fn approve_pending_manifest_requires_envelope_or_digest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 9,
+            council_envelope: None,
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("pending approval should require envelope or digest");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("approval requires council envelope payload"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_reapproval_rejects_digest_without_stored_digest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: None,
+            council_envelope_digest: Some([0x12; 32]),
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("re-approval should reject digest-only input without stored digest");
+        let message = match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => message,
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("because no digest is stored"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn approve_manifest_rejects_retired_manifest() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        let register = RegisterPinManifest {
+            digest: default_digest(),
+            chunker: default_chunker(),
+            chunk_digest_sha3_256: default_chunk_digest(),
+            policy: default_policy(),
+            submitted_epoch: 5,
+            alias: None,
+            successor_of: None,
+        };
+        register
+            .execute(&alice(), &mut stx)
+            .expect("register manifest");
+
+        let retire = RetirePinManifest {
+            digest: default_digest(),
+            retired_epoch: 8,
+            reason: Some("superseded".into()),
+        };
+        retire.execute(&alice(), &mut stx).expect("retire manifest");
+
+        let approve = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 8,
+            council_envelope: None,
+            council_envelope_digest: None,
+        };
+        let err = approve
+            .execute(&alice(), &mut stx)
+            .expect_err("approval must reject retired manifest");
+        let message = match err {
+            InstructionExecutionError::InvariantViolation(message) => message.to_string(),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("is retired and cannot be approved"),
             "unexpected error message: {message}"
         );
     }
@@ -3890,6 +4846,40 @@ mod sorafs_tests {
         let decoded =
             decode_from_bytes::<ReplicationOrderV1>(&record.canonical_order).expect("decode order");
         assert_eq!(decoded.order_id, *order_id.as_bytes());
+    }
+
+    #[test]
+    fn instruction_box_dispatches_replication_order_issue() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+
+        register_and_approve_manifest(&mut stx, default_digest(), default_chunk_digest());
+
+        let order_id = ReplicationOrderId::new([0x54; 32]);
+        let providers = vec![
+            ProviderId::new([0x21; 32]),
+            ProviderId::new([0x22; 32]),
+            ProviderId::new([0x23; 32]),
+        ];
+        seed_provider_owners(&mut stx, &providers, &alice());
+        let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
+        let payload = encode_replication_order(&order_struct);
+
+        let instruction = InstructionBox::from(IssueReplicationOrder {
+            order_id,
+            order_payload: payload,
+            issued_epoch: 12,
+            deadline_epoch: 32,
+        });
+        instruction
+            .execute(&alice(), &mut stx)
+            .expect("instruction box should dispatch SoraFS replication orders");
+
+        assert!(
+            stx.world.replication_orders.get(&order_id).is_some(),
+            "instruction box execution should store the replication order"
+        );
     }
 
     #[test]
@@ -6350,7 +7340,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let provider = ProviderId::new([0xA1; 32]);
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         ensure_registered_account(&mut stx, &bob(), &domain_id);
 
         RegisterProviderOwner {
@@ -6433,7 +7423,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let provider = ProviderId::new([0xA3; 32]);
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         ensure_registered_account(&mut stx, &alice(), &domain_id);
         RegisterProviderOwner {
             provider_id: provider,

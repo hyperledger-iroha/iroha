@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
-import warnings
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -13,7 +12,6 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Type, Union
 from urllib.parse import ParseResult, parse_qs, urlencode, urlparse
 
 from ._native import load_crypto_extension
-from .connect_stub import ConnectCodecStub
 
 __all__ = [
     "ConnectUri",
@@ -150,54 +148,22 @@ def _require(value: Optional[str], name: str) -> str:
 _BytesLike = Union[bytes, bytearray, memoryview]
 _CodecModule = Optional[Any]
 _CODEC_MODULE: _CodecModule = None
-_STUB_NOTICE_EMITTED = False
-
-
-def _connect_codec_mode() -> Optional[str]:
-    value = os.environ.get("IROHA_PYTHON_CONNECT_CODEC")
-    if value is None:
-        value = os.environ.get("IROHA_PYTHON_CONNECT_STUB")
-    if value is None:
-        return None
-    normalized = value.strip().lower()
-    return normalized or None
-
-
-def _should_force_stub() -> bool:
-    mode = _connect_codec_mode()
-    return mode in {"1", "true", "yes", "on", "stub", "test"}
-
-
-def _load_stub(reason: str) -> Any:
-    global _CODEC_MODULE, _STUB_NOTICE_EMITTED
-    if not _STUB_NOTICE_EMITTED:
-        warnings.warn(
-            f"Using Connect codec stub ({reason}); do not rely on it in production.",
-            RuntimeWarning,
-            stacklevel=3,
-        )
-        _STUB_NOTICE_EMITTED = True
-    _CODEC_MODULE = ConnectCodecStub()
-    return _CODEC_MODULE
 
 
 def _require_codec_module() -> Any:
     global _CODEC_MODULE
     if _CODEC_MODULE is not None:
         return _CODEC_MODULE
-    if _should_force_stub():
-        return _load_stub("IROHA_PYTHON_CONNECT_CODEC=stub")
     try:
         _CODEC_MODULE = load_crypto_extension()
     except Exception as exc:  # pragma: no cover - defensive
         raise RuntimeError(
-            "native Connect codec unavailable; install the extension or set "
-            "IROHA_PYTHON_CONNECT_CODEC=stub explicitly for tests"
+            "native Connect codec unavailable; install the extension before using Connect"
         ) from exc
     return _CODEC_MODULE
 
 
-def _register_stub_session_sequence(
+def _register_session_sequence(
     sid: bytes,
     direction: ConnectDirection,
     sequence: int,
@@ -284,6 +250,8 @@ class ConnectPreviewTokens:
 
     wallet: str
     app: str
+    management: str
+    relay: str
 
 
 @dataclass(frozen=True)
@@ -303,6 +271,8 @@ class ConnectSessionInfo:
     app_uri: str
     app_token: str
     wallet_token: str
+    management_token: str
+    relay_token: str
     expires_at: Optional[datetime] = None
 
     @classmethod
@@ -321,6 +291,8 @@ class ConnectSessionInfo:
                 app_uri=str(payload["app_uri"]),
                 app_token=str(payload["token_app"]),
                 wallet_token=str(payload["token_wallet"]),
+                management_token=str(payload["token_management"]),
+                relay_token=str(payload["token_relay"]),
                 expires_at=expires_at,
             )
         except KeyError as exc:  # pragma: no cover - defensive
@@ -334,6 +306,8 @@ class ConnectSessionInfo:
             "app_uri": self.app_uri,
             "token_app": self.app_token,
             "token_wallet": self.wallet_token,
+            "token_management": self.management_token,
+            "token_relay": self.relay_token,
             "expires_at": self.expires_at.isoformat(timespec="seconds") if self.expires_at else None,
         }
 
@@ -1169,7 +1143,7 @@ class ConnectSession:
         payload: ConnectCiphertextPayload,
     ) -> ConnectFrame:
         seq = self._next_sequence[direction]
-        _register_stub_session_sequence(self._sid, direction, seq)
+        _register_session_sequence(self._sid, direction, seq)
         frame = seal_connect_payload(
             self._key_for(direction),
             self._sid,
@@ -1347,7 +1321,14 @@ def bootstrap_connect_preview_session(
     session = torii_client.create_connect_session(payload)
     wallet_token = _read_session_token(session, "wallet_token")
     app_token = _read_session_token(session, "app_token")
-    tokens = ConnectPreviewTokens(wallet=wallet_token, app=app_token)
+    management_token = _read_session_token(session, "management_token")
+    relay_token = _read_session_token(session, "relay_token")
+    tokens = ConnectPreviewTokens(
+        wallet=wallet_token,
+        app=app_token,
+        management=management_token,
+        relay=relay_token,
+    )
     return ConnectPreviewBootstrapResult(preview=preview, session=session, tokens=tokens)
 
 

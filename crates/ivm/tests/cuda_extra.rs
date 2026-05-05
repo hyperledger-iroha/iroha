@@ -32,7 +32,7 @@ fn test_cuda_keccak() {
     }
     let mut st_cpu = [0u64; 25];
     let mut st_gpu = [0u64; 25];
-    ivm::sha3::keccak_f1600_impl(&mut st_cpu);
+    ivm::keccak_f1600(&mut st_cpu);
     if ivm::keccak_f1600_cuda(&mut st_gpu) {
         assert_eq!(st_gpu, st_cpu);
     } else {
@@ -177,9 +177,7 @@ fn test_cuda_ed25519_verify() {
         return;
     }
     use ed25519_dalek::{Signer, SigningKey};
-    use rand_core::OsRng;
-    let mut rng = OsRng;
-    let keypair = SigningKey::generate(&mut rng);
+    let keypair = SigningKey::from_bytes(&[0x11; 32]);
     let msg = b"cuda ed25519";
     let sig = keypair.sign(msg);
     let pk_bytes = keypair.verifying_key().to_bytes();
@@ -219,10 +217,8 @@ fn test_cuda_ed25519_verify_batch() {
         return;
     }
     use ed25519_dalek::{Signer, SigningKey};
-    use rand_core::OsRng;
-    let mut rng = OsRng;
-    let key1 = SigningKey::generate(&mut rng);
-    let key2 = SigningKey::generate(&mut rng);
+    let key1 = SigningKey::from_bytes(&[0x22; 32]);
+    let key2 = SigningKey::from_bytes(&[0x33; 32]);
 
     let msg1 = b"cuda batch one";
     let msg2 = b"cuda batch two";

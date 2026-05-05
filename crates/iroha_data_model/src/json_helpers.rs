@@ -321,11 +321,60 @@ pub mod account_metadata_map {
     }
 }
 
+/// Serialize Soracloud Inrou guest-image maps as string-keyed JSON objects.
+#[cfg(feature = "json")]
+#[allow(dead_code)]
+pub mod sora_inrou_guest_images_map {
+    use super::*;
+    use crate::soracloud::{SoraInrouGuestImageV1, SoraInrouGuestIsaV1};
+
+    pub fn serialize(
+        value: &BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
+        out: &mut String,
+    ) {
+        let string_keyed: BTreeMap<String, SoraInrouGuestImageV1> = value
+            .iter()
+            .map(|(guest_isa, image)| (guest_isa.as_str().to_owned(), image.clone()))
+            .collect();
+        JsonSerialize::json_serialize(&string_keyed, out);
+    }
+
+    pub fn deserialize(
+        parser: &mut Parser<'_>,
+    ) -> Result<BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>, norito::json::Error> {
+        let value = Value::json_deserialize(parser)?;
+        let object = match value {
+            Value::Object(map) => map,
+            other => {
+                return Err(norito::json::Error::Message(format!(
+                    "expected object for Soracloud Inrou guest image map, got {other:?}"
+                )));
+            }
+        };
+
+        object
+            .into_iter()
+            .map(|(key, value)| {
+                let guest_isa = SoraInrouGuestIsaV1::parse_key(&key).ok_or_else(|| {
+                    norito::json::Error::Message(format!(
+                        "unsupported Soracloud Inrou guest ISA key: {key}"
+                    ))
+                })?;
+                let image: SoraInrouGuestImageV1 = json::from_value(value)?;
+                Ok((guest_isa, image))
+            })
+            .collect()
+    }
+}
+
 #[cfg(all(test, feature = "json"))]
 mod tests {
     use norito::json;
 
     use super::*;
+    use crate::soracloud::{
+        SoraArtifactDistributionPolicyV1, SoraInrouGuestImageV1, SoraInrouGuestIsaV1,
+    };
 
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct Base64Wrapper {
@@ -387,6 +436,65 @@ mod tests {
         match err {
             norito::json::Error::Message(message) => assert!(
                 message.contains("invalid i128 string representation"),
+                "unexpected message: {message}"
+            ),
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
+    struct InrouGuestImagesWrapper {
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::sora_inrou_guest_images_map")
+        )]
+        guest_images: BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
+    }
+
+    #[test]
+    fn sora_inrou_guest_images_map_roundtrip_serialization() {
+        let wrapper = InrouGuestImagesWrapper {
+            guest_images: BTreeMap::from([
+                (
+                    SoraInrouGuestIsaV1::X8664,
+                    SoraInrouGuestImageV1 {
+                        kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
+                        rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
+                        initrd_image_path: None,
+                        distribution: SoraArtifactDistributionPolicyV1::default(),
+                        published_artifact: None,
+                    },
+                ),
+                (
+                    SoraInrouGuestIsaV1::Aarch64,
+                    SoraInrouGuestImageV1 {
+                        kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
+                        rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
+                        initrd_image_path: Some("/inrou/aarch64/initrd.img".to_owned()),
+                        distribution: SoraArtifactDistributionPolicyV1::default(),
+                        published_artifact: None,
+                    },
+                ),
+            ]),
+        };
+
+        let json = json::to_json(&wrapper).expect("serialize to JSON");
+        assert!(json.contains("\"x86_64\""));
+        assert!(json.contains("\"aarch64\""));
+
+        let decoded: InrouGuestImagesWrapper = json::from_str(&json).expect("decode from JSON");
+        assert_eq!(decoded, wrapper);
+    }
+
+    #[test]
+    fn sora_inrou_guest_images_map_rejects_unknown_keys() {
+        let json = r#"{"guest_images":{"riscv64":{"kernel_image_path":"/inrou/riscv64/vmlinux","rootfs_image_path":"/inrou/riscv64/rootfs.ext4","initrd_image_path":null}}}"#;
+        let err = json::from_str::<InrouGuestImagesWrapper>(json)
+            .expect_err("unknown guest ISA must fail");
+
+        match err {
+            norito::json::Error::Message(message) => assert!(
+                message.contains("unsupported Soracloud Inrou guest ISA key"),
                 "unexpected message: {message}"
             ),
             other => panic!("unexpected error variant: {other:?}"),

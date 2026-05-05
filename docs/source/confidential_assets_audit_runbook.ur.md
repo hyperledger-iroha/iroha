@@ -32,7 +32,7 @@ translator: machine-google-reviewed
   اختیاری طور پر ایک ہی اثاثہ تعریف کو ختم کرنا۔ سی ایل آئی مثال:
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - پالیسی میٹا ڈیٹا اور زیر التوا ٹرانزیشن دستیاب ہیں

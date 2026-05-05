@@ -30,8 +30,8 @@ translation_last_reviewed: 2026-02-07
 ڈیمو کیز سے:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 پہلے اکاؤنٹس کی فہرست دے کر اقدار کی تصدیق کریں:
@@ -50,7 +50,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dans wonderland (remplacez --limit par un nombre plus eleve si besoin)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions qui existent deja
@@ -67,7 +67,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI جمع کروائے گئے ٹرانزیکشن ہیش کو دکھاتا ہے (مثال کے طور پر ، `0x5f...`)۔ اسے رکھو
@@ -76,7 +76,7 @@ CLI جمع کروائے گئے ٹرانزیکشن ہیش کو دکھاتا ہے 
 ## 3. آپریٹر اکاؤنٹ پر منٹر یونٹ
 
 اثاثوں کی مقدار جوڑی `(asset definition, account)` کے تحت رہتی ہے۔ منٹیز 250
-`$ADMIN_ACCOUNT` میں `coffee#wonderland` کی اکائیاں:
+`$ADMIN_ACCOUNT` میں `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` کی اکائیاں:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

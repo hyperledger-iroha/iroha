@@ -1,7 +1,7 @@
 use crate::bitstream::{BitWriter, BitstreamError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FseError {
+pub enum FseError {
     InvalidTable,
     InvalidSymbol,
     Bitstream(BitstreamError),

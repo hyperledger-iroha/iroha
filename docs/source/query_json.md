@@ -38,7 +38,39 @@ The following singular queries are supported:
 - `FindAbiVersion`
 - `FindExecutorDataModel`
 - `FindParameters`
+- `FindAssetDefinitionById` with `{ "asset": "<base58-asset-definition-id>" }`
+- `FindAssetById` with `{ "asset": "<base58-asset-definition-id>", "account_id": "<canonical-i105>", "scope": { "kind": "Global" } }`
 - `FindContractManifestByCodeHash` (requires a 32-byte `code_hash` hex string)
+
+Example singular asset-definition lookup:
+
+```json
+{
+  "singular": {
+    "type": "FindAssetDefinitionById",
+    "payload": {
+      "asset": "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+    }
+  }
+}
+```
+
+Example singular owned-asset lookup:
+
+```json
+{
+  "singular": {
+    "type": "FindAssetById",
+    "payload": {
+      "asset": "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
+      "account_id": "<i105-account-id>",
+      "scope": {
+        "kind": "Global"
+      }
+    }
+  }
+}
+```
 
 ## Iterable queries
 
@@ -61,7 +93,7 @@ and a predicate payload:
     },
     "predicate": {
       "equals": [
-        {"field": "authority", "value": "i105..."}
+        {"field": "authority", "value": "<i105-account-id>"}
       ],
       "in": [
         {"field": "metadata.tier", "values": [1, 2, 3]}

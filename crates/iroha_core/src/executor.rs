@@ -25,22 +25,27 @@ use iroha_data_model::{
     executor::{self as data_model_executor, ExecutorDataModel},
     isi::{
         CustomInstruction, InstructionBox, InstructionBox as DMInstructionBox, RemoveKeyValueBox,
-        SetKeyValueBox, TransferBox, error::InstructionExecutionError, register::RegisterBox,
+        SetKeyValueBox, TransferBox, error::InstructionExecutionError, mint_burn::MintBox,
+        register::RegisterBox,
     },
     metadata::Metadata,
+    nexus::DataSpaceId,
     parameter::{CustomParameter, CustomParameterId},
     permission::Permission,
-    prelude::{Account, Domain, DomainId, Register, Transfer, Trigger},
+    prelude::{Account, Burn, Domain, DomainId, Register, Transfer, Trigger},
     query::{AnyQueryBox, QueryRequest},
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
-    transaction::{Executable, SignedTransaction},
+    transaction::{Executable, SignedTransaction, executable::ContractInvocation},
 };
 use iroha_executor_data_model::{
     isi::multisig::MultisigInstructionBox, permission as executor_permission,
 };
 use iroha_logger::{debug, trace, warn};
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{
+    json::Json,
+    numeric::{Numeric, NumericSpec},
+};
 use ivm::runtime::IvmConfig;
 use ivm::{IVM, Memory, VMError};
 use mv::storage::StorageReadOnly;
@@ -57,7 +62,7 @@ use crate::zk::PreverifyResult;
 use crate::{
     gas as isi_gas,
     settlement::{PendingSettlement, QuoteError, VolatilityBucket},
-    smartcontracts::{Execute as _, ivm::cache::IvmCache},
+    smartcontracts::{Execute as _, code, ivm::cache::IvmCache},
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
     sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer},
 };
@@ -67,6 +72,8 @@ use crate::{
 const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 const FIXTURE_LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
 const EXECUTOR_ADDITIONAL_FUEL_KEY: &str = "additional_fuel";
+const SORA_V2_CLAIM_TX_HASH_METADATA_KEY: &str = "sora_v2_claim_tx_hash";
+const SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY: &str = "sora_nexus_claim_recipient";
 const FIXTURE_SIMPLE_INSTRUCTION_FUEL_COST: u64 = 31_000_000;
 const FIXTURE_DOMAIN_LIMITS_PARAMETER_ID: &str = "DomainLimits";
 const FIXTURE_PERMISSION_CAN_CONTROL_DOMAIN_LIVES: &str = "CanControlDomainLives";
@@ -428,7 +435,8 @@ fn convert_volatility_bucket(volatility: GasVolatility) -> VolatilityBucket {
 }
 
 fn parse_fee_sponsor(
-    _world: &impl WorldReadOnly,
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     metadata: &Metadata,
 ) -> Result<Option<AccountId>, ValidationFail> {
     let Some(raw) = metadata.get("fee_sponsor") else {
@@ -438,36 +446,398 @@ fn parse_fee_sponsor(
         Ok(sponsor) => Ok(Some(sponsor)),
         Err(err) => {
             if let Ok(literal) = raw.try_into_any_norito::<String>()
-                && let Some(sponsor) =
-                    crate::block::parse_account_literal_with_world(_world, &literal)
+                && let Some(sponsor) = crate::block::parse_account_literal_with_world(
+                    world,
+                    dataspace_catalog,
+                    &literal,
+                )
             {
                 return Ok(Some(sponsor));
             }
             Err(ValidationFail::NotPermitted(format!(
-                "invalid fee_sponsor metadata: {err}"
+                "invalid fee_sponsor metadata: expected canonical I105 account id or on-chain alias ({err})"
             )))
         }
     }
 }
 
-fn parse_account_id_literal(world: &impl WorldReadOnly, literal: &str) -> Option<AccountId> {
-    crate::block::parse_account_literal_with_world(world, literal)
+fn metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
+    metadata
+        .get(key)
+        .and_then(|raw| raw.try_into_any_norito::<String>().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn is_sora_v2_tx_hash_literal(value: &str) -> bool {
+    let hex = value.strip_prefix("0x").unwrap_or(value);
+    hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn account_literal_matches(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    literal: &str,
+    expected: &AccountId,
+) -> bool {
+    if let Ok(canonical) = AccountId::canonicalize(literal)
+        && expected
+            .canonical_i105()
+            .ok()
+            .as_deref()
+            .is_some_and(|expected| expected == canonical)
+    {
+        return true;
+    }
+
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+        .as_ref()
+        .is_some_and(|account| account == expected)
+}
+
+fn successful_claim_fee_authority_allowed(
+    world: &impl WorldReadOnly,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    authority: &AccountId,
+) -> bool {
+    nexus
+        .fees
+        .successful_claim_fee_exempt_authorities
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|literal| !literal.is_empty())
+        .any(|literal| {
+            account_literal_matches(world, world.dataspace_catalog(), literal, authority)
+        })
+}
+
+fn successful_claim_fee_exempt_instructions(
+    world: &impl WorldReadOnly,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    authority: &AccountId,
+    metadata: &Metadata,
+    instructions: &[InstructionBox],
+    observation_time_ms: u64,
+) -> bool {
+    if !successful_claim_fee_authority_allowed(world, nexus, authority) {
+        return false;
+    }
+
+    let Some(claim_tx_hash) = metadata_string(metadata, SORA_V2_CLAIM_TX_HASH_METADATA_KEY) else {
+        return false;
+    };
+    if !is_sora_v2_tx_hash_literal(&claim_tx_hash) {
+        return false;
+    }
+
+    let Some(recipient) = metadata_string(metadata, SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY)
+        .and_then(|literal| parse_account_id_literal(world, world.dataspace_catalog(), &literal))
+    else {
+        return false;
+    };
+
+    let Some(asset_def) = crate::block::parse_asset_definition_literal_with_world(
+        world,
+        &nexus.fees.fee_asset_id,
+        observation_time_ms,
+    ) else {
+        return false;
+    };
+
+    let [instruction] = instructions else {
+        return false;
+    };
+
+    let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() else {
+        return false;
+    };
+
+    match mint {
+        MintBox::Asset(mint) => {
+            mint.destination.account() == &recipient
+                && mint.destination.definition() == &asset_def
+                && mint.object.clone() > Numeric::zero()
+        }
+        MintBox::TriggerRepetitions(_) => false,
+    }
+}
+
+fn successful_claim_fee_exempt_transaction(
+    world: &impl WorldReadOnly,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    transaction: &SignedTransaction,
+    observation_time_ms: u64,
+) -> bool {
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return false;
+    };
+    successful_claim_fee_exempt_instructions(
+        world,
+        nexus,
+        transaction.authority(),
+        transaction.metadata(),
+        instructions.as_ref(),
+        observation_time_ms,
+    )
+}
+
+fn parse_account_id_literal(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    literal: &str,
+) -> Option<AccountId> {
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NexusFeeAdmissionError {
+    Rejected(String),
+    ConfigInvalid(String),
+}
+
+fn validation_fail_to_nexus_fee_admission_error(err: ValidationFail) -> NexusFeeAdmissionError {
+    match err {
+        ValidationFail::InternalError(reason) => NexusFeeAdmissionError::ConfigInvalid(reason),
+        other => NexusFeeAdmissionError::Rejected(other.to_string()),
+    }
+}
+
+pub(crate) fn can_use_fee_sponsor_read_only(
+    world: &impl WorldReadOnly,
+    caller: &AccountId,
+    sponsor: &AccountId,
+) -> bool {
+    let dataspace_catalog = world.dataspace_catalog();
+    let permission_allows_sponsor = |permission: &Permission| {
+        crate::state::permission_allows_fee_sponsor(world, dataspace_catalog, permission, sponsor)
+    };
+
+    if world
+        .account_permissions()
+        .get(caller)
+        .is_some_and(|permissions| permissions.iter().any(permission_allows_sponsor))
+    {
+        return true;
+    }
+
+    world
+        .account_roles_iter(caller)
+        .filter_map(|role_id| world.roles().get(role_id))
+        .any(|role| role.permissions.iter().any(permission_allows_sponsor))
 }
 
 /// Parse optional `gas_limit` from transaction metadata.
 pub(crate) fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, ValidationFail> {
-    let Some(raw) = metadata.get("gas_limit") else {
-        return Ok(None);
-    };
-    let value = raw.try_into_any_norito::<u64>().map_err(|err| {
-        ValidationFail::NotPermitted(format!("invalid gas_limit metadata: {err}"))
-    })?;
-    if value == 0 {
+    iroha_data_model::transaction::parse_transaction_gas_limit(metadata)
+        .map_err(|err| ValidationFail::NotPermitted(err.to_string()))
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ContractRuntimeExecutionContext {
+    #[allow(dead_code)]
+    pub(crate) contract_address: iroha_data_model::smart_contract::ContractAddress,
+    pub(crate) contract_subject: AccountId,
+    pub(crate) contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    pub(crate) entrypoint: String,
+}
+
+impl ContractRuntimeExecutionContext {
+    fn allows_benefit_runtime_asset_transfer_bypass(&self) -> bool {
+        self.contract_alias.as_ref().is_some_and(|contract_alias| {
+            contract_alias.name_segment() == "benefit"
+                && contract_alias.dataspace_segment() == "benefit"
+        }) && matches!(self.entrypoint.as_str(), "spend_to_merchant" | "spend_many")
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ContractCallExecutionContext {
+    contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    entrypoint: Option<String>,
+    entrypoint_pc: Option<u64>,
+    args: Json,
+}
+
+impl ContractCallExecutionContext {
+    pub(crate) fn runtime_context(&self) -> Option<ContractRuntimeExecutionContext> {
+        let contract_address = self.contract_address.clone()?;
+        Some(ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
+            contract_address,
+            contract_alias: self.contract_alias.clone(),
+            entrypoint: self.entrypoint.clone()?,
+        })
+    }
+
+    pub(crate) fn entrypoint_pc(&self) -> Option<u64> {
+        self.entrypoint_pc
+    }
+
+    pub(crate) fn args(&self) -> &Json {
+        &self.args
+    }
+}
+
+pub(crate) fn parse_contract_call_execution_context(
+    metadata: &Metadata,
+    bytecode: &[u8],
+) -> Result<Option<ContractCallExecutionContext>, ValidationFail> {
+    let contract_address = metadata
+        .get("contract_address")
+        .map(|raw| {
+            raw.try_into_any_norito::<String>().map_err(|err| {
+                ValidationFail::NotPermitted(format!("invalid contract_address metadata: {err}"))
+            })
+        })
+        .transpose()?
+        .map(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(ValidationFail::NotPermitted(
+                    "contract_address must not be empty".to_owned(),
+                ));
+            }
+            trimmed.parse().map_err(|err| {
+                ValidationFail::NotPermitted(format!(
+                    "invalid contract_address metadata literal `{trimmed}`: {err}"
+                ))
+            })
+        })
+        .transpose()?;
+
+    let contract_alias = metadata
+        .get("contract_alias")
+        .map(|raw| {
+            raw.try_into_any_norito::<String>().map_err(|err| {
+                ValidationFail::NotPermitted(format!("invalid contract_alias metadata: {err}"))
+            })
+        })
+        .transpose()?
+        .map(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(ValidationFail::NotPermitted(
+                    "contract_alias must not be empty".to_owned(),
+                ));
+            }
+            trimmed.parse().map_err(|err| {
+                ValidationFail::NotPermitted(format!(
+                    "invalid contract_alias metadata literal `{trimmed}`: {err}"
+                ))
+            })
+        })
+        .transpose()?;
+
+    let entrypoint = metadata
+        .get("contract_entrypoint")
+        .map(|raw| {
+            raw.try_into_any_norito::<String>().map_err(|err| {
+                ValidationFail::NotPermitted(format!("invalid contract_entrypoint metadata: {err}"))
+            })
+        })
+        .transpose()?
+        .map(|value| value.trim().to_owned());
+    if entrypoint.as_deref().is_some_and(str::is_empty) {
         return Err(ValidationFail::NotPermitted(
-            "gas_limit must be positive".to_owned(),
+            "contract_entrypoint must not be empty".to_owned(),
         ));
     }
-    Ok(Some(value))
+
+    let payload = metadata.get("contract_payload").cloned();
+    if entrypoint.is_none() && payload.is_none() {
+        return Ok(None);
+    }
+
+    let entrypoint_pc = if let Some(selector) = entrypoint.as_deref() {
+        let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+            ValidationFail::NotPermitted(format!(
+                "invalid contract artifact for contract call dispatch: {err}"
+            ))
+        })?;
+        let prefix_len = parsed.prefix_len() as u64;
+        let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "contract call entrypoint metadata requires a self-describing contract artifact"
+                    .to_owned(),
+            )
+        })?;
+        let descriptor = contract_interface
+            .entrypoints
+            .iter()
+            .find(|candidate| candidate.name == selector)
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+            })?;
+        if !matches!(
+            descriptor.kind,
+            iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+        ) {
+            return Err(ValidationFail::NotPermitted(format!(
+                "contract entrypoint `{selector}` is not public"
+            )));
+        }
+        Some(prefix_len + descriptor.entry_pc)
+    } else {
+        None
+    };
+
+    Ok(Some(ContractCallExecutionContext {
+        contract_address,
+        contract_alias,
+        entrypoint,
+        entrypoint_pc,
+        args: payload.unwrap_or_default(),
+    }))
+}
+
+pub(crate) fn parse_contract_invocation_execution_context(
+    invocation: &ContractInvocation,
+    bytecode: &[u8],
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+) -> Result<ContractCallExecutionContext, ValidationFail> {
+    let selector = invocation.entrypoint.trim();
+    if selector.is_empty() {
+        return Err(ValidationFail::NotPermitted(
+            "contract entrypoint must not be empty".to_owned(),
+        ));
+    }
+
+    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+        ValidationFail::NotPermitted(format!(
+            "invalid contract artifact for contract call dispatch: {err}"
+        ))
+    })?;
+    let prefix_len = parsed.prefix_len() as u64;
+    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "contract call requires a self-describing contract artifact".to_owned(),
+        )
+    })?;
+    let descriptor = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+        })?;
+    if !matches!(
+        descriptor.kind,
+        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+    ) {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` is not public"
+        )));
+    }
+
+    Ok(ContractCallExecutionContext {
+        contract_address: Some(invocation.contract_address.clone()),
+        contract_alias,
+        entrypoint: Some(selector.to_owned()),
+        entrypoint_pc: Some(prefix_len + descriptor.entry_pc),
+        args: invocation.payload.clone().unwrap_or_default(),
+    })
 }
 
 fn parse_executor_additional_fuel(metadata: &Metadata) -> Result<u64, ValidationFail> {
@@ -477,6 +847,172 @@ fn parse_executor_additional_fuel(metadata: &Metadata) -> Result<u64, Validation
     raw.try_into_any_norito::<u64>().map_err(|err| {
         ValidationFail::NotPermitted(format!("invalid additional_fuel metadata: {err}"))
     })
+}
+
+pub(crate) fn compute_nexus_fee_amount(
+    cfg: &iroha_config::parameters::actual::NexusFees,
+    tx_bytes_len: usize,
+    instruction_count: usize,
+    gas_used: u64,
+) -> Result<Numeric, ValidationFail> {
+    let tx_bytes_u64 = u64::try_from(tx_bytes_len).map_err(|_| {
+        ValidationFail::InternalError("transaction too large for fee accounting".to_owned())
+    })?;
+    let instr_u64 = u64::try_from(instruction_count).map_err(|_| {
+        ValidationFail::InternalError("instruction count too large for fee accounting".to_owned())
+    })?;
+    let mut fee = cfg.base_fee.clone();
+    fee = Executor::checked_numeric_add(
+        fee,
+        Executor::checked_numeric_mul_u64(&cfg.per_byte_fee, tx_bytes_u64, "fee amount")?,
+        "fee amount",
+    )?;
+    fee = Executor::checked_numeric_add(
+        fee,
+        Executor::checked_numeric_mul_u64(&cfg.per_instruction_fee, instr_u64, "fee amount")?,
+        "fee amount",
+    )?;
+    Executor::checked_numeric_add(
+        fee,
+        Executor::checked_numeric_mul_u64(&cfg.per_gas_unit_fee, gas_used, "fee amount")?,
+        "fee amount",
+    )
+    .map(Numeric::trim_trailing_zeros)
+}
+
+fn fee_bound_for_admission(
+    transaction: &SignedTransaction,
+) -> Result<(usize, usize, u64), NexusFeeAdmissionError> {
+    let tx_bytes_len = to_bytes(transaction)
+        .map(|bytes| bytes.len())
+        .map_err(|err| {
+            NexusFeeAdmissionError::ConfigInvalid(format!(
+                "failed to encode transaction for fee metering: {err}"
+            ))
+        })?;
+
+    let metadata = transaction.metadata();
+    let (instruction_count, gas_used) = match transaction.instructions() {
+        Executable::Instructions(instructions) => (
+            instructions.len(),
+            isi_gas::meter_instructions(instructions.as_ref()),
+        ),
+        Executable::ContractCall(_) | Executable::Ivm(_) => {
+            let gas_limit = parse_gas_limit(metadata)
+                .map_err(validation_fail_to_nexus_fee_admission_error)?
+                .ok_or_else(|| {
+                    NexusFeeAdmissionError::Rejected(
+                        "missing gas_limit in transaction metadata".to_owned(),
+                    )
+                })?;
+            (0, gas_limit)
+        }
+        Executable::IvmProved(proved) => (
+            proved.overlay.len(),
+            isi_gas::meter_instructions(proved.overlay.as_ref()),
+        ),
+    };
+
+    Ok((tx_bytes_len, instruction_count, gas_used))
+}
+
+pub(crate) fn check_external_nexus_fee_admission(
+    world: &impl WorldReadOnly,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    transaction: &SignedTransaction,
+    observation_time_ms: u64,
+    _route_dataspace_id: Option<DataSpaceId>,
+) -> Result<(), NexusFeeAdmissionError> {
+    if !nexus.enabled {
+        return Ok(());
+    }
+    if successful_claim_fee_exempt_transaction(world, nexus, transaction, observation_time_ms) {
+        return Ok(());
+    }
+
+    let metadata = transaction.metadata();
+    let fee_sponsor = parse_fee_sponsor(world, world.dataspace_catalog(), metadata)
+        .map_err(validation_fail_to_nexus_fee_admission_error)?;
+    let externally_settled_sponsored_fee =
+        fee_sponsor.is_some() && nexus.fees.external_settlement_enabled;
+    let (tx_bytes_len, instruction_count, gas_used) = fee_bound_for_admission(transaction)?;
+    let fee = compute_nexus_fee_amount(&nexus.fees, tx_bytes_len, instruction_count, gas_used)
+        .map_err(validation_fail_to_nexus_fee_admission_error)?;
+
+    if fee <= Numeric::zero() {
+        return Ok(());
+    }
+
+    let payer = if let Some(sponsor) = fee_sponsor {
+        if !nexus.fees.sponsorship_enabled {
+            return Err(NexusFeeAdmissionError::Rejected(
+                "fee sponsorship is disabled".to_owned(),
+            ));
+        }
+        if !can_use_fee_sponsor_read_only(world, transaction.authority(), &sponsor) {
+            return Err(NexusFeeAdmissionError::Rejected(
+                "fee sponsor is not authorized".to_owned(),
+            ));
+        }
+        if nexus.fees.sponsor_max_fee > Numeric::zero() && fee > nexus.fees.sponsor_max_fee {
+            return Err(NexusFeeAdmissionError::Rejected(
+                "fee exceeds sponsor_max_fee".to_owned(),
+            ));
+        }
+        sponsor
+    } else {
+        transaction.authority().clone()
+    };
+
+    if externally_settled_sponsored_fee {
+        return Ok(());
+    }
+
+    if observation_time_ms < nexus.fees.burn_from_unix_timestamp_ms {
+        let sink_account = crate::block::parse_account_literal_with_world(
+            world,
+            world.dataspace_catalog(),
+            &nexus.fees.fee_sink_account_id,
+        )
+        .ok_or_else(|| {
+            NexusFeeAdmissionError::ConfigInvalid(
+                "invalid nexus fee sink account id; expected canonical I105 account id or on-chain alias"
+                    .to_owned(),
+            )
+        })?;
+        if payer == sink_account {
+            return Ok(());
+        }
+    }
+
+    let asset_def = crate::block::parse_asset_definition_literal_with_world(
+        world,
+        &nexus.fees.fee_asset_id,
+        observation_time_ms,
+    )
+    .ok_or_else(|| {
+        NexusFeeAdmissionError::ConfigInvalid(
+            "invalid nexus fee asset id; expected canonical Base58 asset definition id or active asset alias"
+                .to_owned(),
+        )
+    })?;
+
+    let payer_asset = AssetId::new(asset_def, payer.clone());
+    let Some(balance) = world.assets().get(&payer_asset) else {
+        return Err(NexusFeeAdmissionError::Rejected(format!(
+            "fee asset `{}` is missing for payer `{payer}`",
+            payer_asset.definition()
+        )));
+    };
+
+    let available = (**balance).clone();
+    if available < fee {
+        return Err(NexusFeeAdmissionError::Rejected(format!(
+            "fee balance for payer `{payer}` is insufficient: requires {fee}, available {available}"
+        )));
+    }
+
+    Ok(())
 }
 
 pub(crate) fn configure_executor_fuel_budget(
@@ -522,7 +1058,19 @@ pub(crate) fn charge_fees_for_applied_overlay(
         })?;
 
     let md = transaction.metadata();
-    let fee_sponsor = parse_fee_sponsor(&state_transaction.world, md)?;
+    let fee_sponsor = parse_fee_sponsor(
+        &state_transaction.world,
+        &state_transaction.nexus.dataspace_catalog,
+        md,
+    )?;
+    let skip_nexus_fee = successful_claim_fee_exempt_instructions(
+        &state_transaction.world,
+        &state_transaction.nexus,
+        authority,
+        md,
+        overlay.instruction_slice(),
+        state_transaction.block_unix_timestamp_ms(),
+    );
 
     // Keep gas policy snapshots aligned with governance/custom parameter updates.
     Executor::refresh_gas_from_parameters(state_transaction);
@@ -548,7 +1096,7 @@ pub(crate) fn charge_fees_for_applied_overlay(
     }
 
     let (gas_used, instruction_count, require_gas_limit) = match transaction.instructions() {
-        Executable::Ivm(_) => (
+        Executable::ContractCall(_) | Executable::Ivm(_) => (
             overlay.ivm_gas_used().ok_or_else(|| {
                 ValidationFail::InternalError(
                     "missing IVM gas usage metadata for overlay-applied transaction".to_owned(),
@@ -629,19 +1177,23 @@ pub(crate) fn charge_fees_for_applied_overlay(
         if gas_used > 0 && units_per_gas > 0 {
             let tech_account: AccountId = parse_account_id_literal(
                 &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
                 &state_transaction.pipeline.gas.tech_account_id,
             )
             .ok_or_else(|| {
                 ValidationFail::InternalError(
-                    "invalid pipeline.gas.tech_account_id; expected account identifier".to_owned(),
+                    "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
+                        .to_owned(),
                 )
             })?;
 
-            let asset_def: AssetDefinitionId = gas_asset_id_str.parse().map_err(|_| {
-                ValidationFail::NotPermitted(
-                    "invalid gas_asset_id; expected `aid:<32-lower-hex-no-dash>`".to_owned(),
-                )
-            })?;
+            let asset_def =
+                AssetDefinitionId::parse_address_literal(&gas_asset_id_str).map_err(|_| {
+                    ValidationFail::NotPermitted(
+                        "invalid gas_asset_id; expected an unprefixed Base58 asset definition id"
+                            .to_owned(),
+                    )
+                })?;
 
             let fee_u128 = u128::from(gas_used).saturating_mul(u128::from(units_per_gas));
             if fee_u128 > 0 {
@@ -686,7 +1238,7 @@ pub(crate) fn charge_fees_for_applied_overlay(
                 {
                     let delta =
                         u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
-                    state_transaction.stage_block_fee_units(delta);
+                    state_transaction.stage_block_fee_amount(Numeric::from(delta));
                 }
 
                 let block_timestamp_ms_u128 =
@@ -740,14 +1292,16 @@ pub(crate) fn charge_fees_for_applied_overlay(
         }
     }
 
-    Executor::charge_nexus_fees(
-        state_transaction,
-        authority,
-        fee_sponsor,
-        tx_bytes_len,
-        instruction_count,
-        gas_used,
-    )?;
+    if !skip_nexus_fee {
+        Executor::charge_nexus_fees(
+            state_transaction,
+            authority,
+            fee_sponsor,
+            tx_bytes_len,
+            instruction_count,
+            gas_used,
+        )?;
+    }
 
     Ok(())
 }
@@ -773,6 +1327,29 @@ impl Executor {
             .map_err(|_| ValidationFail::InternalError(format!("{context} exceeds u128 bounds")))
     }
 
+    fn checked_numeric_add(
+        lhs: Numeric,
+        rhs: Numeric,
+        context: &'static str,
+    ) -> Result<Numeric, ValidationFail> {
+        lhs.checked_add(rhs).ok_or_else(|| {
+            ValidationFail::NotPermitted(format!("{context} exceeds supported numeric bounds"))
+        })
+    }
+
+    fn checked_numeric_mul_u64(
+        value: &Numeric,
+        multiplier: u64,
+        context: &'static str,
+    ) -> Result<Numeric, ValidationFail> {
+        value
+            .clone()
+            .checked_mul(Numeric::from(multiplier), NumericSpec::unconstrained())
+            .ok_or_else(|| {
+                ValidationFail::NotPermitted(format!("{context} exceeds supported numeric bounds"))
+            })
+    }
+
     #[allow(clippy::too_many_lines)]
     fn charge_nexus_fees(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -786,35 +1363,11 @@ impl Executor {
             return Ok(());
         }
         let cfg = state_transaction.nexus.fees.clone();
-        let tx_bytes_u128 = u128::try_from(tx_bytes_len).map_err(|_| {
-            ValidationFail::InternalError("transaction too large for fee accounting".to_owned())
-        })?;
-        let instr_u128 = u128::try_from(instruction_count).map_err(|_| {
-            ValidationFail::InternalError(
-                "instruction count too large for fee accounting".to_owned(),
-            )
-        })?;
-        let mut fee_u128 = u128::from(cfg.base_fee);
-        fee_u128 = fee_u128
-            .checked_add(u128::from(cfg.per_byte_fee).saturating_mul(tx_bytes_u128))
-            .ok_or_else(|| {
-                ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".into())
-            })?;
-        fee_u128 = fee_u128
-            .checked_add(u128::from(cfg.per_instruction_fee).saturating_mul(instr_u128))
-            .ok_or_else(|| {
-                ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".into())
-            })?;
-        fee_u128 = fee_u128
-            .checked_add(u128::from(cfg.per_gas_unit_fee).saturating_mul(u128::from(gas_used)))
-            .ok_or_else(|| {
-                ValidationFail::NotPermitted("fee amount exceeds supported numeric bounds".into())
-            })?;
+        let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
 
-        if fee_u128 == 0 {
+        if fee <= Numeric::zero() {
             return Ok(());
         }
-
         let payer_kind = if sponsor.is_some() {
             NexusFeePayer::Sponsor
         } else {
@@ -829,7 +1382,7 @@ impl Executor {
                 warn!(
                     target: "economics",
                     payer = %payer_id,
-                    fee_amount = fee_u128,
+                    fee_amount = %fee,
                     "nexus fee sponsor rejected: sponsorship disabled"
                 );
                 return Err(ValidationFail::NotPermitted(
@@ -847,25 +1400,25 @@ impl Executor {
                     target: "economics",
                     sponsor = %sponsor_id,
                     authority = %authority_id,
-                    fee_amount = fee_u128,
+                    fee_amount = %fee,
                     "nexus fee sponsor rejected: missing permission"
                 );
                 return Err(ValidationFail::NotPermitted(
                     "fee sponsor is not authorized".to_owned(),
                 ));
             }
-            if cfg.sponsor_max_fee > 0 && fee_u128 > u128::from(cfg.sponsor_max_fee) {
+            if cfg.sponsor_max_fee > Numeric::zero() && fee > cfg.sponsor_max_fee {
                 let payer_id = sponsor.to_string();
                 sumeragi_status::record_nexus_fee_event(NexusFeeEvent::SponsorCapExceeded {
                     payer_id: payer_id.clone(),
-                    max_fee: cfg.sponsor_max_fee,
-                    attempted_fee: fee_u128,
+                    max_fee: cfg.sponsor_max_fee.clone(),
+                    attempted_fee: fee.clone(),
                 });
                 warn!(
                     target: "economics",
                     payer = %payer_id,
-                    fee_amount = fee_u128,
-                    max_fee = cfg.sponsor_max_fee,
+                    fee_amount = %fee,
+                    max_fee = %cfg.sponsor_max_fee,
                     "nexus fee sponsor rejected: exceeds sponsor_max_fee"
                 );
                 return Err(ValidationFail::NotPermitted(
@@ -877,22 +1430,15 @@ impl Executor {
             authority.clone()
         };
 
-        let sink_account = crate::block::parse_account_literal_with_world(
+        let asset_def = crate::block::parse_asset_definition_literal_with_world(
             &state_transaction.world,
-            &cfg.fee_sink_account_id,
+            &cfg.fee_asset_id,
+            state_transaction.block_unix_timestamp_ms(),
         )
         .ok_or_else(|| {
             let reason =
-                "invalid nexus fee sink account id; expected account identifier".to_owned();
-            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
-                reason: reason.clone(),
-            });
-            warn!(target: "economics", "nexus fee rejected: {reason}");
-            ValidationFail::NotPermitted(reason)
-        })?;
-        let asset_def: AssetDefinitionId = cfg.fee_asset_id.parse().map_err(|_| {
-            let reason =
-                "invalid nexus fee asset id; expected `aid:<32-lower-hex-no-dash>`".to_owned();
+                "invalid nexus fee asset id; expected canonical Base58 asset definition id or active asset alias"
+                    .to_owned();
             sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
                 reason: reason.clone(),
             });
@@ -907,26 +1453,101 @@ impl Executor {
         };
         let payer_id = payer.to_string();
         let asset_label = payer_asset.definition().to_string();
-        let sink_label = sink_account.to_string();
-        let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
-            let reason = "fee amount exceeds supported numeric bounds".to_owned();
-            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
-                reason: reason.clone(),
+        if matches!(payer_kind, NexusFeePayer::Sponsor) && cfg.external_settlement_enabled {
+            state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
+                payer_kind,
+                payer_id,
+                amount: fee,
+                asset_id: asset_label,
             });
-            ValidationFail::NotPermitted(reason)
-        })?;
-        let transfer = iroha_data_model::isi::Transfer::<
-            Asset,
-            Numeric,
-            iroha_data_model::account::Account,
-        >::asset_numeric(payer_asset, qty, sink_account);
-        let instr: DMInstructionBox = transfer.into();
-        instr.execute(authority, state_transaction).map_err(|err| {
-            let reason = format!("nexus fee transfer failed to apply: {err}");
+            return Ok(());
+        }
+
+        if state_transaction.block_unix_timestamp_ms() < cfg.burn_from_unix_timestamp_ms {
+            let sink_account = crate::block::parse_account_literal_with_world(
+                &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
+                &cfg.fee_sink_account_id,
+            )
+            .ok_or_else(|| {
+                let reason =
+                    "invalid nexus fee sink account id; expected canonical I105 account id or on-chain alias"
+                        .to_owned();
+                sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
+                    reason: reason.clone(),
+                });
+                warn!(target: "economics", "nexus fee rejected: {reason}");
+                ValidationFail::NotPermitted(reason)
+            })?;
+            let sink_label = sink_account.to_string();
+            if payer == sink_account {
+                state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
+                    payer_kind,
+                    payer_id,
+                    amount: fee,
+                    asset_id: asset_label,
+                });
+                return Ok(());
+            }
+            let transfer = iroha_data_model::isi::Transfer::<
+                Asset,
+                Numeric,
+                iroha_data_model::account::Account,
+            >::asset_numeric(payer_asset, fee.clone(), sink_account);
+            let instr: DMInstructionBox = transfer.into();
+            let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
+            let previous_world_dataspace_id = state_transaction.world.current_dataspace_id;
+            state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+            let fee_transfer_result = instr.execute(authority, state_transaction);
+            state_transaction.current_dataspace_id = previous_tx_dataspace_id;
+            state_transaction.world.current_dataspace_id = previous_world_dataspace_id;
+            fee_transfer_result.map_err(|err| {
+                let reason = format!("nexus fee transfer failed to apply: {err}");
+                sumeragi_status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
+                    payer_kind,
+                    payer_id: payer_id.clone(),
+                    amount: fee.clone(),
+                    asset_id: asset_label.clone(),
+                    reason: reason.clone(),
+                });
+                warn!(
+                    target: "economics",
+                    ?err,
+                    payer = %payer_id,
+                    payer_kind = payer_kind_label,
+                    fee_amount = %fee,
+                    asset = %asset_label,
+                    sink = %sink_label,
+                    "nexus fee transfer failed"
+                );
+                ValidationFail::from(err)
+            })?;
+
+            state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
+                payer_kind,
+                payer_id,
+                amount: fee,
+                asset_id: asset_label,
+            });
+            return Ok(());
+        }
+
+        let burn = Burn::asset_numeric(fee.clone(), payer_asset);
+        let instr: DMInstructionBox = burn.into();
+        let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
+        let previous_world_dataspace_id = state_transaction.world.current_dataspace_id;
+        state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        state_transaction.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
+        let fee_burn_result = instr.execute(authority, state_transaction);
+        state_transaction.current_dataspace_id = previous_tx_dataspace_id;
+        state_transaction.world.current_dataspace_id = previous_world_dataspace_id;
+        fee_burn_result.map_err(|err| {
+            let reason = format!("nexus fee burn failed to apply: {err}");
             sumeragi_status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
                 payer_kind,
                 payer_id: payer_id.clone(),
-                amount: fee_u128,
+                amount: fee.clone(),
                 asset_id: asset_label.clone(),
                 reason: reason.clone(),
             });
@@ -935,10 +1556,9 @@ impl Executor {
                 ?err,
                 payer = %payer_id,
                 payer_kind = payer_kind_label,
-                fee_amount = fee_u128,
+                fee_amount = %fee,
                 asset = %asset_label,
-                sink = %sink_label,
-                "nexus fee transfer failed"
+                "nexus fee burn failed"
             );
             ValidationFail::from(err)
         })?;
@@ -947,7 +1567,7 @@ impl Executor {
         state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
             payer_kind,
             payer_id,
-            amount: fee_u128,
+            amount: fee,
             asset_id: asset_label,
         });
         Ok(())
@@ -1046,6 +1666,7 @@ impl Executor {
         require_gas_limit: bool,
         gas_asset_opt: Option<String>,
         fee_sponsor: Option<AccountId>,
+        skip_nexus_fee: bool,
     ) -> Result<(), ValidationFail> {
         if require_gas_limit && gas_limit_md.is_none() {
             return Err(ValidationFail::NotPermitted(
@@ -1112,21 +1733,24 @@ impl Executor {
                 // Parse tech account id
                 let tech_account: AccountId = parse_account_id_literal(
                     &state_transaction.world,
+                    &state_transaction.nexus.dataspace_catalog,
                     &state_transaction.pipeline.gas.tech_account_id,
                 )
                 .ok_or_else(|| {
                     ValidationFail::InternalError(
-                        "invalid pipeline.gas.tech_account_id; expected account identifier"
+                        "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
                             .to_owned(),
                     )
                 })?;
 
                 // Parse gas asset definition id
-                let asset_def: AssetDefinitionId = gas_asset_id_str.parse().map_err(|_| {
-                    ValidationFail::NotPermitted(
-                        "invalid gas_asset_id; expected `aid:<32-lower-hex-no-dash>`".to_owned(),
+                let asset_def = AssetDefinitionId::parse_address_literal(&gas_asset_id_str)
+                    .map_err(|_| {
+                        ValidationFail::NotPermitted(
+                        "invalid gas_asset_id; expected an unprefixed Base58 asset definition id"
+                            .to_owned(),
                     )
-                })?;
+                    })?;
 
                 // Compute fee amount deterministically and guard Numeric bounds
                 let fee_u128 = u128::from(used).saturating_mul(u128::from(units_per_gas));
@@ -1174,7 +1798,7 @@ impl Executor {
                     {
                         let delta =
                             u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
-                        state_transaction.stage_block_fee_units(delta);
+                        state_transaction.stage_block_fee_amount(Numeric::from(delta));
                     }
 
                     // Capture deterministic settlement receipt once the transfer succeeds.
@@ -1234,14 +1858,16 @@ impl Executor {
             }
         }
 
-        Self::charge_nexus_fees(
-            state_transaction,
-            authority,
-            fee_sponsor,
-            tx_bytes_len,
-            instruction_count,
-            used,
-        )?;
+        if !skip_nexus_fee {
+            Self::charge_nexus_fees(
+                state_transaction,
+                authority,
+                fee_sponsor,
+                tx_bytes_len,
+                instruction_count,
+                used,
+            )?;
+        }
 
         Ok(())
     }
@@ -1268,11 +1894,16 @@ impl Executor {
                     "failed to encode transaction for fee metering: {err}"
                 ))
             })?;
-        let fee_sponsor = parse_fee_sponsor(&state_transaction.world, transaction.metadata())?;
+        let fee_sponsor = parse_fee_sponsor(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            transaction.metadata(),
+        )?;
         // Bind the transaction call_hash for ISI event emitters to use in audit fields
         let call_hash = transaction.hash_as_entrypoint();
         state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
         let tx_hash = transaction.hash();
+        state_transaction.current_tx_hash = Some(tx_hash.clone());
         let settlement_source_id = {
             let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
             bytes.copy_from_slice(tx_hash.as_ref());
@@ -1281,34 +1912,33 @@ impl Executor {
         // Disallow direct signing with multisig accounts; only explicit multisig
         // proposal/approval envelopes with bundled multisig signatures are allowed.
         {
-            let account = state_transaction.world.account(authority).map_err(|err| {
-                ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
-            })?;
-            if account.id().controller().multisig_policy().is_some() {
-                let only_custom_instruction_envelopes = matches!(
-                    transaction.instructions(),
-                    Executable::Instructions(items)
-                        if !items.is_empty()
-                            && items.iter().all(|instruction| {
-                                instruction
-                                    .as_any()
-                                    .downcast_ref::<CustomInstruction>()
-                                    .is_some()
-                            })
-                );
-                if only_custom_instruction_envelopes {
-                    // Allowed: custom instruction envelopes are validated by their respective
-                    // runtime handlers (including multisig propose/approve/register paths).
-                } else {
-                    #[cfg(feature = "telemetry")]
-                    crate::telemetry::record_social_rejection(
-                        state_transaction.telemetry,
-                        "multisig_direct_sign",
+            if let Ok(account) = state_transaction.world.account(authority) {
+                if account.id().controller().multisig_policy().is_some() {
+                    let only_custom_instruction_envelopes = matches!(
+                        transaction.instructions(),
+                        Executable::Instructions(items)
+                            if !items.is_empty()
+                                && items.iter().all(|instruction| {
+                                    instruction
+                                        .as_any()
+                                        .downcast_ref::<CustomInstruction>()
+                                        .is_some()
+                                })
                     );
-                    return Err(ValidationFail::NotPermitted(
-                    "direct signing with multisig accounts is forbidden; use multisig propose/approve"
-                        .to_owned(),
-                ));
+                    if only_custom_instruction_envelopes {
+                        // Allowed: custom instruction envelopes are validated by their respective
+                        // runtime handlers (including multisig propose/approve/register paths).
+                    } else {
+                        #[cfg(feature = "telemetry")]
+                        crate::telemetry::record_social_rejection(
+                            state_transaction.telemetry,
+                            "multisig_direct_sign",
+                        );
+                        return Err(ValidationFail::NotPermitted(
+                            "direct signing with multisig accounts is forbidden; use multisig propose/approve"
+                                .to_owned(),
+                        ));
+                    }
                 }
             }
         }
@@ -1316,12 +1946,18 @@ impl Executor {
         Self::refresh_gas_from_parameters(state_transaction);
         // Gas asset admission: if an allowlist is configured, require the tx metadata to specify
         // a `gas_asset_id` present in the allowlist. The value must be a valid
-        // `aid:<32-lower-hex-no-dash>` AssetDefinitionId string.
-        let md = transaction.metadata();
+        // unprefixed Base58 `AssetDefinitionId` string.
+        let md = transaction.metadata().clone();
         let gas_asset_opt = md.get("gas_asset_id").map(|j| j.as_ref().to_string());
         // Payer-provided gas limit (optional for non-VM transactions); used to cap fee exposure
-        let gas_limit_md = parse_gas_limit(md)?;
-        configure_executor_fuel_budget(self, state_transaction, md)?;
+        let gas_limit_md = parse_gas_limit(&md)?;
+        configure_executor_fuel_budget(self, state_transaction, &md)?;
+        let skip_nexus_fee = successful_claim_fee_exempt_transaction(
+            &state_transaction.world,
+            &state_transaction.nexus,
+            &transaction,
+            state_transaction.block_unix_timestamp_ms(),
+        );
         let pipeline_gas = &state_transaction.pipeline.gas;
         if !pipeline_gas.accepted_assets.is_empty() {
             let Some(ref gas_asset_id_str) = gas_asset_opt else {
@@ -1343,11 +1979,32 @@ impl Executor {
         {
             use iroha_data_model::proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId};
 
-            let namespace_hint = md.get("contract_namespace").and_then(|value| {
-                let raw = value.as_ref().to_string();
-                let trimmed = raw.trim().trim_matches('"').trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_owned())
-            });
+            let namespace_hint = md
+                .get("contract_alias")
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .and_then(|raw| {
+                    raw.trim()
+                        .parse::<iroha_data_model::smart_contract::ContractAlias>()
+                        .ok()
+                })
+                .map(|alias| alias.dataspace_segment().to_owned())
+                .or_else(|| {
+                    md.get("contract_address")
+                        .and_then(|value| value.try_into_any_norito::<String>().ok())
+                        .and_then(|raw| {
+                            raw.trim()
+                                .parse::<iroha_data_model::smart_contract::ContractAddress>()
+                                .ok()
+                        })
+                        .and_then(|contract_address| contract_address.dataspace_id().ok())
+                        .and_then(|dataspace_id| {
+                            state_transaction
+                                .nexus
+                                .dataspace_catalog
+                                .by_id(dataspace_id)
+                                .map(|entry| entry.alias.clone())
+                        })
+                });
 
             // Process ZK attachments embedded in V2 transactions.
             if let Some(ProofAttachmentList(list)) = transaction.attachments().cloned() {
@@ -1571,6 +2228,8 @@ impl Executor {
             .map_err(map_overlay_error)?;
         }
 
+        let tx_creation_time_ms =
+            u64::try_from(transaction.creation_time().as_millis()).unwrap_or(u64::MAX);
         let (tx_authority, executable) = transaction.into();
         debug_assert_eq!(&tx_authority, authority, "authority mismatch");
 
@@ -1587,6 +2246,7 @@ impl Executor {
                     false,
                     gas_asset_opt,
                     fee_sponsor,
+                    skip_nexus_fee,
                 ),
             (Self::Initial | Self::UserProvided(_), Executable::IvmProved(proved)) => {
                 let mut instructions = proved.overlay.into_vec();
@@ -1605,7 +2265,250 @@ impl Executor {
                     true,
                     gas_asset_opt,
                     fee_sponsor,
+                    false,
                 )
+            }
+            (Self::Initial | Self::UserProvided(_), Executable::ContractCall(call)) => {
+                use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
+
+                let gas_limit_md = gas_limit_md.ok_or_else(|| {
+                    ValidationFail::NotPermitted(
+                        "missing gas_limit in transaction metadata".to_owned(),
+                    )
+                })?;
+                let block_remaining = if state_transaction.gas_limit_per_block == 0 {
+                    u64::MAX
+                } else {
+                    state_transaction
+                        .gas_limit_per_block
+                        .saturating_sub(state_transaction.gas_used_in_block_so_far)
+                };
+                let effective_limit = gas_limit_md.min(block_remaining);
+                let record =
+                    code::fetch_bound_contract_record(state_transaction, &call.contract_address)
+                        .ok_or_else(|| {
+                            ValidationFail::NotPermitted(format!(
+                                "contract instance `{}` not found in WSV",
+                                call.contract_address
+                            ))
+                        })?;
+                let mut runtime = ivm_cache
+                    .take_or_create_cached_runtime(record.code_bytes.as_ref(), effective_limit)
+                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                let contract_call_context = parse_contract_invocation_execution_context(
+                    &call,
+                    record.code_bytes.as_ref(),
+                    record.contract_alias.clone(),
+                )?;
+                if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc {
+                    runtime.vm.set_register(1, runtime.vm.memory.code_len());
+                    runtime
+                        .vm
+                        .set_program_counter(entrypoint_pc)
+                        .map_err(|err| {
+                            let selector = contract_call_context
+                                .entrypoint
+                                .as_deref()
+                                .unwrap_or("main");
+                            ValidationFail::NotPermitted(format!(
+                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                            ))
+                        })?;
+                }
+                let contract_runtime_context = contract_call_context.runtime_context();
+                let accounts = Arc::new(
+                    state_transaction
+                        .world
+                        .accounts
+                        .iter()
+                        .map(|(id, _)| id.clone())
+                        .collect::<Vec<_>>(),
+                );
+                let mut host = CoreCoreHost::with_accounts_and_args(
+                    authority.clone(),
+                    Arc::clone(&accounts),
+                    contract_call_context.args,
+                );
+                // User contract calls execute before the enclosing block has a finalized
+                // creation timestamp, so expose the transaction creation time as the
+                // logical "current time" seen by `current_time_ms()`.
+                host.set_block_time_ms(tx_creation_time_ms);
+                host.set_crypto_config(Arc::clone(&state_transaction.crypto));
+                host.set_halo2_config(&state_transaction.zk.halo2);
+                host.set_durable_state_snapshot_from_world(&state_transaction.world);
+                host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
+                host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
+                host.set_query_state(state_transaction);
+                host.set_contract_runtime_context(contract_runtime_context.clone());
+                host.set_chain_id(&state_transaction.chain_id);
+                #[cfg(feature = "telemetry")]
+                host.set_telemetry(state_transaction.telemetry.clone());
+                host.set_zk_snapshots_from_world(&state_transaction.world, &state_transaction.zk)
+                    .map_err(|err| {
+                        ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
+                    })?;
+                runtime.vm.set_gas_limit(effective_limit);
+                if let Err(err) = runtime.vm.run_with_host(&mut host) {
+                    return Err(
+                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                            &runtime.vm,
+                            &err,
+                        ),
+                    );
+                }
+                let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
+                let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
+                let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
+                state_transaction.last_tx_gas_used = gas_used;
+
+                if let Some(gas_asset_id_str) = gas_asset_opt {
+                    let gas_rate = state_transaction
+                        .pipeline
+                        .gas
+                        .units_per_gas
+                        .iter()
+                        .find(|r| r.asset == gas_asset_id_str)
+                        .ok_or_else(|| {
+                            ValidationFail::NotPermitted(format!(
+                                "missing units_per_gas mapping for `{gas_asset_id_str}`"
+                            ))
+                        })?;
+                    let rate = gas_rate.units_per_gas;
+                    let twap_local_per_xor = gas_rate.twap_local_per_xor;
+                    let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
+                    let liquidity_profile = match gas_rate.liquidity {
+                        GasLiquidity::Tier1 => LiquidityProfile::Tier1,
+                        GasLiquidity::Tier2 => LiquidityProfile::Tier2,
+                        GasLiquidity::Tier3 => LiquidityProfile::Tier3,
+                    };
+                    let tech_account: AccountId = parse_account_id_literal(
+                        &state_transaction.world,
+                        &state_transaction.nexus.dataspace_catalog,
+                        &state_transaction.pipeline.gas.tech_account_id,
+                    )
+                    .ok_or_else(|| {
+                        ValidationFail::InternalError(
+                            "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
+                                .to_owned(),
+                        )
+                    })?;
+                    let asset_def =
+                        AssetDefinitionId::parse_address_literal(&gas_asset_id_str).map_err(|_| {
+                            ValidationFail::NotPermitted(
+                                "invalid gas_asset_id; expected an unprefixed Base58 asset definition id"
+                                    .to_owned(),
+                            )
+                        })?;
+                    if gas_used > 0 && rate > 0 {
+                        let fee_u128 = u128::from(gas_used).saturating_mul(u128::from(rate));
+                        if fee_u128 > 0 {
+                            let payer = if let Some(sponsor) =
+                                fee_sponsor.as_ref().filter(|sponsor| *sponsor != authority)
+                            {
+                                if !state_transaction.nexus.fees.sponsorship_enabled {
+                                    return Err(ValidationFail::NotPermitted(
+                                        "fee sponsorship is disabled".to_owned(),
+                                    ));
+                                }
+                                if !state_transaction.can_use_fee_sponsor(authority, sponsor) {
+                                    return Err(ValidationFail::NotPermitted(
+                                        "fee sponsor is not authorized".to_owned(),
+                                    ));
+                                }
+                                sponsor.clone()
+                            } else {
+                                authority.clone()
+                            };
+                            let payer_asset = AssetId::new(asset_def.clone(), payer);
+                            let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
+                                ValidationFail::NotPermitted(
+                                    "fee amount exceeds supported numeric bounds".to_owned(),
+                                )
+                            })?;
+                            let transfer = iroha_data_model::isi::Transfer::<
+                                Asset,
+                                Numeric,
+                                iroha_data_model::account::Account,
+                            >::asset_numeric(
+                                payer_asset, qty, tech_account
+                            );
+                            let instr: DMInstructionBox = transfer.into();
+                            instr.execute(authority, state_transaction).map_err(|err| {
+                                iroha_logger::debug!(
+                                    ?err,
+                                    authority = %authority,
+                                    "gas fee transfer failed to apply"
+                                );
+                                ValidationFail::from(err)
+                            })?;
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX)))
+                                    .unwrap_or(u64::MAX);
+                                state_transaction.stage_block_fee_amount(Numeric::from(delta));
+                            }
+
+                            let source_id = settlement_source_id;
+                            let block_timestamp_ms_u128 =
+                                state_transaction._curr_block.creation_time().as_millis();
+                            let block_timestamp_ms =
+                                u64::try_from(block_timestamp_ms_u128).unwrap_or(u64::MAX);
+                            let quote = state_transaction
+                                .settlement_engine()
+                                .quote(
+                                    source_id,
+                                    fee_u128,
+                                    twap_local_per_xor,
+                                    liquidity_profile,
+                                    volatility_bucket,
+                                    block_timestamp_ms,
+                                )
+                                .map_err(|err| match err {
+                                    QuoteError::LocalAmountOverflow(amount) => {
+                                        ValidationFail::NotPermitted(format!(
+                                            "local gas amount {amount} exceeds Decimal range"
+                                        ))
+                                    }
+                                    QuoteError::ZeroTwap => ValidationFail::NotPermitted(
+                                        "gas TWAP must be non-zero".to_owned(),
+                                    ),
+                                })?;
+                            let config_snapshot = state_transaction.settlement_engine().config();
+                            let twap_window_seconds =
+                                config_snapshot.twap_window.whole_seconds().max(0);
+                            let twap_window_seconds =
+                                u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
+                            let xor_due_micro = Self::decimal_to_micro_u128(
+                                *quote.receipt.xor_due,
+                                "xor_due amount",
+                            )?;
+                            let xor_after_haircut_micro = Self::decimal_to_micro_u128(
+                                *quote.receipt.xor_with_haircut,
+                                "xor_after_haircut amount",
+                            )?;
+                            let xor_variance_micro =
+                                xor_due_micro.saturating_sub(xor_after_haircut_micro);
+                            let pending = PendingSettlement {
+                                source_id,
+                                asset_definition_id: asset_def,
+                                local_amount_micro: quote.receipt.local_amount_micro,
+                                xor_due_micro,
+                                xor_after_haircut_micro,
+                                xor_variance_micro,
+                                timestamp_ms: block_timestamp_ms,
+                                liquidity_profile,
+                                volatility_bucket,
+                                twap_local_per_xor,
+                                epsilon_bps: quote.effective_epsilon_bps,
+                                twap_window_seconds,
+                                oracle_timestamp_ms: block_timestamp_ms,
+                            };
+                            state_transaction.record_settlement_receipt(tx_hash, pending);
+                        }
+                    }
+                }
+
+                Ok(())
             }
             (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => {
                 // IVM path: run the bytecode through the VM with CoreHost, enqueueing ISIs,
@@ -1629,6 +2532,25 @@ impl Executor {
                 let mut runtime = ivm_cache
                     .take_or_create_cached_runtime(bytes.as_ref(), effective_limit)
                     .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                let contract_call_context =
+                    parse_contract_call_execution_context(&md, bytes.as_ref())?;
+                if let Some(context) = contract_call_context.as_ref()
+                    && let Some(entrypoint_pc) = context.entrypoint_pc
+                {
+                    runtime.vm.set_register(1, runtime.vm.memory.code_len());
+                    runtime
+                        .vm
+                        .set_program_counter(entrypoint_pc)
+                        .map_err(|err| {
+                            let selector = context.entrypoint.as_deref().unwrap_or("main");
+                            ValidationFail::NotPermitted(format!(
+                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                            ))
+                        })?;
+                }
+                let contract_runtime_context = contract_call_context
+                    .as_ref()
+                    .and_then(ContractCallExecutionContext::runtime_context);
                 // Attach host with a snapshot of known accounts for vendor helpers when present.
                 let accounts = Arc::new(
                     state_transaction
@@ -1638,14 +2560,22 @@ impl Executor {
                         .map(|(id, _)| id.clone())
                         .collect::<Vec<_>>(),
                 );
-                let mut host =
-                    CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts));
+                let mut host = if let Some(context) = contract_call_context {
+                    CoreCoreHost::with_accounts_and_args(
+                        authority.clone(),
+                        Arc::clone(&accounts),
+                        context.args,
+                    )
+                } else {
+                    CoreCoreHost::with_accounts(authority.clone(), Arc::clone(&accounts))
+                };
                 host.set_crypto_config(Arc::clone(&state_transaction.crypto));
                 host.set_halo2_config(&state_transaction.zk.halo2);
                 host.set_durable_state_snapshot_from_world(&state_transaction.world);
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
                 host.set_query_state(state_transaction);
+                host.set_contract_runtime_context(contract_runtime_context.clone());
                 // Thread chain_id from StateTransaction into the IVM host for VRF binding
                 host.set_chain_id(&state_transaction.chain_id);
                 #[cfg(feature = "telemetry")]
@@ -1657,12 +2587,17 @@ impl Executor {
                     })?;
                 runtime.vm.set_gas_limit(effective_limit);
                 if let Err(err) = runtime.vm.run_with_host(&mut host) {
-                    return Err(crate::smartcontracts::ivm::map_vm_error_to_validation(&err));
+                    return Err(
+                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                            &runtime.vm,
+                            &err,
+                        ),
+                    );
                 }
                 let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
 
                 // Drain and apply queued ISIs deterministically via executor.
-                let artifacts = host.into_execution_artifacts()?;
+                let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
                 let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
                 state_transaction.last_tx_gas_used = gas_used;
 
@@ -1691,18 +2626,20 @@ impl Executor {
                     // Parse tech account id
                     let tech_account: AccountId = parse_account_id_literal(
                         &state_transaction.world,
+                        &state_transaction.nexus.dataspace_catalog,
                         &state_transaction.pipeline.gas.tech_account_id,
                     )
                     .ok_or_else(|| {
                         ValidationFail::InternalError(
-                            "invalid pipeline.gas.tech_account_id; expected account identifier"
+                            "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
                                 .to_owned(),
                         )
                     })?;
                     // Parse gas asset definition id
-                    let asset_def: AssetDefinitionId = gas_asset_id_str.parse().map_err(|_| {
+                    let asset_def =
+                        AssetDefinitionId::parse_address_literal(&gas_asset_id_str).map_err(|_| {
                         ValidationFail::NotPermitted(
-                            "invalid gas_asset_id; expected `aid:<32-lower-hex-no-dash>`"
+                            "invalid gas_asset_id; expected an unprefixed Base58 asset definition id"
                                 .to_owned(),
                         )
                     })?;
@@ -1754,7 +2691,7 @@ impl Executor {
                             {
                                 let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX)))
                                     .unwrap_or(u64::MAX);
-                                state_transaction.stage_block_fee_units(delta);
+                                state_transaction.stage_block_fee_amount(Numeric::from(delta));
                             }
 
                             let source_id = settlement_source_id;
@@ -1843,11 +2780,30 @@ impl Executor {
         authority: &AccountId,
         instruction: InstructionBox,
     ) -> Result<(), ValidationFail> {
-        self.execute_instruction_with_profile(
+        self.execute_instruction_with_profile_and_contract_runtime_context(
             state_transaction,
             authority,
             instruction,
             InstructionExecutionProfile::Runtime,
+            None,
+        )
+    }
+
+    /// Execute [`InstructionBox`] using the runtime profile and an optional
+    /// contract execution context for nested contract-originated instructions.
+    pub(crate) fn execute_instruction_with_contract_runtime_context(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: InstructionBox,
+        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+    ) -> Result<(), ValidationFail> {
+        self.execute_instruction_with_profile_and_contract_runtime_context(
+            state_transaction,
+            authority,
+            instruction,
+            InstructionExecutionProfile::Runtime,
+            contract_runtime_context,
         )
     }
 
@@ -1868,22 +2824,47 @@ impl Executor {
         instruction: InstructionBox,
         profile: InstructionExecutionProfile,
     ) -> Result<(), ValidationFail> {
+        self.execute_instruction_with_profile_and_contract_runtime_context(
+            state_transaction,
+            authority,
+            instruction,
+            profile,
+            None,
+        )
+    }
+
+    fn execute_instruction_with_profile_and_contract_runtime_context(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: InstructionBox,
+        profile: InstructionExecutionProfile,
+        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+    ) -> Result<(), ValidationFail> {
         trace!("Running instruction execution");
         let instr_id = instruction.id();
 
-        let result = match self {
-            Self::Initial => Self::execute_initial_instruction(
-                state_transaction,
-                authority,
-                instruction,
-                profile,
-            ),
-            Self::UserProvided(loaded_executor) => dispatch_instruction_with_ivm(
-                loaded_executor,
-                state_transaction,
-                authority,
-                instruction,
-            ),
+        let result = if should_bypass_contract_runtime_asset_transfer_check(
+            contract_runtime_context,
+            &instruction,
+        ) {
+            Self::execute_instruction_directly(state_transaction, authority, instruction, profile)
+        } else {
+            match self {
+                Self::Initial => Self::execute_initial_instruction(
+                    state_transaction,
+                    authority,
+                    instruction,
+                    profile,
+                    contract_runtime_context,
+                ),
+                Self::UserProvided(loaded_executor) => dispatch_instruction_with_ivm(
+                    loaded_executor,
+                    state_transaction,
+                    authority,
+                    instruction,
+                ),
+            }
         };
         if let Err(err) = &result {
             iroha_logger::error!(
@@ -1894,6 +2875,28 @@ impl Executor {
             );
         }
         result
+    }
+
+    fn execute_instruction_directly(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: InstructionBox,
+        profile: InstructionExecutionProfile,
+    ) -> Result<(), ValidationFail> {
+        let instruction_id = instruction.id();
+        instruction
+            .execute(authority, state_transaction)
+            .map_err(|err| {
+                if matches!(profile, InstructionExecutionProfile::Runtime) {
+                    iroha_logger::debug!(
+                        ?err,
+                        %instruction_id,
+                        authority = %authority,
+                        "direct executor application failed"
+                    );
+                }
+                ValidationFail::InstructionFailed(err)
+            })
     }
 
     fn multisig_account_from(role_id: &RoleId) -> Result<Option<AccountId>, ValidationFail> {
@@ -1910,7 +2913,7 @@ impl Executor {
         };
 
         let domain_hint = init.trim_matches(DELIMITER);
-        let domain: DomainId = domain_hint.parse().map_err(|_| {
+        let domain = DomainId::parse_fully_qualified(domain_hint).map_err(|_| {
             ValidationFail::NotPermitted("violates multisig role name format".to_owned())
         })?;
         let prefix = iroha_data_model::account::address::chain_discriminant();
@@ -1918,8 +2921,8 @@ impl Executor {
             ValidationFail::NotPermitted("violates multisig role name format".to_owned())
         })?;
         address
-            .to_scoped_account_id(&domain)
-            .map(|account| account.subject_id())
+            .ensure_domain_matches(&domain)
+            .and_then(|_| address.to_account_id())
             .map(Some)
             .map_err(|_| {
                 ValidationFail::NotPermitted("violates multisig role name format".to_owned())
@@ -1932,6 +2935,7 @@ impl Executor {
         authority: &AccountId,
         instruction: InstructionBox,
         profile: InstructionExecutionProfile,
+        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
         if matches!(profile, InstructionExecutionProfile::Runtime) {
             iroha_logger::trace!(
@@ -2033,7 +3037,7 @@ impl Executor {
             // or if tx authority has explicit CanRegisterTrigger { authority: <owner> }.
             let trg_owner = reg_trg.object().action().authority().clone();
             let is_domain_owner =
-                authority_owns_any_subject_domain(&state_transaction.world, authority, &trg_owner)?;
+                authority_owns_any_alias_domain(&state_transaction.world, authority, &trg_owner)?;
 
             // Prefer cached permission check; parse once per tx/account.
             let has_permission =
@@ -2177,7 +3181,12 @@ impl Executor {
 
         if !is_genesis
             && let Some(transfer_asset) = extract_transfer_asset(&instruction)
-            && !can_transfer_asset(&state_transaction.world, authority, &transfer_asset)?
+            && !can_transfer_asset(
+                &state_transaction.world,
+                authority,
+                contract_runtime_context,
+                &transfer_asset,
+            )?
         {
             return Err(ValidationFail::NotPermitted(
                 "Can't transfer asset: source asset owner must sign the transaction".to_owned(),
@@ -2819,7 +3828,18 @@ fn dispatch_instruction_with_ivm(
     let gas_limit = state_transaction
         .executor_fuel_remaining
         .unwrap_or(base_fuel);
+    eprintln!(
+        "executor starting instruction validation instruction_id={} authority={} gas_limit={}",
+        instruction_id, authority, gas_limit
+    );
     let report = run_executor_validation(executor, &payload, instruction_id, gas_limit)?;
+    eprintln!(
+        "executor finished instruction validation instruction_id={} authority={} gas_used={} verdict_ok={}",
+        instruction_id,
+        authority,
+        report.gas_used,
+        report.verdict.is_ok()
+    );
     if let Some(remaining) = state_transaction.executor_fuel_remaining.as_mut() {
         *remaining = remaining.saturating_sub(report.gas_used);
     }
@@ -2875,11 +3895,19 @@ fn execute_multisig_custom_instruction_if_present(
         return Ok(false);
     };
 
+    eprintln!(
+        "executor dispatching multisig custom instruction authority={}",
+        authority
+    );
     crate::smartcontracts::isi::multisig::execute_multisig_instruction(
         state_transaction,
         authority,
         multisig,
     )?;
+    eprintln!(
+        "executor finished multisig custom instruction authority={}",
+        authority
+    );
 
     Ok(true)
 }
@@ -3349,7 +4377,7 @@ fn extract_transfer_asset(
             _ => None,
         };
     }
-    if !instruction.id().contains("Asset") {
+    if !instruction_has_concrete_type::<Transfer<Asset, Numeric, Account>>(instruction) {
         return None;
     }
     let bytes = instruction.dyn_encode();
@@ -3374,7 +4402,7 @@ fn extract_transfer_domain(
             _ => None,
         };
     }
-    if !instruction.id().contains("Domain") {
+    if !instruction_has_concrete_type::<Transfer<Account, DomainId, Account>>(instruction) {
         return None;
     }
     let bytes = instruction.dyn_encode();
@@ -3401,7 +4429,8 @@ fn extract_transfer_asset_definition(
             _ => None,
         };
     }
-    if !instruction.id().contains("AssetDefinition") {
+    if !instruction_has_concrete_type::<Transfer<Account, AssetDefinitionId, Account>>(instruction)
+    {
         return None;
     }
     let bytes = instruction.dyn_encode();
@@ -3428,7 +4457,9 @@ fn extract_transfer_nft(
             _ => None,
         };
     }
-    if !instruction.id().contains("Nft") {
+    if !instruction_has_concrete_type::<Transfer<Account, iroha_data_model::NftId, Account>>(
+        instruction,
+    ) {
         return None;
     }
     let bytes = instruction.dyn_encode();
@@ -3494,12 +4525,20 @@ fn authority_owns_domain(
     Ok(&owner == authority)
 }
 
-fn authority_owns_any_subject_domain(
+fn authority_owns_any_alias_domain(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     subject: &AccountId,
 ) -> Result<bool, ValidationFail> {
-    for domain_id in world.domains_for_subject(subject) {
+    for alias in world.bound_account_aliases(subject) {
+        let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
+            ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(
+                err.to_string().into(),
+            ))
+        })?
+        else {
+            continue;
+        };
         if authority_owns_domain(world, authority, &domain_id)? {
             return Ok(true);
         }
@@ -3516,7 +4555,7 @@ fn can_transfer_domain(
         return Ok(true);
     }
 
-    if authority_owns_any_subject_domain(world, authority, transfer.source())? {
+    if authority_owns_any_alias_domain(world, authority, transfer.source())? {
         return Ok(true);
     }
 
@@ -3559,22 +4598,38 @@ fn can_transfer_nft(
     authority_has_permission(world, authority, &required)
 }
 
+fn should_bypass_contract_runtime_asset_transfer_check(
+    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+    instruction: &InstructionBox,
+) -> bool {
+    contract_runtime_context
+        .is_some_and(ContractRuntimeExecutionContext::allows_benefit_runtime_asset_transfer_bypass)
+        && extract_transfer_asset(instruction).is_some()
+}
+
 fn can_transfer_asset(
     world: &impl WorldReadOnly,
     authority: &AccountId,
+    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     transfer: &Transfer<Asset, Numeric, Account>,
 ) -> Result<bool, ValidationFail> {
     if transfer.source().account() == authority {
         return Ok(true);
     }
 
-    if !transfer.source().definition().is_opaque_canonical()
-        && authority_owns_domain(world, authority, transfer.source().definition().domain())?
+    if contract_runtime_context
+        .is_some_and(|context| transfer.source().account() == &context.contract_subject)
     {
         return Ok(true);
     }
 
-    if authority_owns_any_subject_domain(world, authority, transfer.source().account())? {
+    if let Some(domain_id) = transfer.source().definition().try_domain()
+        && authority_owns_domain(world, authority, domain_id)?
+    {
+        return Ok(true);
+    }
+
+    if authority_owns_any_alias_domain(world, authority, transfer.source().account())? {
         return Ok(true);
     }
 
@@ -3623,6 +4678,10 @@ fn normalize_role_permission_for_initial_executor(
     }
 
     Ok(permission.clone())
+}
+
+fn instruction_has_concrete_type<T: 'static>(instruction: &InstructionBox) -> bool {
+    instruction.id() == core::any::type_name::<T>()
 }
 
 const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
@@ -3679,7 +4738,9 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanOperateSorafsRepair",
     "CanRegisterSorafsProviderOwner",
     "CanUnregisterSorafsProviderOwner",
+    "CanSetMusubiShortAlias",
     "CanIngestSoranetPrivacy",
+    "CanResolveEscrowDispute",
 ];
 
 fn is_builtin_initial_permission_name(permission_name: &str) -> bool {
@@ -3701,7 +4762,7 @@ pub(crate) fn extract_register_asset_definition(
             _ => None,
         };
     }
-    if !instruction.id().contains("AssetDefinition") {
+    if !instruction_has_concrete_type::<Register<AssetDefinition>>(instruction) {
         return None;
     }
     let bytes = instruction.dyn_encode();
@@ -3728,13 +4789,13 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
         return Ok(());
     }
 
-    if reg_asset_definition.object().id().is_opaque_canonical() {
+    let Some(domain_id) = reg_asset_definition.object().id().try_domain() else {
         return Ok(());
-    }
+    };
 
     let domain_owner = state_transaction
         .world
-        .domain(reg_asset_definition.object().id().domain())
+        .domain(domain_id)
         .map(|domain| domain.owned_by().clone())
         .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
     if &domain_owner == authority {
@@ -3985,7 +5046,7 @@ pub mod executor_norito {
 mod tests {
     #[cfg(feature = "telemetry")]
     use iroha_config::parameters::actual::{GasLiquidity, GasRate, GasVolatility};
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         executor::{self as data_model_executor, ExecutorDataModel},
         isi::Grant,
@@ -4070,14 +5131,13 @@ mod tests {
 
     #[test]
     fn fixture_simple_custom_instruction_mints_for_all_accounts() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
-        let bob_account = Account::new(BOB_ID.to_account_id(domain_id.clone())).build(&BOB_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let asset_definition = {
@@ -4145,13 +5205,11 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let (existing_signer, _existing_signer_keypair) = gen_account_in("wonderland");
-        let existing_account =
-            Account::new(existing_signer.to_account_id(domain_id.clone())).build(&existing_signer);
+        let existing_account = Account::new(existing_signer.clone()).build(&existing_signer);
         let world = World::with([domain], [alice_account, existing_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -4217,12 +5275,11 @@ mod tests {
     #[test]
     fn detached_nft_metadata_records_delta() {
         let (bob_id, _bob_kp) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
-        let bob_account = Account::new(bob_id.to_account_id(domain_id.clone())).build(&bob_id);
-        let nft_id: NftId = "nft_detached$wonderland".parse().expect("nft id");
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(bob_id.clone()).build(&bob_id);
+        let nft_id: NftId = "nft_detached$wonderland.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob_id);
 
         let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
@@ -4286,10 +5343,9 @@ mod tests {
 
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -4340,12 +5396,10 @@ mod tests {
         let alice_id = ALICE_ID.clone();
         let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&genesis_id);
-        let alice_account =
-            Account::new(alice_id.to_account_id(domain_id.clone())).build(&alice_id);
-        let genesis_account =
-            Account::new(genesis_id.to_account_id(domain_id.clone())).build(&genesis_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let genesis_account = Account::new(genesis_id.clone()).build(&genesis_id);
 
         let world = World::with([domain], [alice_account, genesis_account], []);
         let kura = Kura::blank_kura_for_testing();
@@ -4366,7 +5420,7 @@ mod tests {
         let executor = super::Executor::Initial;
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "invalid".parse().unwrap(),
             );
         let instruction = InstructionBox::from(Register::asset_definition({
@@ -4384,12 +5438,77 @@ mod tests {
     }
 
     #[test]
+    fn initial_executor_allows_native_escrow_open_without_transfer_permission() {
+        let seller = ALICE_ID.clone();
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+        let domain = Domain::new(asset_definition_id.domain().clone()).build(&seller);
+        let seller_account = Account::new(seller.clone()).build(&seller);
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("XOR".to_owned())
+            .build(&seller);
+        let seller_asset_id = AssetId::of(asset_definition_id.clone(), seller.clone());
+        let seller_asset = Asset::new(seller_asset_id.clone(), Numeric::from(100_u64));
+        let world = World::with_assets(
+            [domain],
+            [seller_account],
+            [asset_definition],
+            [seller_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        let escrow_id = EscrowId::new(Hash::new("executor-native-escrow-open"));
+        let instruction = iroha_data_model::isi::escrow::OpenAssetEscrow::new(
+            escrow_id,
+            asset_definition_id.clone(),
+            Numeric::from(40_u64),
+        );
+        let res = super::Executor::Initial.execute_instruction(
+            &mut stx,
+            &seller,
+            InstructionBox::from(instruction),
+        );
+        assert!(
+            res.is_ok(),
+            "native escrow opening should not require generic CanTransferAsset permission: {res:?}"
+        );
+
+        let record = stx
+            .world
+            .asset_escrows
+            .get(&escrow_id)
+            .expect("escrow record");
+        let custody_asset_id = AssetId::of(asset_definition_id, record.custody.clone());
+        let seller_balance = stx
+            .world
+            .assets
+            .get(&seller_asset_id)
+            .map(|value| value.as_ref().clone())
+            .expect("seller balance");
+        let custody_balance = stx
+            .world
+            .assets
+            .get(&custody_asset_id)
+            .map(|value| value.as_ref().clone())
+            .expect("custody balance");
+        assert_eq!(seller_balance, Numeric::from(60_u64));
+        assert_eq!(custody_balance, Numeric::from(40_u64));
+    }
+
+    #[test]
     fn initial_executor_allows_registering_opaque_asset_definition_without_domain_projection() {
         let alice_id = ALICE_ID.clone();
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.to_account_id(domain_id.clone())).build(&alice_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
 
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
@@ -4400,17 +5519,19 @@ mod tests {
         let mut block = state.block(header);
 
         let executor = super::Executor::Initial;
-        let asset_definition_id: AssetDefinitionId = "aid:2e3d34beb8a84239b3d9590770f1189e"
-            .parse()
-            .expect("opaque aid id");
+        let asset_definition_id = AssetDefinitionId::from_uuid_bytes([
+            0x2e, 0x3d, 0x34, 0xbe, 0xb8, 0xa8, 0x42, 0x39, 0xb3, 0xd9, 0x59, 0x07, 0x70, 0xf1,
+            0x18, 0x9e,
+        ])
+        .expect("opaque asset definition id");
         let instruction = InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone()).with_name("pkr".to_owned()),
+            AssetDefinition::numeric(asset_definition_id.clone()).with_name("cbdc".to_owned()),
         ));
 
         let mut stx = block.transaction();
         executor
             .execute_instruction(&mut stx, &alice_id, instruction)
-            .expect("opaque aid asset definition should not require a domain projection");
+            .expect("opaque asset definition should not require a domain projection");
         assert!(
             stx.world.asset_definition(&asset_definition_id).is_ok(),
             "opaque asset definition must be inserted into world state"
@@ -4418,21 +5539,50 @@ mod tests {
     }
 
     #[test]
+    fn extract_transfer_asset_definition_ignores_register_asset_definition_instruction() {
+        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("defs", "universal").expect("defs domain id"),
+            "bond".parse().expect("asset definition name"),
+        );
+        let instruction = InstructionBox::from(Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id).with_name("bond".to_owned()),
+        ));
+
+        assert!(
+            extract_transfer_asset_definition(&instruction).is_none(),
+            "register asset-definition instruction must not decode as transfer"
+        );
+    }
+
+    #[test]
+    fn extract_register_asset_definition_accepts_register_asset_definition_instruction() {
+        let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("defs", "universal").expect("defs domain id"),
+            "bond".parse().expect("asset definition name"),
+        );
+        let instruction = InstructionBox::from(Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone()).with_name("bond".to_owned()),
+        ));
+
+        let reg = extract_register_asset_definition(&instruction)
+            .expect("expected to extract register asset-definition instruction");
+        assert_eq!(reg.object().id(), &asset_definition_id);
+    }
+
+    #[test]
     fn initial_executor_denies_transfer_domain_without_ownership() {
         let alice_id = ALICE_ID.clone();
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let foo_domain_id: DomainId = "foo".parse().expect("foo domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let foo_domain_id: DomainId = DomainId::try_new("foo", "universal").expect("foo domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let foo_domain = Domain::new(foo_domain_id.clone()).build(&user1);
-        let alice_account =
-            Account::new(alice_id.to_account_id(users_domain_id.clone())).build(&alice_id);
-        let user1_account =
-            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
-        let user2_account =
-            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
 
         let world = World::with(
             [users_domain, foo_domain],
@@ -4494,17 +5644,15 @@ mod tests {
     #[test]
     fn initial_executor_allows_transfer_asset_by_source_domain_owner() {
         let alice_id = ALICE_ID.clone();
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.to_account_id(users_domain_id.clone())).build(&alice_id);
-        let user1_account =
-            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
-        let user2_account =
-            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
 
         let world = World::with(
             [users_domain],
@@ -4524,7 +5672,7 @@ mod tests {
 
         let transfer_asset_id = AssetId::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "users".parse().unwrap(),
+                DomainId::try_new("users", "universal").unwrap(),
                 "coin".parse().unwrap(),
             ),
             user1.clone(),
@@ -4538,7 +5686,7 @@ mod tests {
             .expect("expected to extract asset transfer from instruction");
 
         let stx = block.transaction();
-        let allowed = can_transfer_asset(&stx.world, &alice_id, &transfer)
+        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
             .expect("asset transfer permission check");
         assert!(
             allowed,
@@ -4549,17 +5697,15 @@ mod tests {
     #[test]
     fn initial_executor_denies_transfer_asset_without_owner_signature() {
         let alice_id = ALICE_ID.clone();
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
-        let alice_account =
-            Account::new(alice_id.to_account_id(users_domain_id.clone())).build(&alice_id);
-        let user1_account =
-            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
-        let user2_account =
-            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
 
         let world = World::with(
             [users_domain],
@@ -4580,7 +5726,7 @@ mod tests {
         let executor = super::Executor::Initial;
         let transfer_asset_id = AssetId::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "users".parse().unwrap(),
+                DomainId::try_new("users", "universal").unwrap(),
                 "coin".parse().unwrap(),
             ),
             user1.clone(),
@@ -4594,7 +5740,7 @@ mod tests {
             .expect("expected to extract asset transfer from instruction");
 
         let mut stx = block.transaction();
-        let allowed = can_transfer_asset(&stx.world, &alice_id, &transfer)
+        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
             .expect("asset transfer permission check");
         assert!(
             !allowed,
@@ -4617,23 +5763,181 @@ mod tests {
     }
 
     #[test]
-    fn initial_executor_denies_transfer_asset_definition_without_ownership() {
+    fn contract_runtime_context_allows_benefit_spend_asset_transfers_only_for_benefit_spend_entrypoints()
+     {
         let alice_id = ALICE_ID.clone();
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let defs_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let defs_domain_id: DomainId =
+            DomainId::try_new("defs", "universal").expect("defs domain id");
+        let alice_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
-        let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.to_account_id(alice_domain_id.clone())).build(&alice_id);
-        let user1_account =
-            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
-        let user2_account =
-            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+        let asset_definition_id: AssetDefinitionId =
+            AssetDefinitionId::new(defs_domain_id.clone(), "coin".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("coin".to_owned())
+            .build(&user1);
+        let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
+        let source_balance = Asset::new(transfer_asset_id.clone(), Numeric::new(10, 0));
+
+        let world = World::with_assets(
+            [alice_domain, users_domain, defs_domain],
+            [alice_account, user1_account, user2_account],
+            [asset_definition],
+            [source_balance],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(genesis_header)
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let executor = super::Executor::Initial;
+        let instruction = InstructionBox::from(Transfer::asset_numeric(
+            transfer_asset_id,
+            1_u32,
+            user2.clone(),
+        ));
+        let contract_address = ContractAddress::derive(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &alice_id,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("benefit contract address");
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
+            contract_address,
+            contract_alias: Some("benefit::benefit".parse().expect("benefit alias")),
+            entrypoint: "spend_to_merchant".to_owned(),
+        };
+
+        let mut stx = block.transaction();
+        executor
+            .execute_instruction_with_contract_runtime_context(
+                &mut stx,
+                &alice_id,
+                instruction,
+                Some(&context),
+            )
+            .expect("benefit spend runtime context should allow queued asset transfer");
+    }
+
+    #[test]
+    fn contract_runtime_context_does_not_bypass_non_benefit_spend_entrypoints() {
+        let alice_id = ALICE_ID.clone();
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let defs_domain_id: DomainId =
+            DomainId::try_new("defs", "universal").expect("defs domain id");
+        let alice_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
+        let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+        let asset_definition_id: AssetDefinitionId =
+            AssetDefinitionId::new(defs_domain_id.clone(), "coin".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_definition_id.clone())
+            .with_name("coin".to_owned())
+            .build(&user1);
+        let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
+        let source_balance = Asset::new(transfer_asset_id.clone(), Numeric::new(10, 0));
+
+        let world = World::with_assets(
+            [alice_domain, users_domain, defs_domain],
+            [alice_account, user1_account, user2_account],
+            [asset_definition],
+            [source_balance],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(genesis_header)
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+
+        let executor = super::Executor::Initial;
+        let instruction = InstructionBox::from(Transfer::asset_numeric(
+            transfer_asset_id,
+            1_u32,
+            user2.clone(),
+        ));
+        let contract_address = ContractAddress::derive(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &alice_id,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("benefit contract address");
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
+            contract_address,
+            contract_alias: Some("benefit::benefit".parse().expect("benefit alias")),
+            entrypoint: "create_tranche".to_owned(),
+        };
+
+        let mut stx = block.transaction();
+        let res = executor.execute_instruction_with_contract_runtime_context(
+            &mut stx,
+            &alice_id,
+            instruction,
+            Some(&context),
+        );
+        match res {
+            Err(ValidationFail::NotPermitted(msg)) => assert!(
+                msg.contains("source asset owner must sign the transaction"),
+                "unexpected rejection message: {msg}"
+            ),
+            other => panic!(
+                "non-spend contract runtime context must not bypass asset transfer checks, got: {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn initial_executor_denies_transfer_asset_definition_without_ownership() {
+        let alice_id = ALICE_ID.clone();
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let defs_domain_id: DomainId =
+            DomainId::try_new("defs", "universal").expect("defs domain id");
+        let user1 = AccountId::new(KeyPair::random().into_parts().0);
+        let user2 = AccountId::new(KeyPair::random().into_parts().0);
+        let alice_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
+
+        let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
+        let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
+        let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
 
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
             defs_domain_id.clone(),
@@ -4690,21 +5994,21 @@ mod tests {
     #[test]
     fn initial_executor_denies_transfer_asset_definition_by_definition_domain_owner() {
         let alice_id = ALICE_ID.clone();
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let defs_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let defs_domain_id: DomainId =
+            DomainId::try_new("defs", "universal").expect("defs domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
-        let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let alice_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&alice_id);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.to_account_id(alice_domain_id.clone())).build(&alice_id);
-        let user1_account =
-            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
-        let user2_account =
-            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
 
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
             defs_domain_id.clone(),
@@ -4760,20 +6064,19 @@ mod tests {
     #[test]
     fn initial_executor_denies_transfer_nft_without_ownership() {
         let alice_id = ALICE_ID.clone();
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
-        let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let alice_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.to_account_id(alice_domain_id.clone())).build(&alice_id);
-        let user1_account =
-            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
-        let user2_account =
-            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
-        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
         let world = World::with_assets(
@@ -4822,20 +6125,19 @@ mod tests {
     #[test]
     fn initial_executor_allows_transfer_nft_by_nft_domain_owner() {
         let alice_id = ALICE_ID.clone();
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
-        let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let alice_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
 
         let users_domain = Domain::new(users_domain_id.clone()).build(&alice_id);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
-        let alice_account =
-            Account::new(alice_id.to_account_id(alice_domain_id.clone())).build(&alice_id);
-        let user1_account =
-            Account::new(user1.to_account_id(users_domain_id.clone())).build(&user1);
-        let user2_account =
-            Account::new(user2.to_account_id(users_domain_id.clone())).build(&user2);
-        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+        let user1_account = Account::new(user1.clone()).build(&user1);
+        let user2_account = Account::new(user2.clone()).build(&user2);
+        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
         let world = World::with_assets(
@@ -4875,12 +6177,13 @@ mod tests {
     #[test]
     fn initial_executor_denies_nft_metadata_edit_in_transaction() {
         let (bob_id, bob_kp) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
-        let bob_account = Account::new(bob_id.to_account_id(domain_id.clone())).build(&bob_id);
-        let nft_id: NftId = "nft_owner_modify$wonderland".parse().expect("nft id");
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(bob_id.clone()).build(&bob_id);
+        let nft_id: NftId = "nft_owner_modify$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob_id);
 
         let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
@@ -4909,8 +6212,7 @@ mod tests {
     #[test]
     fn bench_profile_runs_without_logger() {
         let authority = ALICE_ID.clone();
-        let authority_domain_id: DomainId = "wonderland".parse().expect("domain id");
-        let account = Account::new(authority.to_account_id(authority_domain_id)).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([], [account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -4936,25 +6238,24 @@ mod tests {
             .lock()
             .expect("nexus fee test lock");
         crate::sumeragi::status::reset_nexus_economics_for_tests();
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.to_account_id(domain_id.clone())).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
-        let sink_account = Account::new(sink_id.to_account_id(domain_id.clone())).build(&sink_id);
-        let sponsor_account =
-            Account::new(sponsor_id.to_account_id(domain_id.clone())).build(&sponsor_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
         let world = World::with([domain], [alice_account, sink_account, sponsor_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
         let nexus = state.nexus.get_mut();
         nexus.enabled = true;
-        nexus.fees.base_fee = 1;
+        nexus.fees.base_fee = Numeric::from(1_u32);
         nexus.fees.sponsorship_enabled = false;
-        nexus.fees.fee_asset_id = "xor#wonderland".to_string();
+        nexus.fees.fee_asset_id = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
+        nexus.fees.burn_from_unix_timestamp_ms = 0;
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         metadata.insert(
@@ -4988,22 +6289,21 @@ mod tests {
         let (authority_id, authority_kp) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
-        let authority_account =
-            Account::new(authority_id.to_account_id(domain_id.clone())).build(&authority_id);
-        let sponsor_account =
-            Account::new(sponsor_id.to_account_id(domain_id.clone())).build(&sponsor_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
         let world = World::with([domain], [authority_account, sponsor_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let mut state = State::new(world, kura, query_handle);
         let nexus = state.nexus.get_mut();
         nexus.enabled = true;
-        nexus.fees.base_fee = 1;
+        nexus.fees.base_fee = Numeric::from(1_u32);
         nexus.fees.sponsorship_enabled = true;
-        nexus.fees.fee_asset_id = "xor#wonderland".to_string();
+        nexus.fees.fee_asset_id = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
+        nexus.fees.burn_from_unix_timestamp_ms = 0;
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         metadata.insert(
@@ -5041,15 +6341,13 @@ mod tests {
         let (authority_id, authority_kp) = gen_account_in("wonderland");
         let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
-        let authority_account =
-            Account::new(authority_id.to_account_id(domain_id.clone())).build(&authority_id);
-        let sponsor_account =
-            Account::new(sponsor_id.to_account_id(domain_id.clone())).build(&sponsor_id);
-        let sink_account = Account::new(sink_id.to_account_id(domain_id.clone())).build(&sink_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let ad: AssetDefinition = {
@@ -5080,13 +6378,14 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = 1;
-            nexus.fees.per_byte_fee = 0;
-            nexus.fees.per_instruction_fee = 0;
-            nexus.fees.per_gas_unit_fee = 0;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
             nexus.fees.sponsorship_enabled = true;
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -5134,7 +6433,7 @@ mod tests {
             .try_mantissa_u128()
             .unwrap();
         assert_eq!(sponsor_balance_after, 9_999);
-        assert_eq!(sink_balance_after, 1);
+        assert_eq!(sink_balance_after, 0);
 
         let snap = crate::sumeragi::status::nexus_fee_snapshot();
         assert_eq!(snap.charged_total, 0);
@@ -5151,6 +6450,638 @@ mod tests {
     }
 
     #[test]
+    fn nexus_fee_external_settled_sponsor_does_not_require_local_fee_asset() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let asset_definition = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&authority_id);
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sponsor_account],
+            [asset_definition],
+            [],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.external_settlement_enabled = true;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: sponsor_id.clone(),
+            },
+            authority_id.clone(),
+        )
+        .execute(&sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            Json::new(sponsor_id.to_string()),
+        );
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        executor
+            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
+            .expect("external-settled sponsor should not require local fee asset");
+
+        assert!(
+            stx.world
+                .assets()
+                .get(&AssetId::of(asset_def_id, sponsor_id))
+                .is_none(),
+            "external settlement must not create or debit a local sponsor asset"
+        );
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_is_burned_even_when_sponsor_is_fee_sink() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let ad: AssetDefinition = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&authority_id);
+        let sponsor_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
+            Numeric::new(10_000, 0),
+        );
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sponsor_account],
+            [ad],
+            [sponsor_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        let permission = CanUseFeeSponsor {
+            sponsor: sponsor_id.clone(),
+        };
+        Grant::account_permission(permission, authority_id.clone())
+            .execute(&sponsor_id, &mut stx)
+            .expect("grant fee sponsor permission");
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            Json::new(sponsor_id.to_string()),
+        );
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        executor
+            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
+            .expect("execution");
+
+        let sponsor_asset_id = AssetId::of(asset_def_id, sponsor_id);
+        let sponsor_balance_after = stx
+            .world
+            .assets()
+            .get(&sponsor_asset_id)
+            .expect("sponsor asset exists")
+            .0
+            .try_mantissa_u128()
+            .unwrap();
+        assert_eq!(sponsor_balance_after, 9_999);
+
+        stx.apply();
+        block.commit().expect("commit state block");
+
+        let committed_balance_after = state
+            .view()
+            .world()
+            .assets()
+            .get(&sponsor_asset_id)
+            .expect("sponsor asset exists after commit")
+            .0
+            .try_mantissa_u128()
+            .unwrap();
+        assert_eq!(committed_balance_after, 9_999);
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_self_fee_is_legacy_noop_before_burn_activation() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&authority_id);
+        let sponsor_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
+            Numeric::new(10_000, 0),
+        );
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sponsor_account],
+            [asset_definition],
+            [sponsor_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sponsor_id.to_string();
+        }
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: sponsor_id.clone(),
+            },
+            authority_id.clone(),
+        )
+        .execute(&sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+
+        let mut metadata = iroha_data_model::metadata::Metadata::default();
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("static name"),
+            Json::new(sponsor_id.to_string()),
+        );
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        super::Executor::Initial
+            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
+            .expect("legacy self-fee execution");
+
+        let sponsor_balance_after = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id, sponsor_id))
+            .expect("sponsor asset exists")
+            .0
+            .try_mantissa_u128()
+            .unwrap();
+        assert_eq!(sponsor_balance_after, 10_000);
+    }
+
+    #[test]
+    fn nexus_fee_admission_accepts_non_universal_route_with_global_balance() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let ad: AssetDefinition = {
+            let __asset_definition_id = asset_def_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&authority_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), authority_id.clone()),
+            Numeric::from(10_u32),
+        );
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sink_account],
+            [ad],
+            [payer_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+        let view = state.view();
+        check_external_nexus_fee_admission(
+            view.world(),
+            view.nexus(),
+            &tx,
+            0,
+            Some(DataSpaceId::new(10)),
+        )
+        .expect("private routes should admit fees against the authoritative global bucket");
+    }
+
+    #[test]
+    fn nexus_fee_non_universal_route_burns_global_fee_asset_bucket() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let ad = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&authority_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), authority_id.clone()),
+            Numeric::from(10_u32),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sink_id.clone()),
+            Numeric::zero(),
+        );
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sink_account],
+            [ad],
+            [payer_asset, sink_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+        stx.current_dataspace_id = Some(DataSpaceId::new(10));
+        stx.world.current_dataspace_id = Some(DataSpaceId::new(10));
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        super::Executor::Initial
+            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
+            .expect("non-universal route should debit global fee bucket");
+
+        let payer_asset_id = AssetId::of(asset_def_id.clone(), authority_id);
+        let sink_asset_id = AssetId::of(asset_def_id, sink_id);
+        let payer_balance = stx
+            .world
+            .asset(&payer_asset_id)
+            .expect("payer asset")
+            .value()
+            .as_ref()
+            .clone();
+        let sink_balance = stx
+            .world
+            .asset(&sink_asset_id)
+            .expect("sink asset")
+            .value()
+            .as_ref()
+            .clone();
+        assert_eq!(payer_balance, Numeric::from(9_u32));
+        assert_eq!(sink_balance, Numeric::zero());
+    }
+
+    #[test]
+    fn nexus_fee_before_burn_activation_transfers_to_legacy_sink() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let ad = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&authority_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), authority_id.clone()),
+            Numeric::from(10_u32),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sink_id.clone()),
+            Numeric::zero(),
+        );
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sink_account],
+            [ad],
+            [payer_asset, sink_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+
+        let chain: iroha_data_model::ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id.clone())
+            .with_executable(Executable::Instructions(Vec::new().into()))
+            .sign(authority_kp.private_key());
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        super::Executor::Initial
+            .execute_transaction(&mut stx, &authority_id, tx, &mut ivm_cache)
+            .expect("legacy fee transfer should execute");
+
+        let payer_balance = stx
+            .world
+            .asset(&AssetId::of(asset_def_id.clone(), authority_id))
+            .expect("payer asset")
+            .value()
+            .as_ref()
+            .clone();
+        let sink_balance = stx
+            .world
+            .asset(&AssetId::of(asset_def_id, sink_id))
+            .expect("sink asset")
+            .value()
+            .as_ref()
+            .clone();
+        assert_eq!(payer_balance, Numeric::from(9_u32));
+        assert_eq!(sink_balance, Numeric::from(1_u32));
+    }
+
+    #[test]
+    fn nexus_successful_claim_mint_bypasses_fee_admission_for_configured_authority() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id = AssetDefinitionId::new(domain_id, "xor".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&authority_id);
+        let world = World::with(
+            [domain],
+            [authority_account, sink_account],
+            [asset_definition],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.per_instruction_fee = Numeric::from(1_u32);
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+            nexus
+                .fees
+                .successful_claim_fee_exempt_authorities
+                .push(authority_id.to_string());
+        }
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str(SORA_V2_CLAIM_TX_HASH_METADATA_KEY).expect("static name"),
+            Json::new(format!("0x{}", "11".repeat(32))),
+        );
+        metadata.insert(
+            Name::from_str(SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY).expect("static name"),
+            Json::new(recipient_id.to_string()),
+        );
+        let instruction: InstructionBox =
+            Mint::asset_numeric(3_u32, AssetId::of(asset_def_id, recipient_id)).into();
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id)
+            .with_metadata(metadata)
+            .with_executable(Executable::from(core::iter::once(instruction)))
+            .sign(authority_kp.private_key());
+
+        let view = state.view();
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, None)
+            .expect("configured successful claim mint should bypass fee admission");
+    }
+
+    #[test]
+    fn nexus_successful_claim_mint_requires_configured_authority() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (authority_id, authority_kp) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id = AssetDefinitionId::new(domain_id, "xor".parse().unwrap());
+        let asset_definition = AssetDefinition::numeric(asset_def_id.clone())
+            .with_name(asset_def_id.name().to_string())
+            .build(&authority_id);
+        let world = World::with(
+            [domain],
+            [authority_account, sink_account],
+            [asset_definition],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.per_instruction_fee = Numeric::from(1_u32);
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str(SORA_V2_CLAIM_TX_HASH_METADATA_KEY).expect("static name"),
+            Json::new(format!("0x{}", "22".repeat(32))),
+        );
+        metadata.insert(
+            Name::from_str(SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY).expect("static name"),
+            Json::new(recipient_id.to_string()),
+        );
+        let instruction: InstructionBox =
+            Mint::asset_numeric(3_u32, AssetId::of(asset_def_id, recipient_id)).into();
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, authority_id)
+            .with_metadata(metadata)
+            .with_executable(Executable::from(core::iter::once(instruction)))
+            .sign(authority_kp.private_key());
+
+        let view = state.view();
+        let err = check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, None)
+            .expect_err("unconfigured claim authority should still need fee balance");
+        assert!(matches!(err, NexusFeeAdmissionError::Rejected(_)));
+    }
+
+    #[test]
     fn nexus_fee_charged_event_is_recorded_on_apply() {
         let _guard = crate::sumeragi::status::nexus_fee_test_lock()
             .lock()
@@ -5159,13 +7090,12 @@ mod tests {
 
         let (alice_id, alice_kp) = gen_account_in("wonderland");
         let (sink_id, _sink_kp) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let dom: Domain = Domain::new(domain_id.clone()).build(&alice_id);
-        let alice: Account =
-            Account::new(alice_id.to_account_id(domain_id.clone())).build(&alice_id);
-        let sink: Account = Account::new(sink_id.to_account_id(domain_id.clone())).build(&sink_id);
+        let alice: Account = Account::new(alice_id.clone()).build(&alice_id);
+        let sink: Account = Account::new(sink_id.clone()).build(&sink_id);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let ad: AssetDefinition = {
@@ -5184,9 +7114,10 @@ mod tests {
         {
             let nexus = state.nexus.get_mut();
             nexus.enabled = true;
-            nexus.fees.base_fee = 1;
+            nexus.fees.base_fee = Numeric::from(1_u32);
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
@@ -5224,6 +7155,205 @@ mod tests {
         );
     }
 
+    #[test]
+    fn nexus_fee_transfer_cost_is_exactly_one_cent_xor() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (payer_id, payer_kp) = gen_account_in("wonderland");
+        let (recipient_id, _recipient_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let dom: Domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer: Account = Account::new(payer_id.clone()).build(&payer_id);
+        let recipient: Account = Account::new(recipient_id.clone()).build(&recipient_id);
+        let sink: Account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let ad: AssetDefinition =
+            AssetDefinition::new(asset_def_id.clone(), NumericSpec::default())
+                .with_name("xor".to_owned())
+                .build(&payer_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), payer_id.clone()),
+            Numeric::from_str("10").unwrap(),
+        );
+        let recipient_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), recipient_id.clone()),
+            Numeric::zero(),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sink_id.clone()),
+            Numeric::zero(),
+        );
+        let world = World::with_assets(
+            [dom],
+            [payer, recipient, sink],
+            [ad],
+            [payer_asset, recipient_asset, sink_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::new(1, 3);
+            nexus.fees.per_gas_unit_fee = Numeric::new(5, 5);
+            nexus.fees.sponsorship_enabled = false;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let instruction: InstructionBox = Transfer::asset_numeric(
+            AssetId::of(asset_def_id.clone(), payer_id.clone()),
+            Numeric::from(1_u32),
+            recipient_id.clone(),
+        )
+        .into();
+        assert_eq!(
+            crate::gas::meter_instructions(std::slice::from_ref(&instruction)),
+            180
+        );
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, payer_id.clone())
+            .with_executable(Executable::from(core::iter::once(instruction)))
+            .sign(payer_kp.private_key());
+
+        let executor = super::Executor::default();
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        executor
+            .execute_transaction(&mut stx, &payer_id, tx, &mut ivm_cache)
+            .expect("execution");
+
+        let sink_balance = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id.clone(), sink_id.clone()))
+            .expect("sink asset exists")
+            .0
+            .to_string();
+        let payer_balance = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id.clone(), payer_id.clone()))
+            .expect("payer asset exists")
+            .0
+            .to_string();
+        let recipient_balance = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id, recipient_id))
+            .expect("recipient asset exists")
+            .0
+            .to_string();
+
+        assert_eq!(sink_balance, "0");
+        assert_eq!(payer_balance, "8.99");
+        assert_eq!(recipient_balance, "1");
+    }
+
+    #[test]
+    fn nexus_fee_set_account_kv_cost_is_scaled_from_transfer_anchor() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let (payer_id, payer_kp) = gen_account_in("wonderland");
+        let (sink_id, _sink_kp) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let dom: Domain = Domain::new(domain_id.clone()).build(&payer_id);
+        let payer: Account = Account::new(payer_id.clone()).build(&payer_id);
+        let sink: Account = Account::new(sink_id.clone()).build(&sink_id);
+        let asset_def_id: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let ad: AssetDefinition =
+            AssetDefinition::new(asset_def_id.clone(), NumericSpec::default())
+                .with_name("xor".to_owned())
+                .build(&payer_id);
+        let payer_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), payer_id.clone()),
+            Numeric::from_str("10").unwrap(),
+        );
+        let sink_asset = Asset::new(
+            AssetId::of(asset_def_id.clone(), sink_id.clone()),
+            Numeric::zero(),
+        );
+        let world = World::with_assets([dom], [payer, sink], [ad], [payer_asset, sink_asset], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::new(1, 3);
+            nexus.fees.per_gas_unit_fee = Numeric::new(5, 5);
+            nexus.fees.sponsorship_enabled = false;
+            nexus.fees.fee_asset_id = asset_def_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
+        }
+
+        let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
+            payer_id.clone(),
+            "k".parse().unwrap(),
+            Json::new("v"),
+        )
+        .into();
+        assert_eq!(
+            crate::gas::meter_instructions(std::slice::from_ref(&instruction)),
+            67
+        );
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let tx = TransactionBuilder::new(chain, payer_id.clone())
+            .with_executable(Executable::from(core::iter::once(instruction)))
+            .sign(payer_kp.private_key());
+
+        let executor = super::Executor::default();
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut stx = block.transaction();
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        executor
+            .execute_transaction(&mut stx, &payer_id, tx, &mut ivm_cache)
+            .expect("execution");
+
+        let payer_balance = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id.clone(), payer_id))
+            .expect("payer asset exists")
+            .0
+            .to_string();
+        let sink_balance = stx
+            .world
+            .assets()
+            .get(&AssetId::of(asset_def_id, sink_id))
+            .expect("sink asset exists")
+            .0
+            .to_string();
+        assert_eq!(payer_balance, "9.99565");
+        assert_eq!(sink_balance, "0");
+    }
+
     #[cfg(feature = "telemetry")]
     #[test]
     fn block_fee_units_recorded_on_apply() {
@@ -5231,13 +7361,12 @@ mod tests {
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let (payer_id, payer_kp) = gen_account_in("wonderland");
         let (tech_id, _tech_kp) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let dom: Domain = Domain::new(domain_id.clone()).build(&payer_id);
-        let payer: Account =
-            Account::new(payer_id.to_account_id(domain_id.clone())).build(&payer_id);
-        let tech: Account = Account::new(tech_id.to_account_id(domain_id.clone())).build(&tech_id);
+        let payer: Account = Account::new(payer_id.clone()).build(&payer_id);
+        let tech: Account = Account::new(tech_id.clone()).build(&tech_id);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "gas".parse().unwrap(),
         );
         let ad: AssetDefinition = {
@@ -5311,7 +7440,7 @@ mod tests {
 
     #[test]
     fn multisig_account_direct_signing_is_rejected() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let chain: iroha_data_model::ChainId = "multisig-direct-sign".parse().unwrap();
         let signer = KeyPair::random();
         let member = iroha_data_model::account::MultisigMember::new(signer.public_key().clone(), 1)
@@ -5321,8 +7450,7 @@ mod tests {
         let multisig_id = AccountId::new_multisig(policy);
 
         let domain: Domain = Domain::new(domain_id.clone()).build(&multisig_id);
-        let multisig_account =
-            Account::new(multisig_id.to_account_id(domain_id.clone())).build(&multisig_id);
+        let multisig_account = Account::new(multisig_id.clone()).build(&multisig_id);
 
         let world = World::with([domain], [multisig_account], []);
         let kura = Kura::blank_kura_for_testing();
@@ -5516,10 +7644,10 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let wonderland_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let wonderland_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.to_account_id(wonderland_domain_id.clone())).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -5528,7 +7656,7 @@ mod tests {
         let mut block = state.block(block_header);
         let mut state_tx = block.transaction();
 
-        let domain_id: DomainId = "test".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("test", "universal").expect("domain id");
         let instruction = Register::domain(Domain::new(domain_id.clone())).into();
         executor
             .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction)
@@ -5586,10 +7714,10 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let wonderland_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let wonderland_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.to_account_id(wonderland_domain_id.clone())).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -5624,10 +7752,10 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let wonderland_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let wonderland_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.to_account_id(wonderland_domain_id.clone())).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -5654,10 +7782,10 @@ mod tests {
         let executor =
             super::Executor::UserProvided(super::LoadedExecutor::load(raw).expect("load"));
 
-        let wonderland_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let wonderland_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(wonderland_domain_id.clone()).build(&ALICE_ID);
-        let alice_account =
-            Account::new(ALICE_ID.to_account_id(wonderland_domain_id.clone())).build(&ALICE_ID);
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();

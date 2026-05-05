@@ -1,12 +1,14 @@
+<!-- Auto-generated stub for Spanish (es) translation. Replace this content with the full translation. -->
+
 ---
 lang: es
 direction: ltr
 source: docs/source/data_model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 683bfb31442f8f4ce7b1bf5038f9dba92fe092545e655f43b51195c21535d3c4
-source_last_modified: "2026-03-12T11:24:23.059339+00:00"
-translation_last_reviewed: 2026-03-12
+source_hash: 8055b28096f5884d2636a19a98e92a74599802fa1bd3ff350dbb636d1300b1f8
+source_last_modified: "2026-03-30T18:22:55.957443+00:00"
+translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---
 
@@ -31,43 +33,50 @@ Este documento explica las estructuras, identificadores, rasgos y protocolos que
 - `IdBox`: Un sobre tipo suma para cualquier ID admitido (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Útil para flujos genéricos y codificación Norito como un solo tipo.
 - `ChainId`: Identificador de cadena opaco utilizado para protección de reproducción en transacciones.Formas de cadena de ID (ida y vuelta con `Display`/`FromStr`):
 - `DomainId`: `name` (por ejemplo, `wonderland`).
-- `AccountId`: identificador de cuenta canónica sin dominio codificado mediante `AccountAddress` como I105 únicamente. Las entradas del analizador deben ser canónicas I105; se rechazan los sufijos de dominio (`@domain`), los literales I105 canónicos, los literales de alias, la entrada del analizador hexadecimal canónico, las cargas útiles `norito:` heredadas y los formularios del analizador de cuentas `uaid:`/`opaque:`.
-- `AssetDefinitionId`: canónico `aid:<32-lower-hex-no-dash>` (UUID-v4 bytes).
-- `AssetId`: literal codificado canónico `norito:<hex>` (las formas textuales heredadas no se admiten en la primera versión).
+- `AccountId`: identificador de cuenta canónica sin dominio codificado mediante `AccountAddress` como I105 únicamente. Las entradas estrictas del analizador deben ser canónicas I105; Se rechazan los sufijos de dominio (`@domain`), los literales de alias de cuenta, la entrada del analizador hexadecimal canónico, las cargas útiles `norito:` heredadas y los formularios del analizador de cuentas `uaid:`/`opaque:`. Los alias de cuentas en cadena utilizan `name@domain.dataspace` o `name@dataspace` y se resuelven en valores canónicos `AccountId`.
+- `AssetDefinitionId`: dirección Base58 canónica sin prefijo sobre los bytes canónicos de definición de activos. Este es el ID del activo público. Los alias de activos en cadena utilizan `name#domain.dataspace` o `name#dataspace` y se resuelven solo en este ID de activo canónico Base58.
+- `AssetId`: identificador de activo público en formato canónico básico Base58. Los alias de activos como `name#dataspace` o `name#domain.dataspace` se resuelven en `AssetId`. Las existencias del libro mayor interno pueden exponer adicionalmente campos `asset + account + optional dataspace` divididos cuando sea necesario, pero esa forma compuesta no es el `AssetId` público.
 - `NftId`: `nft$domain` (por ejemplo, `rose$garden`).
 - `PeerId`: `public_key` (la igualdad entre pares es por clave pública).
 
-## Entidades
-
-### Dominio
+## Entidades### Dominio
 - `DomainId { name: Name }` – nombre único.
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Constructor: `NewDomain` con `with_logo`, `with_metadata`, luego `Registrable::build(authority)` establece `owned_by`.### Cuenta
 - `AccountId` es la identidad de cuenta canónica sin dominio codificada por el controlador y codificada como I105 canónica.
-- `ScopedAccountId { account: AccountId, domain: DomainId }` incluye contexto de dominio explícito solo cuando se requiere una vista con alcance.
-- `Account { id, metadata, label?, uaid? }`: `label` es un alias estable opcional utilizado por los registros de nueva clave, `uaid` lleva el [ID de cuenta universal] Nexus opcional (./universal_accounts_guide.md).
-- Constructor: `NewAccount` vía `Account::new(id)`; el registro requiere un dominio `ScopedAccountId` explícito y no infiere uno de los valores predeterminados.
-
-### Definiciones de activos y activos
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` expuesto textualmente como `aid:<32-hex-no-dash>`.
--`AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
+- `Account { id, metadata, label?, uaid?, opaque_ids[] }`: `label` es un `AccountAlias` primario opcional utilizado por los registros de nueva clave, `uaid` lleva el Nexus opcional [ID de cuenta universal] (./universal_accounts_guide.md) y pistas `opaque_ids`. identificadores ocultos vinculados a ese UAID. El estado de cuenta almacenado ya no incluye ningún campo de dominio vinculado.
+- Constructores:
+  - `NewAccount` a través de `Account::new(id)` registra el sujeto de cuenta canónica sin dominio.
+- Modelo de alias:
+  - La identidad de la cuenta canónica nunca incluye un dominio o segmento de espacio de datos.
+  - Los valores `AccountAlias` son enlaces SNS separados superpuestos a `AccountId`.
+  - Los alias calificados por dominio, como `merchant@banka.paynet`, llevan tanto un dominio como un espacio de datos en el enlace de alias.
+  - Los alias de raíz del espacio de datos, como `merchant@paynet`, transportan solo el espacio de datos y, por lo tanto, se emparejan naturalmente con `Account::new(...)`.
+  - Las pruebas y accesorios deben generar primero el `AccountId` universal, luego agregar concesiones de alias, permisos de alias y cualquier estado de propiedad del dominio por separado en lugar de codificar suposiciones de dominio en la identidad de la cuenta misma.
+  - La búsqueda de cuentas públicas singulares ahora se centra en alias (`FindAliasesByAccountId`); La identidad de la cuenta en sí misma permanece sin dominio.### Definiciones de activos y activos
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` expuesto textualmente como una dirección Base58 sin prefijo con control de versiones y suma de comprobación.
+- `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
   - `name` es un texto de visualización de cara humana requerido y no debe contener `#`/`@`.
   - `alias` es opcional y debe ser uno de:
-    - `<name>#<domain>@<dataspace>`
+    -`<name>#<domain>.<dataspace>`
     - `<name>#<dataspace>`
     con el segmento izquierdo coincidiendo exactamente con `AssetDefinition.name`.
+  - El estado de concesión del alias se almacena con autoridad en el registro de vinculación de alias persistente; el campo `alias` en línea se deriva cuando las definiciones se leen a través de las API principales/Torii.
+  - Las respuestas de definición de activos Torii pueden incluir `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, donde `status` es uno de `permanent`, `leased_active`, `leased_grace` o `expired_pending_cleanup`.
+  - La resolución de alias utiliza la última marca de tiempo del bloque comprometido en lugar del reloj de pared del nodo. Una vez que `grace_until_ms` ha pasado, los selectores de alias dejan de resolverse inmediatamente incluso si la limpieza de barrido aún no ha eliminado el enlace obsoleto; Las lecturas de definición directa aún pueden informar el enlace persistente como `expired_pending_cleanup`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - Constructores: `AssetDefinition::new(id, spec)` o conveniencia `numeric(id)`; Se requiere `name` y se debe configurar a través de `.with_name(...)`.
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- `Asset { id, value: Numeric }` con `AssetEntry`/`AssetValue` fácil de almacenar.
-- `AssetBalanceScope`: `Global` para saldos sin restricciones e `Dataspace(DataSpaceId)` para saldos con espacio de datos restringido.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` expuesto para API de resumen.### NFT
+- `Asset { id, value: Numeric }` con `AssetEntry`/`AssetValue` fácil de almacenar.- `AssetBalanceScope`: `Global` para saldos sin restricciones e `Dataspace(DataSpaceId)` para saldos con espacio de datos restringido.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` expuesto para API de resumen.
+
+### NFT
 - `NftId { domain: DomainId, name: Name }`.
 - `Nft { id, content: Metadata, owned_by: AccountId }` (el contenido son metadatos de clave/valor arbitrarios).
 - Constructor: `NewNft` vía `Nft::new(id, content)`.
 
 ### Roles y permisos
-- `RoleId { name: Name }`.
+-`RoleId { name: Name }`.
 - `Role { id, permissions: BTreeSet<Permission> }` con constructor `NewRole { inner: Role, grant_to: AccountId }`.
 - `Permission { name: Ident, payload: Json }`: el `name` y el esquema de carga útil deben alinearse con el `ExecutorDataModel` activo (ver a continuación).
 
@@ -88,10 +97,10 @@ Estos tipos se ubican junto a las primitivas Ed25519/BLS/ML-DSA existentes y pas
 
 ## Parámetros y configuración
 
-- Familias de parámetros del sistema (todos `Default`ed, acarrean captadores y convierten a enumeraciones individuales):
+- Familias de parámetros del sistema (todos `Default`ed, captadores de acarreo y conversión a enumeraciones individuales):
 - `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`.
   - `BlockParameters { max_transactions: NonZeroU64 }`.
-  - `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`.
+  -`TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`.
   - `SmartContractParameters { fuel, memory, execution_depth }`.
 - `Parameters` agrupa todas las familias y un `custom: BTreeMap<CustomParameterId, CustomParameter>`.
 - Enumeraciones de un solo parámetro: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter` para actualizaciones e iteraciones similares a diferencias.
@@ -103,7 +112,7 @@ Estos tipos se ubican junto a las primitivas Ed25519/BLS/ML-DSA existentes y pas
   - `mint_burn`, `transfer`, `register` y un paquete de ayudantes `transparent`.
   - Escriba enumeraciones para metaflujos: `InstructionType`, sumas en cuadros como `SetKeyValueBox` (dominio/cuenta/asset_def/nft/trigger).
 - Errores: modelo de errores enriquecido bajo `isi::error` (errores de tipo de evaluación, errores de búsqueda, acuñabilidad, matemáticas, parámetros no válidos, repetición, invariantes).
-- Registro de instrucciones: la macro `instruction_registry!{ ... }` crea un registro de decodificación en tiempo de ejecución codificado por nombre de tipo. Utilizado por el clon `InstructionBox` y ​​el serde Norito para lograr una (des)serialización dinámica. Si no se ha configurado explícitamente ningún registro a través de `set_instruction_registry(...)`, en el primer uso se instala de forma diferida un registro predeterminado integrado con todos los ISI principales para mantener los archivos binarios sólidos.
+- Registro de instrucciones: la macro `instruction_registry!{ ... }` crea un registro de decodificación en tiempo de ejecución codificado por nombre de tipo. Utilizado por el clon `InstructionBox` y el serde Norito para lograr una (des)serialización dinámica. Si no se ha configurado explícitamente ningún registro a través de `set_instruction_registry(...)`, en el primer uso se instala de forma diferida un registro predeterminado integrado con todos los ISI principales para mantener los archivos binarios sólidos.
 
 ## Transacciones- `Executable`: ya sea `Instructions(ConstVec<InstructionBox>)` o `Ivm(IvmBytecode)`. `IvmBytecode` se serializa como base64 (nuevo tipo transparente sobre `Vec<u8>`).
 - `TransactionBuilder`: construye una carga útil de transacción con `chain`, `authority`, `creation_time_ms`, `time_to_live_ms` opcional y `nonce`, `metadata` y un `Executable`.
@@ -124,7 +133,7 @@ Estos tipos se ubican junto a las primitivas Ed25519/BLS/ML-DSA existentes y pas
 - Los mensajes `ExecWitness` (transmitidos a través de Torii y respaldados por chismes de consenso) ahora incluyen tanto `fastpq_transcripts` como `fastpq_batches: Vec<FastpqTransitionBatch>` listo para probar con `public_inputs` integrado (dsid, slot, root, perm_root, tx_set_hash). por lo que los probadores externos pueden ingerir filas FASTPQ canónicas sin volver a codificar las transcripciones.
 
 ## Consultas- Dos sabores:
-  - Singular: implemente `SingularQuery<Output>` (p. ej., `FindParameters`, `FindExecutorDataModel`).
+  - Singular: implementar `SingularQuery<Output>` (por ejemplo, `FindParameters`, `FindExecutorDataModel`).
   - Iterable: implemente `Query<Item>` (por ejemplo, `FindAccounts`, `FindAssets`, `FindDomains`, etc.).
 - Formularios borrados:
   - `QueryBox<T>` es un `Query<Item = T>` en caja y borrado con un serde Norito respaldado por un registro global.
@@ -141,14 +150,14 @@ Estos tipos se ubican junto a las primitivas Ed25519/BLS/ML-DSA existentes y pas
   - Identificadores de instrucciones personalizados,
   - Identificadores de tokens de permiso,
   - Un esquema JSON que describe tipos personalizados para herramientas del cliente.
-- Existen muestras de personalización en `data_model/samples/executor_custom_data_model` que demuestran:
+- Existen ejemplos de personalización en `data_model/samples/executor_custom_data_model` que demuestran:
   - Token de permiso personalizado a través de derivación `iroha_executor_data_model::permission::Permission`,
   - Parámetro personalizado definido como un tipo convertible a `CustomParameter`,
   - Instrucciones personalizadas serializadas en `CustomInstruction` para su ejecución.
 
 ### Instrucción personalizada (ISI definida por el ejecutor)- Tipo: `isi::CustomInstruction { payload: Json }` con identificación de cable estable `"iroha.custom"`.
 - Propósito: sobre para instrucciones específicas del ejecutor en redes privadas/consorcios o para creación de prototipos, sin bifurcar el modelo de datos públicos.
-- Comportamiento predeterminado del ejecutor: el ejecutor integrado en `iroha_core` no ejecuta `CustomInstruction` y entrará en pánico si se encuentra. Un ejecutor personalizado debe convertir `InstructionBox` a `CustomInstruction` e interpretar de manera determinista la carga útil en todos los validadores.
+- Comportamiento predeterminado del ejecutor: el ejecutor integrado en `iroha_core` no ejecuta `CustomInstruction` y entrará en pánico si se encuentra. Un ejecutor personalizado debe reducir `InstructionBox` a `CustomInstruction` e interpretar de manera determinista la carga útil en todos los validadores.
 - Norito: codifica/decodifica vía `norito::codec::{Encode, Decode}` con esquema incluido; la carga útil `Json` se serializa de forma determinista. Los viajes de ida y vuelta son estables siempre que el registro de instrucciones incluya `CustomInstruction` (es parte del registro predeterminado).
 - IVM: Kotodama se compila en el código de bytes IVM (`.to`) y es la ruta recomendada para la lógica de la aplicación. Utilice únicamente `CustomInstruction` para extensiones de nivel de ejecutor que aún no se pueden expresar en Kotodama. Garantice el determinismo y binarios ejecutores idénticos entre pares.
 - No para redes públicas: no lo use para cadenas públicas donde los ejecutores heterogéneos corren el riesgo de bifurcaciones de consenso. Prefiera proponer un nuevo ISI integrado cuando necesite funciones de plataforma.
@@ -176,17 +185,20 @@ use iroha_crypto::KeyPair;
 use iroha_primitives::numeric::Numeric;
 
 // Domain
-let domain_id: DomainId = "wonderland".parse().unwrap();
+let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
 let new_domain = Domain::new(domain_id.clone()).with_metadata(Metadata::default());
 
 // Account
 let kp = KeyPair::random();
 let account_id = AccountId::new(kp.public_key().clone());
-let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
+let new_account = Account::new(account_id.clone())
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id = AssetDefinitionId::new(
+    domain_id.clone(),
+    "usd".parse().unwrap(),
+);
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -230,36 +242,36 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / alias de referencia rápida (CLI + Torii):
+Referencia rápida de ID/alias de definición de activo (CLI + Torii):
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with a canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
-# Mint using alias + account components (no manual norito hex copy/paste)
+# Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
-  --account sorauﾛ1P... \
+  --definition-alias pkr#bankb.paynet \
+  --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```Nota de migración:
 - Los ID de definición de activos antiguos `name#domain` no se aceptan en v1.
-- Los ID de activos para acuñación/quema/transferencia siguen siendo canónicos `norito:<hex>`; construirlos con:
-  - `iroha tools encode asset-id --definition aid:... --account <i105>`
-  - o `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
+- Los selectores de activos públicos utilizan solo un formato de definición de activos: identificadores canónicos Base58. Los alias siguen siendo selectores opcionales, pero se resuelven en la misma identificación canónica.
+- Las búsquedas de activos públicos abordan los saldos propios con `asset + account + optional scope`; Los literales `AssetId` codificados sin formato son una representación interna y no forman parte de la superficie del selector Torii/CLI.
+- `POST /v1/assets/definitions/query` e `GET /v1/assets/definitions` aceptan filtros/clasificaciones de definición de activos sobre `alias_binding.status`, `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms` e `alias_binding.bound_at_ms` además de `id`. `name`, `alias` y `metadata.*`.
 
 ## Versionado
 

@@ -68,15 +68,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -164,84 +164,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## 離線津貼和判決元數據
+## Offline V2 readiness
 
-離線津貼響應預先公開豐富的賬本元數據 -
-`expires_at_ms`、`policy_expires_at_ms`、`refresh_at_ms`、`verdict_id_hex`、
-`attestation_nonce_hex` 和 `remaining_amount` 與原始數據一起返回
-記錄，以便儀表板不必解碼嵌入式 Norito 有效負載。新的
-倒計時助手（`deadline_kind`、`deadline_state`、`deadline_ms`、
-`deadline_ms_remaining`) 突出顯示下一個即將到期的截止日期（刷新→政策
-→ 證書），以便 UI 徽章可以在津貼出現時警告操作員
-剩餘時間< 24 小時。軟件開發工具包
-鏡像 `/v1/offline/allowances` 暴露的 REST 過濾器：
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`、`attestationNonceHex`、`refreshBeforeMs/AfterMs` 和
-`requireVerdict` / `onlyMissingVerdict` 布爾值。無效組合（對於
-例如 `onlyMissingVerdict` + `verdictIdHex`) 在 Torii 之前被本地拒絕
-被稱為。
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## 線下充值（發行+註冊）
-
-當您想要立即頒發證書時，請使用充值助手
-將其登記在分類賬上。 SDK驗證頒發並註冊的證書
-返回前 ID 匹配，並且響應包含兩個有效負載。有
-無專用充值端點；助手鍊接問題+註冊調用。如果
-您已經擁有簽名證書，請致電 `registerOfflineAllowance`（或
-`renewOfflineAllowance`) 直接。
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii 查詢和流式傳輸（WebSockets）
 
 查詢助手公開狀態、Prometheus 指標、遙測快照和事件
@@ -276,7 +223,7 @@ Explorer 遙測為 `/v1/explorer/metrics` 和
 `/v1/explorer/accounts/{account_id}/qr` 端點，以便儀表板可以重播
 為門戶提供支持的相同快照。 `getExplorerMetrics()` 標準化
 當路由被禁用時，有效負載並返回 `null`。與它配對
-`getExplorerAccountQr()` 每當您需要 I105（首選）/sora（第二好的）文字加上內聯時
+`getExplorerAccountQr()` 每當您需要 i105（首選）/sora（第二好的）文字加上內聯時
 用於共享按鈕的 SVG。
 
 ```ts
@@ -291,7 +238,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -299,8 +246,8 @@ console.log(
 );
 ```
 
-傳遞 `I105` 鏡像資源管理器的默認壓縮
-選擇器；忽略首選 I105 輸出的覆蓋或請求 `i105_qr`
+傳遞 `i105` 鏡像資源管理器的默認壓縮
+選擇器；忽略首選 i105 輸出的覆蓋或請求 `i105_qr`
 當您需要二維碼安全版本時。壓縮文字是第二好的
 僅 Sora 的 UX 選項。助手總是返回規範標識符，
 所選文字和元數據（網絡前綴、QR 版本/模塊、錯誤
@@ -519,7 +466,7 @@ for await (const event of torii.streamEvents({
   按規範賬戶 ID 對資產持有量進行分組；通過 `assetId` 來過濾
   投資組合縮減為單個資產實例。
 - `getUaidBindings(uaid)` 枚舉每個數據空間↔帳戶
-  綁定（`I105` 返回 `i105` 文字）。
+  綁定（`i105` 返回 `i105` 文字）。
 - `getUaidManifests(uaid, { dataspaceId })` 返回每個功能清單，
   生命週期狀態，以及綁定賬戶進行審計。對於操作員證據包、清單發布/撤銷流程和 SDK 遷移
 指導，遵循通用賬戶指南 (`docs/source/universal_accounts_guide.md`)
@@ -562,7 +509,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -572,7 +519,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

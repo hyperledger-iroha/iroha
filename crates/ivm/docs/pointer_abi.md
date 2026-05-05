@@ -23,11 +23,14 @@ added with new IDs; existing IDs must not change.
 | 0x000B | AxtDescriptor | OK |
 | 0x000C | AssetHandle | OK |
 | 0x000D | ProofBlob | OK |
+| 0x000E | SoracloudRequest | OK |
+| 0x000F | SoracloudResponse | OK |
 <!-- END GENERATED POINTER TYPES -->
 
 
 Notes
 - Column denotes whether the type is accepted under ABI v1 (the only supported policy in this release).
-- Runtime upgrades must use the existing type set; no new pointer‑ABI types are introduced in v1.
+- ABI v1 now includes the Soracloud and AXT pointer types shown above; further additions require a deliberate ABI surface change rather than an in-place runtime upgrade.
 - TLV structure is enforced regardless of policy; type IDs gate which categories are accepted for host syscalls.
 - `DataSpaceId`, `AxtDescriptor`, `AssetHandle`, and `ProofBlob` underpin the AXT (atomic cross-transaction) flow. Default and WSV hosts fully validate these pointers when servicing AXT syscalls, ensuring descriptor membership, capability binding equality, and proof material are honoured.
+- `SoracloudRequest` and `SoracloudResponse` carry Norito envelopes for the Soracloud runtime host ABI. They are only meaningful on the dedicated Soracloud syscall block and remain part of ABI v1.

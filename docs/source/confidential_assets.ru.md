@@ -89,7 +89,7 @@ Swift SDK теперь могут генерировать инструкции 
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ Swift SDK теперь могут генерировать инструкции 
 - Иерархия получения ключей для каждой учетной записи:
   - `sk_spend` → `nk` (ключ обнулителя), `ivk` (входящий ключ просмотра), `ovk` (исходящий ключ просмотра), `fvk`.
 - Полезные данные зашифрованных заметок используют AEAD с общими ключами, полученными из ECDH; Дополнительные ключи просмотра аудитора могут быть прикреплены к выходным данным для каждой политики актива.
-- Дополнения CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, инструменты аудитора для расшифровки заметок и помощник `iroha app zk envelope` для создания/проверки конвертов заметок Norito в автономном режиме. Torii предоставляет тот же поток деривации через `POST /v1/confidential/derive-keyset`, возвращая как шестнадцатеричную, так и base64-форму, поэтому кошельки могут программно получать иерархии ключей.
+- Дополнения CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, инструменты аудитора для расшифровки заметок и помощник `iroha app zk envelope` для создания/проверки конвертов заметок Norito в автономном режиме.
 
 ## Газ, ограничения и DoS-контроль
 - Детерминированный газовый график:
@@ -391,7 +391,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -423,8 +423,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -455,7 +455,7 @@ await new ToriiClient({ baseUrl: "https://torii" }).submitTransaction(signed);
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Соедините это с `rg 'iroha_confidential_tree_depth'` в той же очистке, чтобы подтвердить, что глубина увеличивается с новыми обязательствами, в то время как счетчики выселений увеличиваются только тогда, когда ограничения истории обрезают записи. Эти значения должны соответствовать экспорту информационной панели Grafana, который вы прикрепляете к пакетам доказательств управления.

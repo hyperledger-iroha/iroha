@@ -20,7 +20,7 @@ use iroha_core::{
     block::{BlockBuilder, ValidBlock},
     governance::manifest::{
         GovernanceHooks, GovernanceRules, LaneManifestRegistry, LaneManifestStatus,
-        RuntimeUpgradeHook,
+        ManifestValidatorBinding, RuntimeUpgradeHook,
     },
     state::StateReadOnly,
     telemetry::LaneTeuGaugeUpdate,
@@ -43,19 +43,19 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     let (carol_id, _) = iroha_test_samples::gen_account_in("wonderland");
 
     // World: two accounts + one asset def
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
         NumericSpec::default(),
     )
     .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
-    let acc_b = Account::new(bob_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
-    let acc_c = Account::new(carol_id.clone().to_account_id(domain_id)).build(&alice_id);
+    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
+    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
+    let acc_c = Account::new(carol_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b, acc_c], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
@@ -68,7 +68,7 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     // 2) Transfer from Alice to Bob (depends on 1)
     // 3) Set metadata on Carol (independent)
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
@@ -520,9 +520,18 @@ fn governance_rules(validators: &[AccountId], allowed_ids: &BTreeSet<String>) ->
         .into_iter()
         .map(|ns| Name::from_str(ns).expect("namespace"))
         .collect::<BTreeSet<_>>();
+    let validator_bindings = validators
+        .iter()
+        .map(|validator| ManifestValidatorBinding {
+            validator: validator.clone(),
+            peer_id: PeerId::from(validator.signatory().clone()),
+            torii_url: None,
+        })
+        .collect();
     GovernanceRules {
         version: 1,
         validators: validators.to_vec(),
+        validator_bindings,
         quorum: Some(2),
         protected_namespaces,
         hooks: GovernanceHooks {
@@ -548,7 +557,7 @@ fn install_governance_manifest(
         LaneManifestStatus {
             lane: LaneId::new(1),
             alias: "governance".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Restricted,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -567,7 +576,7 @@ fn clear_governance_manifest(telemetry: &iroha_core::telemetry::StateTelemetry) 
         LaneManifestStatus {
             lane: LaneId::new(1),
             alias: "governance".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Restricted,
             storage: LaneStorageProfile::FullReplica,
             governance: Some("parliament".to_string()),
@@ -658,14 +667,12 @@ fn nexus_config_diff_counter_and_event_emitted() {
     .expect("dataspace catalog");
     let routing_policy = LaneRoutingPolicy {
         default_lane: LaneId::SINGLE,
-        default_dataspace: DataSpaceId::GLOBAL,
+        default_dataspace: DataSpaceId::UNIVERSAL,
         rules: vec![LaneRoutingRule {
             lane: LaneId::new(1),
             dataspace: Some(DataSpaceId::new(1)),
             matcher: LaneRoutingMatcher {
-                account: Some(
-                    "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".to_string(),
-                ),
+                account: Some("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_string()),
                 ..LaneRoutingMatcher::default()
             },
         }],
@@ -696,6 +703,8 @@ fn nexus_config_diff_counter_and_event_emitted() {
         storage: NexusStorage::default(),
         staking: NexusStaking::default(),
         fees: NexusFees::default(),
+        hf_shared_leases: Default::default(),
+        uploaded_models: Default::default(),
         endorsement: NexusEndorsement::default(),
         axt: NexusAxt::default(),
         lane_relay_emergency: LaneRelayEmergency::default(),

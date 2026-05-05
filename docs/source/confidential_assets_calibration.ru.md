@@ -89,11 +89,11 @@ translator: machine-google-reviewed
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
 Запишите значения непосредственно до и после калибровочной нагрузки. А
-достаточно одной команды для каждого актива; пример для `xor#wonderland`:
+достаточно одной команды для каждого актива; пример для `4cuvDVPuLBKJyN6dPbRQhmLh68sU`:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Прикрепите необработанные выходные данные (или снимок Prometheus) к билету калибровки, чтобы

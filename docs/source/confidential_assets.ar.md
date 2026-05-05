@@ -89,7 +89,7 @@ the active `AssetConfidentialPolicy`. تتضمن حمولة JSON دائمًا ا
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ lockstep.
 - التسلسل الهرمي لاشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (مفتاح الإلغاء)، `ivk` (مفتاح العرض الوارد)، `ovk` (مفتاح العرض الصادر)، `fvk`.
 - تستخدم حمولات الملاحظات المشفرة AEAD مع المفاتيح المشتركة المشتقة من ECDH؛ قد يتم إرفاق مفاتيح عرض المدقق الاختيارية بالمخرجات وفقًا لسياسة الأصول.
-- إضافات واجهة سطر الأوامر: `confidential create-keys`، و`confidential send`، و`confidential export-view-key`، وأدوات المدقق لفك تشفير المذكرات، ومساعد `iroha app zk envelope` لإنتاج/فحص أظرف المذكرات Norito دون الاتصال بالإنترنت. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v1/confidential/derive-keyset`، مما يؤدي إلى إرجاع كلا النموذجين السداسي وbase64 حتى تتمكن المحافظ من جلب التسلسلات الهرمية الرئيسية برمجيًا.
+- إضافات واجهة سطر الأوامر: `confidential create-keys`، و`confidential send`، و`confidential export-view-key`، وأدوات المدقق لفك تشفير المذكرات، ومساعد `iroha app zk envelope` لإنتاج/فحص أظرف المذكرات Norito دون الاتصال بالإنترنت. يعرض
 
 ## الغاز والحدود وضوابط DoS
 - جدول الغاز الحتمي:
@@ -391,7 +391,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -423,8 +423,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -455,7 +455,7 @@ await new ToriiClient({ baseUrl: "https://torii" }).submitTransaction(signed);
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Pair this with `rg 'iroha_confidential_tree_depth'` on the same scrape to confirm that depth grows with new commitments while eviction counters only increase when the history caps trim entries. يجب أن تتوافق هذه القيم مع تصدير لوحة المعلومات Grafana التي ترفقها بحزم أدلة الحوكمة.

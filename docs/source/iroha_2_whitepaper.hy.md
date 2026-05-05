@@ -113,9 +113,10 @@ Iroha գործընկերները պահպանում են պատվիրված տո
 
 `iroha_data_model` արկղը սահմանում է բոլոր մատյան առարկաները, հրահանգները, հարցումները և իրադարձությունները: Առանձնահատկություններ.
 
-- **Դոմենները, հաշիվները և ակտիվները** օգտագործում են կանոնական I105 հաշվի ID-ներ (նախընտրելի); `name@domain`-ը մնում է երթուղի
-  alias, երբ բացահայտորեն մատակարարվում է: Մետատվյալները դետերմինիստական ​​են (`Metadata` քարտեզ): Թվային ակտիվները աջակցում են ֆիքսված կետին
-  գործողություններ; NFT-ները կրում են կամայական կառուցվածքային մետատվյալներ:
+- **Domains, accounts, and assets** use canonical I105 account ids and canonical Base58 asset ids. Account aliases are separate on-chain
+  bindings in `name@dataspace` / `name@domain.dataspace` form that resolve to I105 account ids, and asset aliases are separate on-chain bindings in `name#dataspace` / `name#domain.dataspace` form that resolve to canonical Base58 asset ids. Metadata is deterministic (`Metadata` map). Numeric assets support fixed-point
+  operations; NFTs carry arbitrary structured metadata.
+
 - **Դերերն ու թույլտվությունները** օգտագործում են Norito թվարկված նշաններ, որոնք ուղղակիորեն քարտեզագրվում են կատարողի ստուգումներին:
 - **Սադրիչները** (ժամանակի վրա հիմնված, բլոկների վրա հիմնված կամ պրեդիկատների վրա հիմնված) թողարկում են որոշիչ գործարքներ շղթայի միջոցով
   կատարող.

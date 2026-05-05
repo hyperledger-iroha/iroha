@@ -11,9 +11,7 @@ import { AccountAddress } from "../src/address.js";
 import { makeNativeTest } from "./helpers/native.js";
 
 const BASE_URL = "https://example.test";
-const CANONICAL_AUTHORITY = AccountAddress.fromAccount({
-  domain: "wonderland",
-  publicKey: Buffer.from(
+const CANONICAL_AUTHORITY = AccountAddress.fromAccount({ publicKey: Buffer.from(
     "CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     "hex",
   ),

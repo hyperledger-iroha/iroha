@@ -1,6 +1,122 @@
+import CryptoKit
 import Foundation
 
 public let ToriiPdpCommitmentHeader = "sora-pdp-commitment"
+public let ToriiAuthorizationHeader = "Authorization"
+public let ToriiAPITokenHeader = "X-API-Token"
+public let ToriiAccountIdHeader = "X-Account-Id"
+public let ToriiDataspaceIdHeader = "X-Dataspace-Id"
+
+public struct ToriiClientAuthentication: Equatable, Sendable {
+    public let headers: [String: String]
+
+    public init(headers: [String: String] = [:]) {
+        self.headers = Self.normalizedHeaders(headers)
+    }
+
+    public static func bearerToken(
+        _ token: String,
+        accountId: String,
+        dataspaceId: String? = nil,
+        apiToken: String? = nil,
+        additionalHeaders: [String: String] = [:]
+    ) throws -> ToriiClientAuthentication {
+        var headers = normalizedHeaders(additionalHeaders)
+        setHeader(
+            &headers,
+            key: ToriiAuthorizationHeader,
+            value: "Bearer \(try requiredHeaderValue(token, field: "token"))"
+        )
+        setHeader(
+            &headers,
+            key: ToriiAccountIdHeader,
+            value: try requiredHeaderValue(accountId, field: "accountId")
+        )
+        if let dataspaceId = try optionalHeaderValue(dataspaceId, field: "dataspaceId") {
+            setHeader(&headers, key: ToriiDataspaceIdHeader, value: dataspaceId)
+        }
+        if let apiToken = try optionalHeaderValue(apiToken, field: "apiToken") {
+            setHeader(&headers, key: ToriiAPITokenHeader, value: apiToken)
+        }
+        return ToriiClientAuthentication(headers: headers)
+    }
+
+    public static func authorizationHeader(
+        _ value: String,
+        accountId: String,
+        dataspaceId: String? = nil,
+        apiToken: String? = nil,
+        additionalHeaders: [String: String] = [:]
+    ) throws -> ToriiClientAuthentication {
+        var headers = normalizedHeaders(additionalHeaders)
+        setHeader(
+            &headers,
+            key: ToriiAuthorizationHeader,
+            value: try requiredHeaderValue(value, field: "authorizationHeader")
+        )
+        setHeader(
+            &headers,
+            key: ToriiAccountIdHeader,
+            value: try requiredHeaderValue(accountId, field: "accountId")
+        )
+        if let dataspaceId = try optionalHeaderValue(dataspaceId, field: "dataspaceId") {
+            setHeader(&headers, key: ToriiDataspaceIdHeader, value: dataspaceId)
+        }
+        if let apiToken = try optionalHeaderValue(apiToken, field: "apiToken") {
+            setHeader(&headers, key: ToriiAPITokenHeader, value: apiToken)
+        }
+        return ToriiClientAuthentication(headers: headers)
+    }
+
+    fileprivate static func normalizedHeaders(_ headers: [String: String]) -> [String: String] {
+        var normalized: [String: String] = [:]
+        for (key, value) in headers {
+            setHeader(&normalized, key: key, value: value)
+        }
+        return normalized
+    }
+
+    fileprivate static func setHeader(_ headers: inout [String: String], key: String, value: String?) {
+        let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else { return }
+        let canonical = canonicalHeaderKey(trimmedKey)
+        let lower = canonical.lowercased()
+        headers = headers.filter { $0.key.lowercased() != lower }
+        if let value {
+            headers[canonical] = value
+        }
+    }
+
+    fileprivate static func canonicalHeaderKey(_ key: String) -> String {
+        switch key.lowercased() {
+        case "authorization": return ToriiAuthorizationHeader
+        case "x-api-token": return ToriiAPITokenHeader
+        case "x-account-id": return ToriiAccountIdHeader
+        case "x-dataspace-id": return ToriiDataspaceIdHeader
+        case "content-type": return "Content-Type"
+        case "accept": return "Accept"
+        default: return key
+        }
+    }
+
+    private static func requiredHeaderValue(_ value: String, field: String) throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+        }
+        guard !trimmed.contains(where: { $0 == "\n" || $0 == "\r" }) else {
+            throw ToriiClientError.invalidPayload("\(field) must not contain newline characters.")
+        }
+        return trimmed
+    }
+
+    private static func optionalHeaderValue(_ value: String?, field: String) throws -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return try requiredHeaderValue(trimmed, field: field)
+    }
+}
 
 public func decodePdpCommitmentHeader(_ headers: [String: String]) throws -> Data? {
     guard !headers.isEmpty else { return nil }
@@ -38,88 +154,325 @@ fileprivate func normalizeToriiAccountIdQueryValue(_ raw: String, field: String)
         throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
     }
     if trimmed.contains("@") {
+        return try normalizeToriiAccountAliasLiteral(trimmed, field: field)
+    }
+    if trimmed.contains("%") || trimmed.contains("/") || trimmed.contains("?") || trimmed.contains("#") {
         throw ToriiClientError.invalidPayload(
             "\(field) must be an encoded account id (i105)."
         )
     }
-    let address = try AccountAddress.parseEncoded(trimmed)
-    return try address.toI105(networkPrefix: 0x02F1)
+    if let address = try? AccountAddress.parseEncoded(trimmed) {
+        return try address.toI105(networkPrefix: 0x02F1)
+    }
+    throw ToriiClientError.invalidPayload(
+        "\(field) must be an encoded account id (i105)."
+    )
 }
 
-fileprivate func normalizeToriiAssetIdQueryValue(_ raw: String, field: String) throws -> String {
+fileprivate func normalizeToriiParticipantQueryValue(_ raw: String, field: String) throws -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
         throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
     }
-    guard trimmed.lowercased().hasPrefix("norito:") else {
-        throw ToriiClientError.invalidPayload("\(field) must use encoded `norito:<hex>` form.")
+    guard !trimmed.contains(where: \.isWhitespace),
+          !trimmed.contains("%"),
+          !trimmed.contains("/"),
+          !trimmed.contains("?"),
+          !trimmed.contains("#")
+    else {
+        throw ToriiClientError.invalidPayload("\(field) must not contain whitespace or URL control characters.")
     }
-    let payload = String(trimmed.dropFirst("norito:".count))
-    guard !payload.isEmpty,
-          payload.count.isMultiple(of: 2),
-          Data(hexString: payload) != nil else {
-        throw ToriiClientError.invalidPayload("\(field) must use encoded `norito:<hex>` form.")
+    if trimmed.contains("@") {
+        return try normalizeToriiAccountAliasLiteral(trimmed, field: field)
     }
-    return "norito:\(payload.lowercased())"
+    if let address = try? AccountAddress.parseEncoded(trimmed) {
+        return try address.toI105(networkPrefix: 0x02F1)
+    }
+    return trimmed
 }
 
-fileprivate func decodeToriiAssetIdFields(_ raw: String) -> (assetDefinitionId: String?, accountId: String?) {
-    let canonical: String
-    if let normalized = try? normalizeToriiAssetIdQueryValue(raw, field: "asset_id") {
-        canonical = normalized
-    } else {
-        canonical = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+fileprivate func normalizeToriiAccountAliasLiteral(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
     }
-    guard !canonical.isEmpty,
-          let payload = NoritoNativeBridge.shared.decodeAssetId(canonical),
-          let json = payload.data(using: .utf8)
+    guard !trimmed.contains(where: \.isWhitespace) else {
+        throw ToriiClientError.invalidPayload("\(field) must not contain whitespace.")
+    }
+    guard !trimmed.contains("%"),
+          !trimmed.contains("/"),
+          !trimmed.contains("?"),
+          !trimmed.contains("#")
     else {
-        return (nil, nil)
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use name@dataspace or name@domain.dataspace form."
+        )
+    }
+    let components = trimmed.split(separator: "@", omittingEmptySubsequences: false)
+    let scopeComponents = components.count == 2
+        ? components[1].split(separator: ".", omittingEmptySubsequences: false)
+        : []
+    guard components.count == 2,
+          !components[0].isEmpty,
+          !components[1].isEmpty,
+          (1...2).contains(scopeComponents.count),
+          !scopeComponents.contains(where: \.isEmpty)
+    else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use name@dataspace or name@domain.dataspace form."
+        )
+    }
+    return trimmed
+}
+
+fileprivate func normalizeToriiContractAliasLiteral(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    }
+    guard !trimmed.contains(where: \.isWhitespace) else {
+        throw ToriiClientError.invalidPayload("\(field) must not contain whitespace.")
+    }
+    guard !trimmed.contains("%"),
+          !trimmed.contains("/"),
+          !trimmed.contains("?"),
+          !trimmed.contains("#"),
+          !trimmed.contains("@")
+    else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use name::dataspace or name::domain.dataspace form."
+        )
+    }
+    let components = trimmed.components(separatedBy: "::")
+    guard components.count == 2,
+          !components[0].isEmpty,
+          !components[1].isEmpty
+    else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use name::dataspace or name::domain.dataspace form."
+        )
+    }
+    let scopeComponents = components[1].split(separator: ".", omittingEmptySubsequences: false)
+    guard (1...2).contains(scopeComponents.count),
+          !scopeComponents.contains(where: \.isEmpty)
+    else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use name::dataspace or name::domain.dataspace form."
+        )
+    }
+    return trimmed
+}
+
+fileprivate func normalizeToriiContractAddressLiteral(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    }
+    guard !trimmed.contains(where: \.isWhitespace),
+          !trimmed.contains("%"),
+          !trimmed.contains("/"),
+          !trimmed.contains("?"),
+          !trimmed.contains("#")
+    else {
+        throw ToriiClientError.invalidPayload("\(field) must be a canonical contract address.")
+    }
+    return trimmed
+}
+
+fileprivate func normalizeToriiContractTargetSelector(contractAddress: String?,
+                                                      contractAlias: String?,
+                                                      field: String) throws -> (contractAddress: String?, contractAlias: String?) {
+    let normalizedContractAddress = try contractAddress.map {
+        try normalizeToriiContractAddressLiteral($0, field: "\(field).contract_address")
+    }
+    let normalizedContractAlias = try contractAlias.map {
+        try normalizeToriiContractAliasLiteral($0, field: "\(field).contract_alias")
+    }
+    guard (normalizedContractAddress == nil) != (normalizedContractAlias == nil) else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) requires exactly one of contract_address or contract_alias."
+        )
+    }
+    return (normalizedContractAddress, normalizedContractAlias)
+}
+
+fileprivate func normalizeToriiAssetDefinitionIdValue(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    }
+    guard !trimmed.contains(where: \.isWhitespace),
+          !trimmed.contains("@"),
+          !trimmed.contains("#"),
+          !trimmed.contains("%"),
+          !trimmed.contains("/"),
+          !trimmed.contains("?"),
+          !trimmed.contains(":"),
+          AssetDefinitionAddress.decode(trimmed) != nil else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use a canonical unprefixed Base58 asset definition id."
+        )
+    }
+    return trimmed
+}
+
+fileprivate func normalizeToriiAssetAliasLiteral(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    }
+    guard !trimmed.contains(where: \.isWhitespace) else {
+        throw ToriiClientError.invalidPayload("\(field) must not contain whitespace.")
+    }
+    let components = trimmed.split(separator: "#", omittingEmptySubsequences: false)
+    let scopeComponents = components.count == 2
+        ? components[1].split(separator: ".", omittingEmptySubsequences: false)
+        : []
+    guard components.count == 2,
+          !components[0].isEmpty,
+          !components[1].isEmpty,
+          (1...2).contains(scopeComponents.count),
+          !scopeComponents.contains(where: \.isEmpty),
+          !components[0].contains("@")
+    else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use name#dataspace or name#domain.dataspace form."
+        )
+    }
+    return trimmed.lowercased()
+}
+
+fileprivate func normalizeToriiAssetIdQueryValue(_ raw: String, field: String) throws -> String {
+    try normalizeToriiAssetDefinitionIdValue(raw, field: field)
+}
+
+fileprivate func normalizeToriiAssetSelectorQueryValue(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    }
+    if AssetDefinitionAddress.decode(trimmed) != nil {
+        return try normalizeToriiAssetDefinitionIdValue(trimmed, field: field)
+    }
+    return try normalizeToriiAssetAliasLiteral(trimmed, field: field)
+}
+
+fileprivate func canonicalPublicAssetDefinitionLiteral(_ raw: String?) -> String? {
+    let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard !trimmed.isEmpty else {
+        return nil
+    }
+    guard !trimmed.contains("#"),
+          AssetDefinitionAddress.decode(trimmed) != nil else {
+        return nil
+    }
+    return trimmed
+}
+
+fileprivate struct ToriiAnyCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int?
+
+    init(_ stringValue: String) {
+        self.stringValue = stringValue
+        intValue = nil
     }
 
-    struct DecodedAssetId: Decodable {
-        let asset_definition_id: String
-        let account_id: String
+    init?(stringValue: String) {
+        self.init(stringValue)
     }
 
-    guard let decoded = try? JSONDecoder().decode(DecodedAssetId.self, from: json) else {
-        return (nil, nil)
+    init?(intValue: Int) {
+        stringValue = String(intValue)
+        self.intValue = intValue
     }
-    let definition = decoded.asset_definition_id.trimmingCharacters(in: .whitespacesAndNewlines)
-    let account = decoded.account_id.trimmingCharacters(in: .whitespacesAndNewlines)
-    return (definition.isEmpty ? nil : definition, account.isEmpty ? nil : account)
+}
+
+fileprivate func decodeOptionalStringValue(
+    from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
+    keys: [String]
+) throws -> String? {
+    for key in keys {
+        let codingKey = ToriiAnyCodingKey(key)
+        guard container.contains(codingKey) else {
+            continue
+        }
+        let value = try container.decodeIfPresent(String.self, forKey: codingKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value, !value.isEmpty {
+            return value
+        }
+    }
+    return nil
+}
+
+fileprivate func decodeOptionalStringArrayValue(
+    from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
+    keys: [String]
+) throws -> [String] {
+    for key in keys {
+        let codingKey = ToriiAnyCodingKey(key)
+        guard container.contains(codingKey) else {
+            continue
+        }
+        let values = try container.decodeIfPresent([String].self, forKey: codingKey) ?? []
+        let normalized = values.compactMap { value -> String? in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if !normalized.isEmpty {
+            return normalized
+        }
+    }
+    return []
+}
+
+fileprivate func decodeRequiredStringValue(
+    from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
+    keys: [String],
+    decoder: Decoder,
+    debugDescription: String
+) throws -> String {
+    if let value = try decodeOptionalStringValue(from: container, keys: keys) {
+        return value
+    }
+    throw DecodingError.keyNotFound(
+        ToriiAnyCodingKey(keys[0]),
+        DecodingError.Context(
+            codingPath: decoder.codingPath,
+            debugDescription: debugDescription
+        )
+    )
 }
 
 public struct ToriiAssetBalance: Decodable, Sendable {
-    public let asset_id: String
-    public let asset_definition_id: String?
-    public let account_id: String?
-    public let asset_name: String?
-    public let asset_alias: String?
+    public let asset: String
+    public let accountId: String?
+    public let scope: String
+    public let assetName: String?
+    public let assetAlias: String?
     public let quantity: String
 
     private enum CodingKeys: String, CodingKey {
-        case asset_id
-        case asset_definition_id
-        case account_id
-        case asset_name
-        case asset_alias
+        case asset
+        case assetId = "asset_id"
+        case accountId = "account_id"
+        case scope
+        case assetName = "asset_name"
+        case assetAlias = "asset_alias"
         case quantity
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let sourceAssetId = try container.decode(String.self, forKey: .asset_id)
-        self.asset_id = sourceAssetId
-        self.asset_name = try container.decodeIfPresent(String.self, forKey: .asset_name)
-        self.asset_alias = try container.decodeIfPresent(String.self, forKey: .asset_alias)
+        self.asset =
+            try container.decodeIfPresent(String.self, forKey: .asset)
+                ?? container.decode(String.self, forKey: .assetId)
+        self.accountId = try container.decodeIfPresent(String.self, forKey: .accountId)
+        self.scope = try container.decodeIfPresent(String.self, forKey: .scope) ?? "account"
+        self.assetName = try container.decodeIfPresent(String.self, forKey: .assetName)
+        self.assetAlias = try container.decodeIfPresent(String.self, forKey: .assetAlias)
         self.quantity = try container.decode(String.self, forKey: .quantity)
-
-        let decoded = decodeToriiAssetIdFields(sourceAssetId)
-        let providedDefinition = try container.decodeIfPresent(String.self, forKey: .asset_definition_id)
-        let providedAccount = try container.decodeIfPresent(String.self, forKey: .account_id)
-        self.asset_definition_id = providedDefinition ?? decoded.assetDefinitionId
-        self.account_id = providedAccount ?? decoded.accountId
     }
 }
 
@@ -130,6 +483,7 @@ public struct ToriiAssetAliasResolution: Decodable, Sendable {
     public let description: String?
     public let logo: String?
     public let source: String?
+    public let aliasBinding: ToriiAssetDefinitionAliasBinding?
 
     private enum CodingKeys: String, CodingKey {
         case alias
@@ -138,12 +492,42 @@ public struct ToriiAssetAliasResolution: Decodable, Sendable {
         case description
         case logo
         case source
+        case aliasBinding = "alias_binding"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        alias = try container.decode(String.self, forKey: .alias)
+        let rawAssetDefinitionId = try container.decode(String.self, forKey: .assetDefinitionId)
+        assetDefinitionId = canonicalPublicAssetDefinitionLiteral(rawAssetDefinitionId) ?? rawAssetDefinitionId
+        assetName = try container.decode(String.self, forKey: .assetName)
+        description = try container.decodeIfPresent(String.self, forKey: .description)
+        logo = try container.decodeIfPresent(String.self, forKey: .logo)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+        aliasBinding = try container.decodeIfPresent(ToriiAssetDefinitionAliasBinding.self, forKey: .aliasBinding)
+    }
+}
+
+public struct ToriiAssetDefinitionAliasBinding: Decodable, Sendable {
+    public let alias: String
+    public let status: String
+    public let leaseExpiryMs: UInt64?
+    public let graceUntilMs: UInt64?
+    public let boundAtMs: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case alias
+        case status
+        case leaseExpiryMs = "lease_expiry_ms"
+        case graceUntilMs = "grace_until_ms"
+        case boundAtMs = "bound_at_ms"
     }
 }
 
 public struct ToriiAccountAliasResolution: Decodable, Sendable {
     public let alias: String
     public let accountId: String
+    public let accountIds: [String]
     public let index: UInt64?
     public let source: String?
 
@@ -152,6 +536,1650 @@ public struct ToriiAccountAliasResolution: Decodable, Sendable {
         case accountId = "account_id"
         case index
         case source
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let anyContainer = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
+        alias = try container.decode(String.self, forKey: .alias)
+        let scalarAccountId = try decodeOptionalStringValue(
+            from: anyContainer,
+            keys: ["account_id", "accountId"]
+        )
+        let arrayAccountIds = try decodeOptionalStringArrayValue(
+            from: anyContainer,
+            keys: ["account_ids", "accountIds"]
+        )
+        let resolvedAccountIds = ([scalarAccountId].compactMap { $0 } + arrayAccountIds)
+            .reduce(into: [String]()) { values, value in
+                guard !values.contains(value) else { return }
+                values.append(value)
+            }
+        guard let primaryAccountId = resolvedAccountIds.first else {
+            throw DecodingError.keyNotFound(
+                ToriiAnyCodingKey("account_id"),
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "account alias resolution must include account_id or account_ids."
+                )
+            )
+        }
+        accountId = primaryAccountId
+        accountIds = resolvedAccountIds
+        index = try container.decodeIfPresent(UInt64.self, forKey: .index)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
+    }
+}
+
+public enum ToriiIdentifierNormalization: String, Codable, Sendable {
+    case exact
+    case lowercaseTrimmed = "lowercase_trimmed"
+    case phoneE164 = "phone_e164"
+    case emailAddress = "email_address"
+    case accountNumber = "account_number"
+
+    public func normalize(_ value: String, field: String = "identifier") throws -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+        }
+        switch self {
+        case .exact:
+            return trimmed
+        case .lowercaseTrimmed:
+            return trimmed.lowercased()
+        case .phoneE164:
+            let compact = trimmed.filter { !" \t\n\r-().".contains($0) }
+            let withoutPrefix: Substring
+            if compact.hasPrefix("+") {
+                withoutPrefix = compact.dropFirst()
+            } else if compact.hasPrefix("00") {
+                withoutPrefix = compact.dropFirst(2)
+            } else {
+                withoutPrefix = Substring(compact)
+            }
+            guard !withoutPrefix.isEmpty, withoutPrefix.allSatisfy(\.isNumber) else {
+                throw ToriiClientError.invalidPayload("\(field) must contain digits with optional leading `+` or `00`.")
+            }
+            return "+\(withoutPrefix)"
+        case .emailAddress:
+            let lowered = trimmed.lowercased()
+            let components = lowered.split(separator: "@", omittingEmptySubsequences: false)
+            guard components.count == 2,
+                  !components[0].isEmpty,
+                  !components[1].isEmpty
+            else {
+                throw ToriiClientError.invalidPayload("\(field) must contain exactly one `@` with non-empty local and domain parts.")
+            }
+            return lowered
+        case .accountNumber:
+            let normalized = trimmed
+                .filter { !" \t\n\r-".contains($0) }
+                .uppercased()
+            guard !normalized.isEmpty,
+                  normalized.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "/" || $0 == ".") })
+            else {
+                throw ToriiClientError.invalidPayload("\(field) must contain ASCII alphanumeric characters, `_`, `/`, or `.`.")
+            }
+            return normalized
+        }
+    }
+}
+
+public struct ToriiIdentifierPolicySummary: Decodable, Sendable {
+    public let policyId: String
+    public let owner: String
+    public let active: Bool
+    public let normalization: ToriiIdentifierNormalization
+    public let resolverPublicKey: String
+    public let backend: String
+    public let inputEncryption: String?
+    public let inputEncryptionPublicParameters: String?
+    public let inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters?
+    public let ramFheProfile: ToriiIdentifierRamFheProfile?
+    public let proofVerifier: ToriiRamLfeProofVerifierMetadata?
+    public let note: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case policyId = "policy_id"
+        case owner
+        case active
+        case normalization
+        case resolverPublicKey = "resolver_public_key"
+        case backend
+        case inputEncryption = "input_encryption"
+        case inputEncryptionPublicParameters = "input_encryption_public_parameters"
+        case inputEncryptionPublicParametersDecoded = "input_encryption_public_parameters_decoded"
+        case ramFheProfile = "ram_fhe_profile"
+        case proofVerifier = "proof_verifier"
+        case note
+    }
+}
+
+public struct ToriiIdentifierPolicyListResponse: Decodable, Sendable {
+    public let total: UInt64
+    public let items: [ToriiIdentifierPolicySummary]
+}
+
+public struct ToriiRamLfeProgramPolicySummary: Decodable, Sendable {
+    public let programId: String
+    public let owner: String
+    public let active: Bool
+    public let resolverPublicKey: String
+    public let backend: String
+    public let verificationMode: String
+    public let inputEncryption: String?
+    public let inputEncryptionPublicParameters: String?
+    public let inputEncryptionPublicParametersDecoded: ToriiIdentifierBfvPublicParameters?
+    public let ramFheProfile: ToriiIdentifierRamFheProfile?
+    public let proofVerifier: ToriiRamLfeProofVerifierMetadata?
+    public let note: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case programId = "program_id"
+        case owner
+        case active
+        case resolverPublicKey = "resolver_public_key"
+        case backend
+        case verificationMode = "verification_mode"
+        case inputEncryption = "input_encryption"
+        case inputEncryptionPublicParameters = "input_encryption_public_parameters"
+        case inputEncryptionPublicParametersDecoded = "input_encryption_public_parameters_decoded"
+        case ramFheProfile = "ram_fhe_profile"
+        case proofVerifier = "proof_verifier"
+        case note
+    }
+}
+
+public struct ToriiRamLfeProgramPolicyListResponse: Decodable, Sendable {
+    public let total: UInt64
+    public let items: [ToriiRamLfeProgramPolicySummary]
+}
+
+public struct ToriiIdentifierBfvParameters: Decodable, Sendable {
+    public let polynomialDegree: UInt32
+    public let plaintextModulus: UInt64
+    public let ciphertextModulus: UInt64
+    public let decompositionBaseLog: UInt8
+
+    private enum CodingKeys: String, CodingKey {
+        case polynomialDegree = "polynomial_degree"
+        case plaintextModulus = "plaintext_modulus"
+        case ciphertextModulus = "ciphertext_modulus"
+        case decompositionBaseLog = "decomposition_base_log"
+    }
+}
+
+public struct ToriiIdentifierBfvPublicKey: Decodable, Sendable {
+    public let b: [UInt64]
+    public let a: [UInt64]
+}
+
+public struct ToriiIdentifierBfvPublicParameters: Decodable, Sendable {
+    public let parameters: ToriiIdentifierBfvParameters
+    public let publicKey: ToriiIdentifierBfvPublicKey
+    public let maxInputBytes: UInt16
+
+    private enum CodingKeys: String, CodingKey {
+        case parameters
+        case publicKey = "public_key"
+        case maxInputBytes = "max_input_bytes"
+    }
+}
+
+public enum ToriiIdentifierRamFheEncryptedInputMode: String, Codable, Sendable {
+    case resolverCanonicalizedEnvelopeV1 = "resolver_canonicalized_envelope_v1"
+
+    private struct TaggedModePayload: Decodable {
+        let mode: String
+    }
+
+    private static func normalizedMode(from raw: String) -> ToriiIdentifierRamFheEncryptedInputMode? {
+        switch raw.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "resolver_canonicalized_envelope_v1", "ResolverCanonicalizedEnvelopeV1":
+            return .resolverCanonicalizedEnvelopeV1
+        default:
+            return nil
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let rawValue = try? container.decode(String.self),
+           let mode = Self.normalizedMode(from: rawValue) {
+            self = mode
+            return
+        }
+        if let taggedPayload = try? container.decode(TaggedModePayload.self),
+           let mode = Self.normalizedMode(from: taggedPayload.mode) {
+            self = mode
+            return
+        }
+        throw DecodingError.dataCorruptedError(
+            in: container,
+            debugDescription: "Unsupported ram_fhe encrypted input mode."
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public struct ToriiIdentifierRamFheProfile: Codable, Sendable {
+    public let profileVersion: UInt8
+    public let registerCount: UInt16
+    public let memoryLaneCount: UInt16
+    public let ciphertextMulPerStep: UInt8
+    public let encryptedInputMode: ToriiIdentifierRamFheEncryptedInputMode
+    public let minCiphertextModulus: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case profileVersion = "profile_version"
+        case registerCount = "register_count"
+        case memoryLaneCount = "memory_lane_count"
+        case ciphertextMulPerStep = "ciphertext_mul_per_step"
+        case encryptedInputMode = "encrypted_input_mode"
+        case minCiphertextModulus = "min_ciphertext_modulus"
+    }
+}
+
+public struct ToriiRamLfeProofVerifierMetadata: Decodable, Sendable {
+    public let proofBackend: String
+    public let circuitId: String
+    public let publicInputsSchemaHash: String
+    public let verifyingKeyBytesB64: String
+
+    private enum CodingKeys: String, CodingKey {
+        case proofBackend = "proof_backend"
+        case circuitId = "circuit_id"
+        case publicInputsSchemaHash = "public_inputs_schema_hash"
+        case verifyingKeyBytesB64 = "verifying_key_bytes_b64"
+    }
+}
+
+fileprivate enum ToriiIdentifierReceiptWireValue {
+    static func normalizedHash(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.lowercased()
+    }
+
+    static func normalizedOpaqueId(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        guard lower.hasPrefix("opaque:") else {
+            return lower
+        }
+        return "opaque:\(normalizedHash(String(trimmed.dropFirst(7))))"
+    }
+
+    static func normalizedUaid(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        guard lower.hasPrefix("uaid:") else {
+            return lower
+        }
+        return "uaid:\(normalizedHash(String(trimmed.dropFirst(5))))"
+    }
+
+    static func normalizedPolicyId<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K
+    ) throws -> String {
+        try container.decode(String.self, forKey: key)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func normalizedProgramId<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K
+    ) throws -> String? {
+        guard container.contains(key) else {
+            return nil
+        }
+        return try container.decode(String.self, forKey: key)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func normalizedVerificationMode<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K
+    ) throws -> String? {
+        guard container.contains(key) else {
+            return nil
+        }
+        return try container.decode(String.self, forKey: key)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    static func normalizedHashValue<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K
+    ) throws -> String? {
+        guard container.contains(key) else {
+            return nil
+        }
+        return normalizedHash(try container.decode(String.self, forKey: key))
+    }
+
+    static func normalizedOpaqueId<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K
+    ) throws -> String {
+        normalizedOpaqueId(try container.decode(String.self, forKey: key))
+    }
+
+    static func normalizedUaid<K: CodingKey>(
+        from container: KeyedDecodingContainer<K>,
+        forKey key: K
+    ) throws -> String {
+        normalizedUaid(try container.decode(String.self, forKey: key))
+    }
+}
+
+enum ToriiIdentifierReceiptCanonicalEncoder {
+    static func canonicalPayloadBytes(
+        for receipt: ToriiIdentifierResolutionReceipt
+    ) throws -> Data {
+        try encodePayload(receipt.payload)
+    }
+
+    static func encodePayload(_ payload: ToriiIdentifierResolutionPayload) throws -> Data {
+        let (policyKind, businessRule) = try parsePolicyId(payload.policyId)
+        let execution = payload.execution
+
+        var policyId = OfflineCompactNoritoWriter()
+        policyId.writeField(OfflineCompactNorito.encodeString(policyKind))
+        policyId.writeField(OfflineCompactNorito.encodeString(businessRule))
+
+        var programId = OfflineCompactNoritoWriter()
+        programId.writeField(
+            OfflineCompactNorito.encodeString(
+                try normalizedNonEmpty(
+                    execution.programId,
+                    field: "payload.execution.programId"
+                )
+            )
+        )
+
+        var executionPayload = OfflineCompactNoritoWriter()
+        executionPayload.writeField(programId.data)
+        executionPayload.writeField(
+            try encodeHash(
+                execution.programDigest,
+                field: "payload.execution.programDigest"
+            )
+        )
+        executionPayload.writeField(
+            OfflineCompactNorito.encodeUInt32(try backendTag(execution.backend))
+        )
+        executionPayload.writeField(
+            OfflineCompactNorito.encodeUInt32(
+                try verificationModeTag(execution.verificationMode)
+            )
+        )
+        executionPayload.writeField(
+            try encodeHash(
+                execution.outputHash,
+                field: "payload.execution.outputHash"
+            )
+        )
+        executionPayload.writeField(
+            try encodeHash(
+                execution.associatedDataHash,
+                field: "payload.execution.associatedDataHash"
+            )
+        )
+        executionPayload.writeField(OfflineCompactNorito.encodeUInt64(execution.executedAtMs))
+        executionPayload.writeField(
+            try OfflineCompactNorito.encodeOption(
+                execution.expiresAtMs,
+                encode: OfflineCompactNorito.encodeUInt64
+            )
+        )
+
+        var payloadWriter = OfflineCompactNoritoWriter()
+        payloadWriter.writeField(policyId.data)
+        payloadWriter.writeField(executionPayload.data)
+        payloadWriter.writeField(
+            try encodePrefixedHash(
+                payload.opaqueId,
+                prefix: "opaque:",
+                field: "payload.opaqueId"
+            )
+        )
+        payloadWriter.writeField(
+            try encodeHash(payload.receiptHash, field: "payload.receiptHash")
+        )
+        payloadWriter.writeField(
+            try encodePrefixedHash(
+                payload.uaid,
+                prefix: "uaid:",
+                field: "payload.uaid"
+            )
+        )
+        payloadWriter.writeField(try encodeAccountId(payload.accountId))
+        return payloadWriter.data
+    }
+
+    private static func parsePolicyId(_ raw: String) throws -> (String, String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = trimmed.split(
+            separator: "#",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )
+        guard parts.count == 2 else {
+            throw ToriiClientError.invalidPayload(
+                "payload.policyId must use `kind#rule`."
+            )
+        }
+        let kind = try normalizedNonEmpty(String(parts[0]), field: "payload.policyId.kind")
+        let businessRule = try normalizedNonEmpty(
+            String(parts[1]),
+            field: "payload.policyId.businessRule"
+        )
+        return (kind, businessRule)
+    }
+
+    private static func normalizedNonEmpty(_ raw: String, field: String) throws -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ToriiClientError.invalidPayload("\(field) must not be empty.")
+        }
+        return trimmed
+    }
+
+    private static func encodeHash(_ raw: String, field: String) throws -> Data {
+        let normalized = ToriiIdentifierReceiptWireValue.normalizedHash(raw)
+        do {
+            return try OfflineCompactNorito.encodeHash(try decodeHex(normalized, field: field))
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "\(field) must be a canonical 32-byte Iroha hash."
+            )
+        }
+    }
+
+    private static func encodePrefixedHash(
+        _ raw: String,
+        prefix: String,
+        field: String
+    ) throws -> Data {
+        let normalized: String
+        switch prefix {
+        case "opaque:":
+            normalized = ToriiIdentifierReceiptWireValue.normalizedOpaqueId(raw)
+        case "uaid:":
+            normalized = ToriiIdentifierReceiptWireValue.normalizedUaid(raw)
+        default:
+            throw ToriiClientError.invalidPayload("Unsupported receipt hash prefix \(prefix).")
+        }
+        guard normalized.lowercased().hasPrefix(prefix) else {
+            throw ToriiClientError.invalidPayload("\(field) must use the \(prefix) prefix.")
+        }
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeField(try encodeHash(String(normalized.dropFirst(prefix.count)), field: field))
+        return writer.data
+    }
+
+    private static func decodeHex(_ raw: String, field: String) throws -> Data {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized: String
+        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+            normalized = String(trimmed.dropFirst(2))
+        } else {
+            normalized = trimmed
+        }
+        guard !normalized.isEmpty, let bytes = Data(hexString: normalized) else {
+            throw ToriiClientError.invalidPayload("\(field) must contain valid hexadecimal bytes.")
+        }
+        return bytes
+    }
+
+    private static func encodeAccountId(_ raw: String) throws -> Data {
+        do {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            let address = try AccountAddress.parseEncoded(trimmed, expectedPrefix: 0x02F1)
+            return try address.compactNoritoAccountControllerPayload()
+        } catch {
+            throw ToriiClientError.invalidPayload(
+                "payload.accountId must be a canonical account identifier."
+            )
+        }
+    }
+
+    private static func backendTag(_ raw: String) throws -> UInt32 {
+        switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "hkdf-sha3-512-prf-v1":
+            return 0
+        case "bfv-affine-sha3-256-v1":
+            return 1
+        case "bfv-programmed-sha3-256-v1":
+            return 2
+        default:
+            throw ToriiClientError.invalidPayload(
+                "Unsupported identifier receipt backend `\(raw)`."
+            )
+        }
+    }
+
+    private static func verificationModeTag(_ raw: String) throws -> UInt32 {
+        switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "signed":
+            return 0
+        case "proof":
+            return 1
+        default:
+            throw ToriiClientError.invalidPayload(
+                "Unsupported identifier receipt verification mode `\(raw)`."
+            )
+        }
+    }
+}
+
+public struct ToriiIdentifierResolutionExecutionPayload: Codable, Sendable {
+    public let programId: String
+    public let programDigest: String
+    public let backend: String
+    public let verificationMode: String
+    public let outputHash: String
+    public let associatedDataHash: String
+    public let executedAtMs: UInt64
+    public let expiresAtMs: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case programId = "program_id"
+        case programDigest = "program_digest"
+        case backend
+        case verificationMode = "verification_mode"
+        case outputHash = "output_hash"
+        case associatedDataHash = "associated_data_hash"
+        case executedAtMs = "executed_at_ms"
+        case expiresAtMs = "expires_at_ms"
+    }
+
+    public init(programId: String,
+                programDigest: String,
+                backend: String,
+                verificationMode: String,
+                outputHash: String,
+                associatedDataHash: String,
+                executedAtMs: UInt64,
+                expiresAtMs: UInt64?) {
+        self.programId = programId
+        self.programDigest = programDigest
+        self.backend = backend
+        self.verificationMode = verificationMode
+        self.outputHash = outputHash
+        self.associatedDataHash = associatedDataHash
+        self.executedAtMs = executedAtMs
+        self.expiresAtMs = expiresAtMs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard let programId = try ToriiIdentifierReceiptWireValue.normalizedProgramId(
+            from: container,
+            forKey: .programId
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.programId,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "payload.execution.program_id is required."
+                )
+            )
+        }
+        self.programId = programId
+        guard let programDigest = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
+            from: container,
+            forKey: .programDigest
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.programDigest,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "payload.execution.program_digest is required."
+                )
+            )
+        }
+        self.programDigest = programDigest
+        let backend = try container.decode(String.self, forKey: .backend)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !backend.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .backend,
+                in: container,
+                debugDescription: "payload.execution.backend must not be empty."
+            )
+        }
+        self.backend = backend
+        guard let verificationMode = try ToriiIdentifierReceiptWireValue.normalizedVerificationMode(
+            from: container,
+            forKey: .verificationMode
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.verificationMode,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "payload.execution.verification_mode is required."
+                )
+            )
+        }
+        self.verificationMode = verificationMode
+        guard let outputHash = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
+            from: container,
+            forKey: .outputHash
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.outputHash,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "payload.execution.output_hash is required."
+                )
+            )
+        }
+        self.outputHash = outputHash
+        guard let associatedDataHash = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
+            from: container,
+            forKey: .associatedDataHash
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.associatedDataHash,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "payload.execution.associated_data_hash is required."
+                )
+            )
+        }
+        self.associatedDataHash = associatedDataHash
+        executedAtMs = try container.decode(UInt64.self, forKey: .executedAtMs)
+        expiresAtMs = try container.decodeIfPresent(UInt64.self, forKey: .expiresAtMs)
+    }
+}
+
+public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
+    public let policyId: String
+    public let opaqueId: String
+    public let receiptHash: String
+    public let uaid: String
+    public let accountId: String
+    public let resolvedAtMs: UInt64
+    public let expiresAtMs: UInt64?
+    public let execution: ToriiIdentifierResolutionExecutionPayload
+
+    private enum CodingKeys: String, CodingKey {
+        case policyId = "policy_id"
+        case execution
+        case opaqueId = "opaque_id"
+        case receiptHash = "receipt_hash"
+        case uaid
+        case accountId = "account_id"
+        case resolvedAtMs = "resolved_at_ms"
+        case expiresAtMs = "expires_at_ms"
+    }
+
+    public init(policyId: String,
+                opaqueId: String,
+                receiptHash: String,
+                uaid: String,
+                accountId: String,
+                execution: ToriiIdentifierResolutionExecutionPayload) {
+        self.policyId = policyId
+        self.opaqueId = opaqueId
+        self.receiptHash = receiptHash
+        self.uaid = uaid
+        self.accountId = accountId
+        self.resolvedAtMs = execution.executedAtMs
+        self.expiresAtMs = execution.expiresAtMs
+        self.execution = execution
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        policyId = try ToriiIdentifierReceiptWireValue.normalizedPolicyId(
+            from: container,
+            forKey: .policyId
+        )
+        opaqueId = try ToriiIdentifierReceiptWireValue.normalizedOpaqueId(
+            from: container,
+            forKey: .opaqueId
+        )
+        guard let normalizedReceiptHash = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
+            from: container,
+            forKey: .receiptHash
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.receiptHash,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "payload.receipt_hash is required."
+                )
+            )
+        }
+        receiptHash = normalizedReceiptHash
+        uaid = try ToriiIdentifierReceiptWireValue.normalizedUaid(
+            from: container,
+            forKey: .uaid
+        )
+        accountId = try container.decode(String.self, forKey: .accountId)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !accountId.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .accountId,
+                in: container,
+                debugDescription: "payload.account_id must not be empty."
+            )
+        }
+        execution = try container.decode(
+            ToriiIdentifierResolutionExecutionPayload.self,
+            forKey: .execution
+        )
+        resolvedAtMs = execution.executedAtMs
+        expiresAtMs = execution.expiresAtMs
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(policyId, forKey: .policyId)
+        try container.encode(opaqueId, forKey: .opaqueId)
+        try container.encode(receiptHash, forKey: .receiptHash)
+        try container.encode(uaid, forKey: .uaid)
+        try container.encode(accountId, forKey: .accountId)
+        try container.encode(execution, forKey: .execution)
+    }
+}
+
+public struct ToriiIdentifierClaimRecord: Codable, Sendable {
+    public let policyId: String
+    public let opaqueId: String
+    public let receiptHash: String
+    public let uaid: String
+    public let accountId: String
+    public let verifiedAtMs: UInt64
+    public let expiresAtMs: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case policyId = "policy_id"
+        case opaqueId = "opaque_id"
+        case receiptHash = "receipt_hash"
+        case uaid
+        case accountId = "account_id"
+        case verifiedAtMs = "verified_at_ms"
+        case expiresAtMs = "expires_at_ms"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        policyId = try ToriiIdentifierReceiptWireValue.normalizedPolicyId(
+            from: container,
+            forKey: .policyId
+        )
+        opaqueId = try ToriiIdentifierReceiptWireValue.normalizedOpaqueId(
+            from: container,
+            forKey: .opaqueId
+        )
+        guard let normalizedReceiptHash = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
+            from: container,
+            forKey: .receiptHash
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.receiptHash,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "receipt_hash is required."
+                )
+            )
+        }
+        receiptHash = normalizedReceiptHash
+        uaid = try ToriiIdentifierReceiptWireValue.normalizedUaid(
+            from: container,
+            forKey: .uaid
+        )
+        accountId = try container.decode(String.self, forKey: .accountId)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !accountId.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .accountId,
+                in: container,
+                debugDescription: "account_id must not be empty."
+            )
+        }
+        verifiedAtMs = try container.decode(UInt64.self, forKey: .verifiedAtMs)
+        expiresAtMs = try container.decodeIfPresent(UInt64.self, forKey: .expiresAtMs)
+    }
+}
+
+public struct ToriiIdentifierReceiptAttestation: Codable, Sendable {
+    public let kind: String
+    public let signature: String?
+    public let proofBackend: String?
+    public let proofB64: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case signature
+        case proofBackend = "proof_backend"
+        case proofB64 = "proof_b64"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(String.self, forKey: .kind)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        signature = try container.decodeIfPresent(String.self, forKey: .signature)
+        proofBackend = try container.decodeIfPresent(String.self, forKey: .proofBackend)
+        proofB64 = try container.decodeIfPresent(String.self, forKey: .proofB64)
+        switch kind {
+        case "signed":
+            guard signature?.isEmpty == false, proofBackend == nil, proofB64 == nil else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .kind,
+                    in: container,
+                    debugDescription: "signed identifier receipt attestations require only signature."
+                )
+            }
+        case "proof":
+            guard signature == nil,
+                  proofBackend?.isEmpty == false,
+                  proofB64?.isEmpty == false else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .kind,
+                    in: container,
+                    debugDescription: "proof identifier receipt attestations require proof_backend and proof_b64."
+                )
+            }
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .kind,
+                in: container,
+                debugDescription: "identifier receipt attestation kind must be signed or proof."
+            )
+        }
+    }
+}
+
+public struct ToriiIdentifierResolutionReceipt: Codable, Sendable {
+    public let payload: ToriiIdentifierResolutionPayload
+    public let attestation: ToriiIdentifierReceiptAttestation
+
+    private enum CodingKeys: String, CodingKey {
+        case payload
+        case attestation
+    }
+
+    public var policyId: String { payload.policyId }
+    public var opaqueId: String { payload.opaqueId }
+    public var receiptHash: String { payload.receiptHash }
+    public var uaid: String { payload.uaid }
+    public var accountId: String { payload.accountId }
+    public var resolvedAtMs: UInt64 { payload.resolvedAtMs }
+    public var expiresAtMs: UInt64? { payload.expiresAtMs }
+    public var backend: String { payload.execution.backend }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        payload = try container.decode(ToriiIdentifierResolutionPayload.self, forKey: .payload)
+        attestation = try container.decode(ToriiIdentifierReceiptAttestation.self, forKey: .attestation)
+        _ = try ToriiIdentifierReceiptCanonicalEncoder.canonicalPayloadBytes(for: self)
+    }
+}
+
+public struct ToriiIdentifierLookupRequest: Encodable, Sendable {
+    public let policyId: String
+    public let input: String?
+    public let encryptedInputHex: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case policyId = "policy_id"
+        case input
+        case encryptedInputHex = "encrypted_input"
+    }
+
+    public static func plaintext(policyId: String, input: String) throws -> ToriiIdentifierLookupRequest {
+        let normalizedPolicyId = try ToriiRequestValidation.normalizedNonEmpty(policyId, field: "policyId")
+        let normalizedInput = try ToriiRequestValidation.normalizedNonEmpty(input, field: "input")
+        return ToriiIdentifierLookupRequest(policyId: normalizedPolicyId,
+                                            input: normalizedInput,
+                                            encryptedInputHex: nil)
+    }
+
+    public static func encrypted(policyId: String, encryptedInputHex: String) throws -> ToriiIdentifierLookupRequest {
+        let normalizedPolicyId = try ToriiRequestValidation.normalizedNonEmpty(policyId, field: "policyId")
+        let normalizedEncryptedInput = try ToriiRequestValidation.normalizedEvenLengthHex(
+            encryptedInputHex,
+            field: "encryptedInputHex"
+        )
+        return ToriiIdentifierLookupRequest(policyId: normalizedPolicyId,
+                                            input: nil,
+                                            encryptedInputHex: normalizedEncryptedInput)
+    }
+
+    public static func plaintext(policy: ToriiIdentifierPolicySummary,
+                                 input: String) throws -> ToriiIdentifierLookupRequest {
+        let normalizedInput = try policy.normalization.normalize(input, field: "input")
+        return try plaintext(policyId: policy.policyId, input: normalizedInput)
+    }
+
+    public static func encrypted(policy: ToriiIdentifierPolicySummary,
+                                 encryptedInputHex: String) throws -> ToriiIdentifierLookupRequest {
+        guard policy.inputEncryption?.lowercased() == "bfv-v1" else {
+            throw ToriiClientError.invalidPayload(
+                "Policy \(policy.policyId) does not publish BFV encrypted-input support."
+            )
+        }
+        return try encrypted(policyId: policy.policyId, encryptedInputHex: encryptedInputHex)
+    }
+
+    public static func encrypted(policy: ToriiIdentifierPolicySummary,
+                                 input: String,
+                                 seedHex: String? = nil) throws -> ToriiIdentifierLookupRequest {
+        let encryptedInputHex = try ToriiIdentifierBfvEnvelopeBuilder.encrypt(
+            policy: policy,
+            input: input,
+            seedHex: seedHex
+        )
+        return try encrypted(policyId: policy.policyId, encryptedInputHex: encryptedInputHex)
+    }
+}
+
+public typealias ToriiRamLfeExecutionReceipt = [String: ToriiJSONValue]
+
+public struct ToriiRamLfeExecuteRequest: Encodable, Sendable {
+    public let inputHex: String?
+    public let encryptedInputHex: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case inputHex = "input_hex"
+        case encryptedInputHex = "encrypted_input"
+    }
+
+    public static func plaintext(inputHex: String) throws -> ToriiRamLfeExecuteRequest {
+        let normalizedInputHex = try ToriiRequestValidation.normalizedEvenLengthHex(
+            inputHex,
+            field: "inputHex"
+        )
+        return ToriiRamLfeExecuteRequest(
+            inputHex: normalizedInputHex,
+            encryptedInputHex: nil
+        )
+    }
+
+    public static func encrypted(encryptedInputHex: String) throws -> ToriiRamLfeExecuteRequest {
+        let normalizedEncryptedInput = try ToriiRequestValidation.normalizedEvenLengthHex(
+            encryptedInputHex,
+            field: "encryptedInputHex"
+        )
+        return ToriiRamLfeExecuteRequest(
+            inputHex: nil,
+            encryptedInputHex: normalizedEncryptedInput
+        )
+    }
+}
+
+public struct ToriiRamLfeExecuteResponse: Decodable, Sendable {
+    public let programId: String
+    public let opaqueHash: String
+    public let receiptHash: String
+    public let outputHex: String
+    public let outputHash: String
+    public let associatedDataHash: String
+    public let executedAtMs: UInt64
+    public let expiresAtMs: UInt64?
+    public let backend: String
+    public let verificationMode: String
+    public let receipt: ToriiRamLfeExecutionReceipt
+
+    private enum CodingKeys: String, CodingKey {
+        case programId = "program_id"
+        case opaqueHash = "opaque_hash"
+        case receiptHash = "receipt_hash"
+        case outputHex = "output_hex"
+        case outputHash = "output_hash"
+        case associatedDataHash = "associated_data_hash"
+        case executedAtMs = "executed_at_ms"
+        case expiresAtMs = "expires_at_ms"
+        case backend
+        case verificationMode = "verification_mode"
+        case receipt
+    }
+}
+
+public struct ToriiRamLfeReceiptVerifyRequest: Encodable, Sendable {
+    public let receipt: ToriiRamLfeExecutionReceipt
+    public let outputHex: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case receipt
+        case outputHex = "output_hex"
+    }
+
+    public init(receipt: ToriiRamLfeExecutionReceipt, outputHex: String? = nil) {
+        self.receipt = receipt
+        self.outputHex = outputHex
+    }
+}
+
+public struct ToriiRamLfeReceiptVerifyResponse: Decodable, Sendable {
+    public let valid: Bool
+    public let programId: String
+    public let backend: String
+    public let verificationMode: String
+    public let outputHash: String
+    public let associatedDataHash: String
+    public let outputHashMatches: Bool?
+    public let error: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case valid
+        case programId = "program_id"
+        case backend
+        case verificationMode = "verification_mode"
+        case outputHash = "output_hash"
+        case associatedDataHash = "associated_data_hash"
+        case outputHashMatches = "output_hash_matches"
+        case error
+    }
+}
+
+public extension ToriiIdentifierPolicySummary {
+    func plaintextRequest(input: String) throws -> ToriiIdentifierLookupRequest {
+        try ToriiIdentifierLookupRequest.plaintext(policy: self, input: input)
+    }
+
+    func encryptedRequest(encryptedInputHex: String) throws -> ToriiIdentifierLookupRequest {
+        try ToriiIdentifierLookupRequest.encrypted(policy: self, encryptedInputHex: encryptedInputHex)
+    }
+
+    func encryptInput(_ input: String, seedHex: String? = nil) throws -> String {
+        try ToriiIdentifierBfvEnvelopeBuilder.encrypt(policy: self, input: input, seedHex: seedHex)
+    }
+
+    func encryptedRequest(input: String, seedHex: String? = nil) throws -> ToriiIdentifierLookupRequest {
+        try ToriiIdentifierLookupRequest.encrypted(policy: self, input: input, seedHex: seedHex)
+    }
+}
+
+private struct ToriiIdentifierBfvValidatedParameters {
+    let polynomialDegree: Int
+    let plaintextModulus: UInt64
+    let ciphertextModulus: UInt64
+    let maxInputBytes: Int
+    let delta: UInt64
+    let publicKeyA: [UInt64]
+    let publicKeyB: [UInt64]
+}
+
+private struct ToriiIdentifierBfvCiphertextSlot {
+    let c0: [UInt64]
+    let c1: [UInt64]
+}
+
+private struct ToriiIdentifierBfvDeterministicStream {
+    private let seed: Data
+    private let domain: Data
+    private var counter: UInt64 = 0
+    private var buffer = Data()
+    private var index = 0
+
+    init(seed: Data, domain: String) {
+        self.seed = seed
+        self.domain = Data(domain.utf8)
+    }
+
+    mutating func nextByte() -> UInt8 {
+        if index >= buffer.count {
+            refill()
+        }
+        let value = buffer[index]
+        index += 1
+        return value
+    }
+
+    mutating func nextUInt64() -> UInt64 {
+        var value: UInt64 = 0
+        for offset in 0..<8 {
+            value |= UInt64(nextByte()) << (UInt64(offset) * 8)
+        }
+        return value
+    }
+
+    private mutating func refill() {
+        var hasher = SHA512()
+        hasher.update(data: Data("iroha.sdk.identifier.bfv.prg.v1".utf8))
+        hasher.update(data: domain)
+        hasher.update(data: seed)
+        hasher.update(data: ToriiIdentifierBfvEnvelopeBuilder.littleEndianData(counter))
+        buffer = Data(hasher.finalize())
+        index = 0
+        counter &+= 1
+    }
+}
+
+private enum ToriiIdentifierBfvEnvelopeBuilder {
+    private static let slotDomain = Data("iroha.sdk.identifier.bfv.slot.v1".utf8)
+    private static let uDomain = "iroha.sdk.identifier.bfv.u.v1"
+    private static let e1Domain = "iroha.sdk.identifier.bfv.e1.v1"
+    private static let e2Domain = "iroha.sdk.identifier.bfv.e2.v1"
+    private static let schemaName = "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext"
+
+    static func encrypt(policy: ToriiIdentifierPolicySummary,
+                        input: String,
+                        seedHex: String? = nil) throws -> String {
+        guard policy.inputEncryption?.lowercased() == "bfv-v1" else {
+            throw ToriiClientError.invalidPayload(
+                "Policy \(policy.policyId) does not publish BFV encrypted-input support."
+            )
+        }
+        guard let publicParameters = policy.inputEncryptionPublicParametersDecoded else {
+            throw ToriiClientError.invalidPayload(
+                "Policy \(policy.policyId) is missing decoded BFV public parameters."
+            )
+        }
+        let normalizedInput = try policy.normalization.normalize(input, field: "input")
+        let params = try validate(publicParameters)
+        let inputBytes = Array(normalizedInput.utf8)
+        guard inputBytes.count <= params.maxInputBytes else {
+            throw ToriiClientError.invalidPayload(
+                "input exceeds maxInputBytes \(params.maxInputBytes)."
+            )
+        }
+        let seed = try resolvedSeed(seedHex)
+        let scalars = encodeIdentifierSlots(maxInputBytes: params.maxInputBytes, inputBytes: inputBytes)
+        let slots = try scalars.enumerated().map { index, scalar in
+            try encryptScalar(params: params, scalar: scalar, seed: seed, slotIndex: index)
+        }
+        return try encodeEnvelope(slots).hexEncodedString()
+    }
+
+    private static func resolvedSeed(_ seedHex: String?) throws -> Data {
+        if let seedHex {
+            let normalized = try ToriiRequestValidation.normalizedEvenLengthHex(
+                seedHex,
+                field: "seedHex"
+            )
+            guard let data = Data(hexString: normalized), !data.isEmpty else {
+                throw ToriiClientError.invalidPayload("seedHex must be valid hex.")
+            }
+            return data
+        }
+        return Data((0..<32).map { _ in UInt8.random(in: .min ... .max) })
+    }
+
+    private static func validate(_ publicParameters: ToriiIdentifierBfvPublicParameters) throws -> ToriiIdentifierBfvValidatedParameters {
+        let params = publicParameters.parameters
+        let polynomialDegree = Int(params.polynomialDegree)
+        guard polynomialDegree >= 2, polynomialDegree.nonzeroBitCount == 1 else {
+            throw ToriiClientError.invalidPayload("BFV polynomialDegree must be a power of two and at least 2.")
+        }
+        guard params.decompositionBaseLog >= 1, params.decompositionBaseLog <= 16 else {
+            throw ToriiClientError.invalidPayload("BFV decompositionBaseLog must be within 1...16.")
+        }
+        guard params.plaintextModulus >= 2 else {
+            throw ToriiClientError.invalidPayload("BFV plaintextModulus must be at least 2.")
+        }
+        guard params.ciphertextModulus > params.plaintextModulus else {
+            throw ToriiClientError.invalidPayload("BFV ciphertextModulus must be greater than plaintextModulus.")
+        }
+        guard params.ciphertextModulus % params.plaintextModulus == 0 else {
+            throw ToriiClientError.invalidPayload("BFV ciphertextModulus must be divisible by plaintextModulus.")
+        }
+        let maxInputBytes = Int(publicParameters.maxInputBytes)
+        guard maxInputBytes >= 1 else {
+            throw ToriiClientError.invalidPayload("BFV maxInputBytes must be at least 1.")
+        }
+        guard UInt64(publicParameters.maxInputBytes) < params.plaintextModulus else {
+            throw ToriiClientError.invalidPayload("BFV maxInputBytes must fit into one plaintext slot.")
+        }
+        guard publicParameters.publicKey.a.count == polynomialDegree,
+              publicParameters.publicKey.b.count == polynomialDegree else {
+            throw ToriiClientError.invalidPayload("BFV public-key polynomials must match polynomialDegree.")
+        }
+        for coefficient in publicParameters.publicKey.a + publicParameters.publicKey.b {
+            guard coefficient < params.ciphertextModulus else {
+                throw ToriiClientError.invalidPayload("BFV public-key coefficient exceeds ciphertextModulus.")
+            }
+        }
+        return ToriiIdentifierBfvValidatedParameters(
+            polynomialDegree: polynomialDegree,
+            plaintextModulus: params.plaintextModulus,
+            ciphertextModulus: params.ciphertextModulus,
+            maxInputBytes: maxInputBytes,
+            delta: params.ciphertextModulus / params.plaintextModulus,
+            publicKeyA: publicParameters.publicKey.a,
+            publicKeyB: publicParameters.publicKey.b
+        )
+    }
+
+    private static func encodeIdentifierSlots(maxInputBytes: Int, inputBytes: [UInt8]) -> [UInt64] {
+        var slots = Array(repeating: UInt64.zero, count: maxInputBytes + 1)
+        slots[0] = UInt64(inputBytes.count)
+        for (index, byte) in inputBytes.enumerated() {
+            slots[index + 1] = UInt64(byte)
+        }
+        return slots
+    }
+
+    private static func encryptScalar(params: ToriiIdentifierBfvValidatedParameters,
+                                      scalar: UInt64,
+                                      seed: Data,
+                                      slotIndex: Int) throws -> ToriiIdentifierBfvCiphertextSlot {
+        let slotSeed = sha512(
+            parts: [
+                slotDomain,
+                seed,
+                littleEndianData(UInt64(slotIndex)),
+            ]
+        )
+        let u = sampleSmallPolynomial(
+            params: params,
+            stream: ToriiIdentifierBfvDeterministicStream(seed: slotSeed, domain: uDomain)
+        )
+        let e1 = sampleSmallPolynomial(
+            params: params,
+            stream: ToriiIdentifierBfvDeterministicStream(seed: slotSeed, domain: e1Domain)
+        )
+        let e2 = sampleSmallPolynomial(
+            params: params,
+            stream: ToriiIdentifierBfvDeterministicStream(seed: slotSeed, domain: e2Domain)
+        )
+        var encoded = Array(repeating: UInt64.zero, count: params.polynomialDegree)
+        encoded[0] = multiplyMod(scalar, params.delta, modulus: params.ciphertextModulus)
+        return ToriiIdentifierBfvCiphertextSlot(
+            c0: addPolynomialMod(
+                lhs: addPolynomialMod(
+                    lhs: multiplyPolynomialMod(
+                        params: params,
+                        lhs: params.publicKeyB,
+                        rhs: u
+                    ),
+                    rhs: e1,
+                    modulus: params.ciphertextModulus
+                ),
+                rhs: encoded,
+                modulus: params.ciphertextModulus
+            ),
+            c1: addPolynomialMod(
+                lhs: multiplyPolynomialMod(
+                    params: params,
+                    lhs: params.publicKeyA,
+                    rhs: u
+                ),
+                rhs: e2,
+                modulus: params.ciphertextModulus
+            )
+        )
+    }
+
+    private static func sampleSmallPolynomial(params: ToriiIdentifierBfvValidatedParameters,
+                                              stream: ToriiIdentifierBfvDeterministicStream) -> [UInt64] {
+        var stream = stream
+        return (0..<params.polynomialDegree).map { _ in
+            switch Int(stream.nextByte() % 3) {
+            case 0:
+                return 0
+            case 1:
+                return 1
+            default:
+                return params.ciphertextModulus &- 1
+            }
+        }
+    }
+
+    private static func addPolynomialMod(lhs: [UInt64], rhs: [UInt64], modulus: UInt64) -> [UInt64] {
+        zip(lhs, rhs).map { addMod($0, $1, modulus: modulus) }
+    }
+
+    private static func multiplyPolynomialMod(params: ToriiIdentifierBfvValidatedParameters,
+                                              lhs: [UInt64],
+                                              rhs: [UInt64]) -> [UInt64] {
+        var out = Array(repeating: UInt64.zero, count: params.polynomialDegree)
+        for i in 0..<params.polynomialDegree {
+            for j in 0..<params.polynomialDegree {
+                let product = multiplyMod(lhs[i], rhs[j], modulus: params.ciphertextModulus)
+                let target = i + j
+                if target < params.polynomialDegree {
+                    out[target] = addMod(out[target], product, modulus: params.ciphertextModulus)
+                } else {
+                    out[target - params.polynomialDegree] = subtractMod(
+                        out[target - params.polynomialDegree],
+                        product,
+                        modulus: params.ciphertextModulus
+                    )
+                }
+            }
+        }
+        return out
+    }
+
+    private static func addMod(_ lhs: UInt64, _ rhs: UInt64, modulus: UInt64) -> UInt64 {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        return mod128(high: overflow ? 1 : 0, low: sum, modulus: modulus)
+    }
+
+    private static func subtractMod(_ lhs: UInt64, _ rhs: UInt64, modulus: UInt64) -> UInt64 {
+        if lhs >= rhs {
+            return lhs - rhs
+        }
+        return modulus - (rhs - lhs)
+    }
+
+    private static func multiplyMod(_ lhs: UInt64, _ rhs: UInt64, modulus: UInt64) -> UInt64 {
+        let fullWidth = lhs.multipliedFullWidth(by: rhs)
+        return mod128(high: fullWidth.high, low: fullWidth.low, modulus: modulus)
+    }
+
+    private static func mod128(high: UInt64, low: UInt64, modulus: UInt64) -> UInt64 {
+        precondition(modulus > 0)
+        var remainder: UInt64 = 0
+        for bit in stride(from: 63, through: 0, by: -1) {
+            remainder = stepMod(remainder: remainder, bit: (high >> UInt64(bit)) & 1, modulus: modulus)
+        }
+        for bit in stride(from: 63, through: 0, by: -1) {
+            remainder = stepMod(remainder: remainder, bit: (low >> UInt64(bit)) & 1, modulus: modulus)
+        }
+        return remainder
+    }
+
+    private static func stepMod(remainder: UInt64, bit: UInt64, modulus: UInt64) -> UInt64 {
+        let doubled: UInt64
+        if remainder >= modulus &- remainder {
+            doubled = remainder &- (modulus &- remainder)
+        } else {
+            doubled = remainder &+ remainder
+        }
+        if bit == 0 {
+            return doubled
+        }
+        if doubled == modulus &- 1 {
+            return 0
+        }
+        return doubled &+ 1
+    }
+
+    private static func sha512(parts: [Data]) -> Data {
+        var hasher = SHA512()
+        for part in parts {
+            hasher.update(data: part)
+        }
+        return Data(hasher.finalize())
+    }
+
+    static func littleEndianData(_ value: UInt64) -> Data {
+        var littleEndian = value.littleEndian
+        return withUnsafeBytes(of: &littleEndian) { Data($0) }
+    }
+
+    private static func encodeEnvelope(_ slots: [ToriiIdentifierBfvCiphertextSlot]) throws -> Data {
+        let payload = try encodeEnvelopePayload(slots)
+        return noritoEncode(typeName: schemaName, payload: payload, flags: 0)
+    }
+
+    private static func encodeEnvelopePayload(_ slots: [ToriiIdentifierBfvCiphertextSlot]) throws -> Data {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(
+            try OfflineNorito.encodeVec(slots, encode: { slot in
+                try encodeSlot(slot)
+            })
+        )
+        return writer.data
+    }
+
+    private static func encodeSlot(_ slot: ToriiIdentifierBfvCiphertextSlot) throws -> Data {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try OfflineNorito.encodeVec(slot.c0, encode: OfflineNorito.encodeUInt64))
+        writer.writeField(try OfflineNorito.encodeVec(slot.c1, encode: OfflineNorito.encodeUInt64))
+        return writer.data
+    }
+}
+
+public extension ToriiIdentifierResolutionReceipt {
+    func verifyAttestation(using policy: ToriiIdentifierPolicySummary) throws -> Bool {
+        guard policy.policyId == payload.policyId else {
+            throw ToriiClientError.invalidPayload(
+                "Identifier receipt policy \(payload.policyId) does not match policy summary \(policy.policyId)."
+            )
+        }
+        guard attestation.kind == "signed", let signature = attestation.signature else {
+            throw ToriiClientError.invalidPayload(
+                "Only signed identifier receipt attestations can be verified with a resolver public key."
+            )
+        }
+        let payloadBytes = try ToriiIdentifierReceiptCanonicalEncoder.canonicalPayloadBytes(for: self)
+        guard let signatureBytes = Data(hexString: signature) else {
+            throw ToriiClientError.invalidPayload("attestation.signature must be valid hex.")
+        }
+        let verifyingKey = try ToriiIdentifierReceiptVerifier.parsePublicKey(policy.resolverPublicKey)
+        let message = ToriiIdentifierReceiptVerifier.prehash(payloadBytes)
+        return try ToriiIdentifierReceiptVerifier.verify(
+            algorithm: verifyingKey.algorithm,
+            publicKey: verifyingKey.publicKey,
+            message: message,
+            signature: signatureBytes
+        )
+    }
+}
+
+private enum ToriiIdentifierReceiptVerifier {
+    fileprivate struct ParsedPublicKey {
+        let algorithm: SigningAlgorithm
+        let publicKey: Data
+    }
+
+    static func prehash(_ payload: Data) -> Data {
+        var digest = Blake2b.hash256(payload)
+        if !digest.isEmpty {
+            digest[digest.count - 1] |= 0x01
+        }
+        return digest
+    }
+
+    static func parsePublicKey(_ literal: String) throws -> ParsedPublicKey {
+        let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw ToriiClientError.invalidPayload("resolverPublicKey must not be empty.")
+        }
+        let rawHex: String
+        var prefixedAlgorithm: SigningAlgorithm?
+        if let separator = trimmed.firstIndex(of: ":") {
+            let prefix = String(trimmed[..<separator]).lowercased()
+            rawHex = String(trimmed[trimmed.index(after: separator)...])
+            switch prefix {
+            case "ed25519":
+                prefixedAlgorithm = .ed25519
+            case "secp256k1":
+                prefixedAlgorithm = .secp256k1
+            case "ml-dsa", "mldsa":
+                prefixedAlgorithm = .mlDsa
+            case "bls_normal", "bls-normal", "blsnormal":
+                prefixedAlgorithm = .blsNormal
+            case "bls_small", "bls-small", "blssmall":
+                prefixedAlgorithm = .blsSmall
+            case "gost256a", "gost-256-a", "gost3410-2012-256-paramset-a":
+                prefixedAlgorithm = .gost2012_256A
+            case "gost256b", "gost-256-b", "gost3410-2012-256-paramset-b":
+                prefixedAlgorithm = .gost2012_256B
+            case "gost256c", "gost-256-c", "gost3410-2012-256-paramset-c":
+                prefixedAlgorithm = .gost2012_256C
+            case "gost512a", "gost-512-a", "gost3410-2012-512-paramset-a":
+                prefixedAlgorithm = .gost2012_512A
+            case "gost512b", "gost-512-b", "gost3410-2012-512-paramset-b":
+                prefixedAlgorithm = .gost2012_512B
+            case "sm2":
+                prefixedAlgorithm = .sm2
+            default:
+                throw ToriiClientError.invalidPayload("Unsupported resolver public-key prefix \(prefix).")
+            }
+        } else {
+            rawHex = trimmed
+        }
+        guard let bytes = Data(hexString: rawHex) else {
+            throw ToriiClientError.invalidPayload("resolverPublicKey must be valid multihash hex.")
+        }
+        let decoded = try decodePublicKeyMultihash(bytes)
+        if let prefixedAlgorithm, decoded.algorithm != prefixedAlgorithm {
+            throw ToriiClientError.invalidPayload("resolverPublicKey prefix does not match its multihash payload.")
+        }
+        return decoded
+    }
+
+    private static func decodePublicKeyMultihash(_ bytes: Data) throws -> ParsedPublicKey {
+        let raw = [UInt8](bytes)
+        let (functionCode, functionEnd) = try decodeVarint(raw, startIndex: 0)
+        let (length, lengthEnd) = try decodeVarint(raw, startIndex: functionEnd)
+        guard lengthEnd <= raw.count else {
+            throw ToriiClientError.invalidPayload("resolverPublicKey multihash is truncated.")
+        }
+        let payload = Data(raw[lengthEnd...])
+        guard payload.count == Int(length) else {
+            throw ToriiClientError.invalidPayload("resolverPublicKey multihash length does not match its payload.")
+        }
+        let algorithm: SigningAlgorithm
+        switch functionCode {
+        case 0xed:
+            algorithm = .ed25519
+        case 0xe7:
+            algorithm = .secp256k1
+        case 0xea:
+            algorithm = .blsNormal
+        case 0xeb:
+            algorithm = .blsSmall
+        case 0xee:
+            algorithm = .mlDsa
+        case 0x1200:
+            algorithm = .gost2012_256A
+        case 0x1201:
+            algorithm = .gost2012_256B
+        case 0x1202:
+            algorithm = .gost2012_256C
+        case 0x1203:
+            algorithm = .gost2012_512A
+        case 0x1204:
+            algorithm = .gost2012_512B
+        case 0x1306:
+            algorithm = .sm2
+        default:
+            throw ToriiClientError.invalidPayload(
+                String(format: "resolverPublicKey uses unsupported multihash code 0x%X.", functionCode)
+            )
+        }
+        return ParsedPublicKey(algorithm: algorithm, publicKey: payload)
+    }
+
+    private static func decodeVarint(_ bytes: [UInt8], startIndex: Int) throws -> (UInt64, Int) {
+        var value: UInt64 = 0
+        var shift: UInt64 = 0
+        var index = startIndex
+        while index < bytes.count {
+            let byte = bytes[index]
+            let chunk = UInt64(byte & 0x7F)
+            if shift >= 64 {
+                throw ToriiClientError.invalidPayload("resolverPublicKey multihash varint overflowed.")
+            }
+            value |= chunk << shift
+            index += 1
+            if (byte & 0x80) == 0 {
+                return (value, index)
+            }
+            shift += 7
+        }
+        throw ToriiClientError.invalidPayload("resolverPublicKey multihash varint is truncated.")
+    }
+
+    static func verify(algorithm: SigningAlgorithm,
+                       publicKey: Data,
+                       message: Data,
+                       signature: Data) throws -> Bool {
+        switch algorithm {
+        case .ed25519:
+            guard #available(macOS 10.15, iOS 13.0, *) else {
+                throw ToriiClientError.invalidPayload("Ed25519 receipt verification requires iOS 13/macOS 10.15.")
+            }
+            let ed25519Key: Curve25519.Signing.PublicKey
+            do {
+                ed25519Key = try Curve25519.Signing.PublicKey(rawRepresentation: publicKey)
+            } catch {
+                throw ToriiClientError.invalidPayload("resolverPublicKey is not a valid Ed25519 public key.")
+            }
+            return ed25519Key.isValidSignature(signature, for: message)
+        case .secp256k1:
+            if let verified = NoritoNativeBridge.shared.verifyDetached(
+                algorithm: .secp256k1,
+                publicKey: publicKey,
+                message: message,
+                signature: signature
+            ) ?? NoritoNativeBridge.shared.secp256k1Verify(
+                publicKey: publicKey,
+                message: message,
+                signature: signature
+            ) {
+                return verified
+            }
+            throw ToriiClientError.invalidPayload("Secp256k1 receipt verification is unavailable.")
+        case .sm2:
+            if let verified = NoritoNativeBridge.shared.verifyDetached(
+                algorithm: .sm2,
+                publicKey: publicKey,
+                message: message,
+                signature: signature
+            ) ?? NoritoNativeBridge.shared.sm2Verify(
+                distid: Sm2Keypair.defaultDistid(),
+                publicKey: publicKey,
+                message: message,
+                signature: signature
+            ) {
+                return verified
+            }
+            throw ToriiClientError.invalidPayload("SM2 receipt verification is unavailable.")
+        case .mlDsa:
+            if let verified = NoritoNativeBridge.shared.verifyDetached(
+                algorithm: .mlDsa,
+                publicKey: publicKey,
+                message: message,
+                signature: signature
+            ) {
+                return verified
+            }
+            guard let suite = inferMlDsaSuite(publicKey: publicKey, signature: signature),
+                  let verified = NoritoNativeBridge.shared.mldsaVerify(
+                    suiteId: suite.rawValue,
+                    publicKey: publicKey,
+                    message: message,
+                    signature: signature
+                  ) else {
+                throw ToriiClientError.invalidPayload("ML-DSA receipt verification is unavailable.")
+            }
+            return verified
+        case .blsNormal, .blsSmall,
+             .gost2012_256A, .gost2012_256B, .gost2012_256C,
+             .gost2012_512A, .gost2012_512B:
+            if let verified = NoritoNativeBridge.shared.verifyDetached(
+                algorithm: algorithm,
+                publicKey: publicKey,
+                message: message,
+                signature: signature
+            ) {
+                return verified
+            }
+            throw ToriiClientError.invalidPayload("\(algorithm.wireName) receipt verification is unavailable.")
+        }
+    }
+
+    private static func inferMlDsaSuite(publicKey: Data, signature: Data) -> MlDsaSuite? {
+        for suite in MlDsaSuite.allCases {
+            guard let params = NoritoNativeBridge.shared.mldsaParameters(suiteId: suite.rawValue) else {
+                continue
+            }
+            if publicKey.count == params.publicKeyLength, signature.count == params.signatureLength {
+                return suite
+            }
+        }
+        return nil
     }
 }
 
@@ -337,7 +2365,7 @@ public struct ToriiExplorerPaginationMeta: Decodable, Sendable, Equatable {
 
 /// Instruction payload wrapper returned by `/v1/explorer/instructions`.
 public struct ToriiExplorerInstructionBox: Decodable, Sendable, Equatable {
-    public let scale: String
+    public let scale: String?
     public let json: ToriiJSONValue
 }
 
@@ -357,7 +2385,6 @@ public struct ToriiExplorerInstructionItem: Decodable, Sendable, Equatable {
         case createdAt = "created_at"
         case kind
         case box = "r#box"
-        case legacyBox = "box"
         case transactionHash = "transaction_hash"
         case transactionStatus = "transaction_status"
         case block
@@ -369,19 +2396,16 @@ public struct ToriiExplorerInstructionItem: Decodable, Sendable, Equatable {
         authority = try container.decode(String.self, forKey: .authority)
         createdAt = try container.decode(String.self, forKey: .createdAt)
         kind = try container.decode(String.self, forKey: .kind)
-        if let decodedBox = try container.decodeIfPresent(ToriiExplorerInstructionBox.self, forKey: .box) {
-            box = decodedBox
-        } else if let decodedBox = try container.decodeIfPresent(ToriiExplorerInstructionBox.self, forKey: .legacyBox) {
-            box = decodedBox
-        } else {
+        guard let decodedBox = try container.decodeIfPresent(ToriiExplorerInstructionBox.self, forKey: .box) else {
             throw DecodingError.keyNotFound(
                 CodingKeys.box,
                 DecodingError.Context(
                     codingPath: container.codingPath,
-                    debugDescription: "Expected key \"r#box\" or \"box\"."
+                    debugDescription: "Expected key \"r#box\"."
                 )
             )
         }
+        box = decodedBox
         transactionHash = try container.decode(String.self, forKey: .transactionHash)
         transactionStatus = try container.decode(String.self, forKey: .transactionStatus)
         block = try container.decode(UInt64.self, forKey: .block)
@@ -418,6 +2442,171 @@ public struct ToriiExplorerTransactionItem: Decodable, Sendable, Equatable {
 public struct ToriiExplorerTransactionsPage: Decodable, Sendable, Equatable {
     public let pagination: ToriiExplorerPaginationMeta
     public let items: [ToriiExplorerTransactionItem]
+}
+
+/// Explorer RWA lot projection returned by `/v1/explorer/rwas`.
+public struct ToriiExplorerRwaRecord: Decodable, Sendable, Equatable {
+    public let id: String
+    public let ownedBy: String
+    public let quantity: String
+    public let heldQuantity: String
+    public let primaryReference: String
+    public let status: String?
+    public let isFrozen: Bool
+    public let metadata: [String: ToriiJSONValue]
+    public let raw: [String: ToriiJSONValue]
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode([String: ToriiJSONValue].self)
+        guard case let .string(identifier)? = raw["id"], !identifier.isEmpty else {
+            throw ToriiClientError.invalidPayload("RWA explorer record missing string `id` field")
+        }
+        guard case let .string(owner)? = raw["owned_by"], !owner.isEmpty else {
+            throw ToriiClientError.invalidPayload("RWA explorer record missing string `owned_by` field")
+        }
+        guard case let .string(quantity)? = raw["quantity"], !quantity.isEmpty else {
+            throw ToriiClientError.invalidPayload("RWA explorer record missing string `quantity` field")
+        }
+        guard case let .string(heldQuantity)? = raw["held_quantity"], !heldQuantity.isEmpty else {
+            throw ToriiClientError.invalidPayload("RWA explorer record missing string `held_quantity` field")
+        }
+        guard case let .string(primaryReference)? = raw["primary_reference"], !primaryReference.isEmpty else {
+            throw ToriiClientError.invalidPayload("RWA explorer record missing string `primary_reference` field")
+        }
+        guard case let .bool(isFrozen)? = raw["is_frozen"] else {
+            throw ToriiClientError.invalidPayload("RWA explorer record missing bool `is_frozen` field")
+        }
+        let status: String?
+        if let statusValue = raw["status"] {
+            switch statusValue {
+            case .string(let value):
+                status = value
+            case .null:
+                status = nil
+            default:
+                throw ToriiClientError.invalidPayload("RWA explorer record `status` must be a string when present")
+            }
+        } else {
+            status = nil
+        }
+        let metadata: [String: ToriiJSONValue]
+        if let metadataValue = raw["metadata"] {
+            switch metadataValue {
+            case .object(let object):
+                metadata = object
+            case .null:
+                metadata = [:]
+            default:
+                throw ToriiClientError.invalidPayload("RWA explorer record `metadata` must be an object when present")
+            }
+        } else {
+            metadata = [:]
+        }
+        id = identifier
+        ownedBy = owner
+        self.quantity = quantity
+        self.heldQuantity = heldQuantity
+        self.primaryReference = primaryReference
+        self.status = status
+        self.isFrozen = isFrozen
+        self.metadata = metadata
+        self.raw = raw
+    }
+}
+
+/// Paginated explorer RWA lot list returned by `/v1/explorer/rwas`.
+public struct ToriiExplorerRwasPage: Decodable, Sendable, Equatable {
+    public let pagination: ToriiExplorerPaginationMeta
+    public let items: [ToriiExplorerRwaRecord]
+}
+
+/// Contract-call activity item returned by `/v1/contracts/activity`.
+public struct ToriiContractActivityItem: Decodable, Sendable, Equatable {
+    public let authority: String?
+    public let timestampMs: UInt64?
+    public let entrypointHash: String
+    public let resultOk: Bool
+    public let contractAddress: String
+    public let contractAlias: String?
+    public let contractEntrypoint: String?
+    public let contractPayload: ToriiJSONValue?
+    public let gasAssetId: String?
+    public let feeSponsor: String?
+    public let gasLimit: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case timestampMs = "timestamp_ms"
+        case entrypointHash = "entrypoint_hash"
+        case resultOk = "result_ok"
+        case contractAddress = "contract_address"
+        case contractAlias = "contract_alias"
+        case contractEntrypoint = "contract_entrypoint"
+        case contractPayload = "contract_payload"
+        case gasAssetId = "gas_asset_id"
+        case feeSponsor = "fee_sponsor"
+        case gasLimit = "gas_limit"
+    }
+}
+
+/// Contract-call activity envelope returned by `/v1/contracts/activity`.
+public struct ToriiContractActivityList: Decodable, Sendable, Equatable {
+    public let items: [ToriiContractActivityItem]
+    public let total: UInt64
+}
+
+/// Generic contract event item returned by `/v1/contracts/events`.
+public struct ToriiContractEventItem: Decodable, Sendable, Equatable {
+    public let eventId: String
+    public let schemaVersion: UInt64
+    public let provenance: String
+    public let authority: String?
+    public let timestampMs: UInt64?
+    public let txHashHex: String
+    public let blockHeight: UInt64
+    public let blockHashHex: String
+    public let resultOk: Bool
+    public let contractAddress: String
+    public let contractAlias: String?
+    public let module: String
+    public let eventKind: String
+    public let participants: [String]?
+    public let assetIds: [String]?
+    public let numericFields: [String: ToriiJSONValue]?
+    public let payload: ToriiJSONValue?
+    public let gasAssetId: String?
+    public let feeSponsor: String?
+    public let gasLimit: UInt64?
+
+    private enum CodingKeys: String, CodingKey {
+        case eventId = "event_id"
+        case schemaVersion = "schema_version"
+        case provenance
+        case authority
+        case timestampMs = "timestamp_ms"
+        case txHashHex = "tx_hash_hex"
+        case blockHeight = "block_height"
+        case blockHashHex = "block_hash_hex"
+        case resultOk = "result_ok"
+        case contractAddress = "contract_address"
+        case contractAlias = "contract_alias"
+        case module
+        case eventKind = "event_kind"
+        case participants
+        case assetIds = "asset_ids"
+        case numericFields = "numeric_fields"
+        case payload
+        case gasAssetId = "gas_asset_id"
+        case feeSponsor = "fee_sponsor"
+        case gasLimit = "gas_limit"
+    }
+}
+
+/// Generic contract event envelope returned by `/v1/contracts/events`.
+public struct ToriiContractEventList: Decodable, Sendable, Equatable {
+    public let items: [ToriiContractEventItem]
+    public let total: UInt64
 }
 
 /// Explorer duration wrapper (milliseconds).
@@ -482,13 +2671,15 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
     public let status: String
     public let authority: String
     public let instructionIndex: UInt32
-    /// Index of the transfer entry within the instruction payload (0 for single-asset transfers).
-    public let transferIndex: UInt32
     public let senderAccountId: String
     public let receiverAccountId: String
     public let assetDefinitionId: String
     public let amount: String
     public let direction: ToriiExplorerTransferDirection
+    /// The instruction kind from the explorer API (e.g. "Transfer", "Mint", "Burn").
+    public let kind: String
+    /// Index of the transfer entry within the instruction payload (0 for single-asset transfers).
+    public let transferIndex: UInt32
 
     public var isIncoming: Bool {
         direction == .incoming
@@ -500,18 +2691,6 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
 
     public var isSelfTransfer: Bool {
         direction == .selfTransfer
-    }
-
-    /// Construct the source asset id when possible.
-    public var sourceAssetId: String? {
-        ToriiExplorerTransferSummary.assetId(assetDefinitionId: assetDefinitionId,
-                                             accountId: senderAccountId)
-    }
-
-    /// Construct the destination asset id when possible.
-    public var destinationAssetId: String? {
-        ToriiExplorerTransferSummary.assetId(assetDefinitionId: assetDefinitionId,
-                                             accountId: receiverAccountId)
     }
 
     /// Stable identifier for SwiftUI lists (`transactionHash|instructionIndex|transferIndex`).
@@ -558,42 +2737,6 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
         direction(relativeTo: accountId) == .selfTransfer
     }
 
-    /// Return the asset id scoped to the provided account (source for sender, destination for receiver).
-    public func assetId(relativeTo accountId: String?) -> String? {
-        let trimmed = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let trimmed, !trimmed.isEmpty else {
-            return nil
-        }
-        if senderAccountId == trimmed && receiverAccountId == trimmed {
-            return sourceAssetId ?? destinationAssetId
-        }
-        if senderAccountId == trimmed {
-            return sourceAssetId
-        }
-        if receiverAccountId == trimmed {
-            return destinationAssetId
-        }
-        return nil
-    }
-
-    /// Return the counterparty asset id relative to the provided account (destination for sender, source for receiver).
-    public func counterpartyAssetId(relativeTo accountId: String?) -> String? {
-        let trimmed = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let trimmed, !trimmed.isEmpty else {
-            return nil
-        }
-        if senderAccountId == trimmed && receiverAccountId == trimmed {
-            return sourceAssetId ?? destinationAssetId
-        }
-        if senderAccountId == trimmed {
-            return destinationAssetId
-        }
-        if receiverAccountId == trimmed {
-            return sourceAssetId
-        }
-        return nil
-    }
-
     /// Return the amount with a sign relative to the provided account (`+` for incoming, `-` for outgoing).
     public func signedAmount(relativeTo accountId: String?) -> String {
         let trimmedAmount = amount.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -622,6 +2765,7 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
                 assetDefinitionId: String,
                 amount: String,
                 direction: ToriiExplorerTransferDirection,
+                kind: String = "Transfer",
                 transferIndex: UInt32 = 0) {
         self.transactionHash = transactionHash
         self.block = block
@@ -629,19 +2773,18 @@ public struct ToriiExplorerTransferSummary: Sendable, Equatable, Identifiable {
         self.status = status
         self.authority = authority
         self.instructionIndex = instructionIndex
-        self.transferIndex = transferIndex
         self.senderAccountId = senderAccountId
         self.receiverAccountId = receiverAccountId
         self.assetDefinitionId = assetDefinitionId
         self.amount = amount
         self.direction = direction
+        self.kind = kind
+        self.transferIndex = transferIndex
     }
 }
 
 /// Parsed transfer details derived from explorer instruction payloads.
 public struct ToriiExplorerTransferAsset: Sendable, Equatable {
-    /// Full asset identifier literal (encoded `norito:<hex>`).
-    public let sourceAssetId: String
     /// Destination account literal.
     public let destinationAccountId: String
     /// Amount transferred (string numeric).
@@ -679,12 +2822,19 @@ public enum ToriiExplorerTransferDetails: Sendable, Equatable {
 
 public extension ToriiExplorerInstructionItem {
     /// Extract transfer details from the instruction payload when possible.
+    /// Supports Transfer, Mint, and Burn instruction kinds.
     func transferDetails() -> ToriiExplorerTransferDetails? {
-        let normalizedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalizedKind.lowercased() == "transfer" else {
+        let normalizedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch normalizedKind {
+        case "transfer":
+            return ToriiExplorerTransferDetails.parse(from: box.json)
+        case "mint", "burn":
+            return ToriiExplorerTransferDetails.parseMintBurn(from: box.json,
+                                                              kind: normalizedKind,
+                                                              authority: authority)
+        default:
             return nil
         }
-        return ToriiExplorerTransferDetails.parse(from: box.json)
     }
 }
 
@@ -751,22 +2901,6 @@ public extension ToriiExplorerTransferDetails {
         }
     }
 
-    /// Check whether a transfer involves the provided asset id (source asset literal).
-    func involvesAssetId(_ assetId: String) -> Bool {
-        let trimmed = assetId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return false
-        }
-        switch self {
-        case .asset(let asset):
-            return asset.sourceAssetId == trimmed
-        case .assetBatch(let entries):
-            return entries.contains {
-                ToriiExplorerTransferSummary.assetId(assetDefinitionId: $0.assetDefinitionId,
-                                                     accountId: $0.senderAccountId) == trimmed
-            }
-        }
-    }
 }
 
 extension ToriiExplorerTransferSummary {
@@ -787,22 +2921,6 @@ extension ToriiExplorerTransferSummary {
         }
         return .unknown
     }
-
-    fileprivate static func assetId(assetDefinitionId: String, accountId _: String) -> String? {
-        let trimmedDefinition = assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedDefinition.isEmpty else {
-            return nil
-        }
-        let lower = trimmedDefinition.lowercased()
-        guard lower.hasPrefix("norito:") else {
-            return nil
-        }
-        let hex = String(trimmedDefinition.dropFirst("norito:".count))
-        guard !hex.isEmpty else {
-            return nil
-        }
-        return "norito:\(hex.lowercased())"
-    }
 }
 
 public extension ToriiExplorerTransferRecord {
@@ -812,20 +2930,30 @@ public extension ToriiExplorerTransferRecord {
         let relativeAccount = (relative?.isEmpty ?? true) ? nil : relative
         switch details {
         case .asset(let asset):
-            let fallbackSender = instruction.authority.trimmingCharacters(in: .whitespacesAndNewlines)
-            let sender = asset.senderAccountId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                ? asset.senderAccountId!
-                : fallbackSender
-            guard !sender.isEmpty else {
+            guard let sender = asset.senderAccountId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !sender.isEmpty else {
                 return []
             }
-            guard let assetDefinition = asset.assetDefinitionId ?? (!asset.sourceAssetId.isEmpty ? asset.sourceAssetId : nil) else {
+            guard let assetDefinition = asset.assetDefinitionId else {
                 return []
             }
-            let receiver = asset.destinationAccountId
-            let direction = ToriiExplorerTransferSummary.direction(sender: sender,
+            let normalizedKind = instruction.kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let trimmedReceiver = asset.destinationAccountId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedReceiver.isEmpty else {
+                return []
+            }
+            let receiver = trimmedReceiver
+            let direction: ToriiExplorerTransferDirection
+            switch normalizedKind {
+            case "mint":
+                direction = .incoming
+            case "burn":
+                direction = .outgoing
+            default:
+                direction = ToriiExplorerTransferSummary.direction(sender: sender,
                                                                     receiver: receiver,
                                                                     relativeTo: relativeAccount)
+            }
             return [
                 ToriiExplorerTransferSummary(transactionHash: instruction.transactionHash,
                                              block: instruction.block,
@@ -838,6 +2966,7 @@ public extension ToriiExplorerTransferRecord {
                                              assetDefinitionId: assetDefinition,
                                              amount: asset.amount,
                                              direction: direction,
+                                             kind: instruction.kind,
                                              transferIndex: 0),
             ]
         case .assetBatch(let entries):
@@ -856,6 +2985,7 @@ public extension ToriiExplorerTransferRecord {
                                                     assetDefinitionId: entry.assetDefinitionId,
                                                     amount: entry.amount,
                                                     direction: direction,
+                                                    kind: instruction.kind,
                                                     transferIndex: UInt32(offset))
             }
         }
@@ -863,27 +2993,23 @@ public extension ToriiExplorerTransferRecord {
 }
 
 public extension ToriiExplorerInstructionsPage {
-    /// Extract flattened transfer summaries from this page, optionally filtering by account, asset definition, or asset id.
+    /// Extract flattened transfer summaries from this page, optionally filtering by account or asset definition.
     func transferSummaries(matchingAccount accountId: String? = nil,
                            assetDefinitionId: String? = nil,
-                           assetId: String? = nil,
                            relativeTo relativeAccountId: String? = nil) -> [ToriiExplorerTransferSummary] {
         let relative = relativeAccountId ?? accountId
         let records = transferRecords(matchingAccount: accountId,
-                                      assetDefinitionId: assetDefinitionId,
-                                      assetId: assetId)
+                                      assetDefinitionId: assetDefinitionId)
         return records.flatMap { $0.summaries(relativeTo: relative) }
     }
 }
 
 public extension ToriiExplorerInstructionsPage {
-    /// Extract transfer records from this page, optionally filtering by account, asset definition, or asset id.
+    /// Extract transfer records from this page, optionally filtering by account or asset definition.
     func transferRecords(matchingAccount accountId: String? = nil,
-                         assetDefinitionId: String? = nil,
-                         assetId: String? = nil) -> [ToriiExplorerTransferRecord] {
+                         assetDefinitionId: String? = nil) -> [ToriiExplorerTransferRecord] {
         let accountFilter = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let assetFilter = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let assetIdFilter = assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
         var records: [ToriiExplorerTransferRecord] = []
         records.reserveCapacity(items.count)
         for item in items {
@@ -894,9 +3020,6 @@ public extension ToriiExplorerInstructionsPage {
                 continue
             }
             if let assetFilter, !assetFilter.isEmpty, !details.involvesAssetDefinition(assetFilter) {
-                continue
-            }
-            if let assetIdFilter, !assetIdFilter.isEmpty, !details.involvesAssetId(assetIdFilter) {
                 continue
             }
             records.append(ToriiExplorerTransferRecord(instruction: item, details: details))
@@ -916,7 +3039,7 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
     public var transactionStatus: String?
     public var block: UInt64?
     public var kind: String?
-    public var assetId: String?
+    public var assetDefinitionId: String?
 
     public init(page: UInt64? = nil,
                 perPage: UInt64? = nil,
@@ -926,7 +3049,7 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
                 transactionStatus: String? = nil,
                 block: UInt64? = nil,
                 kind: String? = nil,
-                assetId: String? = nil) {
+                assetDefinitionId: String? = nil) {
         self.page = page
         self.perPage = perPage
         self.account = account
@@ -935,7 +3058,7 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
         self.transactionStatus = transactionStatus
         self.block = block
         self.kind = kind
-        self.assetId = assetId
+        self.assetDefinitionId = assetDefinitionId
     }
 
     public func queryItems() throws -> [URLQueryItem]? {
@@ -980,9 +3103,12 @@ public struct ToriiExplorerInstructionsParams: Sendable, Equatable {
            !kind.isEmpty {
             items.append(URLQueryItem(name: "kind", value: kind))
         }
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetDefinitionId.isEmpty {
+            let normalized = try normalizeToriiAssetSelectorQueryValue(
+                assetDefinitionId,
+                field: "assetDefinitionId"
+            )
             items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         return items.isEmpty ? nil : items
@@ -996,20 +3122,20 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
     public var authority: String?
     public var block: UInt64?
     public var status: String?
-    public var assetId: String?
+    public var assetDefinitionId: String?
 
     public init(page: UInt64? = nil,
                 perPage: UInt64? = nil,
                 authority: String? = nil,
                 block: UInt64? = nil,
                 status: String? = nil,
-                assetId: String? = nil) {
+                assetDefinitionId: String? = nil) {
         self.page = page
         self.perPage = perPage
         self.authority = authority
         self.block = block
         self.status = status
-        self.assetId = assetId
+        self.assetDefinitionId = assetDefinitionId
     }
 
     public func queryItems() throws -> [URLQueryItem]? {
@@ -1041,10 +3167,235 @@ public struct ToriiExplorerTransactionsParams: Sendable, Equatable {
            !status.isEmpty {
             items.append(URLQueryItem(name: "status", value: status))
         }
+        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetDefinitionId.isEmpty {
+            let normalized = try normalizeToriiAssetSelectorQueryValue(
+                assetDefinitionId,
+                field: "assetDefinitionId"
+            )
+            items.append(URLQueryItem(name: "asset_id", value: normalized))
+        }
+        return items.isEmpty ? nil : items
+    }
+}
+
+/// Query parameters accepted by `/v1/explorer/rwas`.
+public struct ToriiExplorerRwasParams: Sendable, Equatable {
+    public var page: UInt64?
+    public var perPage: UInt64?
+    public var ownedBy: String?
+    public var domain: String?
+
+    public init(page: UInt64? = nil,
+                perPage: UInt64? = nil,
+                ownedBy: String? = nil,
+                domain: String? = nil) {
+        self.page = page
+        self.perPage = perPage
+        self.ownedBy = ownedBy
+        self.domain = domain
+    }
+
+    public func queryItems() throws -> [URLQueryItem]? {
+        var items: [URLQueryItem] = []
+        if let page {
+            guard page > 0 else {
+                throw ToriiClientError.invalidPayload("page must be at least 1.")
+            }
+            items.append(URLQueryItem(name: "page", value: String(page)))
+        }
+        if let perPage {
+            guard perPage > 0 else {
+                throw ToriiClientError.invalidPayload("perPage must be at least 1.")
+            }
+            items.append(URLQueryItem(name: "per_page", value: String(perPage)))
+        }
+        if let ownedBy = ownedBy?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !ownedBy.isEmpty {
+            let normalized = try normalizeToriiAccountIdQueryValue(ownedBy, field: "ownedBy")
+            items.append(URLQueryItem(name: "owned_by", value: normalized))
+        }
+        if let domain = try ToriiRequestValidation.normalizedOptionalNonEmpty(domain, field: "domain") {
+            items.append(URLQueryItem(name: "domain", value: domain))
+        }
+        return items.isEmpty ? nil : items
+    }
+}
+
+/// Query parameters accepted by `/v1/contracts/activity`.
+public struct ToriiContractActivityParams: Sendable, Equatable {
+    public var limit: UInt64?
+    public var offset: UInt64?
+    public var authority: String?
+    public var contractAddress: String?
+    public var contractAlias: String?
+    public var contractEntrypoint: String?
+    public var sinceTimestampMs: UInt64?
+    public var untilTimestampMs: UInt64?
+    public var resultOk: Bool?
+
+    public init(limit: UInt64? = nil,
+                offset: UInt64? = nil,
+                authority: String? = nil,
+                contractAddress: String? = nil,
+                contractAlias: String? = nil,
+                contractEntrypoint: String? = nil,
+                sinceTimestampMs: UInt64? = nil,
+                untilTimestampMs: UInt64? = nil,
+                resultOk: Bool? = nil) {
+        self.limit = limit
+        self.offset = offset
+        self.authority = authority
+        self.contractAddress = contractAddress
+        self.contractAlias = contractAlias
+        self.contractEntrypoint = contractEntrypoint
+        self.sinceTimestampMs = sinceTimestampMs
+        self.untilTimestampMs = untilTimestampMs
+        self.resultOk = resultOk
+    }
+
+    public func queryItems() throws -> [URLQueryItem]? {
+        var items: [URLQueryItem] = []
+        if let limit {
+            guard limit > 0 else {
+                throw ToriiClientError.invalidPayload("limit must be at least 1.")
+            }
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
+        }
+        if let offset {
+            items.append(URLQueryItem(name: "offset", value: String(offset)))
+        }
+        if let authority = authority?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !authority.isEmpty {
+            let normalized = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
+            items.append(URLQueryItem(name: "authority", value: normalized))
+        }
+        if let contractAddress = contractAddress?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !contractAddress.isEmpty {
+            let normalized = try normalizeToriiContractAddressLiteral(contractAddress, field: "contractAddress")
+            items.append(URLQueryItem(name: "contract_address", value: normalized))
+        }
+        if let contractAlias = contractAlias?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !contractAlias.isEmpty {
+            let normalized = try normalizeToriiContractAliasLiteral(contractAlias, field: "contractAlias")
+            items.append(URLQueryItem(name: "contract_alias", value: normalized))
+        }
+        if let contractEntrypoint = try ToriiRequestValidation.normalizedOptionalNonEmpty(
+            contractEntrypoint,
+            field: "contractEntrypoint"
+        ) {
+            items.append(URLQueryItem(name: "contract_entrypoint", value: contractEntrypoint))
+        }
+        if let sinceTimestampMs {
+            items.append(URLQueryItem(name: "since_timestamp_ms", value: String(sinceTimestampMs)))
+        }
+        if let untilTimestampMs {
+            items.append(URLQueryItem(name: "until_timestamp_ms", value: String(untilTimestampMs)))
+        }
+        if let resultOk {
+            items.append(URLQueryItem(name: "result_ok", value: resultOk ? "true" : "false"))
+        }
+        return items.isEmpty ? nil : items
+    }
+}
+
+/// Query parameters accepted by `/v1/contracts/events`.
+public struct ToriiContractEventParams: Sendable, Equatable {
+    public var limit: UInt64?
+    public var offset: UInt64?
+    public var authority: String?
+    public var contractAddress: String?
+    public var contractAlias: String?
+    public var module: String?
+    public var eventKind: String?
+    public var participant: String?
+    public var assetId: String?
+    public var provenance: String?
+    public var sinceTimestampMs: UInt64?
+    public var untilTimestampMs: UInt64?
+    public var resultOk: Bool?
+
+    public init(limit: UInt64? = nil,
+                offset: UInt64? = nil,
+                authority: String? = nil,
+                contractAddress: String? = nil,
+                contractAlias: String? = nil,
+                module: String? = nil,
+                eventKind: String? = nil,
+                participant: String? = nil,
+                assetId: String? = nil,
+                provenance: String? = nil,
+                sinceTimestampMs: UInt64? = nil,
+                untilTimestampMs: UInt64? = nil,
+                resultOk: Bool? = nil) {
+        self.limit = limit
+        self.offset = offset
+        self.authority = authority
+        self.contractAddress = contractAddress
+        self.contractAlias = contractAlias
+        self.module = module
+        self.eventKind = eventKind
+        self.participant = participant
+        self.assetId = assetId
+        self.provenance = provenance
+        self.sinceTimestampMs = sinceTimestampMs
+        self.untilTimestampMs = untilTimestampMs
+        self.resultOk = resultOk
+    }
+
+    public func queryItems() throws -> [URLQueryItem]? {
+        var items: [URLQueryItem] = []
+        if let limit {
+            guard limit > 0 else {
+                throw ToriiClientError.invalidPayload("limit must be at least 1.")
+            }
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
+        }
+        if let offset {
+            items.append(URLQueryItem(name: "offset", value: String(offset)))
+        }
+        if let authority = authority?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !authority.isEmpty {
+            let normalized = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
+            items.append(URLQueryItem(name: "authority", value: normalized))
+        }
+        if let contractAddress = contractAddress?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !contractAddress.isEmpty {
+            let normalized = try normalizeToriiContractAddressLiteral(contractAddress, field: "contractAddress")
+            items.append(URLQueryItem(name: "contract_address", value: normalized))
+        }
+        if let contractAlias = contractAlias?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !contractAlias.isEmpty {
+            let normalized = try normalizeToriiContractAliasLiteral(contractAlias, field: "contractAlias")
+            items.append(URLQueryItem(name: "contract_alias", value: normalized))
+        }
+        if let module = try ToriiRequestValidation.normalizedOptionalNonEmpty(module, field: "module") {
+            items.append(URLQueryItem(name: "module", value: module))
+        }
+        if let eventKind = try ToriiRequestValidation.normalizedOptionalNonEmpty(eventKind, field: "eventKind") {
+            items.append(URLQueryItem(name: "event_kind", value: eventKind))
+        }
+        if let participant = participant?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !participant.isEmpty {
+            let normalized = try normalizeToriiParticipantQueryValue(participant, field: "participant")
+            items.append(URLQueryItem(name: "participant", value: normalized))
+        }
         if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+            let normalized = try normalizeToriiAssetSelectorQueryValue(assetId, field: "assetId")
             items.append(URLQueryItem(name: "asset_id", value: normalized))
+        }
+        if let provenance = try ToriiRequestValidation.normalizedOptionalNonEmpty(provenance, field: "provenance") {
+            items.append(URLQueryItem(name: "provenance", value: provenance))
+        }
+        if let sinceTimestampMs {
+            items.append(URLQueryItem(name: "since_timestamp_ms", value: String(sinceTimestampMs)))
+        }
+        if let untilTimestampMs {
+            items.append(URLQueryItem(name: "until_timestamp_ms", value: String(untilTimestampMs)))
+        }
+        if let resultOk {
+            items.append(URLQueryItem(name: "result_ok", value: resultOk ? "true" : "false"))
         }
         return items.isEmpty ? nil : items
     }
@@ -1072,6 +3423,48 @@ extension ToriiExplorerTransferDetails {
         }
     }
 
+    /// Parse Mint/Burn payloads. These have `destination` (an asset id) and `object` (amount).
+    fileprivate static func parseMintBurn(from json: ToriiJSONValue,
+                                          kind: String,
+                                          authority: String) -> ToriiExplorerTransferDetails? {
+        guard let payload = payloadObject(from: json) else {
+            return nil
+        }
+        guard let variantRaw = stringValue(payload["variant"]) else {
+            return nil
+        }
+        let variant = variantRaw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard variant == "asset" else {
+            return nil
+        }
+        guard let value = payload["value"], case let .object(map) = value else {
+            return nil
+        }
+        guard let destination = stringValue(map["destination"]),
+              let amount = stringValue(map["object"]) else {
+            return nil
+        }
+        let parsedAsset = parseAssetId(destination)
+        let actor = parsedAsset.account ?? authority
+        let normalizedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let sender = normalizedKind == "burn" ? actor : authority
+        let receiver = normalizedKind == "mint" ? actor : authority
+        let details = ToriiExplorerTransferAsset(destinationAccountId: receiver,
+                                                 amount: amount,
+                                                 senderAccountId: sender,
+                                                 assetDefinitionId: parsedAsset.definition)
+        return .asset(details)
+    }
+
+    /// Extract asset definition ID from a canonical public asset JSON value.
+    fileprivate static func extractAssetDefinitionId(from assetValue: ToriiJSONValue?) -> String? {
+        guard let assetValue else { return nil }
+        if case let .string(literal) = assetValue {
+            return OfflineNorito.assetDefinitionIdFromLiteral(literal) ?? literal
+        }
+        return stringValue(assetValue)
+    }
+
     fileprivate static func payloadObject(from json: ToriiJSONValue) -> [String: ToriiJSONValue]? {
         guard case let .object(root) = json else {
             return nil
@@ -1094,12 +3487,13 @@ extension ToriiExplorerTransferDetails {
               let amount = stringValue(map["object"]) else {
             return nil
         }
-        let (definition, sender) = parseAssetId(source)
-        let details = ToriiExplorerTransferAsset(sourceAssetId: source,
-                                                  destinationAccountId: destination,
-                                                  amount: amount,
-                                                  senderAccountId: sender,
-                                                  assetDefinitionId: definition)
+        let sourceFields = decodeToriiAssetIdFields(source)
+        let destinationFields = decodeToriiAssetIdFields(destination)
+        let sender = sourceFields.accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let details = ToriiExplorerTransferAsset(destinationAccountId: destinationFields.accountId ?? destination,
+                                                 amount: amount,
+                                                 senderAccountId: sender?.isEmpty == false ? sender : nil,
+                                                 assetDefinitionId: sourceFields.assetDefinitionId ?? destinationFields.assetDefinitionId)
         return .asset(details)
     }
 
@@ -1118,10 +3512,11 @@ extension ToriiExplorerTransferDetails {
             }
             guard let sender = stringValue(entryMap["from"]),
                   let receiver = stringValue(entryMap["to"]),
-                  let assetDefinition = stringValue(entryMap["asset_definition"]),
+                  let rawAssetDefinition = stringValue(entryMap["asset_definition"]),
                   let amount = stringValue(entryMap["amount"]) else {
                 return nil
             }
+            let assetDefinition = canonicalPublicAssetDefinitionLiteral(rawAssetDefinition) ?? rawAssetDefinition
             entries.append(ToriiExplorerTransferBatchEntry(senderAccountId: sender,
                                                            receiverAccountId: receiver,
                                                            assetDefinitionId: assetDefinition,
@@ -1152,21 +3547,38 @@ extension ToriiExplorerTransferDetails {
         guard !trimmed.isEmpty else {
             return (nil, nil)
         }
-        // Hard cut: parse encoded asset identifiers only.
-        guard (try? OfflineNorito.encodeAssetId(trimmed)) != nil else {
-            return (nil, nil)
+        if let parsed = OfflineNorito.parsePublicAssetIdLiteral(trimmed) {
+            return (parsed.assetDefinitionId, parsed.accountId)
         }
-        let lower = trimmed.lowercased()
-        guard lower.hasPrefix("norito:") else {
-            return (trimmed, nil)
+        if let canonical = canonicalPublicAssetDefinitionLiteral(trimmed) {
+            return (canonical, nil)
         }
-        let hex = String(trimmed.dropFirst("norito:".count)).lowercased()
-        let canonical = "norito:\(hex)"
-        let decoded = decodeToriiAssetIdFields(canonical)
-        if let definition = decoded.assetDefinitionId {
-            return (definition, decoded.accountId)
+        if let canonicalAccount = try? normalizeToriiAccountIdQueryValue(trimmed, field: "asset_id.account_id") {
+            return (nil, canonicalAccount)
         }
-        return (canonical, nil)
+        return (nil, nil)
+    }
+
+    fileprivate struct DecodedToriiAssetIdFields {
+        let assetDefinitionId: String?
+        let accountId: String?
+    }
+
+    fileprivate static func decodeToriiAssetIdFields(_ literal: String) -> DecodedToriiAssetIdFields {
+        let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parsed = OfflineNorito.parsePublicAssetIdLiteral(trimmed) {
+            return DecodedToriiAssetIdFields(
+                assetDefinitionId: parsed.assetDefinitionId,
+                accountId: parsed.accountId
+            )
+        }
+        if let canonical = canonicalPublicAssetDefinitionLiteral(trimmed) {
+            return DecodedToriiAssetIdFields(assetDefinitionId: canonical, accountId: nil)
+        }
+        if let canonicalAccount = try? normalizeToriiAccountIdQueryValue(trimmed, field: "asset_id.account_id") {
+            return DecodedToriiAssetIdFields(assetDefinitionId: nil, accountId: canonicalAccount)
+        }
+        return DecodedToriiAssetIdFields(assetDefinitionId: nil, accountId: nil)
     }
 }
 
@@ -1232,6 +3644,54 @@ public struct ToriiDomainListPage: Decodable, Sendable, ToriiListPageProtocol {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         items = try container.decodeIfPresent([ToriiDomainRecord].self, forKey: .items) ?? []
+        if let explicitTotal = try container.decodeIfPresent(Int.self, forKey: .total) {
+            total = explicitTotal
+        } else {
+            total = items.count
+        }
+    }
+}
+
+/// Chain-state RWA list item returned by `/v1/rwas` and `/v1/rwas/query`.
+public struct ToriiRwaListItem: Decodable, Sendable, Equatable {
+    public let id: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+
+    public init(id: String) {
+        self.id = id
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let identifier = try container.decode(String.self, forKey: .id)
+        guard !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ToriiClientError.invalidPayload("RWA list item `id` must be a non-empty string")
+        }
+        id = identifier
+    }
+}
+
+/// Paginated chain-state RWA lot list returned by `/v1/rwas` and `/v1/rwas/query`.
+public struct ToriiRwaListPage: Decodable, Sendable, ToriiListPageProtocol {
+    public let items: [ToriiRwaListItem]
+    public let total: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+        case total
+    }
+
+    public init(items: [ToriiRwaListItem], total: Int) {
+        self.items = items
+        self.total = total
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        items = try container.decodeIfPresent([ToriiRwaListItem].self, forKey: .items) ?? []
         if let explicitTotal = try container.decodeIfPresent(Int.self, forKey: .total) {
             total = explicitTotal
         } else {
@@ -1553,6 +4013,10 @@ public struct ToriiConnectStatusPolicySnapshot: Decodable, Sendable, Equatable {
     public let frameMaxBytes: UInt64?
     public let sessionBufferMaxBytes: UInt64?
     public let relayEnabled: Bool?
+    public let relayStrategy: String?
+    public let relayEffectiveStrategy: String?
+    public let relayP2pAttached: Bool?
+    public let p2pTtlHops: UInt64?
     public let heartbeatIntervalMs: UInt64?
     public let heartbeatMissTolerance: UInt64?
     public let heartbeatMinIntervalMs: UInt64?
@@ -1568,6 +4032,10 @@ public struct ToriiConnectStatusPolicySnapshot: Decodable, Sendable, Equatable {
         frameMaxBytes = ToriiConnectJSON.optionalUInt64(raw, key: "frame_max_bytes")
         sessionBufferMaxBytes = ToriiConnectJSON.optionalUInt64(raw, key: "session_buffer_max_bytes")
         relayEnabled = ToriiConnectJSON.optionalBool(raw, key: "relay_enabled")
+        relayStrategy = ToriiConnectJSON.optionalString(raw, key: "relay_strategy")
+        relayEffectiveStrategy = ToriiConnectJSON.optionalString(raw, key: "relay_effective_strategy")
+        relayP2pAttached = ToriiConnectJSON.optionalBool(raw, key: "relay_p2p_attached")
+        p2pTtlHops = ToriiConnectJSON.optionalUInt64(raw, key: "p2p_ttl_hops")
         heartbeatIntervalMs = ToriiConnectJSON.optionalUInt64(raw, key: "heartbeat_interval_ms")
         heartbeatMissTolerance = ToriiConnectJSON.optionalUInt64(raw, key: "heartbeat_miss_tolerance")
         heartbeatMinIntervalMs = ToriiConnectJSON.optionalUInt64(raw, key: "heartbeat_min_interval_ms")
@@ -1579,6 +4047,10 @@ public struct ToriiConnectStatusPolicySnapshot: Decodable, Sendable, Equatable {
             "frame_max_bytes",
             "session_buffer_max_bytes",
             "relay_enabled",
+            "relay_strategy",
+            "relay_effective_strategy",
+            "relay_p2p_attached",
+            "p2p_ttl_hops",
             "heartbeat_interval_ms",
             "heartbeat_miss_tolerance",
             "heartbeat_min_interval_ms"
@@ -1608,7 +4080,19 @@ public struct ToriiConnectStatusSnapshot: Decodable, Sendable, Equatable {
     public let bufferDropsTotal: UInt64
     public let plaintextControlDropsTotal: UInt64
     public let monotonicDropsTotal: UInt64
+    public let sequenceViolationClosesTotal: UInt64
+    public let roleDirectionMismatchTotal: UInt64
     public let pingMissTotal: UInt64
+    public let p2pRebroadcastsTotal: UInt64
+    public let p2pRebroadcastSkippedTotal: UInt64
+    public let p2pAuthFailuresTotal: UInt64
+    public let p2pTtlDropsTotal: UInt64
+    public let p2pUnknownSessionDropsTotal: UInt64
+    public let p2pSessionClaimsInTotal: UInt64
+    public let p2pSessionClaimsInstalledTotal: UInt64
+    public let p2pSessionClaimConflictsTotal: UInt64
+    public let p2pRoleConsumedTotal: UInt64
+    public let p2pSessionTerminatedTotal: UInt64
     public let raw: [String: ToriiJSONValue]
 
     public init(raw: [String: ToriiJSONValue]) throws {
@@ -1626,7 +4110,19 @@ public struct ToriiConnectStatusSnapshot: Decodable, Sendable, Equatable {
         bufferDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "buffer_drops_total", field: "buffer_drops_total")
         plaintextControlDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "plaintext_control_drops_total", field: "plaintext_control_drops_total")
         monotonicDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "monotonic_drops_total", field: "monotonic_drops_total")
+        sequenceViolationClosesTotal = try ToriiConnectJSON.requireUInt64(raw, key: "sequence_violation_closes_total", field: "sequence_violation_closes_total")
+        roleDirectionMismatchTotal = try ToriiConnectJSON.requireUInt64(raw, key: "role_direction_mismatch_total", field: "role_direction_mismatch_total")
         pingMissTotal = try ToriiConnectJSON.requireUInt64(raw, key: "ping_miss_total", field: "ping_miss_total")
+        p2pRebroadcastsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_rebroadcasts_total", field: "p2p_rebroadcasts_total")
+        p2pRebroadcastSkippedTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_rebroadcast_skipped_total", field: "p2p_rebroadcast_skipped_total")
+        p2pAuthFailuresTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_auth_failures_total", field: "p2p_auth_failures_total")
+        p2pTtlDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_ttl_drops_total", field: "p2p_ttl_drops_total")
+        p2pUnknownSessionDropsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_unknown_session_drops_total", field: "p2p_unknown_session_drops_total")
+        p2pSessionClaimsInTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_session_claims_in_total", field: "p2p_session_claims_in_total")
+        p2pSessionClaimsInstalledTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_session_claims_installed_total", field: "p2p_session_claims_installed_total")
+        p2pSessionClaimConflictsTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_session_claim_conflicts_total", field: "p2p_session_claim_conflicts_total")
+        p2pRoleConsumedTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_role_consumed_total", field: "p2p_role_consumed_total")
+        p2pSessionTerminatedTotal = try ToriiConnectJSON.requireUInt64(raw, key: "p2p_session_terminated_total", field: "p2p_session_terminated_total")
         let perIpRaw = try ToriiConnectJSON.objectsArray(raw,
                                                          key: "per_ip_sessions",
                                                          field: "per_ip_sessions")
@@ -1650,6 +4146,8 @@ public struct ToriiConnectSessionResponse: Decodable, Sendable, Equatable {
     public let appURI: String
     public let tokenApp: String
     public let tokenWallet: String
+    public let tokenManagement: String
+    public let tokenRelay: String
     public let extra: [String: ToriiJSONValue]
     public let raw: [String: ToriiJSONValue]
 
@@ -1660,12 +4158,16 @@ public struct ToriiConnectSessionResponse: Decodable, Sendable, Equatable {
         appURI = try ToriiConnectJSON.requireString(raw, key: "app_uri", field: "app_uri")
         tokenApp = try ToriiConnectJSON.requireString(raw, key: "token_app", field: "token_app")
         tokenWallet = try ToriiConnectJSON.requireString(raw, key: "token_wallet", field: "token_wallet")
+        tokenManagement = try ToriiConnectJSON.requireString(raw, key: "token_management", field: "token_management")
+        tokenRelay = try ToriiConnectJSON.requireString(raw, key: "token_relay", field: "token_relay")
         let known: Set<String> = [
             "sid",
             "wallet_uri",
             "app_uri",
             "token_app",
-            "token_wallet"
+            "token_wallet",
+            "token_management",
+            "token_relay"
         ]
         extra = ToriiConnectJSON.mergeExtra(record: raw, knownKeys: known)
     }
@@ -2086,23 +4588,19 @@ public enum ToriiSubscriptionCancelMode: String, Codable, Sendable, CaseIterable
 
 public struct ToriiSubscriptionPlanCreateRequest: Encodable, Sendable {
     public var authority: String
-    public var privateKey: String
     public var planId: String
     public var plan: ToriiSubscriptionPlan
 
     public init(authority: String,
-                privateKey: String,
                 planId: String,
                 plan: ToriiSubscriptionPlan) {
         self.authority = authority
-        self.privateKey = privateKey
         self.planId = planId
         self.plan = plan
     }
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case privateKey = "private_key"
         case planId = "plan_id"
         case plan
     }
@@ -2110,13 +4608,10 @@ public struct ToriiSubscriptionPlanCreateRequest: Encodable, Sendable {
     public func encode(to encoder: Encoder) throws {
         let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
                                                                                 field: "authority")
-        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                  field: "private_key")
         let normalizedPlanId = try ToriiRequestValidation.normalizedNonEmpty(planId,
                                                                              field: "plan_id")
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
         try container.encode(normalizedPlanId, forKey: .planId)
         try container.encode(plan, forKey: .plan)
     }
@@ -2180,7 +4675,6 @@ public struct ToriiSubscriptionPlanListResponse: Decodable, Sendable {
 
 public struct ToriiSubscriptionCreateRequest: Encodable, Sendable {
     public var authority: String
-    public var privateKey: String
     public var subscriptionId: String
     public var planId: String
     public var billingTriggerId: String?
@@ -2189,7 +4683,6 @@ public struct ToriiSubscriptionCreateRequest: Encodable, Sendable {
     public var grantUsageToProvider: Bool?
 
     public init(authority: String,
-                privateKey: String,
                 subscriptionId: String,
                 planId: String,
                 billingTriggerId: String? = nil,
@@ -2197,7 +4690,6 @@ public struct ToriiSubscriptionCreateRequest: Encodable, Sendable {
                 firstChargeMs: UInt64? = nil,
                 grantUsageToProvider: Bool? = nil) {
         self.authority = authority
-        self.privateKey = privateKey
         self.subscriptionId = subscriptionId
         self.planId = planId
         self.billingTriggerId = billingTriggerId
@@ -2208,7 +4700,6 @@ public struct ToriiSubscriptionCreateRequest: Encodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case privateKey = "private_key"
         case subscriptionId = "subscription_id"
         case planId = "plan_id"
         case billingTriggerId = "billing_trigger_id"
@@ -2220,15 +4711,12 @@ public struct ToriiSubscriptionCreateRequest: Encodable, Sendable {
     public func encode(to encoder: Encoder) throws {
         let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
                                                                                 field: "authority")
-        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                  field: "private_key")
         let normalizedSubscriptionId = try ToriiRequestValidation.normalizedNonEmpty(subscriptionId,
                                                                                      field: "subscription_id")
         let normalizedPlanId = try ToriiRequestValidation.normalizedNonEmpty(planId,
                                                                              field: "plan_id")
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
         try container.encode(normalizedSubscriptionId, forKey: .subscriptionId)
         try container.encode(normalizedPlanId, forKey: .planId)
         if let billingTriggerId = try ToriiRequestValidation.normalizedOptionalNonEmpty(billingTriggerId,
@@ -2325,23 +4813,19 @@ public struct ToriiSubscriptionListResponse: Decodable, Sendable {
 
 public struct ToriiSubscriptionActionRequest: Encodable, Sendable {
     public var authority: String
-    public var privateKey: String
     public var chargeAtMs: UInt64?
     public var cancelMode: ToriiSubscriptionCancelMode?
 
     public init(authority: String,
-                privateKey: String,
                 chargeAtMs: UInt64? = nil,
                 cancelMode: ToriiSubscriptionCancelMode? = nil) {
         self.authority = authority
-        self.privateKey = privateKey
         self.chargeAtMs = chargeAtMs
         self.cancelMode = cancelMode
     }
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case privateKey = "private_key"
         case chargeAtMs = "charge_at_ms"
         case cancelMode = "cancel_mode"
     }
@@ -2349,11 +4833,8 @@ public struct ToriiSubscriptionActionRequest: Encodable, Sendable {
     public func encode(to encoder: Encoder) throws {
         let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
                                                                                 field: "authority")
-        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                  field: "private_key")
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
         try container.encodeIfPresent(chargeAtMs, forKey: .chargeAtMs)
         try container.encodeIfPresent(cancelMode, forKey: .cancelMode)
     }
@@ -2361,18 +4842,15 @@ public struct ToriiSubscriptionActionRequest: Encodable, Sendable {
 
 public struct ToriiSubscriptionUsageRequest: Encodable, Sendable {
     public var authority: String
-    public var privateKey: String
     public var unitKey: String
     public var delta: String
     public var usageTriggerId: String?
 
     public init(authority: String,
-                privateKey: String,
                 unitKey: String,
                 delta: String,
                 usageTriggerId: String? = nil) {
         self.authority = authority
-        self.privateKey = privateKey
         self.unitKey = unitKey
         self.delta = delta
         self.usageTriggerId = usageTriggerId
@@ -2380,7 +4858,6 @@ public struct ToriiSubscriptionUsageRequest: Encodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case privateKey = "private_key"
         case unitKey = "unit_key"
         case delta
         case usageTriggerId = "usage_trigger_id"
@@ -2389,13 +4866,10 @@ public struct ToriiSubscriptionUsageRequest: Encodable, Sendable {
     public func encode(to encoder: Encoder) throws {
         let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
                                                                                 field: "authority")
-        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                  field: "private_key")
         let normalizedUnitKey = try ToriiRequestValidation.normalizedNonEmpty(unitKey, field: "unit_key")
         let normalizedDelta = try ToriiRequestValidation.normalizedNonEmpty(delta, field: "delta")
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
         try container.encode(normalizedUnitKey, forKey: .unitKey)
         try container.encode(normalizedDelta, forKey: .delta)
         if let usageTriggerId = try ToriiRequestValidation.normalizedOptionalNonEmpty(usageTriggerId,
@@ -2414,1050 +4888,6 @@ public struct ToriiSubscriptionActionResponse: Decodable, Sendable {
         case ok
         case subscriptionId = "subscription_id"
         case txHashHex = "tx_hash_hex"
-    }
-}
-
-public struct ToriiOfflineAllowanceItem: Decodable, Sendable {
-    public let certificateIdHex: String
-    public let controllerId: String
-    public let controllerDisplay: String
-    public let assetId: String
-    public let registeredAtMs: UInt64
-    public let expiresAtMs: UInt64
-    public let policyExpiresAtMs: UInt64
-    public let refreshAtMs: UInt64?
-    public let verdictIdHex: String?
-    public let attestationNonceHex: String?
-    public let remainingAmount: String
-    public let currentCommitmentHex: String
-    public let deadlineKind: String?
-    public let deadlineState: String?
-    public let deadlineMs: UInt64?
-    public let deadlineMsRemaining: Int64?
-    let record: ToriiJSONValue
-
-    public func decodeRecord<T: Decodable>(as type: T.Type = T.self,
-                                           decoder: JSONDecoder = JSONDecoder()) throws -> T {
-        try record.decode(as: type, decoder: decoder)
-    }
-
-    public init(certificateIdHex: String,
-                controllerId: String,
-                controllerDisplay: String,
-                assetId: String,
-                registeredAtMs: UInt64,
-                expiresAtMs: UInt64,
-                policyExpiresAtMs: UInt64,
-                refreshAtMs: UInt64?,
-                verdictIdHex: String?,
-                attestationNonceHex: String?,
-                remainingAmount: String,
-                currentCommitmentHex: String,
-                deadlineKind: String? = nil,
-                deadlineState: String? = nil,
-                deadlineMs: UInt64? = nil,
-                deadlineMsRemaining: Int64? = nil,
-                record: ToriiJSONValue) {
-        self.certificateIdHex = certificateIdHex
-        self.controllerId = controllerId
-        self.controllerDisplay = controllerDisplay
-        self.assetId = assetId
-        self.registeredAtMs = registeredAtMs
-        self.expiresAtMs = expiresAtMs
-        self.policyExpiresAtMs = policyExpiresAtMs
-        self.refreshAtMs = refreshAtMs
-        self.verdictIdHex = verdictIdHex
-        self.attestationNonceHex = attestationNonceHex
-        self.remainingAmount = remainingAmount
-        self.currentCommitmentHex = currentCommitmentHex
-        self.deadlineKind = deadlineKind
-        self.deadlineState = deadlineState
-        self.deadlineMs = deadlineMs
-        self.deadlineMsRemaining = deadlineMsRemaining
-        self.record = record
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let rootValue = try container.decode(ToriiJSONValue.self)
-        guard case let .object(object) = rootValue else {
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "Offline allowance entry must be a JSON object"
-            )
-        }
-
-        func value(_ key: String) -> ToriiJSONValue? {
-            object[key]
-        }
-
-        guard let recordValue = object["record"] else {
-            throw DecodingError.keyNotFound(
-                CodingKeys.record,
-                .init(codingPath: decoder.codingPath, debugDescription: "missing record payload")
-            )
-        }
-
-        let recordObject: [String: ToriiJSONValue]
-        if case let .object(payload) = recordValue {
-            recordObject = payload
-        } else {
-            recordObject = [:]
-        }
-
-        func string(_ key: String, field: String) throws -> String {
-            if let string = ToriiOfflineAllowanceItem.normalizedString(value(key)) {
-                return string
-            }
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath, debugDescription: "missing \(field)")
-            )
-        }
-
-        func optionalString(_ key: String) -> String? {
-            ToriiOfflineAllowanceItem.normalizedString(value(key))
-        }
-
-        func uint64(_ key: String, field: String, defaultValue: UInt64? = nil) throws -> UInt64 {
-            if let number = ToriiOfflineAllowanceItem.normalizedUInt64(value(key)) {
-                return number
-            }
-            if let fallback = defaultValue {
-                return fallback
-            }
-            throw DecodingError.dataCorrupted(
-                .init(codingPath: decoder.codingPath,
-                      debugDescription: "missing \(field)")
-            )
-        }
-
-        func optionalUInt64(_ key: String) -> UInt64? {
-            ToriiOfflineAllowanceItem.normalizedUInt64(value(key))
-        }
-
-        func optionalInt64(_ key: String) -> Int64? {
-            ToriiOfflineAllowanceItem.normalizedInt64(value(key))
-        }
-
-        func remainingAmountValue() -> String {
-            if let topLevel = ToriiOfflineAllowanceItem.normalizedString(
-                value("remaining_amount")
-            ) {
-                return topLevel
-            }
-            if let nested = ToriiOfflineAllowanceItem.normalizedString(
-                ToriiOfflineAllowanceItem.lookup(
-                    key: "remaining_amount",
-                    in: recordObject
-                )
-            ) {
-                return nested
-            }
-            return "0"
-        }
-
-        self.certificateIdHex = try string("certificate_id_hex", field: "certificate_id_hex")
-        self.controllerId = try string("controller_id", field: "controller_id")
-        self.controllerDisplay = try string("controller_display", field: "controller_display")
-        self.assetId = try string("asset_id", field: "asset_id")
-        self.registeredAtMs = try uint64("registered_at_ms", field: "registered_at_ms")
-        let expires = try uint64(
-            "expires_at_ms",
-            field: "expires_at_ms",
-            defaultValue: 0
-        )
-        self.expiresAtMs = expires
-        self.policyExpiresAtMs = try uint64(
-            "policy_expires_at_ms",
-            field: "policy_expires_at_ms",
-            defaultValue: expires
-        )
-        self.refreshAtMs = optionalUInt64("refresh_at_ms")
-        self.verdictIdHex = optionalString("verdict_id_hex")
-        self.attestationNonceHex = optionalString("attestation_nonce_hex")
-        self.remainingAmount = remainingAmountValue()
-        self.currentCommitmentHex = Self.parseCommitmentHex(
-            from: recordObject, recordValue: recordValue
-        )
-        self.deadlineKind = optionalString("deadline_kind")
-        self.deadlineState = optionalString("deadline_state")
-        self.deadlineMs = optionalUInt64("deadline_ms")
-        self.deadlineMsRemaining = optionalInt64("deadline_ms_remaining")
-        self.record = recordValue
-    }
-
-    private static func lookup(key: String,
-                               in object: [String: ToriiJSONValue]) -> ToriiJSONValue? {
-        object[key]
-    }
-
-    private static func normalizedString(_ value: ToriiJSONValue?) -> String? {
-        guard let value else { return nil }
-        return value.normalizedString
-    }
-
-    private static func normalizedUInt64(_ value: ToriiJSONValue?) -> UInt64? {
-        guard let value else { return nil }
-        return value.normalizedUInt64
-    }
-
-    private static func normalizedInt64(_ value: ToriiJSONValue?) -> Int64? {
-        guard let value else { return nil }
-        return value.normalizedInt64
-    }
-
-    private static func parseCommitmentHex(
-        from recordObject: [String: ToriiJSONValue],
-        recordValue: ToriiJSONValue
-    ) -> String {
-        if let hex = recordObject["current_commitment_hex"]?.normalizedString {
-            let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-            let cleaned = trimmed.lowercased().hasPrefix("0x")
-                ? String(trimmed.dropFirst(2)) : trimmed
-            if let data = Data(hexString: cleaned), !data.isEmpty {
-                return data.hexLowercased()
-            }
-        }
-        if let bytes = recordObject["current_commitment"]?.normalizedBytes, !bytes.isEmpty {
-            return bytes.hexLowercased()
-        }
-        let certificateValue: ToriiJSONValue
-        if let certValue = recordObject["certificate"] {
-            certificateValue = certValue
-        } else {
-            certificateValue = recordValue
-        }
-        if let cert = try? OfflineToriiDecoding.decodeCertificate(from: certificateValue),
-           !cert.allowance.commitment.isEmpty {
-            return cert.allowance.commitment.hexLowercased()
-        }
-        return ""
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case record
-    }
-}
-
-public struct ToriiOfflineAllowanceList: Decodable, Sendable {
-    public let items: [ToriiOfflineAllowanceItem]
-    public let total: UInt64
-}
-
-public extension ToriiOfflineAllowanceItem {
-    /// Construct a synthetic allowance item from a certificate issue response,
-    /// for immediate local use before ledger confirmation.
-    init(issueResponse: ToriiOfflineCertificateIssueResponse,
-         controllerId: String,
-         registeredAtMs: UInt64) throws {
-        let certificate = try issueResponse.decodeCertificate()
-        guard !certificate.allowance.commitment.isEmpty else {
-            throw OfflineToriiDecodingError.missingField("commitment")
-        }
-        let commitmentHex = certificate.allowance.commitment.hexLowercased()
-        self.init(
-            certificateIdHex: issueResponse.certificateIdHex,
-            controllerId: controllerId,
-            controllerDisplay: controllerId,
-            assetId: certificate.allowance.assetId,
-            registeredAtMs: registeredAtMs,
-            expiresAtMs: certificate.expiresAtMs,
-            policyExpiresAtMs: certificate.policy.expiresAtMs,
-            refreshAtMs: certificate.refreshAtMs,
-            verdictIdHex: certificate.verdictId?.hexUppercased(),
-            attestationNonceHex: certificate.attestationNonce?.hexUppercased(),
-            remainingAmount: certificate.allowance.amount,
-            currentCommitmentHex: commitmentHex,
-            record: issueResponse.certificate
-        )
-    }
-}
-
-public extension ToriiOfflineAllowanceItem {
-    /// Parsed numeric remaining amount for this certificate, or `nil` when the payload is invalid.
-    var remainingAmountDecimal: Decimal? {
-        let trimmed = remainingAmount.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return nil
-        }
-        return Decimal(string: trimmed)
-    }
-}
-
-public extension ToriiOfflineAllowanceList {
-    /// Sum of all remaining offline allowances across certificates.
-    ///
-    /// Important: this value can be higher than what can be sent in a single receipt.
-    var aggregateRemainingAmount: Decimal {
-        items
-            .compactMap(\.remainingAmountDecimal)
-            .reduce(.zero, +)
-    }
-
-    /// Maximum amount that can be sent in one offline receipt, constrained by one certificate.
-    var maxSingleTransferAmount: Decimal {
-        var maximum = Decimal.zero
-        for amount in items.compactMap(\.remainingAmountDecimal) where amount > maximum {
-            maximum = amount
-        }
-        return maximum
-    }
-
-    /// Returns `true` when any single certificate can cover `amount`.
-    func supportsSingleTransfer(amount: Decimal) -> Bool {
-        guard amount > .zero else {
-            return false
-        }
-        return maxSingleTransferAmount >= amount
-    }
-
-    /// Returns the first allowance whose remaining balance can cover `amount`.
-    func firstAllowanceSupportingSingleTransfer(amount: Decimal) -> ToriiOfflineAllowanceItem? {
-        guard amount > .zero else {
-            return nil
-        }
-        return items.first { item in
-            (item.remainingAmountDecimal ?? .zero) >= amount
-        }
-    }
-}
-
-public struct ToriiOfflineSummaryItem: Decodable, Sendable {
-    public let certificateIdHex: String
-    public let controllerId: String
-    public let controllerDisplay: String
-    public let summaryHashHex: String
-    public let appleKeyCounters: [String: UInt64]
-    public let androidSeriesCounters: [String: UInt64]
-
-    private enum CodingKeys: String, CodingKey {
-        case certificateIdHex = "certificate_id_hex"
-        case controllerId = "controller_id"
-        case controllerDisplay = "controller_display"
-        case summaryHashHex = "summary_hash_hex"
-        case appleKeyCounters = "apple_key_counters"
-        case androidSeriesCounters = "android_series_counters"
-    }
-}
-
-public struct ToriiOfflineSummaryList: Decodable, Sendable {
-    public let items: [ToriiOfflineSummaryItem]
-    public let total: UInt64
-}
-
-public struct ToriiOfflineVerdictRevocation: Decodable, Sendable {
-    public let verdictIdHex: String
-    public let issuerId: String
-    public let issuerDisplay: String
-    public let revokedAtMs: UInt64
-    public let reason: String
-    public let note: String?
-    public let metadata: ToriiJSONValue?
-    public let record: ToriiJSONValue
-
-    private enum CodingKeys: String, CodingKey {
-        case verdictIdHex = "verdict_id_hex"
-        case issuerId = "issuer_id"
-        case issuerDisplay = "issuer_display"
-        case revokedAtMs = "revoked_at_ms"
-        case reason
-        case note
-        case metadata
-        case record
-    }
-
-    public func decodeRecord<T: Decodable>(as type: T.Type = T.self,
-                                           decoder: JSONDecoder = JSONDecoder()) throws -> T {
-        try record.decode(as: type, decoder: decoder)
-    }
-}
-
-public struct ToriiOfflineRevocationList: Decodable, Sendable {
-    public let items: [ToriiOfflineVerdictRevocation]
-    public let total: UInt64
-}
-
-/// Lightweight proof status response for an offline bundle.
-public struct ToriiOfflineBundleProofStatus: Decodable, Sendable, Equatable {
-    /// Proof status label returned by Torii (e.g., `fresh`, `match`, `expired`).
-    public let proofStatus: String?
-    /// Receipts root advertised by the bundle.
-    public let receiptsRootHex: String?
-    /// Aggregate proof root if present in the bundle or admission pipeline.
-    public let aggregateProofRootHex: String?
-    /// Indicates whether Torii computed the same receipts root as the bundle reported.
-    public let receiptsRootMatches: Bool?
-    /// Optional summary payload returned by Torii.
-    public let proofSummary: ToriiJSONValue?
-    /// Full payload for forward compatibility.
-    public let fields: [String: ToriiJSONValue]
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let raw = try container.decode([String: ToriiJSONValue].self)
-        fields = raw
-        proofStatus = Self.normalizedString(raw["proof_status"])
-        receiptsRootHex = Self.normalizedString(raw["receipts_root_hex"])
-        aggregateProofRootHex = Self.normalizedString(raw["aggregate_proof_root_hex"])
-        receiptsRootMatches = Self.normalizedBool(raw["receipts_root_matches"])
-        proofSummary = raw["proof_summary"]
-    }
-
-    /// Attempt to decode the proof summary into the typed view if present.
-    public func decodeProofSummary() throws -> ToriiOfflineBundleProofSummary? {
-        guard let proofSummary else { return nil }
-        return try proofSummary.decode(as: ToriiOfflineBundleProofSummary.self)
-    }
-
-    /// Access an arbitrary raw field by name.
-    public subscript(field name: String) -> ToriiJSONValue? {
-        fields[name]
-    }
-
-    private static func normalizedString(_ value: ToriiJSONValue?) -> String? {
-        guard let value else { return nil }
-        return value.normalizedString
-    }
-
-    private static func normalizedBool(_ value: ToriiJSONValue?) -> Bool? {
-        guard let value else { return nil }
-        switch value {
-        case .bool(let flag):
-            return flag
-        case .string(let string):
-            let lowered = string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if lowered == "true" { return true }
-            if lowered == "false" { return false }
-            return nil
-        default:
-            return nil
-        }
-    }
-}
-
-/// Typed view of the optional proof summary payload returned by `/v1/offline/bundle/proof_status`.
-public struct ToriiOfflineBundleProofSummary: Decodable, Sendable, Equatable {
-    public let version: UInt16
-    public let proofSumBytes: UInt64?
-    public let proofCounterBytes: UInt64?
-    public let proofReplayBytes: UInt64?
-    public let metadataKeys: [String]?
-
-    private enum CodingKeys: String, CodingKey {
-        case version
-        case proofSumBytes = "proof_sum_bytes"
-        case proofCounterBytes = "proof_counter_bytes"
-        case proofReplayBytes = "proof_replay_bytes"
-        case metadataKeys = "metadata_keys"
-    }
-}
-
-public struct ToriiOfflineCertificateIssueRequest: Encodable, Sendable {
-    public let certificate: ToriiJSONValue
-
-    public init(certificate: ToriiJSONValue) {
-        self.certificate = certificate
-    }
-}
-
-public struct ToriiOfflineCertificateIssueResponse: Decodable, Sendable, Equatable {
-    public let certificateIdHex: String
-    let certificate: ToriiJSONValue
-
-    private enum CodingKeys: String, CodingKey {
-        case certificateIdHex = "certificate_id_hex"
-        case certificate
-    }
-
-    public func decodeCertificate() throws -> OfflineWalletCertificate {
-        try OfflineWalletCertificate(toriiValue: certificate)
-    }
-
-    /// Encode the raw certificate JSON to Data for local storage.
-    public func encodedRecordData() throws -> Data {
-        try certificate.encodedData()
-    }
-
-    /// Build a register request from this issue response — keeps ToriiJSONValue internal.
-    public func registerRequest(authority: String, privateKey: String) -> ToriiOfflineAllowanceRegisterRequest {
-        ToriiOfflineAllowanceRegisterRequest(authority: authority, privateKey: privateKey, certificate: certificate)
-    }
-}
-
-public struct ToriiOfflineBuildClaimIssueRequest: Encodable, Sendable {
-    public let certificateIdHex: String
-    public let txIdHex: String
-    public let platform: String
-    public let appId: String?
-    public let buildNumber: UInt64?
-    public let issuedAtMs: UInt64?
-    public let expiresAtMs: UInt64?
-
-    private enum CodingKeys: String, CodingKey {
-        case certificateIdHex = "certificate_id_hex"
-        case txIdHex = "tx_id_hex"
-        case platform
-        case appId = "app_id"
-        case buildNumber = "build_number"
-        case issuedAtMs = "issued_at_ms"
-        case expiresAtMs = "expires_at_ms"
-    }
-
-    public init(certificateIdHex: String,
-                txIdHex: String,
-                platform: String,
-                appId: String? = nil,
-                buildNumber: UInt64? = nil,
-                issuedAtMs: UInt64? = nil,
-                expiresAtMs: UInt64? = nil) {
-        self.certificateIdHex = certificateIdHex
-        self.txIdHex = txIdHex
-        self.platform = platform.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.appId = appId
-        self.buildNumber = buildNumber
-        self.issuedAtMs = issuedAtMs
-        self.expiresAtMs = expiresAtMs
-    }
-}
-
-public enum ToriiOfflineBuildClaimPlatform: String, Codable, Sendable, Equatable {
-    case apple = "Apple"
-    case android = "Android"
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let raw = try container.decode(String.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        switch raw.lowercased() {
-        case "apple", "ios":
-            self = .apple
-        case "android":
-            self = .android
-        default:
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "platform must be Apple or Android"
-            )
-        }
-    }
-}
-
-public struct ToriiOfflineBuildClaim: Codable, Sendable, Equatable {
-    public let claimId: String
-    public let nonce: String
-    public let platform: ToriiOfflineBuildClaimPlatform
-    public let appId: String
-    public let buildNumber: UInt64
-    public let issuedAtMs: UInt64
-    public let expiresAtMs: UInt64
-    public let lineageScope: String?
-    public let operatorSignature: String
-
-    private enum CodingKeys: String, CodingKey {
-        case claimId = "claim_id"
-        case nonce
-        case platform
-        case appId = "app_id"
-        case buildNumber = "build_number"
-        case issuedAtMs = "issued_at_ms"
-        case expiresAtMs = "expires_at_ms"
-        case lineageScope = "lineage_scope"
-        case operatorSignature = "operator_signature"
-    }
-}
-
-public struct ToriiOfflineBuildClaimIssueResponse: Decodable, Sendable, Equatable {
-    public let claimIdHex: String
-    private let buildClaim: ToriiJSONValue
-
-    private enum CodingKeys: String, CodingKey {
-        case claimIdHex = "claim_id_hex"
-        case buildClaim = "build_claim"
-    }
-
-    public var rawBuildClaim: ToriiJSONValue {
-        buildClaim
-    }
-
-    public func decodeBuildClaim<T: Decodable>(as type: T.Type = T.self,
-                                               decoder: JSONDecoder = JSONDecoder()) throws -> T {
-        try buildClaim.decode(as: type, decoder: decoder)
-    }
-
-    public func buildClaimObject(decoder: JSONDecoder = JSONDecoder()) throws -> ToriiOfflineBuildClaim {
-        try decodeBuildClaim(as: ToriiOfflineBuildClaim.self, decoder: decoder)
-    }
-
-    /// Encode the raw build-claim JSON to Data for local storage.
-    public func encodedBuildClaimData() throws -> Data {
-        try buildClaim.encodedData()
-    }
-}
-
-public struct ToriiOfflineAllowanceRegisterRequest: Encodable, Sendable {
-    public let authority: String
-    public let privateKey: String
-    public let certificate: ToriiJSONValue
-
-    private enum CodingKeys: String, CodingKey {
-        case authority
-        case privateKey = "private_key"
-        case certificate
-    }
-
-    public init(authority: String, privateKey: String, certificate: ToriiJSONValue) {
-        self.authority = authority
-        self.privateKey = privateKey
-        self.certificate = certificate
-    }
-}
-
-public struct ToriiOfflineAllowanceRegisterResponse: Decodable, Sendable, Equatable {
-    public let certificateIdHex: String
-
-    private enum CodingKeys: String, CodingKey {
-        case certificateIdHex = "certificate_id_hex"
-    }
-}
-
-/// Aggregated result for the offline top-up helper (issue + register/renew).
-public struct ToriiOfflineTopUpResponse: Sendable, Equatable {
-    public let certificate: ToriiOfflineCertificateIssueResponse
-    public let registration: ToriiOfflineAllowanceRegisterResponse
-
-    public init(certificate: ToriiOfflineCertificateIssueResponse,
-                registration: ToriiOfflineAllowanceRegisterResponse) {
-        self.certificate = certificate
-        self.registration = registration
-    }
-}
-
-public struct ToriiOfflineSpendReceiptsSubmitRequest: Encodable, Sendable {
-    public let receipts: [ToriiJSONValue]
-
-    public init(receipts: [ToriiJSONValue]) {
-        self.receipts = receipts
-    }
-}
-
-public struct ToriiOfflineSpendReceiptsSubmitResponse: Decodable, Sendable, Equatable {
-    public let receiptsRootHex: String
-    public let receiptCount: UInt64
-    public let totalAmount: String
-    public let assetId: String?
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        let raw = try container.decode([String: ToriiJSONValue].self)
-        guard let root = raw["receipts_root_hex"]?.normalizedString else {
-            throw DecodingError.dataCorruptedError(in: container,
-                                                   debugDescription: "missing receipts_root_hex")
-        }
-        guard let count = raw["receipt_count"]?.normalizedUInt64 else {
-            throw DecodingError.dataCorruptedError(in: container,
-                                                   debugDescription: "missing receipt_count")
-        }
-        guard let total = raw["total_amount"]?.normalizedString else {
-            throw DecodingError.dataCorruptedError(in: container,
-                                                   debugDescription: "missing total_amount")
-        }
-        self.receiptsRootHex = root
-        self.receiptCount = count
-        self.totalAmount = total
-        self.assetId = raw["asset_id"]?.normalizedString
-    }
-}
-
-public struct ToriiOfflineSettlementSubmitRequest: Encodable, Sendable {
-    public let authority: String
-    public let privateKey: String
-    public let transfer: ToriiJSONValue
-    public let buildClaimOverrides: [ToriiOfflineSettlementBuildClaimOverride]
-    public let repairExistingBuildClaims: Bool
-
-    private enum CodingKeys: String, CodingKey {
-        case authority
-        case privateKey = "private_key"
-        case transfer
-        case buildClaimOverrides = "build_claim_overrides"
-        case repairExistingBuildClaims = "repair_existing_build_claims"
-    }
-
-    public init(authority: String,
-                privateKey: String,
-                transfer: ToriiJSONValue,
-                buildClaimOverrides: [ToriiOfflineSettlementBuildClaimOverride] = [],
-                repairExistingBuildClaims: Bool = false) {
-        self.authority = authority
-        self.privateKey = privateKey
-        self.transfer = transfer
-        self.buildClaimOverrides = buildClaimOverrides
-        self.repairExistingBuildClaims = repairExistingBuildClaims
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(authority, forKey: .authority)
-        try container.encode(privateKey, forKey: .privateKey)
-        try container.encode(transfer, forKey: .transfer)
-        if !buildClaimOverrides.isEmpty {
-            try container.encode(buildClaimOverrides, forKey: .buildClaimOverrides)
-        }
-        if repairExistingBuildClaims {
-            try container.encode(true, forKey: .repairExistingBuildClaims)
-        }
-    }
-}
-
-public struct ToriiOfflineSettlementSubmitResponse: Decodable, Sendable, Equatable {
-    public let bundleIdHex: String
-    public let txHashHex: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case bundleIdHex = "bundle_id_hex"
-        case txHashHex = "transaction_hash_hex"
-    }
-}
-
-public struct ToriiOfflineSettlementBuildClaimOverride: Encodable, Sendable, Equatable {
-    public let txIdHex: String
-    public let appId: String?
-    public let buildNumber: UInt64?
-    public let issuedAtMs: UInt64?
-    public let expiresAtMs: UInt64?
-
-    private enum CodingKeys: String, CodingKey {
-        case txIdHex = "tx_id_hex"
-        case appId = "app_id"
-        case buildNumber = "build_number"
-        case issuedAtMs = "issued_at_ms"
-        case expiresAtMs = "expires_at_ms"
-    }
-
-    public init(txIdHex: String,
-                appId: String? = nil,
-                buildNumber: UInt64? = nil,
-                issuedAtMs: UInt64? = nil,
-                expiresAtMs: UInt64? = nil) {
-        self.txIdHex = txIdHex
-        self.appId = appId
-        self.buildNumber = buildNumber
-        self.issuedAtMs = issuedAtMs
-        self.expiresAtMs = expiresAtMs
-    }
-}
-
-public struct ToriiOfflineTransferProofRequest: Encodable, Sendable {
-    public let transfer: ToriiJSONValue
-    public let kind: String
-    public let counterCheckpoint: UInt64?
-    public let replayLogHeadHex: String?
-    public let replayLogTailHex: String?
-
-    private enum CodingKeys: String, CodingKey {
-        case transfer
-        case kind
-        case counterCheckpoint = "counter_checkpoint"
-        case replayLogHeadHex = "replay_log_head_hex"
-        case replayLogTailHex = "replay_log_tail_hex"
-    }
-
-    public init(transfer: ToriiJSONValue,
-                kind: String,
-                counterCheckpoint: UInt64? = nil,
-                replayLogHeadHex: String? = nil,
-                replayLogTailHex: String? = nil) {
-        self.transfer = transfer
-        self.kind = kind
-        self.counterCheckpoint = counterCheckpoint
-        self.replayLogHeadHex = replayLogHeadHex
-        self.replayLogTailHex = replayLogTailHex
-    }
-
-    public init(transfer: OfflineToOnlineTransfer,
-                kind: String,
-                counterCheckpoint: UInt64? = nil,
-                replayLogHeadHex: String? = nil,
-                replayLogTailHex: String? = nil) throws {
-        self.init(transfer: try transfer.toriiJSON(),
-                  kind: kind,
-                  counterCheckpoint: counterCheckpoint,
-                  replayLogHeadHex: replayLogHeadHex,
-                  replayLogTailHex: replayLogTailHex)
-    }
-}
-
-public struct ToriiOfflineTransferItem: Codable, Sendable {
-    public let bundleIdHex: String
-    public let controllerId: String
-    public let controllerDisplay: String
-    public let receiverId: String
-    public let receiverDisplay: String
-    public let depositAccountId: String
-    public let depositAccountDisplay: String
-    public let assetId: String?
-    public let receiptCount: UInt64
-    public let totalAmount: String
-    public let claimedDelta: String
-    public let status: String
-    public let recordedAtMs: UInt64
-    public let recordedAtHeight: UInt64
-    public let archivedAtHeight: UInt64?
-    public let certificateIdHex: String?
-    public let certificateExpiresAtMs: UInt64?
-    public let policyExpiresAtMs: UInt64?
-    public let refreshAtMs: UInt64?
-    public let verdictIdHex: String?
-    public let attestationNonceHex: String?
-    public let rejectionReason: String?
-    public let platformPolicy: ToriiPlatformPolicy?
-    public let platformTokenSnapshot: ToriiOfflinePlatformTokenSnapshot?
-    public let transfer: ToriiJSONValue
-
-    private enum CodingKeys: String, CodingKey {
-        case bundleIdHex = "bundle_id_hex"
-        case controllerId = "controller_id"
-        case controllerDisplay = "controller_display"
-        case receiverId = "receiver_id"
-        case receiverDisplay = "receiver_display"
-        case depositAccountId = "deposit_account_id"
-        case depositAccountDisplay = "deposit_account_display"
-        case assetId = "asset_id"
-        case receiptCount = "receipt_count"
-        case totalAmount = "total_amount"
-        case claimedDelta = "claimed_delta"
-        case status
-        case recordedAtMs = "recorded_at_ms"
-        case recordedAtHeight = "recorded_at_height"
-        case archivedAtHeight = "archived_at_height"
-        case certificateIdHex = "certificate_id_hex"
-        case certificateExpiresAtMs = "certificate_expires_at_ms"
-        case policyExpiresAtMs = "policy_expires_at_ms"
-        case refreshAtMs = "refresh_at_ms"
-        case verdictIdHex = "verdict_id_hex"
-        case attestationNonceHex = "attestation_nonce_hex"
-        case rejectionReason = "rejection_reason"
-        case platformPolicy = "platform_policy"
-        case platformTokenSnapshot = "platform_token_snapshot"
-        case transfer
-    }
-
-    public init(bundleIdHex: String,
-                controllerId: String,
-                controllerDisplay: String,
-                receiverId: String,
-                receiverDisplay: String,
-                depositAccountId: String,
-                depositAccountDisplay: String,
-                assetId: String?,
-                receiptCount: UInt64,
-                totalAmount: String,
-                claimedDelta: String,
-                status: String,
-                recordedAtMs: UInt64,
-                recordedAtHeight: UInt64,
-                archivedAtHeight: UInt64?,
-                certificateIdHex: String?,
-                certificateExpiresAtMs: UInt64?,
-                policyExpiresAtMs: UInt64?,
-                refreshAtMs: UInt64?,
-                verdictIdHex: String?,
-                attestationNonceHex: String?,
-                rejectionReason: String? = nil,
-                platformPolicy: ToriiPlatformPolicy?,
-                platformTokenSnapshot: ToriiOfflinePlatformTokenSnapshot?,
-                transfer: ToriiJSONValue) {
-        self.bundleIdHex = bundleIdHex
-        self.controllerId = controllerId
-        self.controllerDisplay = controllerDisplay
-        self.receiverId = receiverId
-        self.receiverDisplay = receiverDisplay
-        self.depositAccountId = depositAccountId
-        self.depositAccountDisplay = depositAccountDisplay
-        self.assetId = assetId
-        self.receiptCount = receiptCount
-        self.totalAmount = totalAmount
-        self.claimedDelta = claimedDelta
-        self.status = status
-        self.recordedAtMs = recordedAtMs
-        self.recordedAtHeight = recordedAtHeight
-        self.archivedAtHeight = archivedAtHeight
-        self.certificateIdHex = certificateIdHex
-        self.certificateExpiresAtMs = certificateExpiresAtMs
-        self.policyExpiresAtMs = policyExpiresAtMs
-        self.refreshAtMs = refreshAtMs
-        self.verdictIdHex = verdictIdHex
-        self.attestationNonceHex = attestationNonceHex
-        self.rejectionReason = rejectionReason
-        self.platformPolicy = platformPolicy
-        self.platformTokenSnapshot = platformTokenSnapshot
-        self.transfer = transfer
-    }
-
-    public func decodeTransfer<T: Decodable>(as type: T.Type = T.self,
-                                             decoder: JSONDecoder = JSONDecoder()) throws -> T {
-        try transfer.decode(as: type, decoder: decoder)
-    }
-}
-
-public struct ToriiOfflineTransferList: Decodable, Sendable {
-    public let items: [ToriiOfflineTransferItem]
-    public let total: UInt64
-}
-
-/// Execution outcome for an offline settlement bundle.
-///
-/// Semantics:
-/// - ``settled``: a settlement record exists on Torii (`status=settled|archived`).
-/// - ``pending``: the bundle was submitted by this client but no settlement record exists yet.
-/// - ``rejected(reason:)``: a submit rejection was observed locally or the server reported a rejected status.
-/// - ``unknown``: no settlement record exists and this client has no local submit outcome for the bundle.
-public enum ToriiSettlementExecutionStatus: Sendable, Equatable {
-    case settled
-    case rejected(reason: String?)
-    case pending
-    case unknown
-
-    /// Rejection reason when ``self`` is ``rejected(reason:)``.
-    public var rejectionReason: String? {
-        guard case .rejected(let reason) = self else {
-            return nil
-        }
-        return reason
-    }
-}
-
-public struct ToriiOfflineReceiptListItem: Decodable, Sendable, Equatable {
-    public let bundleIdHex: String
-    public let txIdHex: String
-    public let certificateIdHex: String
-    public let controllerId: String
-    public let controllerDisplay: String
-    public let receiverId: String
-    public let receiverDisplay: String
-    public let assetId: String
-    public let amount: String
-    public let invoiceId: String
-    public let counter: UInt64
-    public let recordedAtMs: UInt64
-    public let recordedAtHeight: UInt64
-
-    private enum CodingKeys: String, CodingKey {
-        case bundleIdHex = "bundle_id_hex"
-        case txIdHex = "tx_id_hex"
-        case certificateIdHex = "certificate_id_hex"
-        case controllerId = "controller_id"
-        case controllerDisplay = "controller_display"
-        case receiverId = "receiver_id"
-        case receiverDisplay = "receiver_display"
-        case assetId = "asset_id"
-        case amount
-        case invoiceId = "invoice_id"
-        case counter
-        case recordedAtMs = "recorded_at_ms"
-        case recordedAtHeight = "recorded_at_height"
-    }
-}
-
-public struct ToriiOfflineReceiptList: Decodable, Sendable, Equatable {
-    public let items: [ToriiOfflineReceiptListItem]
-    public let total: UInt64
-}
-
-public struct ToriiOfflineStateResponse: Decodable, Sendable, Equatable {
-    public let allowances: [ToriiJSONValue]
-    public let transfers: [ToriiJSONValue]
-    public let summaries: [ToriiJSONValue]
-    public let revocations: [ToriiJSONValue]
-    public let nowMs: UInt64
-
-    private enum CodingKeys: String, CodingKey {
-        case allowances
-        case transfers
-        case summaries
-        case revocations
-        case nowMs = "now_ms"
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let allowancesValue = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .allowances) ?? .array([])
-        let transfersValue = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .transfers) ?? .array([])
-        let summariesValue = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .summaries) ?? .array([])
-        let revocationsValue = try container.decodeIfPresent(ToriiJSONValue.self, forKey: .revocations) ?? .array([])
-
-        guard case let .array(allowances) = allowancesValue else {
-            throw DecodingError.dataCorruptedError(forKey: .allowances,
-                                                   in: container,
-                                                   debugDescription: "allowances must be an array")
-        }
-        guard case let .array(transfers) = transfersValue else {
-            throw DecodingError.dataCorruptedError(forKey: .transfers,
-                                                   in: container,
-                                                   debugDescription: "transfers must be an array")
-        }
-        guard case let .array(summaries) = summariesValue else {
-            throw DecodingError.dataCorruptedError(forKey: .summaries,
-                                                   in: container,
-                                                   debugDescription: "summaries must be an array")
-        }
-        guard case let .array(revocations) = revocationsValue else {
-            throw DecodingError.dataCorruptedError(forKey: .revocations,
-                                                   in: container,
-                                                   debugDescription: "revocations must be an array")
-        }
-
-        self.allowances = allowances
-        self.transfers = transfers
-        self.summaries = summaries
-        self.revocations = revocations
-        self.nowMs = try container.decode(UInt64.self, forKey: .nowMs)
-    }
-}
-
-public struct ToriiOfflinePlatformTokenSnapshot: Codable, Sendable, Equatable {
-    public let policy: ToriiPlatformPolicy
-    public let attestationJwsB64: String
-
-    private enum CodingKeys: String, CodingKey {
-        case policy
-        case attestationJwsB64 = "attestation_jws_b64"
-    }
-
-    public init(policy: ToriiPlatformPolicy, attestationJwsB64: String) {
-        self.policy = policy
-        self.attestationJwsB64 = attestationJwsB64
-    }
-}
-
-public struct ToriiOfflineReceiptSummary: Sendable, Equatable {
-    public let senderId: String
-    public let receiverId: String
-    public let assetId: String?
-    public let amount: String
-}
-
-public extension ToriiOfflineTransferItem {
-    /// Returns a lightweight projection of the first receipt embedded in the transfer payload.
-    func firstReceiptSummary() -> ToriiOfflineReceiptSummary? {
-        guard case let .object(payload) = transfer else {
-            return nil
-        }
-        guard case let .array(receipts) = payload["receipts"],
-              let first = receipts.first,
-              case let .object(receipt) = first else {
-            return nil
-        }
-        guard let sender = receipt["from"]?.normalizedString,
-              let receiver = receipt["to"]?.normalizedString,
-              let amount = receipt["amount"]?.normalizedString else {
-            return nil
-        }
-        let asset = receipt["asset"]?.normalizedString
-        return ToriiOfflineReceiptSummary(senderId: sender,
-                                          receiverId: receiver,
-                                          assetId: asset,
-                                          amount: amount)
     }
 }
 
@@ -4260,6 +5690,41 @@ public struct ToriiConfidentialKeysetResponse: Decodable, Sendable {
         case fullViewKeyBase64 = "full_view_key_b64"
     }
 
+    public init(seedHex: String,
+                seedBase64: String,
+                nullifierKeyHex: String,
+                nullifierKeyBase64: String,
+                incomingViewKeyHex: String,
+                incomingViewKeyBase64: String,
+                outgoingViewKeyHex: String,
+                outgoingViewKeyBase64: String,
+                fullViewKeyHex: String,
+                fullViewKeyBase64: String) {
+        self.seedHex = seedHex
+        self.seedBase64 = seedBase64
+        self.nullifierKeyHex = nullifierKeyHex
+        self.nullifierKeyBase64 = nullifierKeyBase64
+        self.incomingViewKeyHex = incomingViewKeyHex
+        self.incomingViewKeyBase64 = incomingViewKeyBase64
+        self.outgoingViewKeyHex = outgoingViewKeyHex
+        self.outgoingViewKeyBase64 = outgoingViewKeyBase64
+        self.fullViewKeyHex = fullViewKeyHex
+        self.fullViewKeyBase64 = fullViewKeyBase64
+    }
+
+    public init(seed: Data, keyset: ConfidentialKeyset) {
+        self.seedHex = seed.hexEncodedString()
+        self.seedBase64 = seed.base64EncodedString()
+        self.nullifierKeyHex = keyset.nullifierKeyHex
+        self.nullifierKeyBase64 = keyset.nullifierKey.base64EncodedString()
+        self.incomingViewKeyHex = keyset.incomingViewKeyHex
+        self.incomingViewKeyBase64 = keyset.incomingViewKey.base64EncodedString()
+        self.outgoingViewKeyHex = keyset.outgoingViewKeyHex
+        self.outgoingViewKeyBase64 = keyset.outgoingViewKey.base64EncodedString()
+        self.fullViewKeyHex = keyset.fullViewKeyHex
+        self.fullViewKeyBase64 = keyset.fullViewKey.base64EncodedString()
+    }
+
     public func asKeyset() throws -> ConfidentialKeyset {
         guard let seedData = Data(hexString: seedHex) else {
             throw ConfidentialKeyDerivationError.invalidHexEncoding(field: "seed_hex")
@@ -4324,18 +5789,41 @@ public struct ToriiConfidentialAssetPolicy: Decodable, Sendable {
         case pedersenParamsId = "pedersen_params_id"
         case pendingTransition = "pending_transition"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let anyContainer = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
+        let rawAssetId = try decodeRequiredStringValue(
+            from: anyContainer,
+            keys: ["asset_id", "asset"],
+            decoder: decoder,
+            debugDescription: "confidential asset policy must include asset_id."
+        )
+        assetId = canonicalPublicAssetDefinitionLiteral(rawAssetId) ?? rawAssetId
+        blockHeight = try container.decode(UInt64.self, forKey: .blockHeight)
+        currentMode = try container.decode(String.self, forKey: .currentMode)
+        effectiveMode = try container.decode(String.self, forKey: .effectiveMode)
+        vkSetHashHex = try container.decodeIfPresent(String.self, forKey: .vkSetHashHex)
+        poseidonParamsId = try container.decodeIfPresent(UInt32.self, forKey: .poseidonParamsId)
+        pedersenParamsId = try container.decodeIfPresent(UInt32.self, forKey: .pedersenParamsId)
+        pendingTransition = try container.decodeIfPresent(ToriiConfidentialPolicyTransition.self, forKey: .pendingTransition)
+    }
 }
 
 public struct ToriiNodeCapabilities: Decodable, Sendable {
     /// Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
     public static let expectedDataModelVersion = 1
+    /// Must match `<SignedTransaction as NoritoSerialize>::schema_hash()` on the node.
+    public static let expectedSignedTransactionSchemaHashHex = "7ad1ae306dffd89a7ad1ae306dffd89a"
     public let abiVersion: Int
     public let dataModelVersion: Int?
+    public let signedTransactionSchemaHashHex: String?
     public let crypto: ToriiNodeCryptoCapabilities?
 
     private enum CodingKeys: String, CodingKey {
         case abiVersion = "abi_version"
         case dataModelVersion = "data_model_version"
+        case signedTransactionSchemaHashHex = "signed_transaction_schema_hash_hex"
         case crypto
     }
 }
@@ -4557,308 +6045,6 @@ public enum ToriiRuntimeUpgradeStatus: Equatable, Sendable {
     case canceled
 }
 
-public enum ToriiPlatformPolicy: String, Codable, Sendable, CaseIterable {
-    case markerKey = "marker_key"
-    case playIntegrity = "play_integrity"
-    case hmsSafetyDetect = "hms_safety_detect"
-    case provisioned = "provisioned"
-}
-
-public struct ToriiOfflineListParams: Sendable, Equatable {
-    public var filter: String?
-    public var limit: UInt64?
-    public var offset: UInt64?
-    public var sort: String?
-    public var controllerId: String?
-    public var receiverId: String?
-    public var depositAccountId: String?
-    public var assetId: String?
-    public var certificateExpiresBeforeMs: UInt64?
-    public var certificateExpiresAfterMs: UInt64?
-    public var policyExpiresBeforeMs: UInt64?
-    public var policyExpiresAfterMs: UInt64?
-    public var refreshBeforeMs: UInt64?
-    public var refreshAfterMs: UInt64?
-    public var verdictIdHex: String?
-    public var attestationNonceHex: String?
-    public var certificateIdHex: String?
-    public var platformPolicy: ToriiPlatformPolicy?
-    public var requireVerdict: Bool
-    public var onlyMissingVerdict: Bool
-    public var includeExpired: Bool
-
-    public init(filter: String? = nil,
-                limit: UInt64? = nil,
-                offset: UInt64? = nil,
-                sort: String? = nil,
-                controllerId: String? = nil,
-                receiverId: String? = nil,
-                depositAccountId: String? = nil,
-                assetId: String? = nil,
-                certificateExpiresBeforeMs: UInt64? = nil,
-                certificateExpiresAfterMs: UInt64? = nil,
-                policyExpiresBeforeMs: UInt64? = nil,
-                policyExpiresAfterMs: UInt64? = nil,
-                refreshBeforeMs: UInt64? = nil,
-                refreshAfterMs: UInt64? = nil,
-                verdictIdHex: String? = nil,
-                attestationNonceHex: String? = nil,
-                certificateIdHex: String? = nil,
-                platformPolicy: ToriiPlatformPolicy? = nil,
-                requireVerdict: Bool = false,
-                onlyMissingVerdict: Bool = false,
-                includeExpired: Bool = false) {
-        self.filter = filter
-        self.limit = limit
-        self.offset = offset
-        self.sort = sort
-        self.controllerId = controllerId
-        self.receiverId = receiverId
-        self.depositAccountId = depositAccountId
-        self.assetId = assetId
-        self.certificateExpiresBeforeMs = certificateExpiresBeforeMs
-        self.certificateExpiresAfterMs = certificateExpiresAfterMs
-        self.policyExpiresBeforeMs = policyExpiresBeforeMs
-        self.policyExpiresAfterMs = policyExpiresAfterMs
-        self.refreshBeforeMs = refreshBeforeMs
-        self.refreshAfterMs = refreshAfterMs
-        self.verdictIdHex = verdictIdHex
-        self.attestationNonceHex = attestationNonceHex
-        self.certificateIdHex = certificateIdHex
-        self.platformPolicy = platformPolicy
-        self.requireVerdict = requireVerdict
-        self.onlyMissingVerdict = onlyMissingVerdict
-        self.includeExpired = includeExpired
-    }
-
-    public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let filter, !filter.isEmpty {
-            items.append(URLQueryItem(name: "filter", value: filter))
-        }
-        if let limit {
-            items.append(URLQueryItem(name: "limit", value: String(limit)))
-        }
-        if let offset {
-            items.append(URLQueryItem(name: "offset", value: String(offset)))
-        }
-        if let sort, !sort.isEmpty {
-            items.append(URLQueryItem(name: "sort", value: sort))
-        }
-        if let controllerId = controllerId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !controllerId.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(controllerId, field: "controllerId")
-            items.append(URLQueryItem(name: "controller_id", value: normalized))
-        }
-        if let receiverId = receiverId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !receiverId.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(receiverId, field: "receiverId")
-            items.append(URLQueryItem(name: "receiver_id", value: normalized))
-        }
-        if let depositAccountId = depositAccountId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !depositAccountId.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(depositAccountId, field: "depositAccountId")
-            items.append(URLQueryItem(name: "deposit_account_id", value: normalized))
-        }
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
-            items.append(URLQueryItem(name: "asset_id", value: normalized))
-        }
-        if let certificateExpiresBeforeMs {
-            items.append(URLQueryItem(name: "certificate_expires_before_ms",
-                                      value: String(certificateExpiresBeforeMs)))
-        }
-        if let certificateExpiresAfterMs {
-            items.append(URLQueryItem(name: "certificate_expires_after_ms",
-                                      value: String(certificateExpiresAfterMs)))
-        }
-        if let policyExpiresBeforeMs {
-            items.append(URLQueryItem(name: "policy_expires_before_ms",
-                                      value: String(policyExpiresBeforeMs)))
-        }
-        if let policyExpiresAfterMs {
-            items.append(URLQueryItem(name: "policy_expires_after_ms",
-                                      value: String(policyExpiresAfterMs)))
-        }
-        if let refreshBeforeMs {
-            items.append(URLQueryItem(name: "refresh_before_ms",
-                                      value: String(refreshBeforeMs)))
-        }
-        if let refreshAfterMs {
-            items.append(URLQueryItem(name: "refresh_after_ms",
-                                      value: String(refreshAfterMs)))
-        }
-        if let verdictIdHex, !verdictIdHex.isEmpty {
-            items.append(URLQueryItem(name: "verdict_id_hex", value: verdictIdHex.lowercased()))
-        }
-        if let attestationNonceHex, !attestationNonceHex.isEmpty {
-            items.append(URLQueryItem(name: "attestation_nonce_hex",
-                                      value: attestationNonceHex.lowercased()))
-        }
-        if let certificateIdHex, !certificateIdHex.isEmpty {
-            items.append(URLQueryItem(name: "certificate_id_hex",
-                                      value: certificateIdHex.lowercased()))
-        }
-        if let platformPolicy {
-            items.append(URLQueryItem(name: "platform_policy", value: platformPolicy.rawValue))
-        }
-        if requireVerdict {
-            items.append(URLQueryItem(name: "require_verdict", value: "true"))
-        }
-        if onlyMissingVerdict {
-            items.append(URLQueryItem(name: "only_missing_verdict", value: "true"))
-        }
-        if includeExpired {
-            items.append(URLQueryItem(name: "include_expired", value: "true"))
-        }
-        return items.isEmpty ? nil : items
-    }
-}
-
-public struct ToriiOfflineRevocationListParams: Sendable, Equatable {
-    public var filter: String?
-    public var limit: UInt64?
-    public var offset: UInt64?
-    public var sort: String?
-
-    public init(filter: String? = nil,
-                limit: UInt64? = nil,
-                offset: UInt64? = nil,
-                sort: String? = nil) {
-        self.filter = filter
-        self.limit = limit
-        self.offset = offset
-        self.sort = sort
-    }
-
-    public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let filter, !filter.isEmpty {
-            items.append(URLQueryItem(name: "filter", value: filter))
-        }
-        if let limit {
-            items.append(URLQueryItem(name: "limit", value: String(limit)))
-        }
-        if let offset {
-            items.append(URLQueryItem(name: "offset", value: String(offset)))
-        }
-        if let sort, !sort.isEmpty {
-            items.append(URLQueryItem(name: "sort", value: sort))
-        }
-        return items.isEmpty ? nil : items
-    }
-}
-
-public struct ToriiOfflineBundleProofStatusParams: Sendable, Equatable {
-    public var bundleIdHex: String
-
-    public init(bundleIdHex: String) {
-        self.bundleIdHex = bundleIdHex
-    }
-
-    public func queryItems() throws -> [URLQueryItem] {
-        var items: [URLQueryItem] = []
-        var trimmed = bundleIdHex.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
-            trimmed = String(trimmed.dropFirst(2))
-        }
-        guard !trimmed.isEmpty, Data(hexString: trimmed) != nil else {
-            throw ToriiClientError.invalidPayload("bundleIdHex must be a valid hex string")
-        }
-        items.append(URLQueryItem(name: "bundle_id_hex", value: trimmed.lowercased()))
-        return items
-    }
-}
-
-public struct ToriiOfflineReceiptListParams: Sendable, Equatable {
-    public var filter: String?
-    public var limit: UInt64?
-    public var offset: UInt64?
-    public var sort: String?
-    public var controllerId: String?
-    public var receiverId: String?
-    public var bundleIdHex: String?
-    public var certificateIdHex: String?
-    public var invoiceId: String?
-    public var assetId: String?
-
-    public init(filter: String? = nil,
-                limit: UInt64? = nil,
-                offset: UInt64? = nil,
-                sort: String? = nil,
-                controllerId: String? = nil,
-                receiverId: String? = nil,
-                bundleIdHex: String? = nil,
-                certificateIdHex: String? = nil,
-                invoiceId: String? = nil,
-                assetId: String? = nil) {
-        self.filter = filter
-        self.limit = limit
-        self.offset = offset
-        self.sort = sort
-        self.controllerId = controllerId
-        self.receiverId = receiverId
-        self.bundleIdHex = bundleIdHex
-        self.certificateIdHex = certificateIdHex
-        self.invoiceId = invoiceId
-        self.assetId = assetId
-    }
-
-    public func queryItems() throws -> [URLQueryItem]? {
-        var items: [URLQueryItem] = []
-        if let filter, !filter.isEmpty {
-            items.append(URLQueryItem(name: "filter", value: filter))
-        }
-        if let limit {
-            items.append(URLQueryItem(name: "limit", value: String(limit)))
-        }
-        if let offset {
-            items.append(URLQueryItem(name: "offset", value: String(offset)))
-        }
-        if let sort, !sort.isEmpty {
-            items.append(URLQueryItem(name: "sort", value: sort))
-        }
-        if let controllerId = controllerId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !controllerId.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(controllerId, field: "controllerId")
-            items.append(URLQueryItem(name: "controller_id", value: normalized))
-        }
-        if let receiverId = receiverId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !receiverId.isEmpty {
-            let normalized = try normalizeToriiAccountIdQueryValue(receiverId, field: "receiverId")
-            items.append(URLQueryItem(name: "receiver_id", value: normalized))
-        }
-        if let bundleIdHex = Self.normalizeHex(bundleIdHex) {
-            items.append(URLQueryItem(name: "bundle_id_hex", value: bundleIdHex))
-        }
-        if let certificateIdHex = Self.normalizeHex(certificateIdHex) {
-            items.append(URLQueryItem(name: "certificate_id_hex", value: certificateIdHex))
-        }
-        if let invoiceId = invoiceId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !invoiceId.isEmpty {
-            items.append(URLQueryItem(name: "invoice_id", value: invoiceId))
-        }
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
-            items.append(URLQueryItem(name: "asset_id", value: normalized))
-        }
-        return items.isEmpty ? nil : items
-    }
-
-    private static func normalizeHex(_ raw: String?) -> String? {
-        guard var trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !trimmed.isEmpty else {
-            return nil
-        }
-        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
-            trimmed = String(trimmed.dropFirst(2))
-        }
-        return trimmed.lowercased()
-    }
-}
-
 public struct ToriiUaidPortfolioTotals: Decodable, Sendable {
     public let accounts: UInt64
     public let positions: UInt64
@@ -4890,6 +6076,15 @@ public struct ToriiUaidPortfolioAsset: Decodable, Sendable {
         case assetId = "asset_id"
         case assetDefinitionId = "asset_definition_id"
         case quantity
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let rawAssetId = try container.decode(String.self, forKey: .assetId)
+        let rawAssetDefinitionId = try container.decode(String.self, forKey: .assetDefinitionId)
+        assetId = canonicalPublicAssetDefinitionLiteral(rawAssetId) ?? rawAssetId
+        assetDefinitionId = canonicalPublicAssetDefinitionLiteral(rawAssetDefinitionId) ?? rawAssetDefinitionId
+        quantity = try container.decode(String.self, forKey: .quantity)
     }
 }
 
@@ -5004,7 +6199,7 @@ public struct ToriiUaidPortfolioQuery: Sendable, Equatable {
         var items: [URLQueryItem] = []
         if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
            !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "asset_id")
             items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         return items.isEmpty ? nil : items
@@ -5505,7 +6700,7 @@ public struct ToriiVerifyingKeyRecord: Decodable, Sendable {
     }
 }
 
-public struct ToriiVerifyingKeyId: Decodable, Sendable {
+public struct ToriiVerifyingKeyId: Decodable, Sendable, Equatable {
     public let backend: String
     public let name: String
 
@@ -5558,6 +6753,49 @@ public struct ToriiVerifyingKeyId: Decodable, Sendable {
 public struct ToriiVerifyingKeyDetail: Decodable, Sendable {
     public let id: ToriiVerifyingKeyId
     public let record: ToriiVerifyingKeyRecord
+}
+
+public struct ToriiOfflineV2Readiness: Decodable, Sendable, Equatable {
+    public let offlineNoteV2: Bool
+    public let offlineOneUseKeys: Bool
+    public let offlineRecursiveNoteProof: Bool
+    public let offlineRecursiveNoteProofBackend: String?
+    public let offlineRecursiveNoteProofCircuitId: String?
+    public let offlineRecursiveNoteProofPublicInputsSchemaHash: String?
+    public let offlineRecursiveNoteProofPublicInstanceColumns: UInt64?
+    public let offlineRecursiveNoteProofVerifierKeyId: ToriiVerifyingKeyId?
+    public let offlineFountainQrV1: Bool
+    public let offlineSyncOptional: Bool
+    public let offlineTelemetry: Bool
+
+    public var hasCanonicalRecursiveVerifierMetadata: Bool {
+        guard let schemaHash = offlineRecursiveNoteProofPublicInputsSchemaHash,
+              schemaHash.count == 64,
+              schemaHash.allSatisfy(\.isHexDigit)
+        else {
+            return false
+        }
+        return offlineRecursiveNoteProof
+            && offlineRecursiveNoteProofBackend == "halo2/ipa"
+            && offlineRecursiveNoteProofCircuitId == "offline-note-v2-recursive-v1"
+            && offlineRecursiveNoteProofPublicInstanceColumns == 16
+            && offlineRecursiveNoteProofVerifierKeyId?.backend == "halo2/ipa"
+            && offlineRecursiveNoteProofVerifierKeyId?.name == "offline-note-v2-recursive-v1"
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case offlineNoteV2 = "offline_note_v2"
+        case offlineOneUseKeys = "offline_one_use_keys"
+        case offlineRecursiveNoteProof = "offline_recursive_note_proof"
+        case offlineRecursiveNoteProofBackend = "offline_recursive_note_proof_backend"
+        case offlineRecursiveNoteProofCircuitId = "offline_recursive_note_proof_circuit_id"
+        case offlineRecursiveNoteProofPublicInputsSchemaHash = "offline_recursive_note_proof_public_inputs_schema_hash"
+        case offlineRecursiveNoteProofPublicInstanceColumns = "offline_recursive_note_proof_public_instance_columns"
+        case offlineRecursiveNoteProofVerifierKeyId = "offline_recursive_note_proof_verifier_key_id"
+        case offlineFountainQrV1 = "offline_fountain_qr_v1"
+        case offlineSyncOptional = "offline_sync_optional"
+        case offlineTelemetry = "offline_telemetry"
+    }
 }
 
 public struct ToriiVerifyingKeyListItem: Decodable, Sendable {
@@ -5646,7 +6884,6 @@ public struct ToriiVerifyingKeyListQuery: Sendable {
 
 public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
     public var authority: String
-    public var privateKey: String
     public var backend: String
     public var name: String
     public var version: UInt32
@@ -5665,7 +6902,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
     public var status: ToriiVerifyingKeyStatus?
 
     public init(authority: String,
-                privateKey: String,
                 backend: String,
                 name: String,
                 version: UInt32,
@@ -5676,7 +6912,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
                 verifyingKeyLength: UInt32? = nil,
                 status: ToriiVerifyingKeyStatus? = nil) {
         self.authority = authority
-        self.privateKey = privateKey
         self.backend = backend
         self.name = name
         self.version = version
@@ -5697,7 +6932,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case privateKey = "private_key"
         case backend
         case name
         case version
@@ -5719,8 +6953,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
     public func encode(to encoder: Encoder) throws {
         let normalizedAuthority = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(authority,
                                                                                             field: "authority")
-        let normalizedPrivateKey = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                              field: "private_key")
         let normalizedBackend = try ToriiVerifyingKeyRequestValidation.normalizedBackend(backend, field: "backend")
         let normalizedName = try ToriiVerifyingKeyRequestValidation.normalizedName(name, field: "name")
         let normalizedCircuitId = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(circuitId,
@@ -5751,7 +6983,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
         )
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
         try container.encode(normalizedBackend, forKey: .backend)
         try container.encode(normalizedName, forKey: .name)
         try container.encode(version, forKey: .version)
@@ -5779,7 +7010,6 @@ public struct ToriiVerifyingKeyRegisterRequest: Encodable, Sendable {
 
 public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
     public var authority: String
-    public var privateKey: String
     public var backend: String
     public var name: String
     public var version: UInt32
@@ -5798,14 +7028,12 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
     public var status: ToriiVerifyingKeyStatus?
 
     public init(authority: String,
-                privateKey: String,
                 backend: String,
                 name: String,
                 version: UInt32,
                 circuitId: String,
                 publicInputsSchemaHashHex: String) {
         self.authority = authority
-        self.privateKey = privateKey
         self.backend = backend
         self.name = name
         self.version = version
@@ -5815,7 +7043,6 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case privateKey = "private_key"
         case backend
         case name
         case version
@@ -5837,8 +7064,6 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
     public func encode(to encoder: Encoder) throws {
         let normalizedAuthority = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(authority,
                                                                                             field: "authority")
-        let normalizedPrivateKey = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                              field: "private_key")
         let normalizedBackend = try ToriiVerifyingKeyRequestValidation.normalizedBackend(backend, field: "backend")
         let normalizedName = try ToriiVerifyingKeyRequestValidation.normalizedName(name, field: "name")
         let normalizedCircuitId = try ToriiVerifyingKeyRequestValidation.normalizedNonEmpty(circuitId,
@@ -5869,7 +7094,6 @@ public struct ToriiVerifyingKeyUpdateRequest: Encodable, Sendable {
         )
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
         try container.encode(normalizedBackend, forKey: .backend)
         try container.encode(normalizedName, forKey: .name)
         try container.encode(version, forKey: .version)
@@ -5993,6 +7217,17 @@ fileprivate enum ToriiRequestValidation {
     static func normalizedOptional32ByteHex(_ value: String?, field: String) throws -> String? {
         guard let value else { return nil }
         return try normalized32ByteHex(value, field: field)
+    }
+
+    static func normalizedEvenLengthHex(_ value: String, field: String) throws -> String {
+        var trimmed = try normalizedNonEmpty(value, field: field)
+        if trimmed.hasPrefix("0x") || trimmed.hasPrefix("0X") {
+            trimmed = String(trimmed.dropFirst(2))
+        }
+        guard !trimmed.isEmpty, trimmed.count.isMultiple(of: 2), Data(hexString: trimmed) != nil else {
+            throw ToriiClientError.invalidPayload("\(field) must be an even-length hex string.")
+        }
+        return trimmed.lowercased()
     }
 
     static func normalizedBase64(_ value: String, field: String) throws -> String {
@@ -6607,58 +7842,61 @@ public struct ToriiContractManifestRecord: Decodable, Sendable {
 
 public struct ToriiDeployContractRequest: Encodable, Sendable {
     public var authority: String
-    public var privateKey: String
     public var codeB64: String
-    public var codeHash: String?
-    public var abiHash: String?
-    public var manifest: ToriiContractManifest?
+    public var contractAlias: String
+    public var leaseExpiryMs: UInt64?
 
     public init(authority: String,
-                privateKey: String,
                 codeB64: String,
-                codeHash: String? = nil,
-                abiHash: String? = nil,
-                manifest: ToriiContractManifest? = nil) {
+                contractAlias: String,
+                leaseExpiryMs: UInt64? = nil) {
         self.authority = authority
-        self.privateKey = privateKey
         self.codeB64 = codeB64
-        self.codeHash = codeHash
-        self.abiHash = abiHash
-        self.manifest = manifest
+        self.contractAlias = contractAlias
+        self.leaseExpiryMs = leaseExpiryMs
     }
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case privateKey = "private_key"
         case codeB64 = "code_b64"
-        case codeHash = "code_hash"
-        case abiHash = "abi_hash"
-        case manifest
+        case contractAlias = "contract_alias"
+        case leaseExpiryMs = "lease_expiry_ms"
     }
 
     public func encode(to encoder: Encoder) throws {
-        if codeHash != nil || abiHash != nil || manifest != nil {
-            throw ToriiClientError.invalidPayload("code_hash, abi_hash, and manifest are not accepted by /v1/contracts/deploy")
-        }
-        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
-                                                                                field: "authority")
-        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                  field: "private_key")
+        let normalizedAuthority = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
         let normalizedCodeB64 = try ToriiRequestValidation.normalizedBase64(codeB64, field: "code_b64")
+        let normalizedContractAlias = try normalizeToriiContractAliasLiteral(contractAlias,
+                                                                             field: "contract_alias")
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
         try container.encode(normalizedCodeB64, forKey: .codeB64)
+        try container.encode(normalizedContractAlias, forKey: .contractAlias)
+        try container.encodeIfPresent(leaseExpiryMs, forKey: .leaseExpiryMs)
     }
 }
 
 public struct ToriiDeployContractResponse: Decodable, Sendable {
     public let ok: Bool
-    public let codeHashHex: String?
-    public let abiHashHex: String?
+    public let contractAlias: String
+    public let contractAddress: String
+    public let previousContractAddress: String?
+    public let upgraded: Bool
+    public let dataspace: String
+    public let deployNonce: UInt64
+    public let txHashHex: String
+    public let codeHashHex: String
+    public let abiHashHex: String
 
     private enum CodingKeys: String, CodingKey {
         case ok
+        case contractAlias = "contract_alias"
+        case contractAddress = "contract_address"
+        case previousContractAddress = "previous_contract_address"
+        case upgraded
+        case dataspace
+        case deployNonce = "deploy_nonce"
+        case txHashHex = "tx_hash_hex"
         case codeHashHex = "code_hash_hex"
         case abiHashHex = "abi_hash_hex"
     }
@@ -6666,24 +7904,49 @@ public struct ToriiDeployContractResponse: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         ok = try container.decode(Bool.self, forKey: .ok)
-        if let codeHashHex = try container.decodeIfPresent(String.self, forKey: .codeHashHex) {
-            self.codeHashHex = try ToriiValidation.normalized32ByteHex(
-                codeHashHex,
-                field: "code_hash_hex",
-                codingPath: container.codingPath + [CodingKeys.codeHashHex]
+        let contractAlias = try container.decode(String.self, forKey: .contractAlias)
+        self.contractAlias = try normalizeToriiContractAliasLiteral(
+            contractAlias,
+            field: "contract_alias"
+        )
+        let contractAddress = try container.decode(String.self, forKey: .contractAddress)
+        self.contractAddress = try normalizeToriiContractAddressLiteral(
+            contractAddress,
+            field: "contract_address"
+        )
+        if let previousContractAddress = try container.decodeIfPresent(String.self, forKey: .previousContractAddress) {
+            self.previousContractAddress = try normalizeToriiContractAddressLiteral(
+                previousContractAddress,
+                field: "previous_contract_address"
             )
         } else {
-            self.codeHashHex = nil
+            self.previousContractAddress = nil
         }
-        if let abiHashHex = try container.decodeIfPresent(String.self, forKey: .abiHashHex) {
-            self.abiHashHex = try ToriiValidation.normalized32ByteHex(
-                abiHashHex,
-                field: "abi_hash_hex",
-                codingPath: container.codingPath + [CodingKeys.abiHashHex]
-            )
-        } else {
-            self.abiHashHex = nil
-        }
+        upgraded = try container.decode(Bool.self, forKey: .upgraded)
+        dataspace = try ToriiValidation.normalizedNonEmpty(
+            try container.decode(String.self, forKey: .dataspace),
+            field: "dataspace",
+            codingPath: container.codingPath + [CodingKeys.dataspace]
+        )
+        deployNonce = try container.decode(UInt64.self, forKey: .deployNonce)
+        let txHashHex = try container.decode(String.self, forKey: .txHashHex)
+        self.txHashHex = try ToriiValidation.normalized32ByteHex(
+            txHashHex,
+            field: "tx_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.txHashHex]
+        )
+        let codeHashHex = try container.decode(String.self, forKey: .codeHashHex)
+        self.codeHashHex = try ToriiValidation.normalized32ByteHex(
+            codeHashHex,
+            field: "code_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.codeHashHex]
+        )
+        let abiHashHex = try container.decode(String.self, forKey: .abiHashHex)
+        self.abiHashHex = try ToriiValidation.normalized32ByteHex(
+            abiHashHex,
+            field: "abi_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.abiHashHex]
+        )
     }
 }
 
@@ -6703,22 +7966,211 @@ public struct ToriiContractCodeBytes: Decodable, Sendable {
     }
 }
 
+public struct ToriiContractCallRequest: Encodable, Sendable {
+    public var authority: String
+    public var publicKeyHex: String?
+    public var signatureB64: String?
+    public var contractAddress: String?
+    public var contractAlias: String?
+    public var entrypoint: String?
+    public var payload: ToriiJSONValue?
+    public var creationTimeMs: UInt64?
+    public var gasAssetId: String?
+    public var feeSponsor: String?
+    public var gasLimit: UInt64
+
+    public init(authority: String,
+                publicKeyHex: String? = nil,
+                signatureB64: String? = nil,
+                contractAddress: String? = nil,
+                contractAlias: String? = nil,
+                entrypoint: String? = nil,
+                payload: ToriiJSONValue? = nil,
+                creationTimeMs: UInt64? = nil,
+                gasAssetId: String? = nil,
+                feeSponsor: String? = nil,
+                gasLimit: UInt64) {
+        self.authority = authority
+        self.publicKeyHex = publicKeyHex
+        self.signatureB64 = signatureB64
+        self.contractAddress = contractAddress
+        self.contractAlias = contractAlias
+        self.entrypoint = entrypoint
+        self.payload = payload
+        self.creationTimeMs = creationTimeMs
+        self.gasAssetId = gasAssetId
+        self.feeSponsor = feeSponsor
+        self.gasLimit = gasLimit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case authority
+        case publicKeyHex = "public_key_hex"
+        case signatureB64 = "signature_b64"
+        case contractAddress = "contract_address"
+        case contractAlias = "contract_alias"
+        case entrypoint
+        case payload
+        case creationTimeMs = "creation_time_ms"
+        case gasAssetId = "gas_asset_id"
+        case feeSponsor = "fee_sponsor"
+        case gasLimit = "gas_limit"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedAuthority = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
+        let normalizedPublicKeyHex = try ToriiRequestValidation.normalizedOptional32ByteHex(
+            publicKeyHex,
+            field: "public_key_hex"
+        )
+        let normalizedSignatureB64 = try signatureB64.map {
+            try ToriiRequestValidation.normalizedBase64($0, field: "signature_b64")
+        }
+        let normalizedTarget = try normalizeToriiContractTargetSelector(
+            contractAddress: contractAddress,
+            contractAlias: contractAlias,
+            field: "contract call"
+        )
+        let normalizedEntrypoint = try entrypoint.map {
+            try ToriiRequestValidation.normalizedNonEmpty($0, field: "entrypoint")
+        }
+        let normalizedGasAssetId = try gasAssetId.map {
+            try normalizeToriiAssetIdQueryValue($0, field: "gas_asset_id")
+        }
+        let normalizedFeeSponsor = try feeSponsor.map {
+            try normalizeToriiAccountIdQueryValue($0, field: "fee_sponsor")
+        }
+        if gasLimit == 0 {
+            throw ToriiClientError.invalidPayload("gas_limit must be greater than zero.")
+        }
+
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(normalizedAuthority, forKey: .authority)
+        try container.encodeIfPresent(normalizedPublicKeyHex, forKey: .publicKeyHex)
+        try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
+        try container.encodeIfPresent(normalizedTarget.contractAddress, forKey: .contractAddress)
+        try container.encodeIfPresent(normalizedTarget.contractAlias, forKey: .contractAlias)
+        try container.encodeIfPresent(normalizedEntrypoint, forKey: .entrypoint)
+        try container.encodeIfPresent(payload, forKey: .payload)
+        try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
+        try container.encodeIfPresent(normalizedGasAssetId, forKey: .gasAssetId)
+        try container.encodeIfPresent(normalizedFeeSponsor, forKey: .feeSponsor)
+        try container.encode(gasLimit, forKey: .gasLimit)
+    }
+}
+
+public struct ToriiContractCallResponse: Decodable, Sendable {
+    public let ok: Bool
+    public let submitted: Bool
+    public let dataspace: String
+    public let contractAddress: String?
+    public let codeHashHex: String
+    public let abiHashHex: String
+    public let creationTimeMs: UInt64
+    public let txHashHex: String?
+    public let transactionScaffoldB64: String?
+    public let signedTransactionB64: String?
+    public let signingMessageB64: String?
+    public let entrypoint: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case submitted
+        case dataspace
+        case contractAddress = "contract_address"
+        case codeHashHex = "code_hash_hex"
+        case abiHashHex = "abi_hash_hex"
+        case creationTimeMs = "creation_time_ms"
+        case txHashHex = "tx_hash_hex"
+        case transactionScaffoldB64 = "transaction_scaffold_b64"
+        case signedTransactionB64 = "signed_transaction_b64"
+        case signingMessageB64 = "signing_message_b64"
+        case entrypoint
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try container.decode(Bool.self, forKey: .ok)
+        submitted = try container.decode(Bool.self, forKey: .submitted)
+        dataspace = try ToriiValidation.normalizedNonEmpty(
+            try container.decode(String.self, forKey: .dataspace),
+            field: "dataspace",
+            codingPath: container.codingPath + [CodingKeys.dataspace]
+        )
+        if let contractAddress = try container.decodeIfPresent(String.self, forKey: .contractAddress) {
+            self.contractAddress = try normalizeToriiContractAddressLiteral(
+                contractAddress,
+                field: "contract_address"
+            )
+        } else {
+            self.contractAddress = nil
+        }
+        let codeHashHex = try container.decode(String.self, forKey: .codeHashHex)
+        self.codeHashHex = try ToriiValidation.normalized32ByteHex(
+            codeHashHex,
+            field: "code_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.codeHashHex]
+        )
+        let abiHashHex = try container.decode(String.self, forKey: .abiHashHex)
+        self.abiHashHex = try ToriiValidation.normalized32ByteHex(
+            abiHashHex,
+            field: "abi_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.abiHashHex]
+        )
+        creationTimeMs = try container.decode(UInt64.self, forKey: .creationTimeMs)
+        if let txHashHex = try container.decodeIfPresent(String.self, forKey: .txHashHex) {
+            self.txHashHex = try ToriiValidation.normalized32ByteHex(
+                txHashHex,
+                field: "tx_hash_hex",
+                codingPath: container.codingPath + [CodingKeys.txHashHex]
+            )
+        } else {
+            self.txHashHex = nil
+        }
+        if let transactionScaffoldB64 = try container.decodeIfPresent(String.self, forKey: .transactionScaffoldB64) {
+            self.transactionScaffoldB64 = try ToriiValidation.normalizedBase64(
+                transactionScaffoldB64,
+                field: "transaction_scaffold_b64",
+                codingPath: container.codingPath + [CodingKeys.transactionScaffoldB64]
+            )
+        } else {
+            self.transactionScaffoldB64 = nil
+        }
+        if let signedTransactionB64 = try container.decodeIfPresent(String.self, forKey: .signedTransactionB64) {
+            self.signedTransactionB64 = try ToriiValidation.normalizedBase64(
+                signedTransactionB64,
+                field: "signed_transaction_b64",
+                codingPath: container.codingPath + [CodingKeys.signedTransactionB64]
+            )
+        } else {
+            self.signedTransactionB64 = nil
+        }
+        if let signingMessageB64 = try container.decodeIfPresent(String.self, forKey: .signingMessageB64) {
+            self.signingMessageB64 = try ToriiValidation.normalizedBase64(
+                signingMessageB64,
+                field: "signing_message_b64",
+                codingPath: container.codingPath + [CodingKeys.signingMessageB64]
+            )
+        } else {
+            self.signingMessageB64 = nil
+        }
+        entrypoint = try container.decodeIfPresent(String.self, forKey: .entrypoint)
+    }
+}
+
 public struct ToriiDeployContractInstanceRequest: Encodable, Sendable {
     public var authority: String
-    public var privateKey: String
     public var namespace: String
     public var contractId: String
     public var codeB64: String
     public var manifest: ToriiContractManifest?
 
     public init(authority: String,
-                privateKey: String,
                 namespace: String,
                 contractId: String,
                 codeB64: String,
                 manifest: ToriiContractManifest? = nil) {
         self.authority = authority
-        self.privateKey = privateKey
         self.namespace = namespace
         self.contractId = contractId
         self.codeB64 = codeB64
@@ -6727,7 +8179,6 @@ public struct ToriiDeployContractInstanceRequest: Encodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case privateKey = "private_key"
         case namespace
         case contractId = "contract_id"
         case codeB64 = "code_b64"
@@ -6737,8 +8188,6 @@ public struct ToriiDeployContractInstanceRequest: Encodable, Sendable {
     public func encode(to encoder: Encoder) throws {
         let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
                                                                                 field: "authority")
-        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                  field: "private_key")
         let normalizedNamespace = try ToriiRequestValidation.normalizedNonEmpty(namespace,
                                                                                 field: "namespace")
         let normalizedContractId = try ToriiRequestValidation.normalizedNonEmpty(contractId,
@@ -6746,7 +8195,6 @@ public struct ToriiDeployContractInstanceRequest: Encodable, Sendable {
         let normalizedCodeB64 = try ToriiRequestValidation.normalizedBase64(codeB64, field: "code_b64")
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
         try container.encode(normalizedNamespace, forKey: .namespace)
         try container.encode(normalizedContractId, forKey: .contractId)
         try container.encode(normalizedCodeB64, forKey: .codeB64)
@@ -6791,18 +8239,15 @@ public struct ToriiDeployContractInstanceResponse: Decodable, Sendable {
 
 public struct ToriiActivateContractInstanceRequest: Encodable, Sendable {
     public var authority: String
-    public var privateKey: String
     public var namespace: String
     public var contractId: String
     public var codeHash: String
 
     public init(authority: String,
-                privateKey: String,
                 namespace: String,
                 contractId: String,
                 codeHash: String) {
         self.authority = authority
-        self.privateKey = privateKey
         self.namespace = namespace
         self.contractId = contractId
         self.codeHash = codeHash
@@ -6810,7 +8255,6 @@ public struct ToriiActivateContractInstanceRequest: Encodable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case authority
-        case privateKey = "private_key"
         case namespace
         case contractId = "contract_id"
         case codeHash = "code_hash"
@@ -6819,8 +8263,6 @@ public struct ToriiActivateContractInstanceRequest: Encodable, Sendable {
     public func encode(to encoder: Encoder) throws {
         let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
                                                                                 field: "authority")
-        let normalizedPrivateKey = try ToriiRequestValidation.normalizedNonEmpty(privateKey,
-                                                                                  field: "private_key")
         let normalizedNamespace = try ToriiRequestValidation.normalizedNonEmpty(namespace,
                                                                                 field: "namespace")
         let normalizedContractId = try ToriiRequestValidation.normalizedNonEmpty(contractId,
@@ -6828,7 +8270,6 @@ public struct ToriiActivateContractInstanceRequest: Encodable, Sendable {
         let normalizedCodeHash = try ToriiRequestValidation.normalized32ByteHex(codeHash, field: "code_hash")
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedPrivateKey, forKey: .privateKey)
         try container.encode(normalizedNamespace, forKey: .namespace)
         try container.encode(normalizedContractId, forKey: .contractId)
         try container.encode(normalizedCodeHash, forKey: .codeHash)
@@ -6837,6 +8278,449 @@ public struct ToriiActivateContractInstanceRequest: Encodable, Sendable {
 
 public struct ToriiActivateContractInstanceResponse: Decodable, Sendable {
     public let ok: Bool
+}
+
+public struct ToriiMultisigAccountSelector: Encodable, Sendable, Equatable {
+    public var multisigAccountId: String?
+    public var multisigAccountAlias: String?
+
+    public init(multisigAccountId: String? = nil,
+                multisigAccountAlias: String? = nil) {
+        self.multisigAccountId = multisigAccountId
+        self.multisigAccountAlias = multisigAccountAlias
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case multisigAccountId = "multisig_account_id"
+        case multisigAccountAlias = "multisig_account_alias"
+    }
+
+    fileprivate func normalizedPayload(field: String) throws -> (multisigAccountId: String?, multisigAccountAlias: String?) {
+        let normalizedAccountId = try multisigAccountId.map {
+            try normalizeToriiAccountIdQueryValue($0, field: "\(field).multisig_account_id")
+        }
+        let normalizedAlias = try multisigAccountAlias.map {
+            try normalizeToriiAccountAliasLiteral($0, field: "\(field).multisig_account_alias")
+        }
+        guard (normalizedAccountId == nil) != (normalizedAlias == nil) else {
+            throw ToriiClientError.invalidPayload(
+                "\(field) requires exactly one of multisig_account_id or multisig_account_alias."
+            )
+        }
+        return (normalizedAccountId, normalizedAlias)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalized = try normalizedPayload(field: "multisig selector")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(normalized.multisigAccountId, forKey: .multisigAccountId)
+        try container.encodeIfPresent(normalized.multisigAccountAlias, forKey: .multisigAccountAlias)
+    }
+}
+
+public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
+    public var selector: ToriiMultisigAccountSelector
+    public var signerAccountId: String
+    public var publicKeyHex: String?
+    public var signatureB64: String?
+    public var creationTimeMs: UInt64?
+    public var contractAddress: String?
+    public var contractAlias: String?
+    public var entrypoint: String
+    public var payload: ToriiJSONValue?
+    public var gasAssetId: String?
+    public var feeSponsor: String?
+    public var gasLimit: UInt64?
+
+    public init(selector: ToriiMultisigAccountSelector,
+                signerAccountId: String,
+                publicKeyHex: String? = nil,
+                signatureB64: String? = nil,
+                creationTimeMs: UInt64? = nil,
+                contractAddress: String? = nil,
+                contractAlias: String? = nil,
+                entrypoint: String,
+                payload: ToriiJSONValue? = nil,
+                gasAssetId: String? = nil,
+                feeSponsor: String? = nil,
+                gasLimit: UInt64? = nil) {
+        self.selector = selector
+        self.signerAccountId = signerAccountId
+        self.publicKeyHex = publicKeyHex
+        self.signatureB64 = signatureB64
+        self.creationTimeMs = creationTimeMs
+        self.contractAddress = contractAddress
+        self.contractAlias = contractAlias
+        self.entrypoint = entrypoint
+        self.payload = payload
+        self.gasAssetId = gasAssetId
+        self.feeSponsor = feeSponsor
+        self.gasLimit = gasLimit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case multisigAccountId = "multisig_account_id"
+        case multisigAccountAlias = "multisig_account_alias"
+        case signerAccountId = "signer_account_id"
+        case publicKeyHex = "public_key_hex"
+        case signatureB64 = "signature_b64"
+        case creationTimeMs = "creation_time_ms"
+        case contractAddress = "contract_address"
+        case contractAlias = "contract_alias"
+        case entrypoint
+        case payload
+        case gasAssetId = "gas_asset_id"
+        case feeSponsor = "fee_sponsor"
+        case gasLimit = "gas_limit"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig propose selector")
+        let normalizedSignerAccountId = try normalizeToriiAccountIdQueryValue(
+            signerAccountId,
+            field: "signer_account_id"
+        )
+        let normalizedTarget = try normalizeToriiContractTargetSelector(
+            contractAddress: contractAddress,
+            contractAlias: contractAlias,
+            field: "multisig contract call"
+        )
+        let normalizedEntrypoint = try ToriiRequestValidation.normalizedNonEmpty(entrypoint, field: "entrypoint")
+        let normalizedPublicKeyHex = try ToriiRequestValidation.normalizedOptional32ByteHex(publicKeyHex, field: "public_key_hex")
+        let normalizedSignatureB64 = try signatureB64.map {
+            try ToriiRequestValidation.normalizedBase64($0, field: "signature_b64")
+        }
+        let normalizedGasAssetId = try gasAssetId.map {
+            try normalizeToriiAssetIdQueryValue($0, field: "gas_asset_id")
+        }
+        let normalizedFeeSponsor = try feeSponsor.map {
+            try normalizeToriiAccountIdQueryValue($0, field: "fee_sponsor")
+        }
+        if let gasLimit, gasLimit == 0 {
+            throw ToriiClientError.invalidPayload("gas_limit must be greater than zero.")
+        }
+
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(normalizedSelector.multisigAccountId, forKey: .multisigAccountId)
+        try container.encodeIfPresent(normalizedSelector.multisigAccountAlias, forKey: .multisigAccountAlias)
+        try container.encode(normalizedSignerAccountId, forKey: .signerAccountId)
+        try container.encodeIfPresent(normalizedPublicKeyHex, forKey: .publicKeyHex)
+        try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
+        try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
+        try container.encodeIfPresent(normalizedTarget.contractAddress, forKey: .contractAddress)
+        try container.encodeIfPresent(normalizedTarget.contractAlias, forKey: .contractAlias)
+        try container.encode(normalizedEntrypoint, forKey: .entrypoint)
+        try container.encodeIfPresent(payload, forKey: .payload)
+        try container.encodeIfPresent(normalizedGasAssetId, forKey: .gasAssetId)
+        try container.encodeIfPresent(normalizedFeeSponsor, forKey: .feeSponsor)
+        try container.encodeIfPresent(gasLimit, forKey: .gasLimit)
+    }
+}
+
+public struct ToriiMultisigContractCallApproveRequest: Encodable, Sendable {
+    public var selector: ToriiMultisigAccountSelector
+    public var signerAccountId: String
+    public var publicKeyHex: String?
+    public var signatureB64: String?
+    public var creationTimeMs: UInt64?
+    public var proposalId: String?
+    public var instructionsHash: String?
+
+    public init(selector: ToriiMultisigAccountSelector,
+                signerAccountId: String,
+                publicKeyHex: String? = nil,
+                signatureB64: String? = nil,
+                creationTimeMs: UInt64? = nil,
+                proposalId: String? = nil,
+                instructionsHash: String? = nil) {
+        self.selector = selector
+        self.signerAccountId = signerAccountId
+        self.publicKeyHex = publicKeyHex
+        self.signatureB64 = signatureB64
+        self.creationTimeMs = creationTimeMs
+        self.proposalId = proposalId
+        self.instructionsHash = instructionsHash
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case multisigAccountId = "multisig_account_id"
+        case multisigAccountAlias = "multisig_account_alias"
+        case signerAccountId = "signer_account_id"
+        case publicKeyHex = "public_key_hex"
+        case signatureB64 = "signature_b64"
+        case creationTimeMs = "creation_time_ms"
+        case proposalId = "proposal_id"
+        case instructionsHash = "instructions_hash"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig approve selector")
+        let normalizedSignerAccountId = try normalizeToriiAccountIdQueryValue(
+            signerAccountId,
+            field: "signer_account_id"
+        )
+        let normalizedPublicKeyHex = try ToriiRequestValidation.normalizedOptional32ByteHex(publicKeyHex, field: "public_key_hex")
+        let normalizedSignatureB64 = try signatureB64.map {
+            try ToriiRequestValidation.normalizedBase64($0, field: "signature_b64")
+        }
+        let normalizedProposalId = try ToriiRequestValidation.normalizedOptionalNonEmpty(proposalId, field: "proposal_id")
+        let normalizedInstructionsHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
+            instructionsHash,
+            field: "instructions_hash"
+        )
+        guard normalizedProposalId != nil || normalizedInstructionsHash != nil else {
+            throw ToriiClientError.invalidPayload(
+                "approve request requires proposal_id or instructions_hash."
+            )
+        }
+
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(normalizedSelector.multisigAccountId, forKey: .multisigAccountId)
+        try container.encodeIfPresent(normalizedSelector.multisigAccountAlias, forKey: .multisigAccountAlias)
+        try container.encode(normalizedSignerAccountId, forKey: .signerAccountId)
+        try container.encodeIfPresent(normalizedPublicKeyHex, forKey: .publicKeyHex)
+        try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
+        try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
+        try container.encodeIfPresent(normalizedProposalId, forKey: .proposalId)
+        try container.encodeIfPresent(normalizedInstructionsHash, forKey: .instructionsHash)
+    }
+}
+
+public struct ToriiMultisigContractCallResponse: Decodable, Sendable {
+    public let ok: Bool
+    public let resolvedMultisigAccountId: String
+    public let submitted: Bool?
+    public let proposalId: String?
+    public let instructionsHash: String?
+    public let executedTxHashHex: String?
+    public let creationTimeMs: UInt64?
+    public let signingMessageB64: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case resolvedMultisigAccountId = "resolved_multisig_account_id"
+        case submitted
+        case proposalId = "proposal_id"
+        case instructionsHash = "instructions_hash"
+        case executedTxHashHex = "executed_tx_hash_hex"
+        case creationTimeMs = "creation_time_ms"
+        case signingMessageB64 = "signing_message_b64"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        ok = try container.decode(Bool.self, forKey: .ok)
+        let resolved = try container.decode(String.self, forKey: .resolvedMultisigAccountId)
+        resolvedMultisigAccountId = try normalizeToriiAccountIdQueryValue(
+            resolved,
+            field: "resolved_multisig_account_id"
+        )
+        submitted = try container.decodeIfPresent(Bool.self, forKey: .submitted)
+        proposalId = try container.decodeIfPresent(String.self, forKey: .proposalId)
+        if let instructionsHashRaw = try container.decodeIfPresent(String.self, forKey: .instructionsHash) {
+            instructionsHash = try ToriiValidation.normalized32ByteHex(
+                instructionsHashRaw,
+                field: "instructions_hash",
+                codingPath: container.codingPath + [CodingKeys.instructionsHash]
+            )
+        } else {
+            instructionsHash = nil
+        }
+        if let executedTxHashRaw = try container.decodeIfPresent(String.self, forKey: .executedTxHashHex) {
+            executedTxHashHex = try ToriiValidation.normalized32ByteHex(
+                executedTxHashRaw,
+                field: "executed_tx_hash_hex",
+                codingPath: container.codingPath + [CodingKeys.executedTxHashHex]
+            )
+        } else {
+            executedTxHashHex = nil
+        }
+        creationTimeMs = try container.decodeIfPresent(UInt64.self, forKey: .creationTimeMs)
+        if let signingMessageRaw = try container.decodeIfPresent(String.self, forKey: .signingMessageB64) {
+            signingMessageB64 = try ToriiValidation.normalizedBase64(
+                signingMessageRaw,
+                field: "signing_message_b64",
+                codingPath: container.codingPath + [CodingKeys.signingMessageB64]
+            )
+        } else {
+            signingMessageB64 = nil
+        }
+    }
+}
+
+public struct ToriiMultisigSpecRequest: Encodable, Sendable {
+    public var selector: ToriiMultisigAccountSelector
+
+    public init(selector: ToriiMultisigAccountSelector) {
+        self.selector = selector
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case multisigAccountId = "multisig_account_id"
+        case multisigAccountAlias = "multisig_account_alias"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig spec selector")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(normalizedSelector.multisigAccountId, forKey: .multisigAccountId)
+        try container.encodeIfPresent(normalizedSelector.multisigAccountAlias, forKey: .multisigAccountAlias)
+    }
+}
+
+public struct ToriiMultisigSpecResponse: Decodable, Sendable, Equatable {
+    public let resolvedMultisigAccountId: String
+    public let spec: ToriiJSONValue
+
+    private enum CodingKeys: String, CodingKey {
+        case resolvedMultisigAccountId = "resolved_multisig_account_id"
+        case spec
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let resolved = try container.decode(String.self, forKey: .resolvedMultisigAccountId)
+        resolvedMultisigAccountId = try normalizeToriiAccountIdQueryValue(
+            resolved,
+            field: "resolved_multisig_account_id"
+        )
+        spec = try container.decode(ToriiJSONValue.self, forKey: .spec)
+    }
+}
+
+public struct ToriiMultisigProposalEntry: Decodable, Sendable, Equatable {
+    public let proposalId: String
+    public let instructionsHash: String
+    public let proposal: ToriiJSONValue
+
+    private enum CodingKeys: String, CodingKey {
+        case proposalId = "proposal_id"
+        case instructionsHash = "instructions_hash"
+        case proposal
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        proposalId = try container.decode(String.self, forKey: .proposalId)
+        let hashRaw = try container.decode(String.self, forKey: .instructionsHash)
+        instructionsHash = try ToriiValidation.normalized32ByteHex(
+            hashRaw,
+            field: "instructions_hash",
+            codingPath: container.codingPath + [CodingKeys.instructionsHash]
+        )
+        proposal = try container.decode(ToriiJSONValue.self, forKey: .proposal)
+    }
+}
+
+public struct ToriiMultisigProposalsListRequest: Encodable, Sendable {
+    public var selector: ToriiMultisigAccountSelector
+
+    public init(selector: ToriiMultisigAccountSelector) {
+        self.selector = selector
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case multisigAccountId = "multisig_account_id"
+        case multisigAccountAlias = "multisig_account_alias"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposals list selector")
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(normalizedSelector.multisigAccountId, forKey: .multisigAccountId)
+        try container.encodeIfPresent(normalizedSelector.multisigAccountAlias, forKey: .multisigAccountAlias)
+    }
+}
+
+public struct ToriiMultisigProposalsListResponse: Decodable, Sendable, Equatable {
+    public let resolvedMultisigAccountId: String
+    public let proposals: [ToriiMultisigProposalEntry]
+
+    private enum CodingKeys: String, CodingKey {
+        case resolvedMultisigAccountId = "resolved_multisig_account_id"
+        case proposals
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let resolved = try container.decode(String.self, forKey: .resolvedMultisigAccountId)
+        resolvedMultisigAccountId = try normalizeToriiAccountIdQueryValue(
+            resolved,
+            field: "resolved_multisig_account_id"
+        )
+        proposals = try container.decode([ToriiMultisigProposalEntry].self, forKey: .proposals)
+    }
+}
+
+public struct ToriiMultisigProposalGetRequest: Encodable, Sendable {
+    public var selector: ToriiMultisigAccountSelector
+    public var proposalId: String?
+    public var instructionsHash: String?
+
+    public init(selector: ToriiMultisigAccountSelector,
+                proposalId: String? = nil,
+                instructionsHash: String? = nil) {
+        self.selector = selector
+        self.proposalId = proposalId
+        self.instructionsHash = instructionsHash
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case multisigAccountId = "multisig_account_id"
+        case multisigAccountAlias = "multisig_account_alias"
+        case proposalId = "proposal_id"
+        case instructionsHash = "instructions_hash"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        let normalizedSelector = try selector.normalizedPayload(field: "multisig proposal get selector")
+        let normalizedProposalId = try ToriiRequestValidation.normalizedOptionalNonEmpty(proposalId, field: "proposal_id")
+        let normalizedInstructionsHash = try ToriiRequestValidation.normalizedOptional32ByteHex(
+            instructionsHash,
+            field: "instructions_hash"
+        )
+        guard normalizedProposalId != nil || normalizedInstructionsHash != nil else {
+            throw ToriiClientError.invalidPayload(
+                "multisig proposal get request requires proposal_id or instructions_hash."
+            )
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(normalizedSelector.multisigAccountId, forKey: .multisigAccountId)
+        try container.encodeIfPresent(normalizedSelector.multisigAccountAlias, forKey: .multisigAccountAlias)
+        try container.encodeIfPresent(normalizedProposalId, forKey: .proposalId)
+        try container.encodeIfPresent(normalizedInstructionsHash, forKey: .instructionsHash)
+    }
+}
+
+public struct ToriiMultisigProposalGetResponse: Decodable, Sendable, Equatable {
+    public let resolvedMultisigAccountId: String
+    public let proposalId: String
+    public let instructionsHash: String
+    public let proposal: ToriiJSONValue
+
+    private enum CodingKeys: String, CodingKey {
+        case resolvedMultisigAccountId = "resolved_multisig_account_id"
+        case proposalId = "proposal_id"
+        case instructionsHash = "instructions_hash"
+        case proposal
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let resolved = try container.decode(String.self, forKey: .resolvedMultisigAccountId)
+        resolvedMultisigAccountId = try normalizeToriiAccountIdQueryValue(
+            resolved,
+            field: "resolved_multisig_account_id"
+        )
+        proposalId = try container.decode(String.self, forKey: .proposalId)
+        let hashRaw = try container.decode(String.self, forKey: .instructionsHash)
+        instructionsHash = try ToriiValidation.normalized32ByteHex(
+            hashRaw,
+            field: "instructions_hash",
+            codingPath: container.codingPath + [CodingKeys.instructionsHash]
+        )
+        proposal = try container.decode(ToriiJSONValue.self, forKey: .proposal)
+    }
 }
 
 public enum ToriiMetricsResponse: Equatable, Sendable {
@@ -7078,10 +8962,11 @@ struct ToriiStatusState {
     }
 }
 
-private enum ToriiDataModelCompatibility {
+private enum ToriiDataModelValidation {
     case unknown
-    case compatible(version: Int)
-    case incompatible(expected: Int, actual: Int?)
+    case matched(version: Int, schemaHash: String)
+    case dataModelMismatch(expected: Int, actual: Int?)
+    case schemaMismatch(expected: String, actual: String?)
 }
 
 public struct ToriiGovernanceInstruction: Codable, Sendable {
@@ -7105,49 +8990,67 @@ public struct ToriiGovernanceWindow: Codable, Sendable {
 }
 
 public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable {
-    public var namespace: String
-    public var contractId: String
+    public var contractAddress: String?
+    public var contractAlias: String?
     public var codeHashHex: String
     public var abiHashHex: String
     public var abiVersion: String
     public var window: ToriiGovernanceWindow?
+    public var mode: ToriiGovernanceReferendumMode?
+    public var limits: ToriiJSONValue?
+    public var manifestProvenance: ToriiJSONValue?
 
     private enum CodingKeys: String, CodingKey {
-        case namespace
-        case contractId = "contract_id"
+        case contractAddress = "contract_address"
+        case contractAlias = "contract_alias"
         case codeHashHex = "code_hash"
         case abiHashHex = "abi_hash"
         case abiVersion = "abi_version"
         case window
+        case mode
+        case limits
+        case manifestProvenance = "manifest_provenance"
     }
 
-    public init(namespace: String,
-                contractId: String,
+    public init(contractAddress: String? = nil,
+                contractAlias: String? = nil,
                 codeHashHex: String,
                 abiHashHex: String,
-                abiVersion: String,
-                window: ToriiGovernanceWindow? = nil) {
-        self.namespace = namespace
-        self.contractId = contractId
+                abiVersion: String = "1",
+                window: ToriiGovernanceWindow? = nil,
+                mode: ToriiGovernanceReferendumMode? = nil,
+                limits: ToriiJSONValue? = nil,
+                manifestProvenance: ToriiJSONValue? = nil) {
+        self.contractAddress = contractAddress
+        self.contractAlias = contractAlias
         self.codeHashHex = codeHashHex
         self.abiHashHex = abiHashHex
         self.abiVersion = abiVersion
         self.window = window
+        self.mode = mode
+        self.limits = limits
+        self.manifestProvenance = manifestProvenance
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedNamespace = try ToriiRequestValidation.normalizedNonEmpty(namespace, field: "namespace")
-        let normalizedContractId = try ToriiRequestValidation.normalizedNonEmpty(contractId, field: "contract_id")
+        let normalizedTarget = try normalizeToriiContractTargetSelector(
+            contractAddress: contractAddress,
+            contractAlias: contractAlias,
+            field: "governanceProposeDeployContract"
+        )
         let normalizedCodeHash = try ToriiRequestValidation.normalized32ByteHex(codeHashHex, field: "code_hash")
         let normalizedAbiHash = try ToriiRequestValidation.normalized32ByteHex(abiHashHex, field: "abi_hash")
         let normalizedAbiVersion = try ToriiRequestValidation.normalizedNonEmpty(abiVersion, field: "abi_version")
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(normalizedNamespace, forKey: .namespace)
-        try container.encode(normalizedContractId, forKey: .contractId)
+        try container.encodeIfPresent(normalizedTarget.contractAddress, forKey: .contractAddress)
+        try container.encodeIfPresent(normalizedTarget.contractAlias, forKey: .contractAlias)
         try container.encode(normalizedCodeHash, forKey: .codeHashHex)
         try container.encode(normalizedAbiHash, forKey: .abiHashHex)
         try container.encode(normalizedAbiVersion, forKey: .abiVersion)
         try container.encodeIfPresent(window, forKey: .window)
+        try container.encodeIfPresent(mode, forKey: .mode)
+        try container.encodeIfPresent(limits, forKey: .limits)
+        try container.encodeIfPresent(manifestProvenance, forKey: .manifestProvenance)
     }
 }
 
@@ -7286,24 +9189,24 @@ fileprivate func ensureGovernanceZkOwnerCanonical(_ inputs: [String: ToriiJSONVa
     guard let value = inputs["owner"] else { return }
     if case .null = value { return }
     guard case let .string(owner) = value else {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
     let canonical = try canonicalizeGovernanceZkOwnerLiteral(owner, field: field)
     if canonical != owner {
-        throw ToriiClientError.invalidPayload("\(field).owner must use canonical account id form.")
+        throw ToriiClientError.invalidPayload("\(field).owner must use canonical I105 account id form.")
     }
 }
 
 fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: String) throws -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty, trimmed == raw else {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
     if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
     if trimmed.contains("@") {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
     let address: AccountAddress
     do {
@@ -7312,7 +9215,7 @@ fileprivate func canonicalizeGovernanceZkOwnerLiteral(_ raw: String, field: Stri
             expectedPrefix: 0x02F1
         )
     } catch {
-        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical account id.")
+        throw ToriiClientError.invalidPayload("\(field).owner must be a canonical I105 account id.")
     }
     let i105 = try address.toI105(networkPrefix: 0x02F1)
     return i105
@@ -7528,15 +9431,13 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
 }
 
 public struct ToriiGovernanceDeployContractKind: Decodable, Sendable, Equatable {
-    public let namespace: String
-    public let contractId: String
+    public let contractAddress: String
     public let codeHashHex: String
     public let abiHashHex: String
     public let abiVersion: String
 
     private enum CodingKeys: String, CodingKey {
-        case namespace
-        case contractId = "contract_id"
+        case contractAddress = "contract_address"
         case codeHashHex = "code_hash_hex"
         case abiHashHex = "abi_hash_hex"
         case abiVersion = "abi_version"
@@ -7544,8 +9445,10 @@ public struct ToriiGovernanceDeployContractKind: Decodable, Sendable, Equatable 
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        namespace = try container.decode(String.self, forKey: .namespace)
-        contractId = try container.decode(String.self, forKey: .contractId)
+        contractAddress = try normalizeToriiContractAddressLiteral(
+            try container.decode(String.self, forKey: .contractAddress),
+            field: "contract_address"
+        )
         let codeHashHex = try container.decode(String.self, forKey: .codeHashHex)
         self.codeHashHex = try ToriiValidation.normalized32ByteHex(
             codeHashHex,
@@ -7645,7 +9548,7 @@ public enum ToriiGovernanceReferendumStatus: String, Decodable, Sendable {
     case closed = "Closed"
 }
 
-public enum ToriiGovernanceReferendumMode: String, Decodable, Sendable {
+public enum ToriiGovernanceReferendumMode: String, Codable, Sendable {
     case zk = "Zk"
     case plain = "Plain"
 }
@@ -7750,11 +9653,13 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
         public let kind: String
         public let content: String?
         public let rejectionReason: String?
+        public let blockHeight: UInt64?
 
         private enum CodingKeys: String, CodingKey {
             case kind
             case content
             case rejectionReason = "rejection_reason"
+            case blockHeight = "block_height"
         }
 
         public var state: PipelineTransactionState {
@@ -7765,10 +9670,180 @@ public struct ToriiPipelineTransactionStatus: Decodable, Sendable {
     public struct Content: Decodable, Sendable {
         public let hash: String
         public let status: Status
+
+        public init(hash: String, status: Status) {
+            self.hash = hash
+            self.status = status
+        }
     }
 
     public let kind: String
     public let content: Content
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case content
+        case hash
+        case status
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+
+        if container.contains(.content) {
+            self.kind = try container.decode(String.self, forKey: .kind)
+            self.content = try container.decode(Content.self, forKey: .content)
+            return
+        }
+
+        let hash = try container.decode(String.self, forKey: .hash)
+        let status = try container.decode(Status.self, forKey: .status)
+        self.kind = "Transaction"
+        self.content = Content(hash: hash, status: status)
+    }
+}
+
+public struct ToriiPipelineTransactionEvent: Decodable, Sendable {
+    public let category: String?
+    public let event: String
+    public let hash: String
+    public let status: String
+    public let blockHeight: UInt64?
+    public let dataspaceId: String?
+    public let laneId: String?
+    public let eventName: String?
+    public let eventId: String?
+    public let retryHintMilliseconds: Int?
+    public let rawEvent: String
+
+    private enum CodingKeys: String, CodingKey {
+        case category
+        case event
+        case hash
+        case status
+        case blockHeight = "block_height"
+        case dataspaceId = "dataspace_id"
+        case laneId = "lane_id"
+    }
+
+    public var state: PipelineTransactionState {
+        PipelineTransactionState(kind: status)
+    }
+
+    public var rejectionReason: String? {
+        Self.parseRejectedReason(from: status)
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            category: try container.decodeIfPresent(String.self, forKey: .category),
+            event: try container.decode(String.self, forKey: .event),
+            hash: try container.decode(String.self, forKey: .hash),
+            status: try container.decode(String.self, forKey: .status),
+            blockHeight: Self.decodeFlexibleUInt64IfPresent(container: container, key: .blockHeight),
+            dataspaceId: Self.decodeFlexibleStringIfPresent(container: container, key: .dataspaceId),
+            laneId: Self.decodeFlexibleStringIfPresent(container: container, key: .laneId),
+            eventName: nil,
+            eventId: nil,
+            retryHintMilliseconds: nil,
+            rawEvent: ""
+        )
+    }
+
+    fileprivate init(
+        category: String?,
+        event: String,
+        hash: String,
+        status: String,
+        blockHeight: UInt64?,
+        dataspaceId: String?,
+        laneId: String?,
+        eventName: String?,
+        eventId: String?,
+        retryHintMilliseconds: Int?,
+        rawEvent: String
+    ) {
+        self.category = category
+        self.event = event
+        self.hash = hash
+        self.status = status
+        self.blockHeight = blockHeight
+        self.dataspaceId = dataspaceId
+        self.laneId = laneId
+        self.eventName = eventName
+        self.eventId = eventId
+        self.retryHintMilliseconds = retryHintMilliseconds
+        self.rawEvent = rawEvent
+    }
+
+    fileprivate init(
+        snapshot: ToriiPipelineTransactionStatus,
+        hashHex: String
+    ) {
+        self.init(
+            category: "Pipeline",
+            event: snapshot.kind,
+            hash: snapshot.content.hash.isEmpty ? hashHex : snapshot.content.hash,
+            status: snapshot.content.status.kind,
+            blockHeight: snapshot.content.status.blockHeight,
+            dataspaceId: nil,
+            laneId: nil,
+            eventName: nil,
+            eventId: nil,
+            retryHintMilliseconds: nil,
+            rawEvent: ""
+        )
+    }
+
+    private static func decodeFlexibleUInt64IfPresent<Key: CodingKey>(
+        container: KeyedDecodingContainer<Key>,
+        key: Key
+    ) -> UInt64? {
+        if let direct = try? container.decodeIfPresent(UInt64.self, forKey: key) {
+            return direct
+        }
+        if let signed = try? container.decode(Int64.self, forKey: key),
+           signed >= 0 {
+            return UInt64(signed)
+        }
+        if let rendered = try? container.decode(String.self, forKey: key) {
+            let trimmed = rendered.trimmingCharacters(in: .whitespacesAndNewlines)
+            return UInt64(trimmed)
+        }
+        return nil
+    }
+
+    private static func decodeFlexibleStringIfPresent<Key: CodingKey>(
+        container: KeyedDecodingContainer<Key>,
+        key: Key
+    ) -> String? {
+        if let direct = try? container.decodeIfPresent(String.self, forKey: key) {
+            return direct
+        }
+        if let unsigned = try? container.decode(UInt64.self, forKey: key) {
+            return String(unsigned)
+        }
+        if let signed = try? container.decode(Int64.self, forKey: key) {
+            return String(signed)
+        }
+        return nil
+    }
+
+    private static func parseRejectedReason(from statusLiteral: String) -> String? {
+        let trimmed = statusLiteral.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("Rejected"),
+              let open = trimmed.firstIndex(of: "("),
+              trimmed.hasSuffix(")"),
+              open < trimmed.index(before: trimmed.endIndex) else {
+            return nil
+        }
+        let reason = String(
+            trimmed[trimmed.index(after: open)..<trimmed.index(before: trimmed.endIndex)]
+        )
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        return reason.isEmpty ? nil : reason
+    }
 }
 
 public struct ToriiPipelineRecovery: Decodable, Sendable {
@@ -7804,14 +9879,15 @@ public enum PipelineTransactionState: Hashable, Sendable {
     case other(String)
 
     public init(kind: String) {
-        switch kind {
-        case "Queued": self = .queued
-        case "Approved": self = .approved
-        case "Committed": self = .committed
-        case "Applied": self = .applied
-        case "Rejected": self = .rejected
-        case "Expired": self = .expired
-        default: self = .other(kind)
+        let trimmed = kind.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch trimmed {
+        case let value where value.hasPrefix("Queued"): self = .queued
+        case let value where value.hasPrefix("Approved"): self = .approved
+        case let value where value.hasPrefix("Committed"): self = .committed
+        case let value where value.hasPrefix("Applied"): self = .applied
+        case let value where value.hasPrefix("Rejected"): self = .rejected
+        case let value where value.hasPrefix("Expired"): self = .expired
+        default: self = .other(trimmed)
         }
     }
 
@@ -7829,7 +9905,7 @@ public enum PipelineTransactionState: Hashable, Sendable {
 
     public var isKnownTerminalSuccess: Bool {
         switch self {
-        case .approved, .committed, .applied:
+        case .committed, .applied:
             return true
         default:
             return false
@@ -7837,6 +9913,24 @@ public enum PipelineTransactionState: Hashable, Sendable {
     }
 
     public var isKnownTerminalFailure: Bool {
+        switch self {
+        case .rejected, .expired:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public var isTerminalSuccess: Bool {
+        switch self {
+        case .committed, .applied:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public var isTerminalFailure: Bool {
         switch self {
         case .rejected, .expired:
             return true
@@ -8056,7 +10150,7 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable {
     public let dataspaceCommitments: [ToriiDataspaceCommitmentSnapshot]
     /// Governance manifest coverage per lane.
     public let laneGovernance: [ToriiLaneGovernanceSnapshot]
-    /// Original payload keyed by field name for forward compatibility.
+    /// Original payload keyed by field name for diagnostics.
     public let fields: [String: ToriiJSONValue]
 
     public init(from decoder: Decoder) throws {
@@ -8263,7 +10357,8 @@ public enum ToriiClientError: Error, Sendable {
     case httpStatus(code: Int, message: String?, rejectCode: String?)
     case decoding(Swift.Error)
     case invalidPayload(String)
-    case incompatibleDataModel(expected: Int, actual: Int?)
+    case dataModelMismatch(expected: Int, actual: Int?)
+    case transactionSchemaMismatch(expected: String, actual: String?)
 }
 
 extension ToriiClientError: LocalizedError {
@@ -8287,11 +10382,16 @@ extension ToriiClientError: LocalizedError {
             return "Failed to decode Torii response: \(error.localizedDescription)"
         case .invalidPayload(let reason):
             return "Torii response payload was invalid: \(reason)"
-        case let .incompatibleDataModel(expected, actual):
+        case let .dataModelMismatch(expected, actual):
             if let actual {
                 return "Torii data model version mismatch (expected \(expected), got \(actual))."
             }
             return "Torii data model version mismatch (expected \(expected), missing on node)."
+        case let .transactionSchemaMismatch(expected, actual):
+            if let actual {
+                return "Torii signed transaction schema hash mismatch (expected \(expected), got \(actual))."
+            }
+            return "Torii signed transaction schema hash mismatch (expected \(expected), missing on node)."
         }
     }
 }
@@ -8335,26 +10435,44 @@ public extension ToriiTransactionSubmitting where Self: Sendable {
 }
 
 public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable {
+    private struct ObservedServerClock: Sendable {
+        let serverEpochMs: UInt64
+        let observedLocalEpochMs: UInt64
+    }
+
+    private static let sharedServerClockQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.shared-server-clock")
+    private static var sharedObservedServerClocks: [String: ObservedServerClock] = [:]
+
     /// Base URL for all requests. Normalized to directory URL (ends with "/") to ensure
     /// correct relative URL resolution per RFC 3986.
     public let baseURL: URL
+    /// Default HTTP headers applied to every Torii request.
+    public let defaultHeaders: [String: String]
     private let session: URLSession
+    private let serverClockCacheKey: String
     private var statusState = ToriiStatusState()
-    private var dataModelCompatibility = ToriiDataModelCompatibility.unknown
+    private var dataModelValidation = ToriiDataModelValidation.unknown
     private let dataModelQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.data-model")
-    private var cachedOfflineSettlementStatusByBundleIdHex: [String: ToriiSettlementExecutionStatus] = [:]
-    private let offlineSettlementStatusQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.offline-settlement-status")
+    private let serverClockQueue = DispatchQueue(label: "org.hyperledger.iroha.torii.server-clock")
+    private var observedServerClock: ObservedServerClock?
     private static let defaultListPageSize = 100
-    internal var assetIdLiteralBuilder: (String, String) throws -> String = {
-        try OfflineNorito.assetIdLiteral(assetDefinitionId: $0, accountId: $1)
-    }
 
-    public init(baseURL: URL, session: URLSession = .shared) {
+    public init(baseURL: URL, session: URLSession = .shared, defaultHeaders: [String: String] = [:]) {
         // Normalize to directory URL for correct relative URL resolution.
         // Without trailing slash, URL(string:relativeTo:) replaces the last path component
         // instead of appending (per RFC 3986).
         self.baseURL = baseURL.hasDirectoryPath ? baseURL : baseURL.appendingPathComponent("")
+        self.serverClockCacheKey = Self.serverClockCacheKey(for: self.baseURL)
         self.session = session
+        self.defaultHeaders = ToriiClientAuthentication.normalizedHeaders(defaultHeaders)
+    }
+
+    public convenience init(
+        baseURL: URL,
+        session: URLSession = .shared,
+        authentication: ToriiClientAuthentication
+    ) {
+        self.init(baseURL: baseURL, session: session, defaultHeaders: authentication.headers)
     }
 
     /// Invalidates the underlying URLSession and cancels all outstanding tasks.
@@ -8363,14 +10481,40 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         session.invalidateAndCancel()
     }
 
+    /// Returns a creation timestamp that tracks observed server time when available and
+    /// otherwise uses the local wall clock. A small safety margin keeps locally
+    /// built transactions from being rejected when the device clock is slightly ahead.
+    public func recommendedCreationTimeMs(safetyMarginMs: UInt64 = 10_000,
+                                          maxObservedLagMs: UInt64 = 20_000) -> UInt64 {
+        let localNowMs = Self.currentEpochMs()
+        let baseMs = serverClockQueue.sync { () -> UInt64 in
+            let clock = observedServerClock ?? Self.sharedObservedServerClock(for: serverClockCacheKey)
+            guard let clock else { return localNowMs }
+            let elapsedSinceObservation = localNowMs >= clock.observedLocalEpochMs
+                ? localNowMs - clock.observedLocalEpochMs
+                : 0
+            let (estimatedServerNow, overflow) = clock.serverEpochMs.addingReportingOverflow(elapsedSinceObservation)
+            let clampedEstimatedServerNow = overflow ? UInt64.max : estimatedServerNow
+            let observedLagMs = localNowMs >= clampedEstimatedServerNow
+                ? localNowMs - clampedEstimatedServerNow
+                : 0
+            guard observedLagMs <= maxObservedLagMs else {
+                return localNowMs
+            }
+            return min(localNowMs, clampedEstimatedServerNow)
+        }
+        return baseMs > safetyMarginMs ? baseMs - safetyMarginMs : 0
+    }
+
     // MARK: - Public completion-based API
 
     @discardableResult
     public func getAssets(accountId: String,
                           limit: Int = 100,
-                          assetId: String? = nil,
+                          asset: String? = nil,
+                          scope: String? = nil,
                           completion: @escaping (Result<[ToriiAssetBalance], Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getAssets(accountId: accountId, limit: limit, assetId: assetId) }
+        runTask(completion) { try await self.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope) }
     }
 
     @discardableResult
@@ -8386,14 +10530,97 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
-    public func buildAssetIdLiteralResolvingAliases(assetDefinitionIdOrAlias: String,
-                                                    accountIdOrAlias: String,
-                                                    completion: @escaping (Result<String, Swift.Error>) -> Void) -> Task<Void, Never> {
+    public func listIdentifierPolicies(completion: @escaping (Result<ToriiIdentifierPolicyListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listIdentifierPolicies() }
+    }
+
+    @discardableResult
+    public func listRamLfeProgramPolicies(completion: @escaping (Result<ToriiRamLfeProgramPolicyListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listRamLfeProgramPolicies() }
+    }
+
+    @discardableResult
+    public func resolveIdentifier(_ requestBody: ToriiIdentifierLookupRequest,
+                                  completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.resolveIdentifier(requestBody) }
+    }
+
+    @discardableResult
+    public func resolveIdentifier(policyId: String,
+                                  input: String? = nil,
+                                  encryptedInputHex: String? = nil,
+                                  completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
-            try await self.buildAssetIdLiteralResolvingAliases(
-                assetDefinitionIdOrAlias: assetDefinitionIdOrAlias,
-                accountIdOrAlias: accountIdOrAlias
+            try await self.resolveIdentifier(
+                policyId: policyId,
+                input: input,
+                encryptedInputHex: encryptedInputHex
             )
+        }
+    }
+
+    @discardableResult
+    public func getIdentifierClaimByReceiptHash(_ receiptHash: String,
+                                                completion: @escaping (Result<ToriiIdentifierClaimRecord?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getIdentifierClaimByReceiptHash(receiptHash) }
+    }
+
+    @discardableResult
+    public func issueIdentifierClaimReceipt(accountId: String,
+                                            requestBody: ToriiIdentifierLookupRequest,
+                                            completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.issueIdentifierClaimReceipt(accountId: accountId, requestBody: requestBody) }
+    }
+
+    @discardableResult
+    public func issueIdentifierClaimReceipt(accountId: String,
+                                            policyId: String,
+                                            input: String? = nil,
+                                            encryptedInputHex: String? = nil,
+                                            completion: @escaping (Result<ToriiIdentifierResolutionReceipt?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.issueIdentifierClaimReceipt(
+                accountId: accountId,
+                policyId: policyId,
+                input: input,
+                encryptedInputHex: encryptedInputHex
+            )
+        }
+    }
+
+    @discardableResult
+    public func executeRamLfeProgram(programId: String,
+                                     requestBody: ToriiRamLfeExecuteRequest,
+                                     completion: @escaping (Result<ToriiRamLfeExecuteResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.executeRamLfeProgram(programId: programId, requestBody: requestBody) }
+    }
+
+    @discardableResult
+    public func executeRamLfeProgram(programId: String,
+                                     inputHex: String? = nil,
+                                     encryptedInputHex: String? = nil,
+                                     completion: @escaping (Result<ToriiRamLfeExecuteResponse?, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.executeRamLfeProgram(
+                programId: programId,
+                inputHex: inputHex,
+                encryptedInputHex: encryptedInputHex
+            )
+        }
+    }
+
+    @discardableResult
+    public func verifyRamLfeReceipt(_ requestBody: ToriiRamLfeReceiptVerifyRequest,
+                                    completion: @escaping (Result<ToriiRamLfeReceiptVerifyResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.verifyRamLfeReceipt(requestBody) }
+    }
+
+    @discardableResult
+    public func verifyRamLfeReceipt(receipt: ToriiRamLfeExecutionReceipt,
+                                    outputHex: String? = nil,
+                                    completion: @escaping (Result<ToriiRamLfeReceiptVerifyResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) {
+            try await self.verifyRamLfeReceipt(receipt: receipt, outputHex: outputHex)
         }
     }
 
@@ -8401,9 +10628,16 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getTransactions(accountId: String,
                                 limit: Int = 50,
                                 offset: Int = 0,
-                                assetId: String? = nil,
+                                assetDefinitionId: String? = nil,
                                 completion: @escaping (Result<ToriiTxEnvelope, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getTransactions(accountId: accountId, limit: limit, offset: offset, assetId: assetId) }
+        runTask(completion) {
+            try await self.getTransactions(
+                accountId: accountId,
+                limit: limit,
+                offset: offset,
+                assetDefinitionId: assetDefinitionId
+            )
+        }
     }
 
     @discardableResult
@@ -8445,6 +10679,34 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     @available(iOS 15.0, macOS 12.0, *)
     @discardableResult
+    public func getExplorerRwas(params: ToriiExplorerRwasParams? = nil,
+                                completion: @escaping (Result<ToriiExplorerRwasPage, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getExplorerRwas(params: params) }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
+    public func getContractActivity(params: ToriiContractActivityParams? = nil,
+                                    completion: @escaping (Result<ToriiContractActivityList, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getContractActivity(params: params) }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
+    public func getContractEvents(params: ToriiContractEventParams? = nil,
+                                  completion: @escaping (Result<ToriiContractEventList, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getContractEvents(params: params) }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
+    public func getExplorerRwaDetail(rwaId: String,
+                                     completion: @escaping (Result<ToriiExplorerRwaRecord, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getExplorerRwaDetail(rwaId: rwaId) }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    @discardableResult
     public func getExplorerTransactionDetail(hashHex: String,
                                               completion: @escaping (Result<ToriiExplorerTransactionDetail, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
@@ -8468,13 +10730,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getExplorerTransfers(params: ToriiExplorerInstructionsParams? = nil,
                                      matchingAccount accountId: String? = nil,
                                      assetDefinitionId: String? = nil,
-                                     assetId: String? = nil,
                                      completion: @escaping (Result<[ToriiExplorerTransferRecord], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getExplorerTransfers(params: params,
                                                 matchingAccount: accountId,
-                                                assetDefinitionId: assetDefinitionId,
-                                                assetId: assetId)
+                                                assetDefinitionId: assetDefinitionId)
         }
     }
 
@@ -8483,14 +10743,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getExplorerTransferSummaries(params: ToriiExplorerInstructionsParams? = nil,
                                              matchingAccount accountId: String? = nil,
                                              assetDefinitionId: String? = nil,
-                                             assetId: String? = nil,
                                              relativeTo relativeAccountId: String? = nil,
                                              completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getExplorerTransferSummaries(params: params,
                                                         matchingAccount: accountId,
                                                         assetDefinitionId: assetDefinitionId,
-                                                        assetId: assetId,
                                                         relativeTo: relativeAccountId)
         }
     }
@@ -8500,14 +10758,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getExplorerTransactionTransfers(hashHex: String,
                                                 matchingAccount accountId: String? = nil,
                                                 assetDefinitionId: String? = nil,
-                                                assetId: String? = nil,
                                                 maxItems: UInt64? = nil,
                                                 completion: @escaping (Result<[ToriiExplorerTransferRecord], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getExplorerTransactionTransfers(hashHex: hashHex,
                                                            matchingAccount: accountId,
                                                            assetDefinitionId: assetDefinitionId,
-                                                           assetId: assetId,
                                                            maxItems: maxItems)
         }
     }
@@ -8517,7 +10773,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getExplorerTransactionTransferSummaries(hashHex: String,
                                                         matchingAccount accountId: String? = nil,
                                                         assetDefinitionId: String? = nil,
-                                                        assetId: String? = nil,
                                                         relativeTo relativeAccountId: String? = nil,
                                                         maxItems: UInt64? = nil,
                                                         completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
@@ -8525,7 +10780,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             try await self.getExplorerTransactionTransferSummaries(hashHex: hashHex,
                                                                    matchingAccount: accountId,
                                                                    assetDefinitionId: assetDefinitionId,
-                                                                   assetId: assetId,
                                                                    relativeTo: relativeAccountId,
                                                                    maxItems: maxItems)
         }
@@ -8537,14 +10791,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                           page: UInt64? = nil,
                                           perPage: UInt64? = nil,
                                           assetDefinitionId: String? = nil,
-                                          assetId: String? = nil,
                                           completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getAccountTransferHistory(accountId: accountId,
                                                      page: page,
                                                      perPage: perPage,
-                                                     assetDefinitionId: assetDefinitionId,
-                                                     assetId: assetId)
+                                                     assetDefinitionId: assetDefinitionId)
         }
     }
 
@@ -8555,14 +10807,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       page: UInt64? = nil,
                                       perPage: UInt64? = nil,
                                       assetDefinitionId: String? = nil,
-                                      assetId: String? = nil,
                                       completion: @escaping (Result<[ToriiExplorerTransferSummary], Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) {
             try await self.getTransactionHistory(accountId: accountId,
                                                  page: page,
                                                  perPage: perPage,
-                                                 assetDefinitionId: assetDefinitionId,
-                                                 assetId: assetId)
+                                                 assetDefinitionId: assetDefinitionId)
         }
     }
 
@@ -8571,7 +10821,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                               page: UInt64? = nil,
                                               perPage: UInt64? = nil,
                                               assetDefinitionId: String? = nil,
-                                              assetId: String? = nil,
                                               maxItems: UInt64? = nil) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
@@ -8586,14 +10835,13 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                         let params = ToriiExplorerInstructionsParams(page: currentPage,
                                                                      perPage: currentPerPage,
                                                                      kind: "Transfer",
-                                                                     assetId: assetId)
+                                                                     assetDefinitionId: assetDefinitionId)
                         let response = try await getExplorerInstructions(params: params)
                         if currentPerPage == nil {
                             currentPerPage = response.pagination.perPage
                         }
                         let summaries = response.transferSummaries(matchingAccount: normalizedAccount,
                                                                    assetDefinitionId: assetDefinitionId,
-                                                                   assetId: assetId,
                                                                    relativeTo: normalizedAccount)
                         for summary in summaries {
                             continuation.yield(summary)
@@ -8629,6 +10877,18 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func listDomains(options: ToriiListOptions = ToriiListOptions(),
                             completion: @escaping (Result<ToriiDomainListPage, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.listDomains(options: options) }
+    }
+
+    @discardableResult
+    public func listRwas(options: ToriiListOptions = ToriiListOptions(),
+                         completion: @escaping (Result<ToriiRwaListPage, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listRwas(options: options) }
+    }
+
+    @discardableResult
+    public func queryRwas(_ envelope: ToriiQueryEnvelope,
+                          completion: @escaping (Result<ToriiRwaListPage, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.queryRwas(envelope) }
     }
 
     @discardableResult
@@ -8710,205 +10970,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
-    public func listOfflineAllowances(params: ToriiOfflineListParams? = nil,
-                                      completion: @escaping (Result<ToriiOfflineAllowanceList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineAllowances(params: params) }
-    }
-
-    @discardableResult
-    public func listOfflineTransfers(params: ToriiOfflineListParams? = nil,
-                                     completion: @escaping (Result<ToriiOfflineTransferList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineTransfers(params: params) }
-    }
-
-    public func listOfflineSummaries(params: ToriiOfflineListParams? = nil,
-                                     completion: @escaping (Result<ToriiOfflineSummaryList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineSummaries(params: params) }
-    }
-
-    @discardableResult
-    public func listOfflineRevocations(params: ToriiOfflineRevocationListParams? = nil,
-                                       completion: @escaping (Result<ToriiOfflineRevocationList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineRevocations(params: params) }
-    }
-
-    @discardableResult
-    public func getOfflineBundleProofStatus(params: ToriiOfflineBundleProofStatusParams,
-                                            completion: @escaping (Result<ToriiOfflineBundleProofStatus, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineBundleProofStatus(params: params) }
-    }
-
-    @discardableResult
-    public func listOfflineReceipts(params: ToriiOfflineReceiptListParams? = nil,
-                                    completion: @escaping (Result<ToriiOfflineReceiptList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.listOfflineReceipts(params: params) }
-    }
-
-    @discardableResult
-    public func queryOfflineReceipts(_ envelope: ToriiQueryEnvelope,
-                                     completion: @escaping (Result<ToriiOfflineReceiptList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineReceipts(envelope) }
-    }
-
-    @discardableResult
-    public func queryOfflineAllowances(_ envelope: ToriiQueryEnvelope,
-                                       completion: @escaping (Result<ToriiOfflineAllowanceList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineAllowances(envelope) }
-    }
-
-    @discardableResult
-    public func queryOfflineCertificates(_ envelope: ToriiQueryEnvelope,
-                                         completion: @escaping (Result<ToriiOfflineAllowanceList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineCertificates(envelope) }
-    }
-
-    @discardableResult
-    public func queryOfflineTransfers(_ envelope: ToriiQueryEnvelope,
-                                      completion: @escaping (Result<ToriiOfflineTransferList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineTransfers(envelope) }
-    }
-
-    @discardableResult
-    public func queryOfflineSettlements(_ envelope: ToriiQueryEnvelope,
-                                        completion: @escaping (Result<ToriiOfflineTransferList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineSettlements(envelope) }
-    }
-
-    @discardableResult
-    public func getSettlementStatus(bundleIdHex: String,
-                                    completion: @escaping (Result<ToriiSettlementExecutionStatus, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getSettlementStatus(bundleIdHex: bundleIdHex) }
-    }
-
-    @discardableResult
-    public func getOfflineSettlementStatus(bundleIdHex: String,
-                                           completion: @escaping (Result<ToriiSettlementExecutionStatus, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineSettlementStatus(bundleIdHex: bundleIdHex) }
-    }
-
-    @discardableResult
-    public func queryOfflineRevocations(_ envelope: ToriiQueryEnvelope,
-                                        completion: @escaping (Result<ToriiOfflineRevocationList, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryOfflineRevocations(envelope) }
-    }
-
-    @discardableResult
-    public func getOfflineState(completion: @escaping (Result<ToriiOfflineStateResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getOfflineState() }
-    }
-
-    @discardableResult
-    public func issueOfflineCertificate(_ requestBody: ToriiOfflineCertificateIssueRequest,
-                                        completion: @escaping (Result<ToriiOfflineCertificateIssueResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.issueOfflineCertificate(requestBody) }
-    }
-
-    @discardableResult
-    public func issueOfflineBuildClaim(_ requestBody: ToriiOfflineBuildClaimIssueRequest,
-                                       completion: @escaping (Result<ToriiOfflineBuildClaimIssueResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.issueOfflineBuildClaim(requestBody) }
-    }
-
-    @discardableResult
-    public func registerOfflineAllowance(_ requestBody: ToriiOfflineAllowanceRegisterRequest,
-                                         completion: @escaping (Result<ToriiOfflineAllowanceRegisterResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.registerOfflineAllowance(requestBody) }
-    }
-
-    @discardableResult
-    public func renewOfflineAllowance(certificateIdHex: String,
-                                      requestBody: ToriiOfflineAllowanceRegisterRequest,
-                                      completion: @escaping (Result<ToriiOfflineAllowanceRegisterResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.renewOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                                   requestBody: requestBody) }
-    }
-
-    @discardableResult
-    public func issueOfflineCertificateRenewal(certificateIdHex: String,
-                                               requestBody: ToriiOfflineCertificateIssueRequest,
-                                               completion: @escaping (Result<ToriiOfflineCertificateIssueResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.issueOfflineCertificateRenewal(certificateIdHex: certificateIdHex,
-                                                                            requestBody: requestBody) }
-    }
-
-    @discardableResult
-    public func topUpOfflineAllowance(draft: OfflineWalletCertificateDraft,
-                                      authority: String,
-                                      privateKey: String,
-                                      attestationNonce: Data? = nil,
-                                      completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.topUpOfflineAllowance(draft: draft,
-                                                                   authority: authority,
-                                                                   privateKey: privateKey,
-                                                                   attestationNonce: attestationNonce) }
-    }
-
-    @discardableResult
-    public func topUpOfflineAllowanceRenewal(certificateIdHex: String,
-                                             draft: OfflineWalletCertificateDraft,
-                                             authority: String,
-                                             privateKey: String,
-                                             attestationNonce: Data? = nil,
-                                             completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.topUpOfflineAllowanceRenewal(certificateIdHex: certificateIdHex,
-                                                                          draft: draft,
-                                                                          authority: authority,
-                                                                          privateKey: privateKey,
-                                                                          attestationNonce: attestationNonce) }
-    }
-
-    /// Reprovisions an existing offline allowance by renewing the certificate with a
-    /// new Pedersen commitment while preserving the current allowance amount and policy.
-    ///
-    /// This is intended for recovery flows that rotate the commitment/blinding without
-    /// changing balances or policy caps.
-    @discardableResult
-    public func reprovisionOfflineAllowance(certificateIdHex: String,
-                                            currentCertificateRecordData: Data,
-                                            newCommitment: Data,
-                                            authority: String,
-                                            privateKey: String,
-                                            lineage: OfflineCertificateLineage,
-                                            completion: @escaping (Result<ToriiOfflineTopUpResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.reprovisionOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                                         currentCertificateRecordData: currentCertificateRecordData,
-                                                                         newCommitment: newCommitment,
-                                                                         authority: authority,
-                                                                         privateKey: privateKey,
-                                                                         lineage: lineage) }
-    }
-
-    @discardableResult
-    public func submitOfflineSpendReceipts(_ requestBody: ToriiOfflineSpendReceiptsSubmitRequest,
-                                           completion: @escaping (Result<ToriiOfflineSpendReceiptsSubmitResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.submitOfflineSpendReceipts(requestBody) }
-    }
-
-    @discardableResult
-    public func submitOfflineSettlement(_ requestBody: ToriiOfflineSettlementSubmitRequest,
-                                        completion: @escaping (Result<ToriiOfflineSettlementSubmitResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.submitOfflineSettlement(requestBody) }
-    }
-
-    @discardableResult
-    public func submitOfflineSettlementAndWait(_ requestBody: ToriiOfflineSettlementSubmitRequest,
-                                               pollOptions: PipelineStatusPollOptions = .default,
-                                               mode: PipelineEndpointMode = .pipeline,
-                                               completion: @escaping (Result<ToriiOfflineSettlementSubmitResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) {
-            try await self.submitOfflineSettlementAndWait(requestBody,
-                                                          pollOptions: pollOptions,
-                                                          mode: mode)
-        }
-    }
-
-    @discardableResult
-    public func requestOfflineTransferProof(_ requestBody: ToriiOfflineTransferProofRequest,
-                                            completion: @escaping (Result<ToriiJSONValue, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.requestOfflineTransferProof(requestBody) }
-    }
-
-    @discardableResult
     public func getConnectStatus(completion: @escaping (Result<ToriiConnectStatusSnapshot?, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.getConnectStatus() }
     }
@@ -8922,8 +10983,9 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     @discardableResult
     public func deleteConnectSession(sid: String,
+                                     tokenManagement: String,
                                      completion: @escaping (Result<Bool, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.deleteConnectSession(sid: sid) }
+        runTask(completion) { try await self.deleteConnectSession(sid: sid, tokenManagement: tokenManagement) }
     }
 
     @discardableResult
@@ -9073,6 +11135,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
+    public func getOfflineV2Readiness(completion: @escaping (Result<ToriiOfflineV2Readiness, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getOfflineV2Readiness() }
+    }
+
+    @discardableResult
     public func getStatusSnapshot(completion: @escaping (Result<ToriiStatusSnapshot, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.getStatusSnapshot() }
     }
@@ -9193,6 +11260,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     @discardableResult
+    public func callContract(_ requestBody: ToriiContractCallRequest,
+                             completion: @escaping (Result<ToriiContractCallResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.callContract(requestBody) }
+    }
+
+    @discardableResult
     public func deployContractInstance(_ requestBody: ToriiDeployContractInstanceRequest,
                                        completion: @escaping (Result<ToriiDeployContractInstanceResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.deployContractInstance(requestBody) }
@@ -9202,6 +11275,36 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func activateContractInstance(_ requestBody: ToriiActivateContractInstanceRequest,
                                          completion: @escaping (Result<ToriiActivateContractInstanceResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.activateContractInstance(requestBody) }
+    }
+
+    @discardableResult
+    public func proposeMultisigContractCall(_ requestBody: ToriiMultisigContractCallProposeRequest,
+                                            completion: @escaping (Result<ToriiMultisigContractCallResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.proposeMultisigContractCall(requestBody) }
+    }
+
+    @discardableResult
+    public func approveMultisigContractCall(_ requestBody: ToriiMultisigContractCallApproveRequest,
+                                            completion: @escaping (Result<ToriiMultisigContractCallResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.approveMultisigContractCall(requestBody) }
+    }
+
+    @discardableResult
+    public func getMultisigSpec(_ requestBody: ToriiMultisigSpecRequest,
+                                completion: @escaping (Result<ToriiMultisigSpecResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getMultisigSpec(requestBody) }
+    }
+
+    @discardableResult
+    public func listMultisigProposals(_ requestBody: ToriiMultisigProposalsListRequest,
+                                      completion: @escaping (Result<ToriiMultisigProposalsListResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.listMultisigProposals(requestBody) }
+    }
+
+    @discardableResult
+    public func getMultisigProposal(_ requestBody: ToriiMultisigProposalGetRequest,
+                                    completion: @escaping (Result<ToriiMultisigProposalGetResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.getMultisigProposal(requestBody) }
     }
 
     @discardableResult
@@ -9342,13 +11445,17 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiAccountOnboardingResponse.self, from: data)
     }
 
-    public func getAssets(accountId: String, limit: Int = 100, assetId: String? = nil) async throws -> [ToriiAssetBalance] {
+    public func getAssets(accountId: String, limit: Int = 100, asset: String? = nil, scope: String? = nil) async throws -> [ToriiAssetBalance] {
         let encodedAccountId = try encodeAccountIdPath(accountId)
         var items = [URLQueryItem(name: "limit", value: String(limit))]
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
-            items.append(URLQueryItem(name: "asset_id", value: normalized))
+        if let asset = asset?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !asset.isEmpty {
+            let normalized = try normalizeToriiAssetSelectorQueryValue(asset, field: "asset")
+            items.append(URLQueryItem(name: "asset", value: normalized))
+        }
+        if let scope = scope?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !scope.isEmpty {
+            items.append(URLQueryItem(name: "scope", value: scope))
         }
         let request = try makeRequest(path: "/v1/accounts/\(encodedAccountId)/assets",
                                       queryItems: items)
@@ -9396,86 +11503,201 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiAccountAliasResolution.self, from: data)
     }
 
-    public static func buildCanonicalAssetIdLiteralOffline(assetDefinitionId: String,
-                                                           accountId: String) throws -> String {
-        try OfflineNorito.assetIdLiteral(assetDefinitionId: assetDefinitionId, accountId: accountId)
+    public func listIdentifierPolicies() async throws -> ToriiIdentifierPolicyListResponse {
+        let request = try makeRequest(
+            path: "/v1/identifier-policies",
+            headers: ["Accept": "application/json"]
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiIdentifierPolicyListResponse.self, from: data)
     }
 
-    /// Derive the deterministic asset definition ID from a human-readable alias.
-    ///
-    /// Uses blake3 hash — same algorithm as Iroha server-side `AssetDefinitionId::new`.
-    ///
-    /// - Parameter alias: Asset alias in `"name#domain"` format, e.g. `"usd#wonderland"`.
-    /// - Returns: Canonical asset definition ID, e.g. `"aid:bef53c1ccd1749e180dfbad6519bfd66"`.
-    public static func assetDefinitionId(fromAlias alias: String) throws -> String {
-        try OfflineNorito.assetDefinitionIdFromAlias(alias)
+    public func listRamLfeProgramPolicies() async throws -> ToriiRamLfeProgramPolicyListResponse {
+        let request = try makeRequest(
+            path: "/v1/ram-lfe/program-policies",
+            headers: ["Accept": "application/json"]
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiRamLfeProgramPolicyListResponse.self, from: data)
     }
 
-    public func buildAssetIdLiteralResolvingAliases(assetDefinitionIdOrAlias: String,
-                                                    accountIdOrAlias: String) async throws -> String {
-        let normalizedAssetInput = try ToriiRequestValidation.normalizedNonEmpty(
-            assetDefinitionIdOrAlias,
-            field: "assetDefinitionIdOrAlias"
+    public func resolveIdentifier(_ requestBody: ToriiIdentifierLookupRequest) async throws -> ToriiIdentifierResolutionReceipt? {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeRequest(
+            path: "/v1/identifiers/resolve",
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            ]
         )
-        let normalizedAccountInput = try ToriiRequestValidation.normalizedNonEmpty(
-            accountIdOrAlias,
-            field: "accountIdOrAlias"
-        )
-
-        let resolvedAccountId: String
-        if let canonical = try? normalizeToriiAccountIdQueryValue(
-            normalizedAccountInput,
-            field: "accountIdOrAlias"
-        ) {
-            resolvedAccountId = canonical
-        } else {
-            guard let resolvedAlias = try await resolveAccountAlias(normalizedAccountInput) else {
-                throw ToriiClientError.invalidPayload(
-                    "account alias '\(normalizedAccountInput)' was not found"
-                )
-            }
-            resolvedAccountId = resolvedAlias.accountId
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 {
+            return nil
         }
-
-        var resolvedAssetDefinition = normalizedAssetInput
-        if normalizedAssetInput.contains("@") {
-            guard let resolvedAlias = try await resolveAssetAlias(normalizedAssetInput) else {
-                throw ToriiClientError.invalidPayload(
-                    "asset alias '\(normalizedAssetInput)' was not found"
-                )
-            }
-            resolvedAssetDefinition = resolvedAlias.assetDefinitionId
-        }
-
+        try ensureStatus(response, in: 200..<300, responseBody: data)
         do {
-            return try assetIdLiteralBuilder(
-                resolvedAssetDefinition,
-                resolvedAccountId
-            )
-        } catch OfflineNoritoError.invalidAssetId where !normalizedAssetInput.contains("@") {
-            guard let resolvedAlias = try await resolveAssetAlias(normalizedAssetInput) else {
+            return try decodeJSON(ToriiIdentifierResolutionReceipt.self, from: data)
+        } catch let error as ToriiClientError {
+            if case .decoding(let underlying) = error {
                 throw ToriiClientError.invalidPayload(
-                    "asset definition '\(normalizedAssetInput)' is invalid and alias resolution did not find a mapping"
+                    "claim-receipt decode failed: \(underlying.localizedDescription); body=\(responseBodyPreview(data))"
                 )
             }
-            return try assetIdLiteralBuilder(
-                resolvedAlias.assetDefinitionId,
-                resolvedAccountId
-            )
+            throw error
         }
+    }
+
+    public func resolveIdentifier(policyId: String,
+                                  input: String? = nil,
+                                  encryptedInputHex: String? = nil) async throws -> ToriiIdentifierResolutionReceipt? {
+        try await resolveIdentifier(
+            buildIdentifierResolveRequest(
+                policyId: policyId,
+                input: input,
+                encryptedInputHex: encryptedInputHex
+            )
+        )
+    }
+
+    public func getIdentifierClaimByReceiptHash(_ receiptHash: String) async throws -> ToriiIdentifierClaimRecord? {
+        let normalizedReceiptHash = try Self.normalizeHex32(receiptHash, field: "receiptHash")
+        let request = try makeRequest(
+            path: "/v1/identifiers/receipts/\(normalizedReceiptHash)",
+            headers: ["Accept": "application/json"]
+        )
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 {
+            return nil
+        }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        return try decodeJSON(ToriiIdentifierClaimRecord.self, from: data)
+    }
+
+    public func issueIdentifierClaimReceipt(accountId: String,
+                                            requestBody: ToriiIdentifierLookupRequest) async throws -> ToriiIdentifierResolutionReceipt? {
+        let encodedAccountId = try encodeAccountIdPath(accountId)
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeRequest(
+            path: "/v1/accounts/\(encodedAccountId)/identifiers/claim-receipt",
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            ]
+        )
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 {
+            return nil
+        }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        do {
+            return try decodeJSON(ToriiIdentifierResolutionReceipt.self, from: data)
+        } catch let error as ToriiClientError {
+            if case .decoding(let underlying) = error {
+                throw ToriiClientError.invalidPayload(
+                    "claim-receipt decode failed: \(underlying.localizedDescription); body=\(responseBodyPreview(data))"
+                )
+            }
+            throw error
+        }
+    }
+
+    public func issueIdentifierClaimReceipt(accountId: String,
+                                            policyId: String,
+                                            input: String? = nil,
+                                            encryptedInputHex: String? = nil) async throws -> ToriiIdentifierResolutionReceipt? {
+        try await issueIdentifierClaimReceipt(
+            accountId: accountId,
+            requestBody: buildIdentifierResolveRequest(
+                policyId: policyId,
+                input: input,
+                encryptedInputHex: encryptedInputHex
+            )
+        )
+    }
+
+    public func executeRamLfeProgram(programId: String,
+                                     requestBody: ToriiRamLfeExecuteRequest) async throws -> ToriiRamLfeExecuteResponse? {
+        let normalizedProgramId = try ToriiRequestValidation.normalizedNonEmpty(programId, field: "programId")
+        let encodedProgramId = encodePathComponent(normalizedProgramId)
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeRequest(
+            path: "/v1/ram-lfe/programs/\(encodedProgramId)/execute",
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            ]
+        )
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 {
+            return nil
+        }
+        try ensureStatus(response, in: 200..<300, responseBody: data)
+        return try decodeJSON(ToriiRamLfeExecuteResponse.self, from: data)
+    }
+
+    public func executeRamLfeProgram(programId: String,
+                                     inputHex: String? = nil,
+                                     encryptedInputHex: String? = nil) async throws -> ToriiRamLfeExecuteResponse? {
+        try await executeRamLfeProgram(
+            programId: programId,
+            requestBody: buildRamLfeExecuteRequest(
+                inputHex: inputHex,
+                encryptedInputHex: encryptedInputHex
+            )
+        )
+    }
+
+    public func verifyRamLfeReceipt(_ requestBody: ToriiRamLfeReceiptVerifyRequest) async throws -> ToriiRamLfeReceiptVerifyResponse {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeRequest(
+            path: "/v1/ram-lfe/receipts/verify",
+            method: .post,
+            body: body,
+            headers: [
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            ]
+        )
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiRamLfeReceiptVerifyResponse.self, from: data)
+    }
+
+    public func verifyRamLfeReceipt(receipt: ToriiRamLfeExecutionReceipt,
+                                    outputHex: String? = nil) async throws -> ToriiRamLfeReceiptVerifyResponse {
+        let normalizedOutputHex = try outputHex.map {
+            try ToriiRequestValidation.normalizedEvenLengthHex($0, field: "outputHex")
+        }
+        return try await verifyRamLfeReceipt(
+            ToriiRamLfeReceiptVerifyRequest(
+                receipt: receipt,
+                outputHex: normalizedOutputHex
+            )
+        )
     }
 
     /// Returns account transaction metadata from `/v1/accounts/{account_id}/transactions`.
     /// Use `getTransactionHistory`/`getAccountTransferHistory` for transfer details.
-    public func getTransactions(accountId: String, limit: Int = 50, offset: Int = 0, assetId: String? = nil) async throws -> ToriiTxEnvelope {
+    public func getTransactions(accountId: String,
+                                limit: Int = 50,
+                                offset: Int = 0,
+                                assetDefinitionId: String? = nil) async throws -> ToriiTxEnvelope {
         let encodedAccountId = try encodeAccountIdPath(accountId)
         var items = [
             URLQueryItem(name: "limit", value: String(limit)),
             URLQueryItem(name: "offset", value: String(offset))
         ]
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let normalized = try normalizeToriiAssetIdQueryValue(assetId, field: "assetId")
+        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetDefinitionId.isEmpty {
+            let normalized = try normalizeToriiAssetSelectorQueryValue(
+                assetDefinitionId,
+                field: "assetDefinitionId"
+            )
             items.append(URLQueryItem(name: "asset_id", value: normalized))
         }
         let request = try makeRequest(path: "/v1/accounts/\(encodedAccountId)/transactions", queryItems: items)
@@ -9504,6 +11726,36 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiExplorerTransactionsPage.self, from: data)
     }
 
+    public func getExplorerRwas(params: ToriiExplorerRwasParams? = nil) async throws -> ToriiExplorerRwasPage {
+        let request = try makeRequest(path: "/v1/explorer/rwas",
+                                      queryItems: try params?.queryItems())
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiExplorerRwasPage.self, from: data)
+    }
+
+    public func getContractActivity(params: ToriiContractActivityParams? = nil) async throws -> ToriiContractActivityList {
+        let request = try makeRequest(path: "/v1/contracts/activity",
+                                      queryItems: try params?.queryItems())
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiContractActivityList.self, from: data)
+    }
+
+    public func getContractEvents(params: ToriiContractEventParams? = nil) async throws -> ToriiContractEventList {
+        let request = try makeRequest(path: "/v1/contracts/events",
+                                      queryItems: try params?.queryItems())
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiContractEventList.self, from: data)
+    }
+
+    public func getExplorerRwaDetail(rwaId: String) async throws -> ToriiExplorerRwaRecord {
+        let normalizedRwaId = try ToriiRequestValidation.normalizedNonEmpty(rwaId, field: "rwaId")
+        let encodedRwaId = encodePathComponent(normalizedRwaId)
+        let request = try makeRequest(path: "/v1/explorer/rwas/\(encodedRwaId)",
+                                      queryItems: nil)
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiExplorerRwaRecord.self, from: data)
+    }
+
     public func getExplorerTransactionDetail(hashHex: String) async throws -> ToriiExplorerTransactionDetail {
         let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
         let encodedHash = encodePathComponent(normalizedHash)
@@ -9525,54 +11777,53 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     public func getExplorerTransfers(params: ToriiExplorerInstructionsParams? = nil,
                                      matchingAccount accountId: String? = nil,
-                                     assetDefinitionId: String? = nil,
-                                     assetId: String? = nil) async throws -> [ToriiExplorerTransferRecord] {
+                                     assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferRecord] {
         var effectiveParams = params ?? ToriiExplorerInstructionsParams()
         let kindTrimmed = effectiveParams.kind?.trimmingCharacters(in: .whitespacesAndNewlines)
         if kindTrimmed == nil || kindTrimmed?.isEmpty == true {
             effectiveParams.kind = "Transfer"
         }
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let existing = effectiveParams.assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetDefinitionId.isEmpty {
+            let existing = effectiveParams.assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
             if existing == nil || existing?.isEmpty == true {
-                effectiveParams.assetId = assetId
+                effectiveParams.assetDefinitionId = assetDefinitionId
             }
         }
         let page = try await getExplorerInstructions(params: effectiveParams)
-        return page.transferRecords(matchingAccount: accountId,
-                                    assetDefinitionId: assetDefinitionId,
-                                    assetId: assetId)
+        return page.transferRecords(
+            matchingAccount: accountId,
+            assetDefinitionId: assetDefinitionId
+        )
     }
 
     public func getExplorerTransferSummaries(params: ToriiExplorerInstructionsParams? = nil,
                                              matchingAccount accountId: String? = nil,
                                              assetDefinitionId: String? = nil,
-                                             assetId: String? = nil,
                                              relativeTo relativeAccountId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         var effectiveParams = params ?? ToriiExplorerInstructionsParams()
         let kindTrimmed = effectiveParams.kind?.trimmingCharacters(in: .whitespacesAndNewlines)
         if kindTrimmed == nil || kindTrimmed?.isEmpty == true {
             effectiveParams.kind = "Transfer"
         }
-        if let assetId = assetId?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !assetId.isEmpty {
-            let existing = effectiveParams.assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let assetDefinitionId = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !assetDefinitionId.isEmpty {
+            let existing = effectiveParams.assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
             if existing == nil || existing?.isEmpty == true {
-                effectiveParams.assetId = assetId
+                effectiveParams.assetDefinitionId = assetDefinitionId
             }
         }
         let page = try await getExplorerInstructions(params: effectiveParams)
-        return page.transferSummaries(matchingAccount: accountId,
-                                      assetDefinitionId: assetDefinitionId,
-                                      assetId: assetId,
-                                      relativeTo: relativeAccountId)
+        return page.transferSummaries(
+            matchingAccount: accountId,
+            assetDefinitionId: assetDefinitionId,
+            relativeTo: relativeAccountId
+        )
     }
 
     public func getExplorerTransactionTransfers(hashHex: String,
                                                 matchingAccount accountId: String? = nil,
                                                 assetDefinitionId: String? = nil,
-                                                assetId: String? = nil,
                                                 maxItems: UInt64? = nil) async throws -> [ToriiExplorerTransferRecord] {
         if let maxItems, maxItems == 0 {
             return []
@@ -9587,14 +11838,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                                          perPage: currentPerPage,
                                                          transactionHash: normalizedHash,
                                                          kind: "Transfer",
-                                                         assetId: assetId)
+                                                         assetDefinitionId: assetDefinitionId)
             let response = try await getExplorerInstructions(params: params)
             if currentPerPage == nil {
                 currentPerPage = response.pagination.perPage
             }
-            let pageRecords = response.transferRecords(matchingAccount: accountId,
-                                                       assetDefinitionId: assetDefinitionId,
-                                                       assetId: assetId)
+            let pageRecords = response.transferRecords(
+                matchingAccount: accountId,
+                assetDefinitionId: assetDefinitionId
+            )
             for record in pageRecords {
                 records.append(record)
                 if let remainingValue = remaining {
@@ -9622,13 +11874,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getExplorerTransactionTransferSummaries(hashHex: String,
                                                         matchingAccount accountId: String? = nil,
                                                         assetDefinitionId: String? = nil,
-                                                        assetId: String? = nil,
                                                         relativeTo relativeAccountId: String? = nil,
                                                         maxItems: UInt64? = nil) async throws -> [ToriiExplorerTransferSummary] {
         let records = try await getExplorerTransactionTransfers(hashHex: hashHex,
                                                                 matchingAccount: accountId,
                                                                 assetDefinitionId: assetDefinitionId,
-                                                                assetId: assetId,
                                                                 maxItems: maxItems)
         let relative = relativeAccountId ?? accountId
         return records.flatMap { $0.summaries(relativeTo: relative) }
@@ -9639,7 +11889,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func streamTransactionTransferSummaries(hashHex: String,
                                                    matchingAccount accountId: String? = nil,
                                                    assetDefinitionId: String? = nil,
-                                                   assetId: String? = nil,
                                                    relativeTo relativeAccountId: String? = nil,
                                                    lastEventId: String? = nil,
                                                    maxItems: UInt64? = nil,
@@ -9674,7 +11923,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                     let history = try await getExplorerTransactionTransferSummaries(hashHex: normalizedHash,
                                                                                     matchingAccount: accountId,
                                                                                     assetDefinitionId: assetDefinitionId,
-                                                                                    assetId: assetId,
                                                                                     relativeTo: relative,
                                                                                     maxItems: remaining)
                     for summary in history {
@@ -9695,7 +11943,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                     for try await summary in streamExplorerTransferSummaries(lastEventId: lastEventId,
                                                                              matchingAccount: accountId,
                                                                              assetDefinitionId: assetDefinitionId,
-                                                                             assetId: assetId,
                                                                              relativeTo: relative) {
                         if Task.isCancelled {
                             break
@@ -9727,17 +11974,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getAccountTransferHistory(accountId: String,
                                           page: UInt64? = nil,
                                           perPage: UInt64? = nil,
-                                          assetDefinitionId: String? = nil,
-                                          assetId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
+                                          assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         let normalizedAccount = try ToriiRequestValidation.normalizedNonEmpty(accountId, field: "accountId")
         let params = ToriiExplorerInstructionsParams(page: page,
                                                      perPage: perPage,
                                                      kind: "Transfer",
-                                                     assetId: assetId)
+                                                     assetDefinitionId: assetDefinitionId)
         return try await getExplorerTransferSummaries(params: params,
                                                       matchingAccount: normalizedAccount,
                                                       assetDefinitionId: assetDefinitionId,
-                                                      assetId: assetId,
                                                       relativeTo: normalizedAccount)
     }
 
@@ -9745,13 +11990,95 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getTransactionHistory(accountId: String,
                                       page: UInt64? = nil,
                                       perPage: UInt64? = nil,
-                                      assetDefinitionId: String? = nil,
-                                      assetId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
+                                      assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         try await getAccountTransferHistory(accountId: accountId,
                                             page: page,
                                             perPage: perPage,
-                                            assetDefinitionId: assetDefinitionId,
-                                            assetId: assetId)
+                                            assetDefinitionId: assetDefinitionId)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func iterateExplorerRwas(params: ToriiExplorerRwasParams = ToriiExplorerRwasParams(),
+                                    maxItems: UInt64? = nil) -> AsyncThrowingStream<ToriiExplorerRwaRecord, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    if let maxItems, maxItems == 0 {
+                        continuation.finish()
+                        return
+                    }
+                    var currentPage = params.page ?? 1
+                    var currentPerPage = params.perPage
+                    var remaining = maxItems
+                    while true {
+                        try Task.checkCancellation()
+                        let pageParams = ToriiExplorerRwasParams(page: currentPage,
+                                                                 perPage: currentPerPage,
+                                                                 ownedBy: params.ownedBy,
+                                                                 domain: params.domain)
+                        let response = try await getExplorerRwas(params: pageParams)
+                        if currentPerPage == nil {
+                            currentPerPage = response.pagination.perPage
+                        }
+                        for item in response.items {
+                            continuation.yield(item)
+                            if let remainingValue = remaining {
+                                if remainingValue <= 1 {
+                                    remaining = 0
+                                    break
+                                }
+                                remaining = remainingValue - 1
+                            }
+                        }
+                        if remaining == 0 {
+                            break
+                        }
+                        if response.items.isEmpty || response.pagination.totalPages == 0 {
+                            break
+                        }
+                        if currentPage >= response.pagination.totalPages {
+                            break
+                        }
+                        currentPage += 1
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    public func listRwas(options: ToriiListOptions = ToriiListOptions()) async throws -> ToriiRwaListPage {
+        let queryItems = try makeListQueryItems(options: options)
+        let request = try makeRequest(path: "/v1/rwas", queryItems: queryItems)
+        let data = try await data(for: request)
+        guard !data.isEmpty else {
+            return ToriiRwaListPage(items: [], total: 0)
+        }
+        return try decodeJSON(ToriiRwaListPage.self, from: data)
+    }
+
+    public func queryRwas(_ envelope: ToriiQueryEnvelope) async throws -> ToriiRwaListPage {
+        let body = try JSONEncoder().encode(envelope)
+        let request = try makeRequest(path: "/v1/rwas/query",
+                                      method: .post,
+                                      body: body,
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiRwaListPage.self, from: data)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func iterateRwas(options: ToriiListOptions = ToriiListOptions(),
+                            pageSize: Int? = nil,
+                            maxItems: Int? = nil) -> AsyncThrowingStream<ToriiRwaListItem, Swift.Error> {
+        iterateList(options: options, pageSize: pageSize, maxItems: maxItems) { opts in
+            try await self.listRwas(options: opts)
+        }
     }
 
     public func listDomains(options: ToriiListOptions = ToriiListOptions()) async throws -> ToriiDomainListPage {
@@ -9780,14 +12107,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func createSubscriptionPlan(_ requestBody: ToriiSubscriptionPlanCreateRequest) async throws -> ToriiSubscriptionPlanCreateResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/subscriptions/plans",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiSubscriptionPlanCreateResponse.self, from: data)
+        let _ = requestBody
+        throw serverSideSigningRemoved("/v1/subscriptions/plans")
     }
 
     public func listSubscriptions(params: ToriiSubscriptionListParams? = nil) async throws -> ToriiSubscriptionListResponse {
@@ -9797,14 +12118,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func createSubscription(_ requestBody: ToriiSubscriptionCreateRequest) async throws -> ToriiSubscriptionCreateResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/subscriptions",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiSubscriptionCreateResponse.self, from: data)
+        let _ = requestBody
+        throw serverSideSigningRemoved("/v1/subscriptions")
     }
 
     public func getSubscription(subscriptionId: String) async throws -> ToriiSubscriptionRecord? {
@@ -9825,52 +12140,38 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
 
     public func pauseSubscription(subscriptionId: String,
                                   requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
-        return try await executeSubscriptionAction(pathSuffix: "pause",
-                                                   subscriptionId: subscriptionId,
-                                                   requestBody: requestBody)
+        let _ = (subscriptionId, requestBody)
+        throw serverSideSigningRemoved("/v1/subscriptions/{subscription_id}/pause")
     }
 
     public func resumeSubscription(subscriptionId: String,
                                    requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
-        return try await executeSubscriptionAction(pathSuffix: "resume",
-                                                   subscriptionId: subscriptionId,
-                                                   requestBody: requestBody)
+        let _ = (subscriptionId, requestBody)
+        throw serverSideSigningRemoved("/v1/subscriptions/{subscription_id}/resume")
     }
 
     public func cancelSubscription(subscriptionId: String,
                                    requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
-        return try await executeSubscriptionAction(pathSuffix: "cancel",
-                                                   subscriptionId: subscriptionId,
-                                                   requestBody: requestBody)
+        let _ = (subscriptionId, requestBody)
+        throw serverSideSigningRemoved("/v1/subscriptions/{subscription_id}/cancel")
     }
 
     public func keepSubscription(subscriptionId: String,
                                  requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
-        return try await executeSubscriptionAction(pathSuffix: "keep",
-                                                   subscriptionId: subscriptionId,
-                                                   requestBody: requestBody)
+        let _ = (subscriptionId, requestBody)
+        throw serverSideSigningRemoved("/v1/subscriptions/{subscription_id}/keep")
     }
 
     public func chargeSubscriptionNow(subscriptionId: String,
                                       requestBody: ToriiSubscriptionActionRequest) async throws -> ToriiSubscriptionActionResponse {
-        return try await executeSubscriptionAction(pathSuffix: "charge-now",
-                                                   subscriptionId: subscriptionId,
-                                                   requestBody: requestBody)
+        let _ = (subscriptionId, requestBody)
+        throw serverSideSigningRemoved("/v1/subscriptions/{subscription_id}/charge-now")
     }
 
     public func recordSubscriptionUsage(subscriptionId: String,
                                         requestBody: ToriiSubscriptionUsageRequest) async throws -> ToriiSubscriptionActionResponse {
-        let normalizedId = try ToriiRequestValidation.normalizedNonEmpty(subscriptionId,
-                                                                         field: "subscriptionId")
-        let encoded = encodePathComponent(normalizedId)
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/subscriptions/\(encoded)/usage",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiSubscriptionActionResponse.self, from: data)
+        let _ = (subscriptionId, requestBody)
+        throw serverSideSigningRemoved("/v1/subscriptions/{subscription_id}/usage")
     }
 
     public func getUaidPortfolio(uaid: String,
@@ -9901,353 +12202,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       queryItems: try query?.queryItems())
         let data = try await data(for: request)
         return try decodeJSON(ToriiUaidManifestsResponse.self, from: data)
-    }
-
-    public func listOfflineAllowances(params: ToriiOfflineListParams? = nil) async throws -> ToriiOfflineAllowanceList {
-        let request = try makeRequest(path: "/v1/offline/allowances", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceList.self, from: data)
-    }
-
-    public func listOfflineTransfers(params: ToriiOfflineListParams? = nil) async throws -> ToriiOfflineTransferList {
-        let request = try makeRequest(path: "/v1/offline/transfers", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineTransferList.self, from: data)
-    }
-
-    public func listOfflineSummaries(params: ToriiOfflineListParams? = nil) async throws -> ToriiOfflineSummaryList {
-        let request = try makeRequest(path: "/v1/offline/summaries", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineSummaryList.self, from: data)
-    }
-
-    public func listOfflineRevocations(params: ToriiOfflineRevocationListParams? = nil) async throws -> ToriiOfflineRevocationList {
-        let request = try makeRequest(path: "/v1/offline/revocations", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineRevocationList.self, from: data)
-    }
-
-    public func getOfflineBundleProofStatus(params: ToriiOfflineBundleProofStatusParams) async throws -> ToriiOfflineBundleProofStatus {
-        let request = try makeRequest(path: "/v1/offline/bundle/proof_status", queryItems: try params.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineBundleProofStatus.self, from: data)
-    }
-
-    public func listOfflineReceipts(params: ToriiOfflineReceiptListParams? = nil) async throws -> ToriiOfflineReceiptList {
-        let request = try makeRequest(path: "/v1/offline/receipts", queryItems: try params?.queryItems())
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineReceiptList.self, from: data)
-    }
-
-    public func queryOfflineReceipts(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineReceiptList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/receipts/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineReceiptList.self, from: data)
-    }
-
-    public func queryOfflineAllowances(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineAllowanceList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/allowances/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceList.self, from: data)
-    }
-
-    public func queryOfflineCertificates(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineAllowanceList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/certificates/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceList.self, from: data)
-    }
-
-    public func queryOfflineTransfers(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineTransferList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/transfers/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineTransferList.self, from: data)
-    }
-
-    public func queryOfflineSettlements(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineTransferList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/settlements/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineTransferList.self, from: data)
-    }
-
-    /// Resolves settlement execution status for a specific offline bundle id.
-    ///
-    /// This method combines server settlement rows with local submit outcomes:
-    /// - server row present with `settled`/`archived` -> ``ToriiSettlementExecutionStatus/settled``
-    /// - server row present with `rejected` -> ``ToriiSettlementExecutionStatus/rejected(reason:)``
-    /// - no server row but this client submitted the bundle -> ``ToriiSettlementExecutionStatus/pending``
-    /// - no row and no local knowledge -> ``ToriiSettlementExecutionStatus/unknown``
-    public func getSettlementStatus(bundleIdHex: String) async throws -> ToriiSettlementExecutionStatus {
-        let normalizedBundleId = try Self.normalizeBundleIdHex(bundleIdHex, field: "bundleIdHex")
-        let envelope = ToriiQueryEnvelope(
-            filter: Self.queryEqualsFilter(field: "bundle_id_hex", value: normalizedBundleId),
-            sort: [ToriiQuerySortKey(key: "recorded_at_ms", order: .desc)],
-            pagination: ToriiQueryPagination(limit: 1, offset: 0)
-        )
-        let settlements = try await queryOfflineSettlements(envelope)
-        if let item = settlements.items.first {
-            let resolved = try await settlementStatus(from: item)
-            cacheOfflineSettlementStatus(resolved, bundleIdHex: normalizedBundleId)
-            return resolved
-        }
-        if let cached = cachedOfflineSettlementStatus(bundleIdHex: normalizedBundleId) {
-            return cached
-        }
-        return .unknown
-    }
-
-    /// Alias for ``getSettlementStatus(bundleIdHex:)``.
-    public func getOfflineSettlementStatus(bundleIdHex: String) async throws -> ToriiSettlementExecutionStatus {
-        try await getSettlementStatus(bundleIdHex: bundleIdHex)
-    }
-
-    public func queryOfflineRevocations(_ envelope: ToriiQueryEnvelope) async throws -> ToriiOfflineRevocationList {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(envelope)
-        let request = try makeRequest(path: "/v1/offline/revocations/query",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineRevocationList.self, from: data)
-    }
-
-    public func getOfflineState() async throws -> ToriiOfflineStateResponse {
-        let request = try makeRequest(path: "/v1/offline/state")
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineStateResponse.self, from: data)
-    }
-
-    public func issueOfflineCertificate(_ requestBody: ToriiOfflineCertificateIssueRequest) async throws -> ToriiOfflineCertificateIssueResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/offline/certificates/issue",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineCertificateIssueResponse.self, from: data)
-    }
-
-    public func issueOfflineBuildClaim(_ requestBody: ToriiOfflineBuildClaimIssueRequest) async throws -> ToriiOfflineBuildClaimIssueResponse {
-        let normalizedCertificateId = try Self.normalizeHash32HexOrLiteral(
-            requestBody.certificateIdHex,
-            field: "certificate_id_hex"
-        )
-        let normalizedTxId = try Self.normalizeHash32HexOrLiteral(
-            requestBody.txIdHex,
-            field: "tx_id_hex"
-        )
-        let normalizedPlatform = try ToriiRequestValidation.normalizedNonEmpty(
-            requestBody.platform,
-            field: "platform"
-        ).lowercased()
-        guard normalizedPlatform == "apple" || normalizedPlatform == "android" else {
-            throw ToriiClientError.invalidPayload("platform must be either \"apple\" or \"android\".")
-        }
-        let normalizedRequest = ToriiOfflineBuildClaimIssueRequest(
-            certificateIdHex: normalizedCertificateId,
-            txIdHex: normalizedTxId,
-            platform: normalizedPlatform,
-            appId: requestBody.appId,
-            buildNumber: requestBody.buildNumber,
-            issuedAtMs: requestBody.issuedAtMs,
-            expiresAtMs: requestBody.expiresAtMs
-        )
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(normalizedRequest)
-        let request = try makeRequest(path: "/v1/offline/build-claims/issue",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineBuildClaimIssueResponse.self, from: data)
-    }
-
-    public func registerOfflineAllowance(_ requestBody: ToriiOfflineAllowanceRegisterRequest) async throws -> ToriiOfflineAllowanceRegisterResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/offline/allowances",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceRegisterResponse.self, from: data)
-    }
-
-    public func renewOfflineAllowance(certificateIdHex: String,
-                                      requestBody: ToriiOfflineAllowanceRegisterRequest) async throws -> ToriiOfflineAllowanceRegisterResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let encodedId = encodePathComponent(certificateIdHex)
-        let request = try makeRequest(path: "/v1/offline/allowances/\(encodedId)/renew",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineAllowanceRegisterResponse.self, from: data)
-    }
-
-    public func issueOfflineCertificateRenewal(certificateIdHex: String,
-                                               requestBody: ToriiOfflineCertificateIssueRequest) async throws -> ToriiOfflineCertificateIssueResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let encodedId = encodePathComponent(certificateIdHex)
-        let request = try makeRequest(path: "/v1/offline/certificates/\(encodedId)/renew/issue",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineCertificateIssueResponse.self, from: data)
-    }
-
-    public func topUpOfflineAllowance(draft: OfflineWalletCertificateDraft,
-                                      authority: String,
-                                      privateKey: String,
-                                      attestationNonce: Data? = nil) async throws -> ToriiOfflineTopUpResponse {
-        let effectiveDraft = try Self.draftByApplyingAttestationNonce(draft, attestationNonce)
-        let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: effectiveDraft)
-        let issued = try await issueOfflineCertificate(issueRequest)
-        let registerRequest = ToriiOfflineAllowanceRegisterRequest(authority: authority,
-                                                                   privateKey: privateKey,
-                                                                   certificate: issued.certificate)
-        let registered = try await registerOfflineAllowance(registerRequest)
-        try ensureTopUpCertificateIdsMatch(issued: issued, registered: registered)
-        return ToriiOfflineTopUpResponse(certificate: issued, registration: registered)
-    }
-
-    public func topUpOfflineAllowanceRenewal(certificateIdHex: String,
-                                             draft: OfflineWalletCertificateDraft,
-                                             authority: String,
-                                             privateKey: String,
-                                             attestationNonce: Data? = nil) async throws -> ToriiOfflineTopUpResponse {
-        let effectiveDraft = try Self.draftByApplyingAttestationNonce(draft, attestationNonce)
-        let issueRequest = try ToriiOfflineCertificateIssueRequest(certificate: effectiveDraft)
-        let issued = try await issueOfflineCertificateRenewal(certificateIdHex: certificateIdHex,
-                                                              requestBody: issueRequest)
-        let renewRequest = ToriiOfflineAllowanceRegisterRequest(authority: authority,
-                                                                privateKey: privateKey,
-                                                                certificate: issued.certificate)
-        let registered = try await renewOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                         requestBody: renewRequest)
-        try ensureTopUpCertificateIdsMatch(issued: issued, registered: registered)
-        return ToriiOfflineTopUpResponse(certificate: issued, registration: registered)
-    }
-
-    /// Reprovisions an existing offline allowance by renewing the certificate with a
-    /// new Pedersen commitment while preserving allowance amount/policy fields.
-    ///
-    /// This avoids `topUp(0)` workarounds in recovery flows where only the commitment
-    /// must change.
-    /// Reprovision from raw record data — decodes the certificate internally.
-    public func reprovisionOfflineAllowance(certificateIdHex: String,
-                                            currentCertificateRecordData: Data,
-                                            newCommitment: Data,
-                                            authority: String,
-                                            privateKey: String,
-                                            lineage: OfflineCertificateLineage) async throws -> ToriiOfflineTopUpResponse {
-        let currentCertificate = try OfflineWalletCertificate(recordData: currentCertificateRecordData)
-        return try await reprovisionOfflineAllowance(certificateIdHex: certificateIdHex,
-                                                      currentCertificate: currentCertificate,
-                                                      newCommitment: newCommitment,
-                                                      authority: authority,
-                                                      privateKey: privateKey,
-                                                      lineage: lineage)
-    }
-
-    func reprovisionOfflineAllowance(certificateIdHex: String,
-                                            currentCertificate: OfflineWalletCertificate,
-                                            newCommitment: Data,
-                                            authority: String,
-                                            privateKey: String,
-                                            lineage: OfflineCertificateLineage) async throws -> ToriiOfflineTopUpResponse {
-        let draft = try Self.makeOfflineReprovisionDraft(currentCertificate: currentCertificate,
-                                                         newCommitment: newCommitment,
-                                                         lineage: lineage)
-        return try await topUpOfflineAllowanceRenewal(certificateIdHex: certificateIdHex,
-                                                      draft: draft,
-                                                      authority: authority,
-                                                      privateKey: privateKey)
-    }
-
-    public func submitOfflineSpendReceipts(_ requestBody: ToriiOfflineSpendReceiptsSubmitRequest) async throws -> ToriiOfflineSpendReceiptsSubmitResponse {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/offline/spend-receipts",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiOfflineSpendReceiptsSubmitResponse.self, from: data)
-    }
-
-    public func submitOfflineSettlement(_ requestBody: ToriiOfflineSettlementSubmitRequest) async throws -> ToriiOfflineSettlementSubmitResponse {
-        let normalizedOverrides = try requestBody.buildClaimOverrides.enumerated().map { index, buildClaimOverride in
-            let normalizedTxIdHex = try Self.normalizeHash32HexOrLiteral(
-                buildClaimOverride.txIdHex,
-                field: "build_claim_overrides[\(index)].tx_id_hex"
-            )
-            return ToriiOfflineSettlementBuildClaimOverride(
-                txIdHex: normalizedTxIdHex,
-                appId: buildClaimOverride.appId,
-                buildNumber: buildClaimOverride.buildNumber,
-                issuedAtMs: buildClaimOverride.issuedAtMs,
-                expiresAtMs: buildClaimOverride.expiresAtMs
-            )
-        }
-        let normalizedBundleId = Self.extractBundleIdHex(from: requestBody.transfer)
-        let normalizedRequest = ToriiOfflineSettlementSubmitRequest(
-            authority: requestBody.authority,
-            privateKey: requestBody.privateKey,
-            transfer: requestBody.transfer,
-            buildClaimOverrides: normalizedOverrides,
-            repairExistingBuildClaims: requestBody.repairExistingBuildClaims
-        )
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(normalizedRequest)
-        let request = try makeRequest(path: "/v1/offline/settlements",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        do {
-            let data = try await data(for: request)
-            let response = try decodeJSON(ToriiOfflineSettlementSubmitResponse.self, from: data)
-            let cachedBundleId = (try? Self.normalizeBundleIdHex(response.bundleIdHex, field: "bundle_id_hex")) ?? normalizedBundleId
-            if let cachedBundleId {
-                cacheOfflineSettlementStatus(.pending, bundleIdHex: cachedBundleId)
-            }
-            return response
-        } catch {
-            if let normalizedBundleId,
-               let rejectCode = Self.extractRejectCode(from: error) {
-                cacheOfflineSettlementStatus(.rejected(reason: rejectCode), bundleIdHex: normalizedBundleId)
-            }
-            throw error
-        }
     }
 
     public func waitForTransactionStatus(hashHex: String,
@@ -10282,50 +12236,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                 await Task.yield()
             }
         }
-    }
-
-    public func submitOfflineSettlementAndWait(_ requestBody: ToriiOfflineSettlementSubmitRequest,
-                                               pollOptions: PipelineStatusPollOptions = .default,
-                                               mode: PipelineEndpointMode = .pipeline) async throws -> ToriiOfflineSettlementSubmitResponse {
-        let settlement = try await submitOfflineSettlement(requestBody)
-        let cachedBundleId =
-            (try? Self.normalizeBundleIdHex(settlement.bundleIdHex, field: "bundle_id_hex"))
-            ?? Self.extractBundleIdHex(from: requestBody.transfer)
-        guard let txHashHex = settlement.txHashHex, !txHashHex.isEmpty else {
-            throw ToriiClientError.invalidPayload(
-                "offline settlement submit response missing transaction_hash_hex"
-            )
-        }
-        do {
-            _ = try await waitForTransactionStatus(hashHex: txHashHex,
-                                                   pollOptions: pollOptions,
-                                                   mode: mode)
-            return settlement
-        } catch let error as PipelineStatusError {
-            if case .failure = error, let cachedBundleId {
-                cacheOfflineSettlementStatus(.rejected(reason: error.rejectionReason),
-                                             bundleIdHex: cachedBundleId)
-            }
-            throw error
-        }
-    }
-
-    public func requestOfflineTransferProof(_ requestBody: ToriiOfflineTransferProofRequest) async throws -> ToriiJSONValue {
-        let data = try await requestOfflineTransferProofData(requestBody)
-        return try decodeJSON(ToriiJSONValue.self, from: data)
-    }
-
-    /// Returns the raw JSON bytes from the Torii proof endpoint, preserving
-    /// the original Iroha JSON format (important for ``norito::json`` parsing
-    /// in the native bridge).
-    public func requestOfflineTransferProofData(_ requestBody: ToriiOfflineTransferProofRequest) async throws -> Data {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/offline/transfers/proof",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        return try await data(for: request)
     }
 
     public func getConnectStatus() async throws -> ToriiConnectStatusSnapshot? {
@@ -10364,10 +12274,13 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiConnectSessionResponse.self, from: data)
     }
 
-    public func deleteConnectSession(sid: String) async throws -> Bool {
+    public func deleteConnectSession(sid: String, tokenManagement: String) async throws -> Bool {
         let trimmed = try ToriiConnectJSON.trimmedNonEmpty(sid, field: "sid")
+        let token = try ToriiConnectJSON.trimmedNonEmpty(tokenManagement, field: "tokenManagement")
         let encoded = encodePathComponent(trimmed)
-        let request = try makeRequest(path: "/v1/connect/session/\(encoded)", method: .delete)
+        let request = try makeRequest(path: "/v1/connect/session/\(encoded)",
+                                      method: .delete,
+                                      headers: ["Authorization": "Bearer \(token)"])
         let (data, response) = try await send(request)
         if response.statusCode == 404 {
             return false
@@ -10924,22 +12837,24 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                          seedBase64: String? = nil) async throws -> ToriiConfidentialKeysetResponse {
         let trimmedHex = seedHex?.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBase64 = seedBase64?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let requestBody = ToriiConfidentialKeysetRequest(
-            seedHex: (trimmedHex?.isEmpty ?? true) ? nil : trimmedHex,
-            seedBase64: (trimmedBase64?.isEmpty ?? true) ? nil : trimmedBase64
-        )
-        if requestBody.seedHex == nil && requestBody.seedBase64 == nil {
+        let normalizedHex = (trimmedHex?.isEmpty ?? true) ? nil : trimmedHex
+        let normalizedBase64 = (trimmedBase64?.isEmpty ?? true) ? nil : trimmedBase64
+        if normalizedHex == nil && normalizedBase64 == nil {
             throw ToriiClientError.invalidPayload("Provide either seedHex or seedBase64.")
         }
-
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/confidential/derive-keyset",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiConfidentialKeysetResponse.self, from: data)
+        let seed: Data
+        if let normalizedHex {
+            guard let decoded = Data(hexString: normalizedHex) else {
+                throw ConfidentialKeyDerivationError.invalidHexEncoding(field: "seed_hex")
+            }
+            seed = decoded
+        } else if let normalizedBase64, let decoded = Data(base64Encoded: normalizedBase64) {
+            seed = decoded
+        } else {
+            throw ConfidentialKeyDerivationError.invalidBase64Encoding(field: "seed_b64")
+        }
+        let keyset = try ConfidentialKeyset.derive(from: seed)
+        return ToriiConfidentialKeysetResponse(seed: seed, keyset: keyset)
     }
 
     @discardableResult
@@ -10981,33 +12896,78 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func deployContract(_ requestBody: ToriiDeployContractRequest) async throws -> ToriiDeployContractResponse {
-        let request = try makeRequest(path: "/v1/contracts/deploy",
+        let _ = requestBody
+        throw serverSideSigningRemoved("/v1/contracts/deploy")
+    }
+
+    public func callContract(_ requestBody: ToriiContractCallRequest) async throws -> ToriiContractCallResponse {
+        let request = try makeRequest(path: "/v1/contracts/call",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiDeployContractResponse.self, from: data)
+        return try decodeJSON(ToriiContractCallResponse.self, from: data)
     }
 
     public func deployContractInstance(_ requestBody: ToriiDeployContractInstanceRequest) async throws -> ToriiDeployContractInstanceResponse {
-        let request = try makeRequest(path: "/v1/contracts/instance",
-                                      method: .post,
-                                      queryItems: nil,
-                                      body: try JSONEncoder().encode(requestBody),
-                                      headers: ["Content-Type": "application/json"])
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiDeployContractInstanceResponse.self, from: data)
+        let _ = requestBody
+        throw serverSideSigningRemoved("/v1/contracts/instance")
     }
 
     public func activateContractInstance(_ requestBody: ToriiActivateContractInstanceRequest) async throws -> ToriiActivateContractInstanceResponse {
-        let request = try makeRequest(path: "/v1/contracts/instance/activate",
+        let _ = requestBody
+        throw serverSideSigningRemoved("/v1/contracts/instance/activate")
+    }
+
+    public func proposeMultisigContractCall(_ requestBody: ToriiMultisigContractCallProposeRequest) async throws -> ToriiMultisigContractCallResponse {
+        let request = try makeRequest(path: "/v1/contracts/call/multisig/propose",
                                       method: .post,
                                       queryItems: nil,
                                       body: try JSONEncoder().encode(requestBody),
                                       headers: ["Content-Type": "application/json"])
         let data = try await data(for: request)
-        return try decodeJSON(ToriiActivateContractInstanceResponse.self, from: data)
+        return try decodeJSON(ToriiMultisigContractCallResponse.self, from: data)
+    }
+
+    public func approveMultisigContractCall(_ requestBody: ToriiMultisigContractCallApproveRequest) async throws -> ToriiMultisigContractCallResponse {
+        let request = try makeRequest(path: "/v1/contracts/call/multisig/approve",
+                                      method: .post,
+                                      queryItems: nil,
+                                      body: try JSONEncoder().encode(requestBody),
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiMultisigContractCallResponse.self, from: data)
+    }
+
+    public func getMultisigSpec(_ requestBody: ToriiMultisigSpecRequest) async throws -> ToriiMultisigSpecResponse {
+        let request = try makeRequest(path: "/v1/multisig/spec",
+                                      method: .post,
+                                      queryItems: nil,
+                                      body: try JSONEncoder().encode(requestBody),
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiMultisigSpecResponse.self, from: data)
+    }
+
+    public func listMultisigProposals(_ requestBody: ToriiMultisigProposalsListRequest) async throws -> ToriiMultisigProposalsListResponse {
+        let request = try makeRequest(path: "/v1/multisig/proposals/list",
+                                      method: .post,
+                                      queryItems: nil,
+                                      body: try JSONEncoder().encode(requestBody),
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiMultisigProposalsListResponse.self, from: data)
+    }
+
+    public func getMultisigProposal(_ requestBody: ToriiMultisigProposalGetRequest) async throws -> ToriiMultisigProposalGetResponse {
+        let request = try makeRequest(path: "/v1/multisig/proposals/get",
+                                      method: .post,
+                                      queryItems: nil,
+                                      body: try JSONEncoder().encode(requestBody),
+                                      headers: ["Content-Type": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiMultisigProposalGetResponse.self, from: data)
     }
 
     public func fetchContractCodeBytes(codeHashHex: String) async throws -> ToriiContractCodeBytes {
@@ -11026,26 +12986,27 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeUTF8String(from: data, context: "health")
     }
 
+    public func getOfflineV2Readiness() async throws -> ToriiOfflineV2Readiness {
+        let request = try makeRequest(path: "/v1/offline/v2/readiness",
+                                      headers: ["Accept": "application/json"])
+        let data = try await data(for: request)
+        return try decodeJSON(ToriiOfflineV2Readiness.self, from: data)
+    }
+
     public func getMetrics(asText: Bool = false) async throws -> ToriiMetricsResponse {
-        var headers: [String: String] = [:]
-        if asText {
-            headers["Accept"] = "text/plain"
-        }
+        let headers = ["Accept": asText ? "text/plain" : "application/json"]
         let request = try makeRequest(path: "/v1/metrics", headers: headers)
         let (data, response) = try await send(request)
         try ensureStatus(response, equals: 200, responseBody: data)
         if asText {
             return .text(try decodeUTF8String(from: data, context: "metrics (text)"))
         }
-        if let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased(),
-           contentType.contains("application/json") {
-            let json = try decodeJSON(ToriiJSONValue.self, from: data)
-            return .json(json)
+        let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
+        guard contentType.contains("application/json") else {
+            throw ToriiClientError.invalidPayload("metrics response Content-Type must be application/json")
         }
-        if let json = try? decodeJSON(ToriiJSONValue.self, from: data) {
-            return .json(json)
-        }
-        return .text(try decodeUTF8String(from: data, context: "metrics"))
+        let json = try decodeJSON(ToriiJSONValue.self, from: data)
+        return .json(json)
     }
 
     @discardableResult
@@ -11076,6 +13037,16 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func getNodeCapabilities() async throws -> ToriiNodeCapabilities {
         let request = try makeRequest(path: "/v1/node/capabilities")
         let data = try await data(for: request)
+        return try decodeJSON(ToriiNodeCapabilities.self, from: data)
+    }
+
+    private func getNodeCapabilitiesForSubmitValidation() async throws -> ToriiNodeCapabilities {
+        let request = try makeRequest(path: "/v1/node/capabilities")
+        let (data, response) = try await send(request)
+        try ensureStatus(response, equals: 200, responseBody: data)
+        if data.isEmpty {
+            throw ToriiClientError.emptyBody
+        }
         return try decodeJSON(ToriiNodeCapabilities.self, from: data)
     }
 
@@ -11167,25 +13138,13 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     public func registerVerifyingKey(_ requestBody: ToriiVerifyingKeyRegisterRequest) async throws {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/zk/vk/register",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 202, responseBody: data)
+        let _ = requestBody
+        throw serverSideSigningRemoved("/v1/zk/vk/register")
     }
 
     public func updateVerifyingKey(_ requestBody: ToriiVerifyingKeyUpdateRequest) async throws {
-        let encoder = JSONEncoder()
-        let body = try encoder.encode(requestBody)
-        let request = try makeRequest(path: "/v1/zk/vk/update",
-                                      method: .post,
-                                      body: body,
-                                      headers: ["Content-Type": "application/json"])
-        let (data, response) = try await send(request)
-        try ensureStatus(response, equals: 202, responseBody: data)
+        let _ = requestBody
+        throw serverSideSigningRemoved("/v1/zk/vk/update")
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -11533,14 +13492,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     @available(iOS 15.0, macOS 12.0, *)
     public func streamExplorerTransfers(lastEventId: String? = nil,
                                         matchingAccount accountId: String? = nil,
-                                        assetDefinitionId: String? = nil,
-                                        assetId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransferRecord, Error> {
+                                        assetDefinitionId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransferRecord, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let accountFilter = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let assetFilter = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let assetIdFilter = assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
                     for try await item in streamExplorerInstructions(lastEventId: lastEventId) {
                         if Task.isCancelled {
                             break
@@ -11552,9 +13509,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                             continue
                         }
                         if let assetFilter, !assetFilter.isEmpty, !details.involvesAssetDefinition(assetFilter) {
-                            continue
-                        }
-                        if let assetIdFilter, !assetIdFilter.isEmpty, !details.involvesAssetId(assetIdFilter) {
                             continue
                         }
                         continuation.yield(ToriiExplorerTransferRecord(instruction: item, details: details))
@@ -11581,14 +13535,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     public func streamExplorerTransferSummaries(lastEventId: String? = nil,
                                                 matchingAccount accountId: String? = nil,
                                                 assetDefinitionId: String? = nil,
-                                                assetId: String? = nil,
                                                 relativeTo relativeAccountId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
                     let accountFilter = accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let assetFilter = assetDefinitionId?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let assetIdFilter = assetId?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let relativeCandidate = relativeAccountId ?? accountId
                     let relativeTrimmed = relativeCandidate?.trimmingCharacters(in: .whitespacesAndNewlines)
                     let relativeAccount = (relativeTrimmed?.isEmpty ?? true) ? nil : relativeTrimmed
@@ -11603,9 +13555,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                             continue
                         }
                         if let assetFilter, !assetFilter.isEmpty, !details.involvesAssetDefinition(assetFilter) {
-                            continue
-                        }
-                        if let assetIdFilter, !assetIdFilter.isEmpty, !details.involvesAssetId(assetIdFilter) {
                             continue
                         }
                         let record = ToriiExplorerTransferRecord(instruction: item, details: details)
@@ -11636,7 +13585,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                              page: UInt64? = nil,
                                              perPage: UInt64? = nil,
                                              assetDefinitionId: String? = nil,
-                                             assetId: String? = nil,
                                              lastEventId: String? = nil,
                                              maxItems: UInt64? = nil,
                                              dedupeLimit: Int = 10_000) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
@@ -11671,7 +13619,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                                                            page: page,
                                                                            perPage: perPage,
                                                                            assetDefinitionId: assetDefinitionId,
-                                                                           assetId: assetId,
                                                                            maxItems: remaining) {
                         if Task.isCancelled {
                             break
@@ -11690,7 +13637,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                     for try await summary in streamExplorerTransferSummaries(lastEventId: lastEventId,
                                                                              matchingAccount: normalizedAccount,
                                                                              assetDefinitionId: assetDefinitionId,
-                                                                             assetId: assetId,
                                                                              relativeTo: normalizedAccount) {
                         if Task.isCancelled {
                             break
@@ -11718,101 +13664,64 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
     }
 
-    private func ensureDataModelCompatibility() async throws {
-        let expected = ToriiNodeCapabilities.expectedDataModelVersion
-        let cached = dataModelQueue.sync { dataModelCompatibility }
+    private static func isCanonicalSignedTransactionSchemaHashHex(_ value: String) -> Bool {
+        value.count == 32 && value == value.lowercased() && Data(hexString: value) != nil
+    }
+
+    private func ensureDataModelValidation() async throws {
+        let expectedVersion = ToriiNodeCapabilities.expectedDataModelVersion
+        let expectedSchemaHash = ToriiNodeCapabilities.expectedSignedTransactionSchemaHashHex
+        let cached = dataModelQueue.sync { dataModelValidation }
         switch cached {
-        case .compatible:
+        case .matched:
             return
-        case let .incompatible(expected, actual):
-            throw ToriiClientError.incompatibleDataModel(expected: expected, actual: actual)
+        case let .dataModelMismatch(expected, actual):
+            throw ToriiClientError.dataModelMismatch(expected: expected, actual: actual)
+        case let .schemaMismatch(expected, actual):
+            throw ToriiClientError.transactionSchemaMismatch(expected: expected, actual: actual)
         case .unknown:
             break
         }
 
-        let capabilities = try await getNodeCapabilities()
-        let actual = capabilities.dataModelVersion
-        guard actual == expected else {
+        let capabilities = try await getNodeCapabilitiesForSubmitValidation()
+
+        let actualVersion = capabilities.dataModelVersion
+        guard actualVersion == expectedVersion else {
             dataModelQueue.sync {
-                dataModelCompatibility = .incompatible(expected: expected, actual: actual)
+                dataModelValidation = .dataModelMismatch(expected: expectedVersion, actual: actualVersion)
             }
-            throw ToriiClientError.incompatibleDataModel(expected: expected, actual: actual)
+            throw ToriiClientError.dataModelMismatch(expected: expectedVersion, actual: actualVersion)
+        }
+
+        let rawSchemaHash = capabilities.signedTransactionSchemaHashHex?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let actualSchemaHash = rawSchemaHash, !actualSchemaHash.isEmpty else {
+            dataModelQueue.sync {
+                dataModelValidation = .schemaMismatch(expected: expectedSchemaHash, actual: nil)
+            }
+            throw ToriiClientError.transactionSchemaMismatch(expected: expectedSchemaHash, actual: nil)
+        }
+        guard Self.isCanonicalSignedTransactionSchemaHashHex(actualSchemaHash) else {
+            dataModelQueue.sync {
+                dataModelValidation = .schemaMismatch(expected: expectedSchemaHash, actual: actualSchemaHash)
+            }
+            throw ToriiClientError.transactionSchemaMismatch(expected: expectedSchemaHash, actual: actualSchemaHash)
+        }
+        guard actualSchemaHash == expectedSchemaHash else {
+            dataModelQueue.sync {
+                dataModelValidation = .schemaMismatch(expected: expectedSchemaHash, actual: actualSchemaHash)
+            }
+            throw ToriiClientError.transactionSchemaMismatch(expected: expectedSchemaHash, actual: actualSchemaHash)
         }
         dataModelQueue.sync {
-            dataModelCompatibility = .compatible(version: expected)
+            dataModelValidation = .matched(version: expectedVersion, schemaHash: expectedSchemaHash)
         }
-    }
-
-    private func ensureTopUpCertificateIdsMatch(issued: ToriiOfflineCertificateIssueResponse,
-                                                registered: ToriiOfflineAllowanceRegisterResponse) throws {
-        let issuedId = issued.certificateIdHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let registeredId = registered.certificateIdHex.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if issuedId != registeredId {
-            throw ToriiClientError.invalidPayload(
-                "Offline top-up certificate mismatch (issued \(issued.certificateIdHex), registered \(registered.certificateIdHex))."
-            )
-        }
-    }
-
-    private static func makeOfflineReprovisionDraft(
-        currentCertificate: OfflineWalletCertificate,
-        newCommitment: Data,
-        lineage: OfflineCertificateLineage
-    ) throws -> OfflineWalletCertificateDraft {
-        guard newCommitment.count == 32 else {
-            throw ToriiClientError.invalidPayload("newCommitment must be exactly 32 bytes.")
-        }
-        let allowance = OfflineAllowanceCommitment(
-            assetId: currentCertificate.allowance.assetId,
-            amount: currentCertificate.allowance.amount,
-            commitment: newCommitment
-        )
-        var metadata = currentCertificate.metadata
-        lineage.apply(to: &metadata)
-        return OfflineWalletCertificateDraft(
-            controller: currentCertificate.controller,
-            allowance: allowance,
-            spendPublicKey: currentCertificate.spendPublicKey,
-            attestationReport: currentCertificate.attestationReport,
-            issuedAtMs: currentCertificate.issuedAtMs,
-            expiresAtMs: currentCertificate.expiresAtMs,
-            policy: currentCertificate.policy,
-            metadata: metadata,
-            verdictId: currentCertificate.verdictId,
-            attestationNonce: currentCertificate.attestationNonce,
-            refreshAtMs: currentCertificate.refreshAtMs
-        )
-    }
-
-    private static func draftByApplyingAttestationNonce(
-        _ draft: OfflineWalletCertificateDraft,
-        _ attestationNonce: Data?
-    ) throws -> OfflineWalletCertificateDraft {
-        guard let attestationNonce else {
-            return draft
-        }
-        guard attestationNonce.count == 32 else {
-            throw ToriiClientError.invalidPayload("attestationNonce must be exactly 32 bytes.")
-        }
-        return OfflineWalletCertificateDraft(
-            controller: draft.controller,
-            allowance: draft.allowance,
-            spendPublicKey: draft.spendPublicKey,
-            attestationReport: draft.attestationReport,
-            issuedAtMs: draft.issuedAtMs,
-            expiresAtMs: draft.expiresAtMs,
-            policy: draft.policy,
-            metadata: draft.metadata,
-            verdictId: draft.verdictId,
-            attestationNonce: attestationNonce,
-            refreshAtMs: draft.refreshAtMs
-        )
     }
 
     public func submitTransaction(data: Data,
                                   mode: PipelineEndpointMode,
                                   idempotencyKey: String? = nil) async throws -> ToriiSubmitTransactionResponse? {
-        try await ensureDataModelCompatibility()
+        try await ensureDataModelValidation()
         let paths = pipelineEndpoints(for: mode)
         var headers: [String: String] = [
             "Content-Type": "application/x-norito",
@@ -11852,6 +13761,126 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         try ensureStatus(response, in: 200..<300, responseBody: data)
         guard !data.isEmpty else { return nil }
         return try decodeJSON(ToriiPipelineTransactionStatus.self, from: data)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func streamTransactionStatusEvents(hashHex: String,
+                                              lastEventId: String? = nil) -> AsyncThrowingStream<ToriiPipelineTransactionEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
+                    let filterValue = try String(
+                        decoding: Self.queryEqualsFilter(field: "tx_hash", value: normalizedHash).encodedData(),
+                        as: UTF8.self
+                    )
+                    var headers = ["Accept": "text/event-stream"]
+                    if let lastEventId {
+                        headers["Last-Event-ID"] = lastEventId
+                    }
+                    let request = try makeRequest(
+                        path: "/v1/events/sse",
+                        queryItems: [URLQueryItem(name: "filter", value: filterValue)],
+                        headers: headers
+                    )
+                    let (bytes, response) = try await session.bytes(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse else {
+                        throw ToriiClientError.invalidResponse
+                    }
+                    try ensureStatus(httpResponse, equals: 200)
+
+                    var buffer: [String] = []
+                    var lineAccumulator = Data()
+                    var iterator = bytes.makeAsyncIterator()
+                    while let byte = try await iterator.next() {
+                        if Task.isCancelled {
+                            break
+                        }
+                        if byte == UInt8(ascii: "\n") {
+                            let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
+                            if rawLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                if let event = try parseTransactionStatusEvent(from: buffer) {
+                                    continuation.yield(event)
+                                }
+                                buffer.removeAll(keepingCapacity: true)
+                            } else {
+                                buffer.append(rawLine)
+                            }
+                            lineAccumulator.removeAll(keepingCapacity: true)
+                        } else {
+                            lineAccumulator.append(byte)
+                        }
+                    }
+                    if !lineAccumulator.isEmpty {
+                        let rawLine = String(decoding: lineAccumulator, as: UTF8.self)
+                        buffer.append(rawLine)
+                    }
+                    if let event = try parseTransactionStatusEvent(from: buffer) {
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    if Task.isCancelled {
+                        continuation.finish()
+                    } else {
+                        continuation.finish(throwing: error)
+                    }
+                }
+            }
+
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func waitForTerminalTransactionStatusEvent(hashHex: String,
+                                                      timeout: TimeInterval = 5) async throws -> ToriiPipelineTransactionEvent {
+        let normalizedHash = try ToriiRequestValidation.normalizedNonEmpty(hashHex, field: "hashHex")
+        if let snapshot = try await getTransactionStatus(hashHex: normalizedHash, mode: .pipeline) {
+            let event = ToriiPipelineTransactionEvent(snapshot: snapshot, hashHex: normalizedHash)
+            if event.state.isTerminalSuccess || event.state.isTerminalFailure {
+                return event
+            }
+        }
+
+        return try await withThrowingTaskGroup(of: ToriiPipelineTransactionEvent.self) { group in
+            group.addTask { [self] in
+                for try await event in streamTransactionStatusEvents(hashHex: normalizedHash) {
+                    guard event.hash == normalizedHash else {
+                        continue
+                    }
+                    if event.state.isTerminalSuccess || event.state.isTerminalFailure {
+                        return event
+                    }
+                }
+                throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
+            }
+
+            let normalizedTimeout = max(timeout, 0)
+            if normalizedTimeout > 0 {
+                group.addTask {
+                    let nanosDouble = normalizedTimeout * 1_000_000_000
+                    let clamped = min(max(nanosDouble, 0), Double(UInt64.max))
+                    try await Task.sleep(nanoseconds: UInt64(clamped))
+                    throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
+                }
+            }
+
+            do {
+                guard let event = try await group.next() else {
+                    throw PipelineStatusError.timeout(hash: normalizedHash, attempts: 0)
+                }
+                group.cancelAll()
+                return event
+            } catch {
+                group.cancelAll()
+                throw error
+            }
+        }
     }
 
     public func getPipelineRecovery(height: UInt64) async throws -> ToriiPipelineRecovery? {
@@ -12131,6 +14160,41 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return body.lowercased()
     }
 
+    private func buildIdentifierResolveRequest(policyId: String,
+                                               input: String?,
+                                               encryptedInputHex: String?) throws -> ToriiIdentifierLookupRequest {
+        let normalizedPolicyId = try ToriiRequestValidation.normalizedNonEmpty(policyId, field: "policyId")
+        let normalizedInput = try ToriiRequestValidation.normalizedOptionalNonEmpty(input, field: "input")
+        let normalizedEncryptedInput = try encryptedInputHex.map {
+            try ToriiRequestValidation.normalizedEvenLengthHex($0, field: "encryptedInputHex")
+        }
+        guard (normalizedInput == nil) != (normalizedEncryptedInput == nil) else {
+            throw ToriiClientError.invalidPayload("Exactly one of input or encryptedInputHex must be provided.")
+        }
+        return ToriiIdentifierLookupRequest(
+            policyId: normalizedPolicyId,
+            input: normalizedInput,
+            encryptedInputHex: normalizedEncryptedInput
+        )
+    }
+
+    private func buildRamLfeExecuteRequest(inputHex: String?,
+                                           encryptedInputHex: String?) throws -> ToriiRamLfeExecuteRequest {
+        let normalizedInputHex = try inputHex.map {
+            try ToriiRequestValidation.normalizedEvenLengthHex($0, field: "inputHex")
+        }
+        let normalizedEncryptedInput = try encryptedInputHex.map {
+            try ToriiRequestValidation.normalizedEvenLengthHex($0, field: "encryptedInputHex")
+        }
+        guard (normalizedInputHex == nil) != (normalizedEncryptedInput == nil) else {
+            throw ToriiClientError.invalidPayload("Exactly one of inputHex or encryptedInputHex must be provided.")
+        }
+        return ToriiRamLfeExecuteRequest(
+            inputHex: normalizedInputHex,
+            encryptedInputHex: normalizedEncryptedInput
+        )
+    }
+
     private func makeRequest(path: String,
                              method: HTTPMethod = .get,
                              queryItems: [URLQueryItem]? = nil,
@@ -12156,18 +14220,32 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         var request = URLRequest(url: finalURL)
         request.httpMethod = method.rawValue
         request.httpBody = body
+        var finalHeaders = defaultHeaders
         headers.forEach { key, value in
+            ToriiClientAuthentication.setHeader(&finalHeaders, key: key, value: value)
+        }
+        finalHeaders.forEach { key, value in
             request.setValue(value, forHTTPHeaderField: key)
         }
         return request
     }
 
     private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        if let url = request.url,
+           let violation = IrohaTransportSecurity.httpViolation(context: "ToriiClient",
+                                                                baseURL: baseURL,
+                                                                targetURL: url,
+                                                                headers: request.allHTTPHeaderFields ?? [:],
+                                                                body: request.httpBody) {
+            throw ToriiClientError.invalidPayload(violation)
+        }
         do {
+            let observedAtLocalMs = Self.currentEpochMs()
             let (data, response) = try await session.data(for: request, delegate: nil)
             guard let http = response as? HTTPURLResponse else {
                 throw ToriiClientError.invalidResponse
             }
+            recordObservedServerClock(from: http, observedAtLocalMs: observedAtLocalMs)
             return (data, http)
         } catch {
             if error is CancellationError || Self.isCancelledTransportError(error) {
@@ -12177,12 +14255,86 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
     }
 
+    private func serverSideSigningRemoved(_ endpoint: String) -> ToriiClientError {
+        ToriiClientError.invalidPayload(
+            "\(endpoint) no longer accepts server-side signing inputs; submit a locally signed transaction instead."
+        )
+    }
+
     private static func isCancelledTransportError(_ error: Error) -> Bool {
         if let urlError = error as? URLError {
             return urlError.code == .cancelled
         }
         let nsError = error as NSError
         return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+
+    private func recordObservedServerClock(from response: HTTPURLResponse, observedAtLocalMs: UInt64) {
+        guard let rawDateHeader = response.value(forHTTPHeaderField: "Date"),
+              let parsedDate = Self.parseHTTPDate(rawDateHeader)
+        else {
+            return
+        }
+        let serverEpochMs = Self.epochMs(for: parsedDate)
+        serverClockQueue.sync {
+            let clock = ObservedServerClock(
+                serverEpochMs: serverEpochMs,
+                observedLocalEpochMs: observedAtLocalMs
+            )
+            observedServerClock = clock
+            Self.setSharedObservedServerClock(clock, for: serverClockCacheKey)
+        }
+    }
+
+    private static func parseHTTPDate(_ rawValue: String) -> Date? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let formats = [
+            "EEE',' dd MMM yyyy HH':'mm':'ss zzz",
+            "EEEE',' dd-MMM-yy HH':'mm':'ss zzz",
+            "EEE MMM d HH':'mm':'ss yyyy"
+        ]
+        for format in formats {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = format
+            if let parsed = formatter.date(from: trimmed) {
+                return parsed
+            }
+        }
+        return nil
+    }
+
+    private static func currentEpochMs() -> UInt64 {
+        epochMs(for: Date())
+    }
+
+    private static func epochMs(for date: Date) -> UInt64 {
+        let millis = date.timeIntervalSince1970 * 1_000
+        if millis < 0 {
+            return 0
+        }
+        return UInt64(millis.rounded())
+    }
+
+    private static func serverClockCacheKey(for baseURL: URL) -> String {
+        let scheme = baseURL.scheme?.lowercased() ?? "https"
+        let host = baseURL.host?.lowercased() ?? baseURL.absoluteString.lowercased()
+        if let port = baseURL.port {
+            return "\(scheme)://\(host):\(port)"
+        }
+        return "\(scheme)://\(host)"
+    }
+
+    private static func sharedObservedServerClock(for key: String) -> ObservedServerClock? {
+        sharedServerClockQueue.sync { sharedObservedServerClocks[key] }
+    }
+
+    private static func setSharedObservedServerClock(_ clock: ObservedServerClock, for key: String) {
+        sharedServerClockQueue.sync {
+            sharedObservedServerClocks[key] = clock
+        }
     }
 
     private func rejectCode(from response: HTTPURLResponse) -> String? {
@@ -12242,8 +14394,8 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
     }
 
     private static func httpStatusMessage(response: HTTPURLResponse, responseBody: Data?) -> String {
-        let fallback = HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
-        guard let responseBody, !responseBody.isEmpty else { return fallback }
+        let defaultMessage = HTTPURLResponse.localizedString(forStatusCode: response.statusCode)
+        guard let responseBody, !responseBody.isEmpty else { return defaultMessage }
         if let jsonObject = try? JSONSerialization.jsonObject(with: responseBody, options: []) {
             if let detail = extractErrorMessage(from: jsonObject), !detail.isEmpty {
                 return detail
@@ -12263,7 +14415,12 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                 return detail
             }
         }
-        return fallback
+        let byteLimit = 256
+        let hex = responseBody.prefix(byteLimit).map { String(format: "%02x", $0) }.joined()
+        if !hex.isEmpty {
+            return responseBody.count > byteLimit ? "body_hex=\(hex)..." : "body_hex=\(hex)"
+        }
+        return defaultMessage
     }
 
     private func ensureStatus(_ response: HTTPURLResponse,
@@ -12302,6 +14459,15 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             throw ToriiClientError.invalidPayload("\(context) response is not valid UTF-8.")
         }
         return text
+    }
+
+    private func responseBodyPreview(_ data: Data, maxLength: Int = 4096) -> String {
+        if let text = String(data: data, encoding: .utf8) {
+            return Self.trimErrorBodyText(text, maxLength: maxLength)
+        }
+        let byteLimit = max(1, maxLength / 2)
+        let hex = data.prefix(byteLimit).map { String(format: "%02x", $0) }.joined()
+        return data.count > byteLimit ? "\(hex)..." : hex
     }
 
     private func decodeJSON<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
@@ -12485,6 +14651,35 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiExplorerInstructionItem.self, from: payloadData)
     }
 
+    private func parseTransactionStatusEvent(from lines: [String]) throws -> ToriiPipelineTransactionEvent? {
+        guard let parsed = try parseServerSentEvent(from: lines) else {
+            return nil
+        }
+        guard let payloadString = parsed.data else {
+            return nil
+        }
+        guard let payloadData = payloadString.data(using: .utf8) else {
+            throw ToriiClientError.invalidPayload("SSE payload is not valid UTF-8.")
+        }
+        let payload = try decodeJSON(ToriiPipelineTransactionEvent.self, from: payloadData)
+        guard payload.event.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("Transaction") == .orderedSame else {
+            return nil
+        }
+        return ToriiPipelineTransactionEvent(
+            category: payload.category,
+            event: payload.event,
+            hash: payload.hash,
+            status: payload.status,
+            blockHeight: payload.blockHeight,
+            dataspaceId: payload.dataspaceId,
+            laneId: payload.laneId,
+            eventName: parsed.eventName,
+            eventId: parsed.id,
+            retryHintMilliseconds: parsed.retry,
+            rawEvent: parsed.raw
+        )
+    }
+
     private struct ToriiVerifyingKeyEventEnvelope: Decodable {
         let event: ToriiVerifyingKeyEvent
 
@@ -12654,89 +14849,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
                                       rawEvent: parsed.raw)
     }
 
-    private func settlementStatus(from item: ToriiOfflineTransferItem) async throws -> ToriiSettlementExecutionStatus {
-        let normalizedStatus = item.status
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        switch normalizedStatus {
-        case "settled", "archived":
-            return .settled
-        case "rejected":
-            let reason = try await settlementRejectionReason(from: item)
-            return .rejected(reason: reason)
-        case "pending", "queued", "in_pool", "in-pool", "pool":
-            return .pending
-        default:
-            return .unknown
-        }
-    }
-
-    private func settlementRejectionReason(from item: ToriiOfflineTransferItem) async throws -> String? {
-        if let reason = item.rejectionReason?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !reason.isEmpty {
-            return reason
-        }
-        if let reason = Self.extractRejectionReason(from: item.transfer) {
-            return reason
-        }
-        guard let verdictIdHex = item.verdictIdHex,
-              let normalizedVerdictIdHex = try? Self.normalizeBundleIdHex(verdictIdHex,
-                                                                           field: "verdictIdHex") else {
-            return nil
-        }
-        let envelope = ToriiQueryEnvelope(
-            filter: Self.queryEqualsFilter(field: "verdict_id_hex", value: normalizedVerdictIdHex),
-            sort: [ToriiQuerySortKey(key: "revoked_at_ms", order: .desc)],
-            pagination: ToriiQueryPagination(limit: 1, offset: 0)
-        )
-        let revocations = try await queryOfflineRevocations(envelope)
-        return revocations.items.first?.reason
-    }
-
-    private func cacheOfflineSettlementStatus(_ status: ToriiSettlementExecutionStatus,
-                                              bundleIdHex: String) {
-        offlineSettlementStatusQueue.sync {
-            cachedOfflineSettlementStatusByBundleIdHex[bundleIdHex] = status
-        }
-    }
-
-    private func cachedOfflineSettlementStatus(bundleIdHex: String) -> ToriiSettlementExecutionStatus? {
-        offlineSettlementStatusQueue.sync {
-            cachedOfflineSettlementStatusByBundleIdHex[bundleIdHex]
-        }
-    }
-
-    private static func extractRejectCode(from error: Error) -> String? {
-        guard let clientError = error as? ToriiClientError else {
-            return nil
-        }
-        guard case let .httpStatus(_, _, rejectCode) = clientError else {
-            return nil
-        }
-        return rejectCode
-    }
-
     private static func queryEqualsFilter(field: String, value: String) -> ToriiJSONValue {
         .object([
             "op": .string("eq"),
             "args": .array([.string(field), .string(value)])
         ])
-    }
-
-    private static func normalizeBundleIdHex(_ bundleIdHex: String,
-                                             field: String) throws -> String {
-        let trimmed = try ToriiRequestValidation.normalizedNonEmpty(bundleIdHex, field: field)
-        if trimmed.lowercased().hasPrefix("hash:") {
-            return try normalizeHashLiteralBundleId(trimmed, field: field)
-        }
-        var normalized = trimmed
-        if normalized.hasPrefix("0x") || normalized.hasPrefix("0X") {
-            normalized = String(normalized.dropFirst(2))
-        }
-        guard Data(hexString: normalized) != nil else {
-            throw ToriiClientError.invalidPayload("\(field) must be a valid hex string.")
-        }
-        return normalized.lowercased()
     }
 
     private static func normalizeHash32HexOrLiteral(_ value: String,
@@ -12746,6 +14863,11 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
             return try normalizeHashLiteralBundleId(trimmed, field: field)
         }
         return try ToriiRequestValidation.normalized32ByteHex(trimmed, field: field)
+    }
+
+    private static func normalizeHashLiteral(_ value: String,
+                                             field: String) throws -> String {
+        try normalizeHash32HexOrLiteral(value, field: field)
     }
 
     private static func normalizeHashLiteralBundleId(_ literal: String,
@@ -12801,41 +14923,6 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return current & 0xFFFF
     }
 
-    private static func extractBundleIdHex(from transfer: ToriiJSONValue) -> String? {
-        guard case let .object(transferObject) = transfer else {
-            return nil
-        }
-        if let explicit = transferObject["bundle_id_hex"]?.normalizedString,
-           let normalized = try? normalizeBundleIdHex(explicit, field: "transfer.bundle_id_hex") {
-            return normalized
-        }
-        if let literal = transferObject["bundle_id"]?.normalizedString,
-           let normalized = try? normalizeBundleIdHex(literal, field: "transfer.bundle_id") {
-            return normalized
-        }
-        return nil
-    }
-
-    private static func extractRejectionReason(from transfer: ToriiJSONValue) -> String? {
-        guard case let .object(record) = transfer else {
-            return nil
-        }
-        if let reason = firstNormalizedString(in: record,
-                                              keys: ["rejection_reason", "reject_code", "reason"]) {
-            return reason
-        }
-        if let rejection = objectValue(record["rejection"]),
-           let reason = firstNormalizedString(in: rejection,
-                                              keys: ["reason", "code", "reject_code"]) {
-            return reason
-        }
-        if let error = objectValue(record["error"]),
-           let reason = firstNormalizedString(in: error,
-                                              keys: ["reason", "code", "reject_code"]) {
-            return reason
-        }
-        return nil
-    }
 
     private static func objectValue(_ value: ToriiJSONValue?) -> [String: ToriiJSONValue]? {
         guard let value else { return nil }

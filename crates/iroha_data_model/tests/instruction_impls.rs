@@ -1,7 +1,7 @@
 //! Tests for instruction implementations
 
 use iroha_data_model::{
-    isi::{BuiltInInstruction, register::RegisterPeerWithPop},
+    isi::{BuiltInInstruction, register::RegisterPeerWithPop, rwa::*},
     prelude::*,
 };
 use iroha_primitives::numeric::Numeric;
@@ -22,11 +22,13 @@ fn built_in_instructions_implement_traits() {
         SetKeyValue<AssetDefinition>,
         SetKeyValue<Account>,
         SetKeyValue<Nft>,
+        SetKeyValue<Rwa>,
         SetKeyValue<Trigger>,
         RemoveKeyValue<Domain>,
         RemoveKeyValue<AssetDefinition>,
         RemoveKeyValue<Account>,
         RemoveKeyValue<Nft>,
+        RemoveKeyValue<Rwa>,
         RemoveKeyValue<Trigger>,
         RegisterPeerWithPop,
         Register<Domain>,
@@ -50,6 +52,17 @@ fn built_in_instructions_implement_traits() {
         Transfer<Account, AssetDefinitionId, Account>,
         Transfer<Asset, Numeric, Account>,
         Transfer<Account, NftId, Account>,
+        RegisterRwa,
+        TransferRwa,
+        MergeRwas,
+        RedeemRwa,
+        FreezeRwa,
+        UnfreezeRwa,
+        HoldRwa,
+        ReleaseRwa,
+        ForceTransferRwa,
+        SetRwaControls,
+        RwaInstructionBox,
         Grant<Permission, Account>,
         Grant<RoleId, Account>,
         Grant<Permission, Role>,

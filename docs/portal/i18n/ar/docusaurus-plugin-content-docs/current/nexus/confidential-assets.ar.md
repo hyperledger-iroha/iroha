@@ -88,7 +88,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -241,7 +241,7 @@ SPDX-License-Identifier: Apache-2.0
 - السلسلة اشتقاق المفاتيح لكل حساب:
   - `sk_spend` → `nk` (مفتاح الإلغاء)، `ivk` (مفتاح العرض الوارد)، `ovk` (مفتاح العرض الصادر)، `fvk`.
 - تستخدم ملاحظات الحمولات النافعة المشفرة AEAD مع مفاتيح التعاون التعاونية من ECDH؛ ويمكن ارفاق المدقق عرض المفاتيح اختيارية الى المخرجات حسب الطلب لبني الاصل.
-- اضافات CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ادوات للمقررين لفك المذكرات، والمساعد `iroha app zk envelope` لانتاج/فحص المغلفات Norito دون اتصال. يعرض Torii نفس تدفق الاشتقاق عبر `POST /v1/confidential/derive-keyset` ويعيد اشكالا hex وbase64 لكي يحافظ على هياكل المفاتيح برمجيا.
+- اضافات CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, ادوات للمقررين لفك المذكرات، والمساعد `iroha app zk envelope` لانتاج/فحص المغلفات Norito دون اتصال. يعرض
 
 ## الغاز، الحدود، وضوابط DoS
 - جدول الغاز حتمي :

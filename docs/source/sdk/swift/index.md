@@ -63,7 +63,7 @@ let accountId = AccountId.make(publicKey: keypair.publicKey)
 let transfer = TransferRequest(
     chainId: "00000000-0000-0000-0000-000000000000",
     authority: accountId,
-    assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
     quantity: "1.23",
     destination: accountId,
     description: "demo",
@@ -82,7 +82,7 @@ if #available(iOS 15.0, macOS 12.0, *) {
 ```
 
 `TransferRequest`, `MintRequest`, `BurnRequest`, `ShieldRequest`, and `UnshieldRequest` require
-canonical `aid:<32-lower-hex-no-dash>` asset-definition IDs.
+canonical unprefixed Base58 asset-definition IDs.
 
 ## SM2 Cryptography
 
@@ -211,359 +211,21 @@ decide whether to discard or resubmit the affected envelope.
 
 ### Offline circulation modes
 
-`OfflineWallet` now exposes `OfflineWalletCirculationMode` so apps can distinguish between
-ledger-reconcilable allowances and pure offline/bearer campaigns:
+Offline value flows use Offline V2 note issuance, redemption, and audit instructions submitted
+through normal transactions. Torii HTTP discovery is limited to the Offline V2 readiness endpoint.
 
-```swift
-let wallet = try OfflineWallet(
-    toriiClient: torii,
-    auditLoggingEnabled: true,
-    circulationMode: .ledgerReconcilable) { mode, notice in
-        bannerView.show(title: notice.headline, message: notice.details)
-    }
+Offline V2 uses note challenges, payment tokens, and receipt acks carried over Fountain QR frames.
 
-wallet.setCirculationMode(.offlineOnly)
+### Offline V2 APIs
 
-guard wallet.requiresLedgerReconciliation else {
-    logger.notice("Skipping Torii sync: offline bearer mode active")
-    return
-}
-
-try await wallet.fetchTransfers(params: ToriiOfflineListParams(limit: 25))
-```
-
-`ToriiOfflineListParams` mirrors the convenience filters exposed by Torii —
-pass `assetId`, `controllerId`, `receiverId`, `depositAccountId`,
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`refreshBeforeMs/AfterMs`, `attestationNonceHex`, `verdictIdHex`,
-`requireVerdict`, or `onlyMissingVerdict` directly to the struct instead of
-composing JSON predicates. The helper lowercases verdict IDs and rejects invalid
-combinations before the request is executed, keeping the Swift surface aligned
-with the OA11 roadmap guarantees.
-
-`OfflineReceiptChallenge.encode(chainId, ...)` reuses the shared native helper to emit the canonical
-Norito payload plus the chain-bound `irohaHash`/`clientDataHash` pair that Apple App Attest and
-Android KeyMint expect. Receipt `amount` strings must use the allowance's canonical scale (asset
-definition scale when specified; otherwise the allowance amount scale) to match the ledger
-verifier. Use the `expectedScale` overload to enforce scale locally, and call it before generating
-platform proofs so every device feeds the exact same bytes into the attestation
-chain.【IrohaSwift/Sources/IrohaSwift/OfflineReceiptChallenge.swift:1】【IrohaSwift/Tests/IrohaSwiftTests/OfflineReceiptChallengeTests.swift:1】
-
-### Offline receipt builders
-
-`OfflineReceiptBuilder` validates receipts and bundles before submission, including spend-key
-signature verification, account-id/policy checks, platform snapshot policy binding, aggregate
-proof root matching, and challenge-hash verification for App Attest/provisioned proofs. Use
-`OfflineWallet.buildSignedReceipt` to sign with the spend key and append to the journal and audit
-log in one call. Pass `chainId` so the challenge hash is bound to the target network:
-
-```swift
-let chainId = "testnet"
-let journal = try OfflineJournal(url: journalURL, key: OfflineJournalKey.derive(from: seed))
-let receipt = try wallet.buildSignedReceipt(
-    chainId: chainId,
-    receiverAccountId: certificate.controller,
-    amount: "10",
-    invoiceId: "inv-001",
-    platformProof: proof,
-    senderCertificate: certificate,
-    signingKey: spendKey,
-    journal: journal
-)
-
-let claimedDelta = try OfflineReceiptBuilder.aggregateAmount(receipts: [receipt])
-let resultingValue = "90" // current balance minus claimedDelta
-let initialBlindingHex = "<current-blinding-hex>"
-let resultingBlindingHex = "<next-blinding-hex>"
-let artifacts = try OfflineBalanceProofBuilder.advanceCommitment(
-    chainId: chainId,
-    claimedDelta: claimedDelta,
-    resultingValue: resultingValue,
-    initialCommitmentHex: certificate.allowance.commitment.hexUppercased(),
-    initialBlindingHex: initialBlindingHex,
-    resultingBlindingHex: resultingBlindingHex
-)
-let balanceProof = OfflineBalanceProof(
-    initialCommitment: certificate.allowance,
-    resultingCommitment: artifacts.resultingCommitment,
-    claimedDelta: claimedDelta,
-    zkProof: artifacts.proof
-)
-let transfer = try OfflineReceiptBuilder.buildTransfer(
-    chainId: chainId,
-    receiver: certificate.controller,
-    depositAccount: certificate.controller,
-    receipts: [receipt],
-    balanceProof: balanceProof
-)
-```
-
-Balance proofs are required for settlement; `OfflineBalanceProofBuilder` emits the versioned
-12,385-byte v1 proof blob (delta + range proofs) that Torii expects.
-
-If you need deterministic IDs or direct journal/audit wiring without `OfflineWallet`, use
-`OfflineReceiptRecorder` alongside the builder:
-
-```swift
-let logger = try OfflineAuditLogger(isEnabled: true)
-let recorder = OfflineReceiptRecorder(journal: journal, auditLogger: logger)
-let chainId = "testnet"
-let seed = Data("receipt-seed".utf8)
-let bundleSeed = Data("bundle-seed".utf8)
-let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
-    txIdSeed: seed,
-    chainId: chainId,
-    receiverAccountId: certificate.controller,
-    amount: "10",
-    invoiceId: "inv-002",
-    platformProof: proof,
-    senderCertificate: certificate,
-    signingKey: spendKey,
-    recorder: recorder,
-    timestampMs: 123
-)
-
-let transfer = try OfflineReceiptBuilder.buildTransfer(
-    bundleIdSeed: bundleSeed,
-    chainId: chainId,
-    receiver: certificate.controller,
-    depositAccount: certificate.controller,
-    receipts: [receipt],
-    balanceProof: balanceProof,
-    sortReceipts: true
-)
-```
-
-When attaching aggregate proofs, compute the Poseidon receipts root with
-`OfflineReceiptBuilder.computeReceiptsRoot` and populate the envelope before submission. Use
-`OfflineAggregateProofMetadataKey` to tag the FASTPQ parameter set and circuit identifiers:
-
-```swift
-let metadata: [String: ToriiJSONValue] = [
-    OfflineAggregateProofMetadataKey.parameterSet: .string("fastpq-offline-v1"),
-    OfflineAggregateProofMetadataKey.sumCircuit: .string("fastpq/offline_sum/v2"),
-    OfflineAggregateProofMetadataKey.counterCircuit: .string("fastpq/offline_counter/v2"),
-    OfflineAggregateProofMetadataKey.replayCircuit: .string("fastpq/offline_replay/v2"),
-]
-```
-
-Torii builds FASTPQ witness payloads from the transfer payload
-(`POST /v1/offline/transfers/proof`). Feed the JSON into
-`OfflineReceiptBuilder.generateAggregateProofs` to get proof bytes (requires the native bridge):
-
-```swift
-let sumRequest = try await torii.requestOfflineTransferProof(
-    .init(transfer: transfer, kind: "sum")
-)
-let counterRequest = try await torii.requestOfflineTransferProof(
-    .init(transfer: transfer, kind: "counter", counterCheckpoint: counterCheckpoint)
-)
-let replayRequest = try await torii.requestOfflineTransferProof(
-    .init(transfer: transfer,
-          kind: "replay",
-          replayLogHeadHex: replayHeadHex,
-          replayLogTailHex: replayTailHex)
-)
-
-let proofs = try OfflineReceiptBuilder.generateAggregateProofs(
-    sumRequest: sumRequest,
-    counterRequest: counterRequest,
-    replayRequest: replayRequest
-)
-let envelope = try OfflineReceiptBuilder.buildAggregateProofEnvelope(
-    receipts: receipts,
-    proofSum: proofs.sum,
-    proofCounter: proofs.counter,
-    proofReplay: proofs.replay,
-    metadata: metadata
-)
-```
-
-Note: the native bridge emits deterministic sum/counter/replay proofs (Norito-encoded
-`OfflineFastpq*Proof`), and the core verifier enforces them when `proof_mode = "required"`.
-
-### Inspector provisioning proofs
-
-Swift ships `AndroidProvisionedProof` so kiosk tooling and POS wallets can load
-the `proof.json` artefacts emitted by `cargo xtask offline-provision`, validate
-the Norito hash literal + inspector signature, and re-encode the manifest
-before attaching it to OA10.3 allowances:
-
-```swift
-let proofURL = URL(fileURLWithPath: "fixtures/offline_provision/kiosk-demo/proof.json")
-let proof = try AndroidProvisionedProof.load(from: proofURL)
-let manifest = proof.deviceManifest
-let canonical = try proof.encodedData(prettyPrinted: true)
-```
-
-The helper normalises the canonical hash literal (`hash:...#....`), exposes
-`deviceId`/`challengeHashData` for downstream attestations, and keeps the
-inspector signature in uppercase hex so OA10.3a flows align with the Norito
-schema documented in `offline_allowance.md`.【IrohaSwift/Sources/IrohaSwift/AndroidProvisionedProof.swift:1】
-
-Use the `.notice` payload to surface disclosures/localised copy and fall back to the default handler
-when no custom UI is supplied. Additional risk guidance lives in `docs/source/offline_bearer_mode.md`.
-
-### Offline allowance top-up
-
-Use `ToriiClient.topUpOfflineAllowance` to issue a certificate and register it on-ledger in one call.
-The helper performs `/v1/offline/certificates/issue` followed by `/v1/offline/allowances` and
-verifies that both responses reference the same certificate id:
-
-```swift
-let draft = OfflineWalletCertificateDraft(
-    controller: controllerId,
-    allowance: allowanceCommitment,
-    spendPublicKey: spendPublicKey,
-    attestationReport: attestationReport,
-    issuedAtMs: issuedAtMs,
-    expiresAtMs: expiresAtMs,
-    policy: policy,
-    metadata: metadata
-)
-
-let topUp = try await torii.topUpOfflineAllowance(
-    draft: draft,
-    authority: controllerId,
-    privateKey: controllerPrivateKey
-)
-
-let certificate = try topUp.certificate.decodeCertificate()
-print("Issued certificate", try certificate.certificateIdHex())
-```
-
-If you are using `OfflineWallet`, call `topUpAllowance` to perform the same flow and (by default)
-persist the verdict metadata for refresh warnings. Disable `recordVerdict` if you want to skip
-the local cache update:
-
-```swift
-let wallet = try OfflineWallet(toriiClient: torii)
-let topUp = try await wallet.topUpAllowance(
-    draft: draft,
-    authority: controllerId,
-    privateKey: controllerPrivateKey,
-    recordVerdict: true
-)
-```
-
-If your app issues certificates separately (for example, to inspect the response before registration),
-you can still update the local verdict cache directly:
-
-```swift
-let issued = try await torii.issueOfflineCertificate(.init(certificate: draft))
-let wallet = try OfflineWallet(toriiClient: torii)
-try wallet.recordVerdictMetadata(from: issued)
-```
-
-For renewals, call `topUpOfflineAllowanceRenewal`, which targets
-`/v1/offline/certificates/{certificate_id_hex}/renew/issue` and
-`/v1/offline/allowances/{certificate_id_hex}/renew`:
-
-```swift
-let renewal = try await torii.topUpOfflineAllowanceRenewal(
-    certificateIdHex: existingCertificateId,
-    draft: draft,
-    authority: controllerId,
-    privateKey: controllerPrivateKey
-)
-```
-
-`OfflineWallet.topUpAllowanceRenewal` mirrors the same flow and can optionally refresh the verdict
-cache by leaving `recordVerdict` enabled.
-
-If you already have a signed certificate (for example, issued out-of-band), call
-`ToriiClient.registerOfflineAllowance` or `ToriiClient.renewOfflineAllowance` directly instead of
-the top-up helpers.
+Torii exposes only `/v1/offline/v2/readiness` for offline HTTP discovery. Offline V2 note
+issuance, redemption, and audit payloads are submitted as transaction instructions; non-V2
+offline HTTP routes are no longer published.
 
 ### Offline audit logging
 
-When `auditLoggingEnabled` is `true`, `OfflineWallet` writes `{sender, receiver, asset, amount, timestamp}` entries to
-`Documents/offline_audit_log.json` (or a custom `storageURL`). Use `fetchTransfersWithAudit` to reconcile bundles and
-`recordTransferAudit(_:)` for bespoke flows:
-
-```swift
-let wallet = try OfflineWallet(
-    toriiClient: torii,
-    auditLoggingEnabled: true,
-    auditStorageURL: customDirectory?.appendingPathComponent("audit.json"))
-
-// Automatically capture every bundle that Torii returns.
-let transfers = try await wallet.fetchTransfersWithAudit(params: ToriiOfflineListParams(limit: 100))
-
-// Manually log a bundle (e.g. after custom filtering).
-if let first = transfers.items.first {
-    wallet.recordTransferAudit(first)
-}
-
-// Export/clear the journal when regulators request it.
-let json = try wallet.exportAuditJSON()
-try wallet.clearAuditLog()
-```
-
-`recordTransferAudit(_:)` inspects the transfer payload, falls back to receiver/deposit metadata when receipts are missing,
-and keeps the log deterministic so the OA5.1 audit toggle can be flipped per jurisdiction without bespoke plumbing.
-
-### Verdict metadata journal
-
-Offline allowances now return attestation verdict metadata (`verdict_id_hex`, `refresh_at_ms`,
-`policy_expires_at_ms`, etc.) plus a normalized countdown helper
-(`deadline_kind`, `deadline_state`, `deadline_ms`, `deadline_ms_remaining`). `OfflineWallet`
-persists those fields when you call `fetchAllowancesRecordingVerdicts` (or invoke
-`recordVerdictMetadata(from:)`) and exposes countdown warnings so apps can nudge users before cached
-attestation tokens expire:
-
-```swift
-let allowances = try await wallet.fetchAllowancesRecordingVerdicts(
-    params: ToriiOfflineListParams(limit: 50))
-
-// Surface refresh/expiry warnings in the UI.
-let warnings = wallet.verdictWarnings(warningThresholdMs: 86_400_000) // 24h
-for warning in warnings {
-    banner.show(title: warning.headline, message: warning.details)
-}
-
-if let specific = wallet.verdictWarning(for: "deadbeef",
-                                        warningThresholdMs: 3_600_000 /* 1h */) {
-    logger.notice("Certificate \(specific.certificateIdHex) deadline: \(specific.details)")
-}
-
-print("Journal stored at \(wallet.verdictJournalURL.path)")
-```
-
-Call `ensureFreshVerdict(for:attestationNonceHex:)` before submitting cached attestations back to Torii.
-The helper consults the journal, compares `attestation_nonce_hex`, and throws `OfflineVerdictError`
-when the refresh deadline, policy expiry, or certificate expiry has elapsed:
-
-```swift
-do {
-    try wallet.ensureFreshVerdict(for: "deadbeef", attestationNonceHex: cachedNonce)
-} catch let OfflineVerdictError.expired(_, kind, deadline) {
-    throw OfflineError.cachedVerdictExpired(kind: kind, deadlineMs: deadline)
-} catch let OfflineVerdictError.nonceMismatch(_, expected, provided) {
-    throw OfflineError.nonceMismatch(expected: expected, provided: provided)
-}
-```
-
-Warnings indicate whether a refresh deadline or policy/certificate expiry triggered the alert, include the canonical ISO
-timestamp, and provide the recorded remaining amount + verdict id so operators can trace every prompt back to the exact
-allowance state. The journal lives alongside the audit log under `Documents/offline_verdict_journal.json`, and
-`verdictMetadata(for:)` exposes the cached struct whenever UIs need to display the stored controller/nonce details.
-
-Each cached entry also records the integrity policy slug (`metadata.integrityPolicy`) and, for OA10.3 provisioning
-allowances, the inspector manifest details (`metadata.provisionedMetadata`). Wallets can surface the inspector public
-key, manifest schema/version, optional manifest digest, and the configured `max_manifest_age_ms` without re-parsing the
-raw certificate JSON before toggling offline functionality or presenting regulator-facing diagnostics.
-
-### Counter journal
-
-`/v1/offline/summaries` exposes the monotonic counter checkpoints for App Attest and Android marker-key series. Use
-`fetchSummariesRecordingCounters` to persist those checkpoints into `OfflineCounterJournal` (stored alongside the audit
-log under `Documents/offline_counter_journal.json`) and `counterCheckpoint(for:)` or `counterSnapshot()` to read the
-latest values.
-
-`buildSignedReceipt(...)` advances the stored counters automatically using the provided `OfflinePlatformProof` and
-throws `OfflineCounterError` when a counter jump or summary hash mismatch is detected, so wallets can fail fast before
-bundling receipts.
+Offline V2 wallet state is V2-only. App startup should discard non-V2 local state instead of
+migrating it.
 
 ## SoraFS orchestrator client
 
@@ -911,8 +573,8 @@ For higher-level walkthroughs, see:
   `getExplorerAccountQr(accountId:)`
   helper wraps `/v1/explorer/accounts/{account_id}/qr` and returns the inline SVG, literal, and
   metadata defined in {doc}`sns/address_display_guidelines` so explorers can embed share-ready
-  preferred I105 QR payloads without reimplementing the renderer
-  (omit the format to use I105 or use canonical I105 output).
+  preferred i105 QR payloads without reimplementing the renderer
+  (omit the format to use i105 or use canonical I105 output).
 - **Explorer:** `getExplorerInstructions` and `getExplorerTransactions` wrap
   `/v1/explorer/instructions` and `/v1/explorer/transactions` with
   `ToriiExplorerInstructionsParams`/`ToriiExplorerTransactionsParams` filters (including
@@ -920,25 +582,22 @@ For higher-level walkthroughs, see:
   transaction with `getExplorerTransactionDetail(hashHex:)` or a single instruction with
   `getExplorerInstructionDetail(hashHex:index:)`. Use
   `getExplorerTransactionTransfers`/`getExplorerTransactionTransferSummaries` to derive transfer
-  details for a single transaction (optionally filtering by `matchingAccount`, `assetDefinitionId`,
-  or `assetId`), or `streamTransactionTransferSummaries` for history+live streaming of a single
+  details for a single transaction (optionally filtering by `matchingAccount` or
+  `assetDefinitionId`), or `streamTransactionTransferSummaries` for history+live streaming of a single
   transaction. For transfer history, use
   `getExplorerTransfers`/`getExplorerTransferSummaries` (support `matchingAccount`,
-  `assetDefinitionId`, and `assetId` filters), or the convenience helpers
+  and `assetDefinitionId` filters), or the convenience helpers
   `getAccountTransferHistory` (alias: `getTransactionHistory`) and `iterateAccountTransferHistory`
   (iOS 15/macOS 12+) which page instructions with `kind: "Transfer"` and emit UI-ready
   `ToriiExplorerTransferSummary` records.
-  These helpers accept `assetDefinitionId` or `assetId` filters (the asset-id filter matches the
-  source asset literal in transfer payloads). Transfer summaries also expose `sourceAssetId` and
-  `destinationAssetId` convenience accessors when they can be derived from the asset definition and
-  account ids, plus `transferIndex` to track the entry position within batch transfer payloads.
+  These helpers accept `assetDefinitionId` filters. Transfer summaries expose the canonical
+  `assetDefinitionId` plus `transferIndex` to track the entry position within batch transfer
+  payloads.
   Convenience flags `isIncoming`, `isOutgoing`, and `isSelfTransfer` assist with UI direction
   labels. Use `direction(relativeTo:)` and `counterpartyAccountId(relativeTo:)` to recompute
   direction or display counterparties for a different account; `isIncoming(relativeTo:)`,
   `isOutgoing(relativeTo:)`, and `isSelfTransfer(relativeTo:)` are available for quick checks.
-  To resolve asset ids relative to a specific account, use `assetId(relativeTo:)` and
-  `counterpartyAssetId(relativeTo:)`. Use `signedAmount(relativeTo:)` when you need a +/‑ string
-  for UI totals.
+  Use `signedAmount(relativeTo:)` when you need a +/‑ string for UI totals.
   Transfer summaries also conform to `Identifiable` with a stable
   `transactionHash|instructionIndex|transferIndex` identifier.
   Live updates are available via `streamExplorerInstructions` and `streamExplorerTransactions`
@@ -951,6 +610,8 @@ For higher-level walkthroughs, see:
   `streamAccountTransferHistory` to emit historical transfer summaries and then keep streaming live
   updates without stitching the two flows manually; Combine callers can use
   `accountTransferHistoryPublisher`.
+
+  Asset-definition helpers now target canonical unprefixed Base58 IDs and dotted aliases (`name#domain.dataspace` / `name#dataspace`). Asset-definition list/get/query responses may include `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`; alias selectors resolve against latest committed block time and stop resolving after grace, while direct reads can still report `expired_pending_cleanup` until sweep.
 - **Domains & registries:** `listDomains(options:)` wraps `/v1/domains` with typed
   pagination/filtering via `ToriiListOptions`/`ToriiListFilter`/`ToriiListSort`, while
   `iterateDomains(pageSize:maxItems:)` (iOS 15/macOS 12+) emits an
@@ -964,9 +625,8 @@ For higher-level walkthroughs, see:
   `ToriiClientError.incompatibleDataModel` on mismatch), `getTransactionStatus`, and recovery
   snapshots via `getPipelineRecovery(height:)`.
 - **Network time:** `getTimeNow` for `/v1/time/now` snapshots.
-- **Zero-knowledge:** prover reports/attachments list/count/delete operations and verifying key registry helpers (`getVerifyingKey`, `listVerifyingKeys`, register/update/deprecate`).
-- **Confidential assets:** derive the wallet key hierarchy through `deriveConfidentialKeyset`
-  (`POST /v1/confidential/derive-keyset`), build memo envelopes with
+- **Zero-knowledge:** prover reports/attachments list/count/delete operations and verifying key registry read/event helpers (`getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`).
+- **Confidential assets:** derive the wallet key hierarchy locally through `deriveConfidentialKeyset`, build memo envelopes with
   `ConfidentialEncryptedPayload`, submit shielded debits via `ShieldRequest` +
   `submit(shield:keypair:)`, **unshield confidential balances via `ProofAttachment` +**
   `UnshieldRequest` **and** `submit(unshield:keypair:)`, and inspect rollout windows with
@@ -1001,7 +661,7 @@ let address = try AccountAddress.fromAccount(
 )
 let formats = address.displayFormats(networkPrefix: 753)
 
-print("I105", formats.i105)
+print("i105", formats.i105)
 ```
 
 Account address domain labels are canonicalized to lowercase ASCII and must not contain whitespace
@@ -1009,7 +669,7 @@ or reserved characters (`@`, `#`, `$`). Use canonical ASCII/punycode labels when
 Account addresses also validate public key lengths for known algorithms (ed25519 requires 32 bytes;
 secp256k1 requires 33 bytes when enabled), and reject empty keys.
 
-Show I105 as the copy/share target (and QR payload), and highlight when the implicit `default` domain is in use. This keeps
+Show i105 as the copy/share target (and QR payload), and highlight when the implicit `default` domain is in use. This keeps
 Swift parity with the Android/JS samples and prevents IME corruption of half-width kana.
 
 To embed the share-ready SVG exposed by ADDR-6b, call
@@ -1024,8 +684,7 @@ print("SVG payload", qr.svg)
 
 ## Verifying Key Registry
 
-`ToriiClient` wraps `/v1/zk/vk/*` so wallets can inspect registry state or submit verifier
-updates without hand-rolling JSON:
+`ToriiClient` wraps `/v1/zk/vk/*` so wallets can inspect registry state without hand-rolling JSON:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
@@ -1037,40 +696,9 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-Submitting lifecycle requests takes the typed DTOs defined in `ToriiClient.swift`. Inline
-verifier bytes are encoded as base64 and the helper infers `vk_len` when omitted:
+Mutation DTOs remain useful when you are assembling locally signed transactions, but the direct Torii register/update/deprecate helpers now fail closed instead of accepting embedded private keys. Build the verifier-management instructions locally, sign them with your wallet key, and submit the resulting transaction through the pipeline helpers.
 
-```swift
-guard
-    #available(iOS 15, macOS 12, *),
-    let vkBytes = Data(base64Encoded: "AQID")
-else { return }
-
-var register = ToriiVerifyingKeyRegisterRequest(
-    authority: "i105...",
-    privateKey: "ed0120...",
-    backend: "halo2/ipa",
-    name: "vk_main",
-    version: 1,
-    circuitId: "halo2/ipa::transfer_v1",
-    publicInputsSchemaHashHex: "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
-    gasScheduleId: "halo2_default",
-    verifyingKeyBytes: vkBytes
-)
-register.maxProofBytes = 8_192
-try await torii.registerVerifyingKey(register)
-
-var deprecate = ToriiVerifyingKeyDeprecateRequest(
-    authority: register.authority,
-    privateKey: register.privateKey,
-    backend: register.backend,
-    name: register.name
-)
-try await torii.deprecateVerifyingKey(deprecate)
-```
-
-Completion-style overloads return `Task<Void, Never>` so UIKit/SwiftUI layers can cancel
-submission if the user dismisses a flow mid-flight.
+Completion-style overloads still mirror the async read and event-stream helpers so UIKit/SwiftUI layers can cancel work if the user dismisses a flow mid-flight.
 
 
 For proof verification outcomes, the proof event stream follows the same pattern:

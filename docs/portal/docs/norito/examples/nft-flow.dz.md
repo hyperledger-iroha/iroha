@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 4a29b96fd90c51ffbfa1de0f7c34d9437cffa80b4caf2965b192abeb56f1c80c
-source_last_modified: "2026-01-22T16:26:46.500837+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 7c00f9054efaa3e657b07033da99a6f6e700f7bad64325c2f1f6621b27469bef
+source_last_modified: "2026-04-08T09:19:38.795735+00:00"
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -23,7 +23,7 @@ title: Mint, སྤོ་བཤུད་དང་ NFT ཅིག་འཚིག�
 
 ##
 
-- ཨེན་ཨེཕ་ཊི་ངེས་ཚིག་ (དཔེར་ན་ I18NI000000007X) འདི་ ཇོ་བདག་/ཐོབ་མཁན་རྩིས་ཐོ་ཚུ་ འཚོལ་ཞིབ་ནང་ལག་ལེན་འཐབ་མི་ མཉམ་སྦྲགས་ (`i105...`, I18NI000000009X) དང་ཅིག་ཁར་ ངེས་གཏན་བཟོ།
+- ཨེན་ཨེཕ་ཊི་ངེས་ཚིག་ (དཔེར་ན་ I18NI000000007X) འདི་ ཇོ་བདག་/ཐོབ་མཁན་རྩིས་ཐོ་ཚུ་ འཚོལ་ཞིབ་ནང་ལག་ལེན་འཐབ་མི་ མཉམ་སྦྲགས་ (`<i105-account-id>`, I18NI000000009X) དང་ཅིག་ཁར་ ངེས་གཏན་བཟོ།
 - ཨེན་ཨེཕ་ཊི་ལུ་ `nft_issue_and_transfer` འཛུལ་སྒོ་འདི་ ཨེ་ལིསི་ལུ་སྤོ་བཤུད་འབད་ཞིནམ་ལས་ བཏོན་གཏང་ནི་དང་ བཏོན་གཏང་ནིའི་གསལ་བཀོད་འབད་མི་ མེ་ཊ་ཌེ་ཊ་ དར་ཆ་འདི་ མཉམ་སྦྲགས་འབད།
 - ཨེན་ཨེཕ་ཊི་ ལེཌི་ཇར་མངའ་སྡེ་འདི་ I18NI000000011X ཡང་ན་ SDK འདྲ་མཉམ་ཚུ་དང་གཅིག་ཁར་ སྤོ་བཤུད་བདེན་དཔྱད་འབད་ནི་ལུ་ བདེན་དཔྱད་འབད་ཞིནམ་ལས་ རྒྱུ་དངོས་འདི་ བདེན་དཔྱད་འབད།
 
@@ -39,11 +39,11 @@ title: Mint, སྤོ་བཤུད་དང་ NFT ཅིག་འཚིག�
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("i105...");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("i105...");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

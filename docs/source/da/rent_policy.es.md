@@ -94,7 +94,7 @@ los grupos de bonificación por prueba sin necesidad de un código de orquestaci
 
 ### Generación de planes de contabilidad de alquileres
 
-Ejecute `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+Ejecute `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc`
 para convertir una cotización de alquiler persistente en transferencias de libro mayor ejecutables. el comando
 analiza el `ledger_projection` integrado, emite instrucciones Norito `Transfer`
 que recaudan el alquiler base hacia la tesorería, encamina la reserva/proveedor

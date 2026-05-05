@@ -7,7 +7,7 @@ With Kura Inspector you can inspect blocks in disk storage regardless of the ope
 Run Kura Inspector:
 
 ```bash
-kagami kura [OPTIONS] <PATH_TO_BLOCK_STORE> <SUBCOMMAND>
+kagami advanced kura [OPTIONS] <PATH_TO_BLOCK_STORE> <SUBCOMMAND>
 ```
 
 ### Options
@@ -65,13 +65,13 @@ Notes:
 - Print the sidecar for height 7 to stdout:
 
   ```bash
-  kagami kura <path> sidecar --height 7
+  kagami advanced kura <path> sidecar --height 7
   ```
 
 - Save the sidecar for height 42 to a file:
 
   ```bash
-  kagami kura <path> sidecar -h 42 -o sidecar_42.json
+  kagami advanced kura <path> sidecar -h 42 -o sidecar_42.json
   ```
 
 ### `sidecar` errors
@@ -86,17 +86,17 @@ An error in `sidecar` occurs if one the following happens:
 - Print the contents of the latest block:
 
   ```bash
-  kagami kura <path> print
+  kagami advanced kura <path> print
   ```
 
 - Print all blocks with a height between 100 and 104:
 
   ```bash
-  kagami kura -f 100 <path> print -n 5
+  kagami advanced kura -f 100 <path> print -n 5
   ```
 
 - Print errors for all blocks with a height between 100 and 104:
 
   ```bash
-  kagami kura -f 100 <path> print -n 5 >/dev/null
+  kagami advanced kura -f 100 <path> print -n 5 >/dev/null
   ```

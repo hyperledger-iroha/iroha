@@ -128,6 +128,83 @@ fn default_order() -> Order {
     Order::Asc
 }
 
+/// Aggregate function applied in aggregate query mode.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum AggregateFn {
+    /// Count rows in each group.
+    Count,
+    /// Sum the referenced field.
+    Sum,
+    /// Compute the minimum referenced field.
+    Min,
+    /// Compute the maximum referenced field.
+    Max,
+    /// Compute the average referenced field.
+    Avg,
+    /// Count distinct values for the referenced field.
+    DistinctCount,
+}
+
+impl JsonSerialize for AggregateFn {
+    fn json_serialize(&self, out: &mut String) {
+        let value = match self {
+            AggregateFn::Count => "count",
+            AggregateFn::Sum => "sum",
+            AggregateFn::Min => "min",
+            AggregateFn::Max => "max",
+            AggregateFn::Avg => "avg",
+            AggregateFn::DistinctCount => "distinct_count",
+        };
+        norito::json::write_json_string(value, out);
+    }
+}
+
+impl JsonDeserialize for AggregateFn {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let start = parser.position();
+        let raw = String::json_deserialize(parser)?;
+        match raw.as_str() {
+            "count" => Ok(AggregateFn::Count),
+            "sum" => Ok(AggregateFn::Sum),
+            "min" => Ok(AggregateFn::Min),
+            "max" => Ok(AggregateFn::Max),
+            "avg" => Ok(AggregateFn::Avg),
+            "distinct_count" => Ok(AggregateFn::DistinctCount),
+            _ => Err(order_parse_error(parser, start)),
+        }
+    }
+}
+
+/// One metric definition in aggregate query mode.
+#[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct AggregateMetric {
+    /// Output alias used in aggregate rows and `having` clauses.
+    pub alias: String,
+    /// Aggregate function name.
+    #[norito(rename = "fn")]
+    pub r#fn: AggregateFn,
+    /// Optional field path consumed by the aggregate function.
+    #[norito(default)]
+    pub field: Option<FieldPath>,
+}
+
+/// Aggregate grouping and metric specification.
+#[derive(Debug, Clone, PartialEq, JsonSerialize, JsonDeserialize, Default)]
+pub struct AggregateSpec {
+    /// Grouping dimensions evaluated before metric reduction.
+    #[norito(default)]
+    pub group_by: Vec<FieldPath>,
+    /// Metrics computed per group.
+    #[norito(default)]
+    pub metrics: Vec<AggregateMetric>,
+    /// Optional predicate tree applied after aggregation.
+    #[norito(default)]
+    #[norito(with = "filter_expr_option")]
+    pub having: Option<FilterExpr>,
+}
+
 fn order_parse_error(parser: &norito::json::Parser<'_>, start: usize) -> norito::json::Error {
     const MSG: &str = "expected \"asc\" or \"desc\"";
     let input = parser.input();
@@ -407,10 +484,23 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_function_serializes_as_lowercase() {
+        let count = norito::json::to_json(&AggregateFn::Count).unwrap();
+        let distinct = norito::json::to_json(&AggregateFn::DistinctCount).unwrap();
+        assert_eq!(count, "\"count\"");
+        assert_eq!(distinct, "\"distinct_count\"");
+        assert_eq!(AggregateFn::Count, norito::json::from_str(&count).unwrap());
+        assert_eq!(
+            AggregateFn::DistinctCount,
+            norito::json::from_str(&distinct).unwrap()
+        );
+    }
+
+    #[test]
     fn filter_expr_serialization_matches_expected_value() {
         let expr = FilterExpr::Eq(
             FieldPath("id".into()),
-            Value::from("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
+            Value::from("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"),
         );
         let value = filter_expr_to_value(&expr);
         let expected = obj(vec![
@@ -419,7 +509,7 @@ mod tests {
                 "args",
                 arr(vec![
                     val("id"),
-                    val("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
+                    val("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"),
                 ]),
             ),
         ]);
@@ -442,7 +532,7 @@ mod tests {
                             "args",
                             arr(vec![
                                 val("authority"),
-                                val("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw"),
+                                val("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"),
                             ]),
                         ),
                     ]),
@@ -501,6 +591,100 @@ mod tests {
         let err2 = validate_filter(&expr2).unwrap_err();
         assert!(matches!(err2, ValidateError::TypeMismatch(_)));
     }
+
+    #[test]
+    fn query_envelope_parses_aggregate_mode() {
+        let json = obj(vec![
+            (
+                "aggregate",
+                obj(vec![
+                    ("group_by", arr(vec![val("primary_alias_domain")])),
+                    (
+                        "metrics",
+                        arr(vec![
+                            obj(vec![
+                                ("alias", val("user_count")),
+                                ("fn", val("distinct_count")),
+                                ("field", val("account_id")),
+                            ]),
+                            obj(vec![
+                                ("alias", val("pkr_total")),
+                                ("fn", val("sum")),
+                                ("field", val("quantity")),
+                            ]),
+                        ]),
+                    ),
+                    (
+                        "having",
+                        obj(vec![
+                            ("op", val("gt")),
+                            ("args", arr(vec![val("pkr_total"), val("0")])),
+                        ]),
+                    ),
+                ]),
+            ),
+            (
+                "sort",
+                arr(vec![obj(vec![
+                    ("key", val("primary_alias_domain")),
+                    ("order", val("asc")),
+                ])]),
+            ),
+        ]);
+        let envelope: QueryEnvelope = json::from_value(json).expect("parse aggregate envelope");
+        let aggregate = envelope.aggregate.expect("aggregate spec");
+        assert_eq!(
+            aggregate.group_by,
+            vec![FieldPath("primary_alias_domain".into())]
+        );
+        assert_eq!(aggregate.metrics.len(), 2);
+        assert_eq!(aggregate.metrics[0].alias, "user_count");
+        assert_eq!(aggregate.metrics[0].r#fn, AggregateFn::DistinctCount);
+        assert_eq!(
+            aggregate.metrics[0].field,
+            Some(FieldPath("account_id".into()))
+        );
+        assert_eq!(envelope.sort.len(), 1);
+        assert_eq!(envelope.sort[0].key.0, "primary_alias_domain");
+        assert_eq!(envelope.sort[0].order, Order::Asc);
+    }
+
+    #[test]
+    fn query_envelope_parses_nested_sort_keys() {
+        let json = obj(vec![(
+            "sort",
+            arr(vec![obj(vec![
+                ("key", val("alias_binding.bound_at_ms")),
+                ("order", val("desc")),
+            ])]),
+        )]);
+        let envelope: QueryEnvelope = json::from_value(json).expect("parse sort envelope");
+        assert_eq!(envelope.sort.len(), 1);
+        assert_eq!(envelope.sort[0].key.0, "alias_binding.bound_at_ms");
+        assert_eq!(envelope.sort[0].order, Order::Desc);
+    }
+
+    #[test]
+    fn query_envelope_json_roundtrip_preserves_nested_sort_keys() {
+        let envelope = QueryEnvelope {
+            query: None,
+            filter: None,
+            select: None,
+            aggregate: None,
+            sort: vec![SortKey {
+                key: FieldPath("alias_binding.bound_at_ms".into()),
+                order: Order::Desc,
+            }],
+            pagination: Pagination {
+                limit: Some(8),
+                offset: 0,
+            },
+            fetch_size: None,
+        };
+        let bytes = norito::json::to_vec(&envelope).expect("serialize envelope");
+        let decoded: QueryEnvelope = norito::json::from_slice(&bytes).expect("decode envelope");
+        assert_eq!(decoded.sort, envelope.sort);
+    }
 }
 
 mod filter_expr_option {
@@ -531,6 +715,9 @@ pub struct QueryEnvelope {
     /// Optional projection limiting the fields included in each result.
     #[norito(default)]
     pub select: Option<Selector>,
+    /// Optional aggregate mode evaluated after filtering and before pagination.
+    #[norito(default)]
+    pub aggregate: Option<AggregateSpec>,
     /// Sort specification evaluated ahead of pagination.
     #[norito(default)]
     pub sort: Vec<SortKey>,

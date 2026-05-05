@@ -48,10 +48,11 @@ fn build_state() -> (Arc<State>, ChainId, AccountId, KeyPair) {
 
     let key_pair = KeyPair::random();
     let (public_key, _) = key_pair.clone().into_parts();
-    let domain_id: DomainId = "queue-regressions".parse().expect("static domain id");
+    let domain_id: DomainId =
+        DomainId::try_new("queue-regressions", "universal").expect("static domain id");
     let account_id = AccountId::of(public_key);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account = Account::new(account_id.clone().to_account_id(domain_id)).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty());
 
     let state = Arc::new(State::new_for_testing(world, kura, query_handle));

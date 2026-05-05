@@ -32,7 +32,7 @@ translator: machine-google-reviewed
   при необходимости можно ограничиться одним определением актива. Пример интерфейса командной строки:
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - Метаданные политики и ожидающие переходы доступны через

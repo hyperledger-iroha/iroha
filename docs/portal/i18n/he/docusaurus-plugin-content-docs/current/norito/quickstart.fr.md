@@ -90,7 +90,7 @@ Le runner imprime le log `info("Hello from Kotodama")` et effectue le syscall `S
 
 Le noeud etant toujours en cours d'execution, evoyez le bytecode compile a Torii avec le CLI. L'identite de developpement par defaut est derivee de la cle publique dans `defaults/client.toml`, donc l'ID de compte est
 ```
-i105...
+<i105-account-id>
 ```
 
 Utilisez le fichier de configuration pour fournir l'URL Torii, le chain ID et la cle de signature:```sh
@@ -108,7 +108,7 @@ Le CLI מקודד la transaction avec Norito, la signe avec la cle de dev et l'e
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

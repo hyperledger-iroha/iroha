@@ -20,7 +20,8 @@ use iroha_data_model::{
 };
 use iroha_test_samples::gen_account_in;
 
-static STARTER_DOMAIN: LazyLock<DomainId> = LazyLock::new(|| "start".parse().unwrap());
+static STARTER_DOMAIN: LazyLock<DomainId> =
+    LazyLock::new(|| DomainId::try_new("start", "universal").unwrap());
 static STARTER_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(KeyPair::random);
 static STARTER_ID: LazyLock<AccountId> =
     LazyLock::new(|| AccountId::new(STARTER_KEYPAIR.public_key().clone()));
@@ -33,24 +34,12 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
         .expect("Failed building the Runtime")
 });
 
-// Shared Tokio runtime for benches that need background tasks (e.g., LiveQueryStore)
-static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("Failed building the Runtime")
-});
-
 fn build_test_transaction(chain_id: ChainId) -> TransactionBuilder {
-    let domain_id: DomainId = "domain".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("domain", "universal").unwrap();
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
-    let create_account = Register::account(Account::new(
-        gen_account_in(&domain_id)
-            .0
-            .to_account_id(domain_id.clone()),
-    ));
+    let create_account = Register::account(Account::new(gen_account_in(&domain_id).0.clone()));
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        DomainId::try_new("domain", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let create_asset = Register::asset_definition(AssetDefinition::numeric(asset_definition_id));
@@ -72,8 +61,7 @@ fn build_test_and_transient_state() -> State {
     let state = State::new(
         {
             let domain = Domain::new(STARTER_DOMAIN.clone()).build(&account_id);
-            let account =
-                Account::new(account_id.to_account_id(STARTER_DOMAIN.clone())).build(&account_id);
+            let account = Account::new(account_id.clone()).build(&account_id);
             World::with([domain], [account], [])
         },
         Arc::clone(&kura),

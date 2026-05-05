@@ -67,15 +67,13 @@ impl<'a> PenaltyApplier<'a> {
         let mut candidates_map: BTreeMap<PublicKey, Vec<ValidatorLocator>> = BTreeMap::new();
 
         for ((lane_id, validator_id), record) in world.public_lane_validators().iter() {
-            if let Some(pk) = record.validator.try_signatory() {
-                candidates_map
-                    .entry(pk.clone())
-                    .or_default()
-                    .push(ValidatorLocator {
-                        lane_id: *lane_id,
-                        validator: validator_id.clone(),
-                    });
-            }
+            candidates_map
+                .entry(record.peer_id.public_key().clone())
+                .or_default()
+                .push(ValidatorLocator {
+                    lane_id: *lane_id,
+                    validator: validator_id.clone(),
+                });
         }
 
         let mut result = BTreeMap::new();
@@ -302,6 +300,7 @@ impl<'a> PenaltyApplier<'a> {
             let mut tx = block.trasaction(self.telemetry, lane_config.clone(), current_height);
             #[cfg(not(feature = "telemetry"))]
             let mut tx = block.trasaction(lane_config.clone(), current_height);
+            let nexus = self.state.nexus_snapshot();
             let mut applied_here = false;
             for locator in locators {
                 if let Some(amount) =
@@ -309,11 +308,16 @@ impl<'a> PenaltyApplier<'a> {
                 {
                     apply_slash_to_validator(
                         &mut tx,
+                        &nexus.dataspace_catalog,
                         &staking_cfg,
                         locator.lane_id,
                         &locator.validator,
                         slash_id,
                         &amount,
+                        self.state
+                            .latest_block_header_fast()
+                            .map(|header| header.creation_time_ms)
+                            .unwrap_or(0),
                         #[cfg(feature = "telemetry")]
                         self.telemetry,
                         #[cfg(not(feature = "telemetry"))]
@@ -644,7 +648,7 @@ mod tests {
         SumeragiFinality, SumeragiGating, SumeragiKeys, SumeragiModeFlip, SumeragiNpos,
         SumeragiNposElection, SumeragiNposReconfig, SumeragiNposTimeoutOverrides, SumeragiNposVrf,
         SumeragiPacemaker, SumeragiPacingGovernor, SumeragiPersistence, SumeragiQueues,
-        SumeragiRbc, SumeragiRecovery, SumeragiWorker,
+        SumeragiRbc, SumeragiRecovery, SumeragiResilience, SumeragiWorker,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -866,7 +870,11 @@ mod tests {
             },
             rbc: SumeragiRbc {
                 chunk_max_bytes: 0,
+                encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                data_shards: 0,
+                parity_shards: 0,
                 chunk_fanout: None,
+                rs16_initial_fanout: iroha_config::parameters::actual::RbcRs16InitialFanout::Full,
                 pending_max_chunks: 0,
                 pending_max_bytes: 0,
                 pending_session_limit: 0,
@@ -903,6 +911,7 @@ mod tests {
                 epoch_length_blocks: 0,
                 use_stake_snapshot_roster: false,
             },
+            resilience: SumeragiResilience::default(),
             adaptive_observability: AdaptiveObservability::default(),
             debug: SumeragiDebug {
                 force_soft_fork: false,
@@ -1128,6 +1137,7 @@ mod tests {
         let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
+            peer_id: peer.clone(),
             stake_account: validator.clone(),
             total_stake: Numeric::new(100, 0),
             self_stake: Numeric::new(50, 0),
@@ -1689,12 +1699,12 @@ mod tests {
             block.commit();
         }
 
-        let domain: DomainId = "test".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("test", "universal").expect("domain id");
         let validator: AccountId = AccountId::new(key_pair.public_key().clone());
         let escrow_key_pair = KeyPair::random();
         let escrow_account: AccountId = AccountId::new(escrow_key_pair.public_key().clone());
         let stake_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "test".parse().unwrap(),
+            DomainId::try_new("test", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let slash_amount = Numeric::new(100, 0);
@@ -1753,6 +1763,7 @@ mod tests {
         let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
+            peer_id: PeerId::from(validator.signatory().clone()),
             stake_account: validator.clone(),
             total_stake: slash_amount.clone(),
             self_stake: slash_amount.clone(),
@@ -1998,6 +2009,7 @@ mod tests {
         let record = iroha_data_model::nexus::PublicLaneValidatorRecord {
             lane_id: LaneId::new(1),
             validator: validator.clone(),
+            peer_id: peer.clone(),
             stake_account: validator.clone(),
             total_stake: Numeric::new(100, 0),
             self_stake: Numeric::new(50, 0),

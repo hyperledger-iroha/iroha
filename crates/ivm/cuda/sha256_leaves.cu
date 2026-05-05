@@ -3,8 +3,8 @@
 // Compute SHA-256 digest for an array of 64-byte blocks, one block per thread.
 // Each block is a fully padded single-block message (e.g., data of length L<=55,
 // followed by 0x80 and zeros, and 64-bit big-endian bit length at the end).
-// Output is 8 x u32 state words per block, written in array-of-structs order.
-extern "C" __global__ void sha256_leaves(const uint8_t* blocks, uint32_t* out_states, uint32_t count) {
+// Output is a 32-byte big-endian digest per block, written in array-of-structs order.
+extern "C" __global__ void sha256_leaves(const uint8_t* blocks, uint8_t* out_digests, uint32_t count) {
     const uint32_t K[64] = {
         0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,
         0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
@@ -67,8 +67,14 @@ extern "C" __global__ void sha256_leaves(const uint8_t* blocks, uint32_t* out_st
     uint32_t out6 = H0[6] + g;
     uint32_t out7 = H0[7] + h;
 
-    uint32_t* dst = out_states + (size_t)i * 8;
-    dst[0] = out0; dst[1] = out1; dst[2] = out2; dst[3] = out3;
-    dst[4] = out4; dst[5] = out5; dst[6] = out6; dst[7] = out7;
+    uint8_t* dst = out_digests + (size_t)i * 32;
+    uint32_t digest[8] = {out0, out1, out2, out3, out4, out5, out6, out7};
+    #pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        uint32_t word = digest[j];
+        dst[j*4 + 0] = (uint8_t)(word >> 24);
+        dst[j*4 + 1] = (uint8_t)(word >> 16);
+        dst[j*4 + 2] = (uint8_t)(word >> 8);
+        dst[j*4 + 3] = (uint8_t)(word);
+    }
 }
-

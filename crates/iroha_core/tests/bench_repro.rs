@@ -1,7 +1,6 @@
 //! Reproduces the ISI gas calibration benchmark setup for debugging.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use std::str::FromStr;
 #[cfg(feature = "telemetry")]
 use std::sync::{Arc, OnceLock};
 
@@ -28,12 +27,10 @@ fn bench_block_header() -> BlockHeader {
 fn build_bench_state() -> (State, AccountId, AccountId) {
     let (authority, _) = gen_account_in("wonderland");
     let (recipient, _) = gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&authority);
-    let authority_account =
-        Account::new(authority.clone().to_account_id(domain_id.clone())).build(&authority);
-    let recipient_account =
-        Account::new(recipient.clone().to_account_id(domain_id)).build(&recipient);
+    let authority_account = Account::new(authority.clone()).build(&authority);
+    let recipient_account = Account::new(recipient.clone()).build(&recipient);
     let world = World::with([domain], [authority_account, recipient_account], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -57,7 +54,10 @@ fn execute_register_domain_like_bench() {
     let executor = Executor::default();
     let mut block = state.block(bench_block_header());
     let mut tx = block.transaction();
-    let instr = Register::domain(Domain::new("bench".parse().unwrap())).into();
+    let instr = Register::domain(Domain::new(
+        DomainId::try_new("bench", "universal").unwrap(),
+    ))
+    .into();
     let _ = gas::meter_instruction(&instr);
     executor
         .execute_instruction_with_profile(
@@ -67,7 +67,7 @@ fn execute_register_domain_like_bench() {
             InstructionExecutionProfile::Bench,
         )
         .expect("bench profile execution");
-    let domain_id = DomainId::from_str("bench").expect("valid domain id");
+    let domain_id = DomainId::try_new("bench", "universal").expect("valid domain id");
     assert!(
         tx.world.domains().get(&domain_id).is_some(),
         "domain registered into world state"

@@ -69,7 +69,7 @@ Lorsque vous êtes satisfait du contrat, déployez-le sur un nu via la CLI. Four
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority i105... \
+  --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

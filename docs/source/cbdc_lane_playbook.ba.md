@@ -54,7 +54,7 @@ settlement = "xor_dual_fund"
 metadata.scheduler.teu_capacity = "1500"
 metadata.scheduler.starvation_bound_slots = "6"
 metadata.settlement.buffer_account = "buffer::cbdc_treasury"
-metadata.settlement.buffer_asset = "xor#sora"
+metadata.settlement.buffer_asset = "61CtjvNd9T3THAR65GsMVHr82Bjc"
 metadata.settlement.buffer_capacity_micro = "1500000000"
 metadata.telemetry.contact = "ops@cb.example"
 
@@ -104,10 +104,10 @@ Lane манифестар каталог аҫтында тура эфирҙа к
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "i105...",
-    "i105...",
-    "i105...",
-    "i105..."
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" }
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,18 @@ Lane манифестар каталог аҫтында тура эфирҙа к
 }
 ```
 
-Төп талаптар:- Валидаторҙар **** канонлы I105 иҫәбе идентификаторҙары булырға тейеш (юҡ `@domain`; `@domain` ҡушымтаһы каталогта бар, улар бар. `quorum` комплекты күп сиг сигенә (≥2).
+Төп талаптар:-
+
+- Validators **must** be declared as explicit bindings with a canonical I105
+  authority account plus a concrete `peer_id`. Legacy string-only validator
+  arrays are rejected.
+- Each manifest `peer_id` must resolve to a registered runtime peer with a live
+  consensus key that is present in the current commit topology; Torii routes
+  only to those authoritative peer bindings and fails closed when the runtime
+  truth disagrees with the manifest.
+- Validator accounts should remain stable governance identities even if the
+  underlying host or peer keys rotate; update the manifest `peer_id` binding
+  when the serving peer changes. Set `quorum` to the multisig threshold (≥2).
 - Һаҡланған исемдәр киңлеге `Queue::push` тарафынан үтәлә (ҡара: `crates/iroha_core/src/queue.rs`), шуға күрә бөтә CBDC контракттары ла `gov_namespace`X + `gov_contract_id`X X.
 - `composability_group` яландары `docs/source/nexus.md` §8.6-ла һүрәтләнгән схема буйынса; хужаһы (CBDC һыҙаты) аҡ исемлек һәм квоталар менән тәьмин итә. Whitest исемлектәге DS маскировкалары ғына `group_id_hex` + `activation_epoch` X.
 - Манифест күсергәндән һуң, `cargo test -p integration_tests nexus::lane_registry -- --nocapture` `LaneManifestRegistry::from_config` раҫлау өсөн эшләй.
@@ -246,7 +257,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "i105...",
+            "authority": "<i105-account-id>",
             "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
@@ -262,7 +273,7 @@ iroha app space-directory manifest audit-bundle \
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "i105...",
+            "authority": "<i105-account-id>",
             "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,

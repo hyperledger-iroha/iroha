@@ -37,7 +37,7 @@ Torii یا CLI۔ مددگار ہر صف سے پہلے ہی توثیق کرتا �
 | `suffix_id` | ہاں | لاحقہ عددی شناخت کنندہ (اعشاریہ یا `0x` ہیکس)۔ |
 | `owner` | ہاں | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | ہاں | انٹیجر `1..=255`۔ |
-| `payment_asset_id` | ہاں | تصفیہ اثاثہ (مثال کے طور پر `xor#sora`)۔ |
+| `payment_asset_id` | ہاں | تصفیہ اثاثہ (مثال کے طور پر `61CtjvNd9T3THAR65GsMVHr82Bjc`)۔ |
 | `payment_gross` / `payment_net` | ہاں | دستخط شدہ عدد جو اثاثہ کے مقامی اکائیوں کی نمائندگی کرتے ہیں۔ |
 | `settlement_tx` | ہاں | JSON قدر یا لفظی تار جو ہیش یا ادائیگی کے لین دین کو بیان کرتا ہے۔ |
 | `payment_payer` | ہاں | اکاؤنٹ آئی ڈی جس نے ادائیگی کو اختیار دیا۔ |
@@ -76,18 +76,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -111,7 +111,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -131,10 +131,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- مددگار ایک `POST /v1/sns/registrations` فی درخواست جاری کرتا ہے اور اس سے پہلے اسقاط حمل کرتا ہے
+- مددگار ایک `POST /v1/sns/names` فی درخواست جاری کرتا ہے اور اس سے پہلے اسقاط حمل کرتا ہے
   پہلی HTTP غلطی۔ جوابات کو بطور ریکارڈ لاگ ان راستے میں شامل کیا جاتا ہے
   ndjson.
-- `--poll-status` `/v1/sns/registrations/{selector}` کے بعد ایک بار پھر مشورہ کرتا ہے
+- `--poll-status` `/v1/sns/names/{namespace}/{literal}` کے بعد ایک بار پھر مشورہ کرتا ہے
   ہر جمع کرانے (`--poll-attempts` ، پہلے سے طے شدہ 5) اس بات کی تصدیق کرنے کے لئے کہ ریکارڈ
   یہ دکھائی دیتا ہے۔ `--suffix-map` (`suffix_id` سے "لاحقہ" اقدار تک فراہم کریں) فراہم کریں)
   تاکہ ٹول پولنگ کے وقت لفظی `{label}.{suffix}` اخذ کرے۔
@@ -221,7 +221,7 @@ which now contains everything governance needs for auditing.
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -245,7 +245,7 @@ CSV رن.
   فائل کے حوالہ جات CSV کے مقام کے مطابق حل کیے جاتے ہیں۔ میٹا ڈیٹا
   کہ یہ کوئی شے نہیں ہے توثیق کی غلطی پیدا کرتی ہے۔
 - ** کنٹرولرز: ** خالی خلیات `--default-controllers` کا احترام کرتے ہیں۔ فراہم کریں
-  جب تفویض کرتے ہو تو واضح کنٹرولر کی فہرستیں (مثال کے طور پر `i105...;i105...`)
+  جب تفویض کرتے ہو تو واضح کنٹرولر کی فہرستیں (مثال کے طور پر `<i105-account-id>;<i105-account-id>`)
   غیر مالک اداکار۔
 
 کیڑے کو سیاق و سباق کی تعداد کے ساتھ اطلاع دی جاتی ہے (جیسے۔

@@ -36,7 +36,7 @@ Analizador کو درج ذیل fila de encabezado درکار ہے (orden flexible
 | `suffix_id` | Sí | Identificador de sufijo numérico (decimal یا `0x` hexadecimal). |
 | `owner` | Sí | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Sí | Entero `1..=255`. |
-| `payment_asset_id` | Sí | Activo de liquidación (مثال `xor#sora`). |
+| `payment_asset_id` | Sí | Activo de liquidación (مثال `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Sí | Los enteros sin signo y las unidades nativas de activos representan کریں۔ |
 | `settlement_tx` | Sí | Valor JSON یا cadena literal جو transacción de pago یا hash بیان کرے۔ |
 | `payment_payer` | Sí | AccountId جس نے autorización de pago کی۔ |
@@ -73,18 +73,18 @@ Opciones clave:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -110,7 +110,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -130,10 +130,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Solicitud de ayuda کے لئے `POST /v1/sns/registrations` بھیجتا ہے اور پہلی HTTP
+- Solicitud de ayuda کے لئے `POST /v1/sns/names` بھیجتا ہے اور پہلی HTTP
   error پر abortar کرتا ہے۔ Ruta del registro de respuestas میں registros NDJSON کے طور پر anexar
   ہوتے ہیں۔
-- `--poll-status` ہر envío کے بعد `/v1/sns/registrations/{selector}` کو
+- `--poll-status` ہر envío کے بعد `/v1/sns/names/{namespace}/{literal}` کو
   دوبارہ consulta کرتا ہے (زیادہ سے زیادہ `--poll-attempts`, predeterminado 5) تاکہ registro
   visible ہونے کی تصدیق ہو۔ `--suffix-map` (JSON y `suffix_id` y valores de "sufijo"
   سے map کرے) فراہم کریں تاکہ herramienta `{label}.{suffix}` literales derivan کر سکے۔
@@ -216,7 +216,7 @@ Flujos de trabajo صرف directorio de lanzamiento کو ایک artefacto کے ط
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -237,7 +237,7 @@ filtro کرتا ہے تاکہ auditores ایک CSV ejecutar پر taladro کر س
   referencias ubicación CSV کے resolución relativa ہوتی ہیں۔ Metadatos que no son objetos
   error de validación دیتا ہے۔
 - **Controladores:** خالی celdas `--default-controllers` کو honor کرتے ہیں۔ no propietario
-  actores کو delegado کرتے وقت listas de controladores explícitos دیں (مثال `i105...;i105...`)۔
+  actores کو delegado کرتے وقت listas de controladores explícitos دیں (مثال `<i105-account-id>;<i105-account-id>`)۔
 
 Números de fila contextuales de fallas کے ساتھ informe ہوتے ہیں (مثال
 `error: row 12 term_years must be between 1 and 255`). Errores de validación del script

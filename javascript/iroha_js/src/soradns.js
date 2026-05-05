@@ -2,6 +2,7 @@ import { getNativeBinding } from "./native.js";
 
 const CANONICAL_SUFFIX = "gw.sora.id";
 const PRETTY_SUFFIX = "gw.sora.name";
+const TAIRA_MON_PRETTY_SUFFIX = "mon.taira.sora.net";
 const CANONICAL_WILDCARD = "*.gw.sora.id";
 
 function requireSoradnsNativeBinding() {
@@ -48,12 +49,39 @@ function normalisePattern(pattern) {
   return trimmed.toLowerCase();
 }
 
+function readDerivedField(object, ...names) {
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(object, name)) {
+      return object[name];
+    }
+  }
+  return undefined;
+}
+
+function readPrettySuffixOption(options) {
+  if (options === undefined || options === null) {
+    return null;
+  }
+  if (typeof options !== "object") {
+    throw new TypeError("options must be an object");
+  }
+  if (!Object.prototype.hasOwnProperty.call(options, "prettySuffix")) {
+    return null;
+  }
+  const prettySuffix = options.prettySuffix;
+  if (typeof prettySuffix !== "string") {
+    throw new TypeError("options.prettySuffix must be a string");
+  }
+  return prettySuffix;
+}
+
 /**
  * Compute the deterministic gateway hosts for a SoraDNS FQDN.
  * Returns an immutable object with the canonical host, pretty host,
  * wildcard pattern, and convenience utilities.
  *
  * @param {string} fqdn
+ * @param {{ prettySuffix?: string }} [options]
  * @returns {{
  *   normalizedName: string,
  *   canonicalLabel: string,
@@ -64,18 +92,38 @@ function normalisePattern(pattern) {
  *   matchesHost(host: string): boolean
  * }}
  */
-export function deriveGatewayHosts(fqdn) {
+export function deriveGatewayHosts(fqdn, options = undefined) {
   if (typeof fqdn !== "string") {
     throw new TypeError("fqdn must be a string");
   }
   const binding = requireSoradnsNativeBinding();
-  const derived = binding.soradnsDeriveGatewayHosts(fqdn);
-  const normalizedName = String(derived.normalized_name ?? "");
-  const canonicalLabel = String(derived.canonical_label ?? "");
-  const canonicalHost = String(derived.canonical_host ?? "");
-  const canonicalWildcard = String(derived.canonical_wildcard ?? "");
-  const prettyHost = String(derived.pretty_host ?? "");
-  const hostPatternsSource = derived.host_patterns ?? [];
+  const prettySuffix = readPrettySuffixOption(options);
+  const derived =
+    prettySuffix === null
+      ? binding.soradnsDeriveGatewayHosts(fqdn)
+      : binding.soradnsDeriveGatewayHostsWithPrettySuffix?.(fqdn, prettySuffix);
+  if (!derived) {
+    throw new Error(
+      "Custom SoraDNS pretty suffixes require a native iroha_js_host module built with soradnsDeriveGatewayHostsWithPrettySuffix. Run `npm run build:native` before using this option.",
+    );
+  }
+  const normalizedName = String(
+    readDerivedField(derived, "normalized_name", "normalizedName") ?? "",
+  );
+  const canonicalLabel = String(
+    readDerivedField(derived, "canonical_label", "canonicalLabel") ?? "",
+  );
+  const canonicalHost = String(
+    readDerivedField(derived, "canonical_host", "canonicalHost") ?? "",
+  );
+  const canonicalWildcard = String(
+    readDerivedField(derived, "canonical_wildcard", "canonicalWildcard") ?? "",
+  );
+  const prettyHost = String(
+    readDerivedField(derived, "pretty_host", "prettyHost") ?? "",
+  );
+  const hostPatternsSource =
+    readDerivedField(derived, "host_patterns", "hostPatterns") ?? [];
   const hostPatterns = Array.isArray(hostPatternsSource)
     ? hostPatternsSource.map((pattern) => String(pattern))
     : [];
@@ -130,6 +178,10 @@ export function canonicalGatewaySuffix() {
 
 export function prettyGatewaySuffix() {
   return PRETTY_SUFFIX;
+}
+
+export function tairaMonPrettyGatewaySuffix() {
+  return TAIRA_MON_PRETTY_SUFFIX;
 }
 
 export function canonicalGatewayWildcard() {

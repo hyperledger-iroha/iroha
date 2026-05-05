@@ -28,7 +28,7 @@ the artefact buckets that back every decision.
 - **Chair & Secretariat:** Rotating council chair; Governance Secretariat owns
   agenda circulation, evidence collection, and publication of minutes within
   48 hours.
-- **Distribution list:** `council@sora.foundation` (decision makers),
+- **Distribution list:** `council@governance.dataspace.foundation` (decision makers),
   `storage-wg@hyperledger.org` (Storage Team observers),
   `sdk-program@hyperledger.org` (SDK parity notifications).
 

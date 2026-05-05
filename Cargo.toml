@@ -20,7 +20,7 @@ docker_bins = ["iroha", "irohad", "iroha3", "iroha3d", "iroha2", "iroha2d", "kag
 [workspace.dependencies]
 iroha_core = { path = "crates/iroha_core" }
 
-iroha_torii = { path = "crates/iroha_torii", default-features = false, features = ["app_api", "transparent_api", "ws_integration_tests", "connect", "circuit-params", "zk-halo2", "zk-halo2-ipa", "ipa-commitment"] }
+iroha_torii = { path = "crates/iroha_torii", default-features = false, features = ["app_api", "transparent_api", "ws_integration_tests", "connect", "circuit-params", "zk-halo2", "zk-halo2-ipa", "zk-stark", "ipa-commitment"] }
 iroha_torii_shared = { path = "crates/iroha_torii_shared" }
 
 iroha = { path = "crates/iroha" }
@@ -40,11 +40,13 @@ iroha_crypto = { path = "crates/iroha_crypto", default-features = false, feature
 iroha_macro = { path = "crates/iroha_macro", default-features = false }
 iroha_futures = { path = "crates/iroha_futures" }
 iroha_genesis = { path = "crates/iroha_genesis" }
+iroha_sccp = { path = "crates/iroha_sccp" }
 norito = { path = "crates/norito", features = ["json", "json-std-io", "strict-safe", "gpu-compression"] }
 norito_derive = { path = "crates/norito_derive" }
 iroha_ffi = { path = "crates/iroha_ffi" }
 iroha_version = { path = "crates/iroha_version", default-features = false, features = ["json"] }
 connect_norito_bridge = { path = "crates/connect_norito_bridge" }
+fastpq_prover = { path = "crates/fastpq_prover" }
 iroha_zkp_halo2 = { path = "crates/iroha_zkp_halo2" }
 iroha_i18n = { path = "crates/iroha_i18n" }
 
@@ -85,7 +87,7 @@ tokio-stream = "0.1.17"
 tokio-tungstenite = "0.28.0"
 tokio-util = "0.7.17"
 tokio-rustls = { version = "0.26.4", default-features = false }
-rustls = { version = "0.23.35", default-features = false, features = ["std"] }
+rustls = { version = "0.23.37", default-features = false, features = ["std"] }
 tungstenite = "0.28.0"
 crossbeam-queue = "0.3.12"
 parking_lot = { version = "0.12.5" }
@@ -101,6 +103,7 @@ trybuild = "1.0.114"
 impls = "1.0.3"
 
 base64 = { version = "0.22.1", default-features = false }
+bech32 = "0.11.0"
 hex = { version = "0.4.3", default-features = false }
 http-body-util = "0.1.3"
 http = "1.3.1"
@@ -111,7 +114,7 @@ rust_decimal = { version = "1.39", default-features = false }
 heck = "0.5.0"
 
 url = "2.5.7"
-reqwest = { version = "0.12.24", default-features = false }
+reqwest = { version = "0.12.28", default-features = false }
 prometheus = { version = "0.14.0", default-features = false }
 
 clap = "4.5.51"
@@ -119,8 +122,6 @@ owo-colors = "4.2.3"
 supports-color = "3.0.2"
 humantime = "2.3.0"
 crossterm = "0.29"
-eframe = { version = "0.33.0", default-features = true }
-
 criterion = "0.8.0"
 expect-test = "1.5.1"
 assertables = "9.8.2"
@@ -156,8 +157,10 @@ toml = "0.9.8"
 bincode = "2.0.1"
 zstd = "0.13.3"
 time = { version = "0.3.44", default-features = false, features = ["formatting", "parsing"] }
+serde = "1.0.228"
 
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }
+scrypt = { version = "0.11.0", default-features = false, features = ["std"] }
 halo2curves = { version = "0.9" }
 
 mv = { path = "crates/mv" }
@@ -202,6 +205,7 @@ rust.unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(feature, values("adaptive-telemetry"))',
     'cfg(feature, values("adaptive-telemetry-log"))',
     'cfg(feature, values("bench-internal"))',
+    'cfg(feature, values("bfv-accel"))',
     'cfg(feature, values("columnar"))',
     'cfg(feature, values("compact-len"))',
     'cfg(feature, values("compression"))',
@@ -216,6 +220,7 @@ rust.unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(feature, values("json"))',
     'cfg(feature, values("json-raw-value"))',
     'cfg(feature, values("json-std-io"))',
+    'cfg(feature, values("local-quic-proxy"))',
     'cfg(feature, values("metal-stage1"))',
     'cfg(feature, values("packed-seq"))',
     'cfg(feature, values("packed-struct"))',
@@ -279,6 +284,26 @@ clippy.wildcard_dependencies = "deny"
 
 [workspace]
 resolver = "2"
+default-members = [
+    "crates/norito",
+    "crates/norito_derive",
+    "crates/iroha_primitives",
+    "crates/iroha_crypto",
+    "crates/iroha_data_model",
+    "crates/iroha_config_base",
+    "crates/iroha_config",
+    "crates/iroha_logger",
+    "crates/iroha_p2p",
+    "crates/iroha_core",
+    "crates/iroha_torii_shared",
+    "crates/iroha_torii",
+    "crates/iroha",
+    "crates/irohad",
+    "crates/iroha_cli",
+    "crates/ivm",
+    "crates/ivm_abi",
+    "crates/kotodama_lang",
+]
 members = [
     "crates/*",
     "crates/norito/accelerators/jsonstage1_cuda",
@@ -292,10 +317,13 @@ members = [
     "xtask",
     "tools/soranet-handshake-harness",
     "tools/soranet-puzzle-service",
+    "tools/sora-vpn-helper",
+    "tools/sora-vpn-backend",
     "tools/soranet-relay",
     "tools/norito_codegen_exporter",
     "tools/soradns-resolver",
-    "tools/telemetry-schema-diff"
+    "tools/telemetry-schema-diff",
+    "tools/kotlin-fixture-gen"
 ]
 exclude = [
     "mochi/fixtures",

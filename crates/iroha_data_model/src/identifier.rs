@@ -2,7 +2,7 @@
 
 use std::{fmt, str::FromStr, string::String, vec::Vec};
 
-use iroha_crypto::{PolicyCommitment, PublicKey, Signature, SignatureOf};
+use iroha_crypto::{Hash, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -10,6 +10,7 @@ use crate::{
     account::{AccountId, OpaqueAccountId},
     name::Name,
     nexus::UniversalAccountId,
+    ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId, RamLfeReceiptAttestation},
 };
 
 /// Error returned while parsing [`IdentifierPolicyId`] literals.
@@ -56,6 +57,11 @@ pub enum IdentifierNormalization {
 
 impl IdentifierNormalization {
     /// Canonicalize an external identifier string according to this mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdentifierNormalizationError`] when the trimmed input is empty or when the
+    /// selected normalization mode rejects the supplied format.
     pub fn normalize(self, raw: &str) -> Result<String, IdentifierNormalizationError> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -130,10 +136,8 @@ pub struct IdentifierPolicy {
     pub owner: AccountId,
     /// Canonicalization mode applied before hidden-function derivation.
     pub normalization: IdentifierNormalization,
-    /// Public commitment to the hidden derivation policy.
-    pub commitment: PolicyCommitment,
-    /// Public key that signs identifier resolution receipts.
-    pub resolver_public_key: PublicKey,
+    /// Referenced generic RAM-LFE program policy.
+    pub program_id: RamLfeProgramId,
     /// Whether the policy is active for new claims and resolutions.
     pub active: bool,
     /// Optional human-readable note.
@@ -149,15 +153,13 @@ impl IdentifierPolicy {
         id: IdentifierPolicyId,
         owner: AccountId,
         normalization: IdentifierNormalization,
-        commitment: PolicyCommitment,
-        resolver_public_key: PublicKey,
+        program_id: RamLfeProgramId,
     ) -> Self {
         Self {
             id,
             owner,
             normalization,
-            commitment,
-            resolver_public_key,
+            program_id,
             active: false,
             note: None,
         }
@@ -182,6 +184,8 @@ pub struct IdentifierClaimRecord {
     pub policy_id: IdentifierPolicyId,
     /// Bound opaque identifier.
     pub opaque_id: OpaqueAccountId,
+    /// Hidden-function receipt hash that produced the opaque identifier.
+    pub receipt_hash: Hash,
     /// UAID that owns the identifier claim.
     pub uaid: UniversalAccountId,
     /// Canonical account currently bound to the UAID.
@@ -194,29 +198,17 @@ pub struct IdentifierClaimRecord {
     pub expires_at_ms: Option<u64>,
 }
 
-/// Signed receipt emitted by identifier resolution services.
+/// Receipt emitted by identifier resolution services.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct IdentifierResolutionReceipt {
-    /// Policy namespace used for the resolution.
-    pub policy_id: IdentifierPolicyId,
-    /// Opaque identifier derived by the hidden-function resolver.
-    pub opaque_id: OpaqueAccountId,
-    /// UAID reached by the opaque identifier.
-    pub uaid: UniversalAccountId,
-    /// Canonical account currently bound to the UAID.
-    pub account_id: AccountId,
-    /// Resolution timestamp in milliseconds since Unix epoch.
-    pub resolved_at_ms: u64,
-    /// Optional expiry timestamp for the receipt.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub expires_at_ms: Option<u64>,
-    /// Resolver signature over the canonical receipt payload.
-    pub signature: Signature,
+    /// Canonical payload covered by the attestation.
+    pub payload: IdentifierResolutionReceiptPayload,
+    /// Explicit receipt attestation.
+    pub attestation: RamLfeReceiptAttestation,
 }
 
 /// Canonical payload covered by an identifier-resolution receipt signature.
@@ -228,32 +220,41 @@ pub struct IdentifierResolutionReceipt {
 pub struct IdentifierResolutionReceiptPayload {
     /// Policy namespace used for the resolution.
     pub policy_id: IdentifierPolicyId,
+    /// Generic RAM-LFE execution receipt payload.
+    pub execution: RamLfeExecutionReceiptPayload,
     /// Opaque identifier derived by the hidden-function resolver.
     pub opaque_id: OpaqueAccountId,
+    /// Hidden-function receipt hash covering the evaluation transcript.
+    pub receipt_hash: Hash,
     /// UAID reached by the opaque identifier.
     pub uaid: UniversalAccountId,
     /// Canonical account currently bound to the UAID.
     pub account_id: AccountId,
-    /// Resolution timestamp in milliseconds since Unix epoch.
-    pub resolved_at_ms: u64,
-    /// Optional expiry timestamp for the receipt.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    #[norito(default)]
-    pub expires_at_ms: Option<u64>,
 }
 
 impl IdentifierResolutionReceipt {
     /// Return the canonical signed payload view of this receipt.
     #[must_use]
     pub fn payload(&self) -> IdentifierResolutionReceiptPayload {
-        IdentifierResolutionReceiptPayload {
-            policy_id: self.policy_id.clone(),
-            opaque_id: self.opaque_id,
-            uaid: self.uaid,
-            account_id: self.account_id.clone(),
-            resolved_at_ms: self.resolved_at_ms,
-            expires_at_ms: self.expires_at_ms,
-        }
+        self.payload.clone()
+    }
+
+    /// Encode the canonical signed payload bytes used by resolver signatures.
+    #[must_use]
+    pub fn payload_bytes(&self) -> Vec<u8> {
+        self.payload.encode()
+    }
+
+    /// Resolution timestamp in milliseconds since Unix epoch.
+    #[must_use]
+    pub const fn resolved_at_ms(&self) -> u64 {
+        self.payload.execution.executed_at_ms
+    }
+
+    /// Optional expiry timestamp for the receipt.
+    #[must_use]
+    pub const fn expires_at_ms(&self) -> Option<u64> {
+        self.payload.execution.expires_at_ms
     }
 
     /// Verify the receipt signature against the provided public key.
@@ -261,8 +262,12 @@ impl IdentifierResolutionReceipt {
     /// # Errors
     /// Returns the underlying signature verification error when the signature is invalid.
     pub fn verify(&self, public_key: &PublicKey) -> Result<(), iroha_crypto::Error> {
-        SignatureOf::<IdentifierResolutionReceiptPayload>::from_signature(self.signature.clone())
-            .verify(public_key, &self.payload())
+        SignatureOf::<IdentifierResolutionReceiptPayload>::from_signature(
+            self.attestation.signature().cloned().ok_or_else(|| {
+                iroha_crypto::Error::Other("identifier receipt is missing a signature".to_owned())
+            })?,
+        )
+        .verify(public_key, &self.payload)
     }
 }
 
@@ -273,33 +278,6 @@ pub mod prelude {
         IdentifierPolicy, IdentifierPolicyId, IdentifierPolicyIdParseError,
         IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload,
     };
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn identifier_policy_id_roundtrip() {
-        let id: IdentifierPolicyId = "phone#retail".parse().expect("valid policy id");
-        assert_eq!(id.to_string(), "phone#retail");
-    }
-
-    #[test]
-    fn phone_normalization_strips_formatting() {
-        let normalized = IdentifierNormalization::PhoneE164
-            .normalize(" +1 (555) 123-4567 ")
-            .expect("phone should normalize");
-        assert_eq!(normalized, "+15551234567");
-    }
-
-    #[test]
-    fn email_normalization_lowercases_and_trims() {
-        let normalized = IdentifierNormalization::EmailAddress
-            .normalize(" Alice.Example@Example.COM ")
-            .expect("email should normalize");
-        assert_eq!(normalized, "alice.example@example.com");
-    }
 }
 
 fn normalize_phone_e164(raw: &str) -> Result<String, IdentifierNormalizationError> {
@@ -349,4 +327,137 @@ fn normalize_account_number(raw: &str) -> Result<String, IdentifierNormalization
         ));
     }
     Ok(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use iroha_crypto::{
+        KeyPair, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature, SignatureOf,
+    };
+
+    use super::*;
+
+    #[test]
+    fn identifier_policy_id_roundtrip() {
+        let id: IdentifierPolicyId = "phone#retail".parse().expect("valid policy id");
+        assert_eq!(id.to_string(), "phone#retail");
+    }
+
+    #[test]
+    fn phone_normalization_strips_formatting() {
+        let normalized = IdentifierNormalization::PhoneE164
+            .normalize(" +1 (555) 123-4567 ")
+            .expect("phone should normalize");
+        assert_eq!(normalized, "+15551234567");
+    }
+
+    #[test]
+    fn email_normalization_lowercases_and_trims() {
+        let normalized = IdentifierNormalization::EmailAddress
+            .normalize(" Alice.Example@Example.COM ")
+            .expect("email should normalize");
+        assert_eq!(normalized, "alice.example@example.com");
+    }
+
+    #[test]
+    fn receipt_payload_bytes_match_signed_encode_bytes() {
+        let account_signatory = KeyPair::random().public_key().clone();
+        let payload = IdentifierResolutionReceiptPayload {
+            policy_id: IdentifierPolicyId::from_str("email#retail").expect("valid policy"),
+            execution: RamLfeExecutionReceiptPayload {
+                program_id: RamLfeProgramId::from_str("email_retail").expect("valid program id"),
+                program_digest: Hash::new(b"program"),
+                backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+                verification_mode: RamLfeVerificationMode::Signed,
+                output_hash: Hash::new(b"output"),
+                associated_data_hash: Hash::new(b"associated-data"),
+                executed_at_ms: 1_777_777_777_000,
+                expires_at_ms: Some(1_777_777_877_000),
+            },
+            opaque_id: OpaqueAccountId::from_hash(Hash::new(b"opaque")),
+            receipt_hash: Hash::new(b"receipt"),
+            uaid: UniversalAccountId::from_hash(Hash::new(b"uaid")),
+            account_id: AccountId::new(account_signatory),
+        };
+        let signer = KeyPair::random();
+        let signature = SignatureOf::new(signer.private_key(), &payload);
+        let receipt = IdentifierResolutionReceipt {
+            payload: payload.clone(),
+            attestation: RamLfeReceiptAttestation::Signed(iroha_crypto::Signature::from_bytes(
+                signature.payload(),
+            )),
+        };
+
+        assert_eq!(receipt.payload_bytes(), payload.encode());
+        signature
+            .verify(signer.public_key(), &payload)
+            .expect("signature should verify against bare encode bytes");
+    }
+
+    #[test]
+    fn live_identifier_resolution_receipt_signature_fixture_verifies() {
+        let payload = IdentifierResolutionReceiptPayload {
+            policy_id: IdentifierPolicyId::from_str("email#retail").expect("valid policy"),
+            execution: RamLfeExecutionReceiptPayload {
+                program_id: RamLfeProgramId::from_str("email_retail").expect("valid program id"),
+                program_digest: Hash::from_str(
+                    "fe36ceb3996d101200b895fd2a377cce4426426a473da9fe08b2dbd2bd8b9375",
+                )
+                .expect("valid hash"),
+                backend: RamLfeBackend::BfvProgrammedSha3_256V1,
+                verification_mode: RamLfeVerificationMode::Signed,
+                output_hash: Hash::from_str(
+                    "72dcdee1435552e943d5e2e1c978d3f728c6a1ce7e6870b50c63568d4876eea5",
+                )
+                .expect("valid hash"),
+                associated_data_hash: Hash::from_str(
+                    "35b8bc8a30685e7cc5679b6e6a45675539548f5a24326bbee1d8c20e55918f55",
+                )
+                .expect("valid hash"),
+                executed_at_ms: 1_776_812_470_694,
+                expires_at_ms: Some(1_776_812_500_694),
+            },
+            opaque_id: OpaqueAccountId::from_str(
+                "opaque:fd14cb369e853352d4b9c578745627d154471ce5fd3462c4db542c104766e983",
+            )
+            .expect("valid opaque id"),
+            receipt_hash: Hash::from_str(
+                "51bbe55b70e09d4c2bb75d9c31b2cde46a7bdd5414134f6786255c679a68ac53",
+            )
+            .expect("valid hash"),
+            uaid: UniversalAccountId::from_str(
+                "uaid:471b620a99c608af1c7a47199f27b3368ae0ea889a497dd774b52a8287a58393",
+            )
+            .expect("valid uaid"),
+            account_id: AccountId::parse_encoded(
+                "sorauﾛ1NiGｸﾛﾋRuﾎQtﾐpヱﾈｻHﾍﾐ3RZﾕYdvbｺhcｽG8A8ｿRﾗeP1E463",
+            )
+            .expect("valid i105 account")
+            .account_id()
+            .clone(),
+        };
+        let receipt = IdentifierResolutionReceipt {
+            payload,
+            attestation: RamLfeReceiptAttestation::Signed(
+                Signature::from_hex(
+                    "4B26BF33F721C551C13F102D4D7F483CB8DD8A13FD6BF4ED26C845E2B69D5D0124B8CFA05493772F6748A42408EEE4542C470B284AB87F686B423F9DF87C8D00",
+                )
+                .expect("valid signature"),
+            ),
+        };
+        let resolver_key = PublicKey::from_str(
+            "ed01200376E59E9078B647F55003896B59758B7BE99908535EC24BAF80A6D52C8B3EB8",
+        )
+        .expect("valid resolver key");
+
+        println!(
+            "live receipt payload hex {}",
+            hex::encode_upper(receipt.payload_bytes())
+        );
+        receipt
+            .verify(&resolver_key)
+            .expect("live receipt signature should verify");
+    }
 }

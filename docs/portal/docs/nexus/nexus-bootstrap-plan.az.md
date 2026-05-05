@@ -32,10 +32,10 @@ Bu səhifə `docs/source/soranexus_bootstrap_plan.md`-i əks etdirir. Lokallaşd
 ## Şəbəkə Mühitləri
 - Fərqli şəbəkə prefiksləri ilə iki Nexus mühitini idarə edin:
 - **Sora Nexus (əsas şəbəkə)** – istehsal şəbəkəsi prefiksi `nexus`, kanonik idarəetmə və SoraFS/SoraNet geri xidmətlər (zəncir ID `0x02F1` / UUU028X / UUU02) yerləşdirilir.
-- **Sora Testus (testnet)** – inteqrasiya testi və buraxılışdan əvvəl doğrulama (zəncir UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`) üçün əsas şəbəkə konfiqurasiyasını əks etdirən `testus` şəbəkə prefiksi.
-- Hər bir mühit üçün ayrı-ayrı genezis faylları, idarəetmə açarları və infrastruktur izlərini qoruyun. Testus, Nexus-ə yüksəlməzdən əvvəl bütün SoraFS/SoraNet buraxılışları üçün sınaq bazası kimi çıxış edir.
-- CI/CD boru kəmərləri əvvəlcə Testus-a yerləşdirilməli, avtomatlaşdırılmış tüstü sınaqları yerinə yetirməli və yoxlamalar keçdikdən sonra Nexus-ə əl ilə irəliləmə tələb olunur.
-- İstinad konfiqurasiya paketləri `configs/soranexus/nexus/` (mainnet) və `configs/soranexus/testus/` (testnet) altında yaşayır, hər biri nümunə `config.toml`, `genesis.json` və Torii qəbul kataloqlarını ehtiva edir.
+- **Sora Taira (testnet)** – inteqrasiya testi və buraxılışdan əvvəl doğrulama (zəncir UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`) üçün əsas şəbəkə konfiqurasiyasını əks etdirən `taira` şəbəkə prefiksi.
+- Hər bir mühit üçün ayrı-ayrı genezis faylları, idarəetmə açarları və infrastruktur izlərini qoruyun. Taira, Nexus-ə yüksəlməzdən əvvəl bütün SoraFS/SoraNet buraxılışları üçün sınaq bazası kimi çıxış edir.
+- CI/CD boru kəmərləri əvvəlcə Taira-a yerləşdirilməli, avtomatlaşdırılmış tüstü sınaqları yerinə yetirməli və yoxlamalar keçdikdən sonra Nexus-ə əl ilə irəliləmə tələb olunur.
+- İstinad konfiqurasiya paketləri `configs/soranexus/nexus/` (mainnet) və `configs/soranexus/taira/` (testnet) altında yaşayır, hər biri nümunə `config.toml`, `genesis.json` və Torii qəbul kataloqlarını ehtiva edir.
 
 ## Addım 1 – Konfiqurasiyaya baxış
 1. Mövcud sənədləri yoxlayın:

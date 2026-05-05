@@ -36,7 +36,7 @@ Esta receita mira a variante desktop/JVM do módulo `java/iroha_android`. Ela es
 ## 1. Registre a definição do ativo (CLI)
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. Exporte credenciais
@@ -44,8 +44,8 @@ iroha --config defaults/client.toml asset definition register --id coffee#wonder
 ```bash
 # raw 32-byte Ed25519 private key in hex (without multicodec prefix)
 export ADMIN_PRIVATE_KEY_RAW="4f94...<64 hex chars>..."
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 > Use `iroha_cli tools crypto private-key export --raw --private-key <multihash>` se precisar remover o prefixo multihash da configuração padrão.

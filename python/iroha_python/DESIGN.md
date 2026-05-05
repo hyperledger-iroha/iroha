@@ -36,7 +36,7 @@ python/iroha_python/
 ├── pyproject.toml            # Unified package metadata (PEP 621)
 ├── src/iroha_python/
 │   ├── __init__.py           # Public API surface + norito re-export
-│   ├── crypto.py             # High-level Ed25519 + transaction helpers
+│   ├── crypto.py             # High-level all-algorithm crypto + transaction helpers
 │   ├── client.py             # Torii HTTP wrapper and polling helpers
 │   ├── query.py              # Structured account/query envelope builders
 │   ├── query_filter.py       # Deterministic filter DSL for metadata/fields
@@ -47,8 +47,12 @@ python/iroha_python/
 
 The Rust crate (`iroha_python_rs`) links against `iroha_crypto`,
 `iroha_data_model`, and `norito` to guarantee parity with the Rust toolchain.
-`pyproject.toml` configures `maturin` so `cargo build --workspace` builds the
-extension alongside the rest of the workspace.
+Its crypto bridge enables the same signature families used by the workspace
+(`ed25519`, `secp256k1`, `ml-dsa`, TC26 GOST parameter sets, `bls_normal`,
+`bls_small`, and `sm2`) and exposes them through generic key/sign/verify and
+multihash helpers. `pyproject.toml` configures `maturin` so
+`cargo build --workspace` builds the extension alongside the rest of the
+workspace.
 
 ## Packaging and Tooling
 

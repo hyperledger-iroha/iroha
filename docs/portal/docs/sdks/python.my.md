@@ -97,58 +97,25 @@ Pagination-aware helpers (ဥပမာ၊ `list_accounts_typed`) သည် အ�
 
 ```python
 asset_id = "norito:4e52543000000001"
-assets = client.list_account_assets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=5)
-txs = client.list_account_transactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=5)
-holders = client.list_asset_holders("rose#wonderland", asset_id=asset_id, limit=5)
+assets = client.list_account_assets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", asset_id=asset_id, limit=5)
+txs = client.list_account_transactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", asset_id=asset_id, limit=5)
+holders = client.list_asset_holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", asset_id=asset_id, limit=5)
 print(assets, txs, holders)
 ```
 
-## 5. အော့ဖ်လိုင်းထောက်ပံ့ကြေးများ
+## 5. Offline V2 readiness
 
-ပိုက်ဆံအိတ်လက်မှတ်များထုတ်ပေးပြီး စာရင်းသွင်းရန် အော့ဖ်လိုင်းထောက်ပံ့ကြေးအဆုံးမှတ်များကိုသုံးပါ။
-လယ်ဂျာတွင် ၎င်းတို့ကို `top_up_offline_allowance` သည် ပြဿနာကို ဆွဲကြိုးချကာ + မှတ်ပုံတင်ရန် အဆင့်များရှိသည်။
-(ငွေဖြည့်ခြင်း အဆုံးမှတ်တစ်ခုမျှ မရှိပါ။)
+Use `GET /v1/offline/v2/readiness` through `get_offline_v2_readiness()` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("http://127.0.0.1:8080")
-
-draft = {
-    "controller": "i105:...",
-    "allowance": {"asset": "usd#wonderland", "amount": "10", "commitment": [1, 2]},
-    "spend_public_key": "ed0120deadbeef",
-    "attestation_report": [3, 4],
-    "issued_at_ms": 100,
-    "expires_at_ms": 200,
-    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-    "metadata": {},
-}
-
-top_up = client.top_up_offline_allowance(
-    certificate=draft,
-    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
-    private_key="operator-private-key",
-)
-print("registered", top_up.registration.certificate_id_hex)
+readiness = client.get_offline_v2_readiness()
+print("offline notes", readiness.offline_note_v2)
 ```
-
-သက်တမ်းတိုးရန်အတွက်၊ လက်ရှိလက်မှတ် ID ဖြင့် `top_up_offline_allowance_renewal` ကိုခေါ်ဆိုပါ-
-
-```python
-renewed = client.top_up_offline_allowance_renewal(
-    certificate_id_hex=top_up.registration.certificate_id_hex,
-    certificate=draft,
-    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
-    private_key="operator-private-key",
-)
-print("renewed", renewed.registration.certificate_id_hex)
-```
-
-စီးဆင်းမှုကို ပိုင်းခြားရန် လိုအပ်ပါက `issue_offline_certificate` (သို့မဟုတ်) ခေါ်ဆိုပါ။
-`issue_offline_certificate_renewal`) နောက်တွင် `register_offline_allowance`
-သို့မဟုတ် `renew_offline_allowance`။
-
 ## 6. အဖြစ်အပျက်များကို တိုက်ရိုက်ကြည့်ရှုပါ။
 
 Torii SSE အဆုံးမှတ်များကို ဂျင်နရေတာများမှတစ်ဆင့် ဖော်ထုတ်ပါသည်။ SDK သည် အလိုအလျောက် ပြန်လည်စတင်သည်။

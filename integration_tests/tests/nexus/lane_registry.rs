@@ -75,7 +75,16 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
         "expected governance manifest file",
     );
     let governance_rules = governance_status.rules().expect("governance rules parsed");
-    assert_eq!(governance_rules.validators.len(), 3);
+    assert_eq!(
+        governance_rules.validators.len(),
+        2,
+        "fixture governance manifest should expose the configured validator roster"
+    );
+    assert_eq!(
+        governance_rules.validator_bindings.len(),
+        2,
+        "fixture governance manifest should expose explicit validator-to-peer bindings"
+    );
     assert_eq!(governance_rules.quorum, Some(2));
     assert!(
         governance_status
@@ -110,7 +119,16 @@ fn lane_manifest_registry_loads_fixture_manifests() -> Result<()> {
         "expected zk manifest file",
     );
     let zk_rules = zk_status.rules().expect("zk rules parsed");
-    assert_eq!(zk_rules.validators.len(), 3);
+    assert_eq!(
+        zk_rules.validators.len(),
+        2,
+        "fixture zk manifest should expose the configured validator roster"
+    );
+    assert_eq!(
+        zk_rules.validator_bindings.len(),
+        2,
+        "fixture zk manifest should expose explicit validator-to-peer bindings"
+    );
     assert_eq!(zk_rules.quorum, Some(2));
     assert!(
         zk_status

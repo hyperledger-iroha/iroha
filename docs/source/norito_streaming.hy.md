@@ -84,7 +84,7 @@ provided together; omitting them keeps HPKE disabled. Operators running with a
 non-Ed25519 validator key (for example TC26 GOST) can still satisfy the Ed25519
 requirement for control-plane signatures by supplying `streaming.identity_public_key`
 and `streaming.identity_private_key`; these fields expect Ed25519 multihash
-strings (matching the format returned by `kagami crypto`). When omitted, the
+strings (matching the format returned by `kagami keys`). When omitted, the
 node’s main key pair is reused, preserving the previous behaviour. The
 `streaming.session_store_dir` parameter selects the directory where encrypted
 session snapshots land (default `./storage/streaming`). The runtime derives the
@@ -309,13 +309,13 @@ Operators can curate Kaigi calls directly from the CLI:
 
 ```bash
 # Register a session
-iroha kaigi create --domain streaming --call-name daily --host i105... \
+iroha kaigi create --domain streaming --call-name daily --host <i105-account-id> \
   --privacy-mode transparent --room-policy public \
   --relay-manifest manifests/torii.json
 
 # Join/leave flows for participants
-iroha kaigi join --domain streaming --call-name daily --participant i105...
-iroha kaigi leave --domain streaming --call-name daily --participant i105...
+iroha kaigi join --domain streaming --call-name daily --participant <i105-account-id>
+iroha kaigi leave --domain streaming --call-name daily --participant <i105-account-id>
 
 # Record billable usage (milliseconds + gas)
 iroha kaigi record-usage --domain streaming --call-name daily \

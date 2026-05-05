@@ -19,9 +19,9 @@ description: يوضح كيف يمكن لنقطة دخول Kotodama استدعا�
 
 ## جولة دفتر الأستاذ
 
-- موّل سلطة العقد (مثلا `i105...`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذنا مكافئا.
-- استدعِ نقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `i105...`، بما يعكس طريقة تغليف الأتمتة على السلسلة لنداءات المضيف.
-- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account i105...` وافحص الأحداث لتأكيد أن حارس بيانات التعريف سجل سياق النقل.
+- موّل سلطة العقد (مثلا `<i105-account-id>`) بالأصل الذي ستنقله وامنح السلطة دور `CanTransfer` أو إذنا مكافئا.
+- استدعِ نقطة الدخول `call_transfer_asset` لنقل 5 وحدات من حساب العقد إلى `<i105-account-id>`، بما يعكس طريقة تغليف الأتمتة على السلسلة لنداءات المضيف.
+- تحقق من الأرصدة عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account <i105-account-id>` وافحص الأحداث لتأكيد أن حارس بيانات التعريف سجل سياق النقل.
 
 ## أدلة SDK ذات صلة
 
@@ -36,9 +36,9 @@ description: يوضح كيف يمكن لنقطة دخول Kotodama استدعا�
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
-      asset_definition!("rose#wonderland"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
   }

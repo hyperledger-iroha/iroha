@@ -27,12 +27,12 @@ Norito түүхий ачааг бичихгүйгээр гэрээг эхлүү�
 iroha --config client.toml --output \
   repo initiate \
   --agreement-id daily_repo \
-  --initiator i105... \
-  --counterparty i105... \
-  --custodian i105... \
-  --cash-asset usd#wonderland \
+  --initiator <i105-account-id> \
+  --counterparty <i105-account-id> \
+  --custodian <i105-account-id> \
+  --cash-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --cash-quantity 1000 \
-  --collateral-asset bond#wonderland \
+  --collateral-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
   --collateral-quantity 1050 \
   --rate-bps 250 \
   --maturity-timestamp-ms 1704000000000 \
@@ -43,11 +43,11 @@ iroha --config client.toml --output \
 iroha --config client.toml --output \
   repo unwind \
   --agreement-id daily_repo \
-  --initiator i105... \
-  --counterparty i105... \
-  --cash-asset usd#wonderland \
+  --initiator <i105-account-id> \
+  --counterparty <i105-account-id> \
+  --cash-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --cash-quantity 1005 \
-  --collateral-asset bond#wonderland \
+  --collateral-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
   --collateral-quantity 1055 \
   --settlement-timestamp-ms 1704086400000
 
@@ -83,19 +83,19 @@ from iroha_python import (
 
 client = create_torii_client("client.toml")
 
-cash = RepoCashLeg(asset_definition_id="usd#wonderland", quantity="1000")
+cash = RepoCashLeg(asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1", quantity="1000")
 collateral = RepoCollateralLeg(
-    asset_definition_id="bond#wonderland",
+    asset_definition_id="4fEiy2n5VMFVfi6BzDJge519zAzg",
     quantity="1050",
     metadata={"isin": "ABC123"},
 )
 governance = RepoGovernance(haircut_bps=1500, margin_frequency_secs=86_400)
 
-draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="i105..."))
+draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="<i105-account-id>"))
 draft.repo_initiate(
     agreement_id="daily_repo",
-    initiator="i105...",
-    counterparty="i105...",
+    initiator="<i105-account-id>",
+    counterparty="<i105-account-id>",
     cash_leg=cash,
     collateral_leg=collateral,
     rate_bps=250,
@@ -125,15 +125,15 @@ next_margin = record.next_margin_check_after(at_timestamp_ms=now_ms)
 iroha --config client.toml --output \
   settlement dvp \
   --settlement-id trade_dvp \
-  --delivery-asset bond#wonderland \
+  --delivery-asset 4fEiy2n5VMFVfi6BzDJge519zAzg \
   --delivery-quantity 10 \
-  --delivery-from i105... \
-  --delivery-to i105... \
+  --delivery-from <i105-account-id> \
+  --delivery-to <i105-account-id> \
   --delivery-instrument-id US0378331005 \
-  --payment-asset usd#wonderland \
+  --payment-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --payment-quantity 1000 \
-  --payment-from i105... \
-  --payment-to i105... \
+  --payment-from <i105-account-id> \
+  --payment-to <i105-account-id> \
   --order payment-then-delivery \
   --atomicity all-or-nothing \
   --iso-reference-crosswalk /opt/iso/isin_crosswalk.json \
@@ -143,14 +143,14 @@ iroha --config client.toml --output \
 iroha --config client.toml --output \
   settlement pvp \
   --settlement-id trade_pvp \
-  --primary-asset usd#wonderland \
+  --primary-asset 7EAD8EFYUx1aVKZPUU1fyKvr8dF1 \
   --primary-quantity 500 \
-  --primary-from i105... \
-  --primary-to i105... \
-  --counter-asset eur#wonderland \
+  --primary-from <i105-account-id> \
+  --primary-to <i105-account-id> \
+  --counter-asset 5tPkFK6s2zUcd1qUHyTmY7fDVa2n \
   --counter-quantity 460 \
-  --counter-from i105... \
-  --counter-to i105... \
+  --counter-from <i105-account-id> \
+  --counter-to <i105-account-id> \
   --iso-xml-out trade_pvp.xml
 ```
 
@@ -178,19 +178,19 @@ from iroha_python import (
     TransactionDraft,
 )
 
-draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="i105..."))
+draft = TransactionDraft(TransactionConfig(chain_id="dev-chain", authority="<i105-account-id>"))
 delivery = SettlementLeg(
-    asset_definition_id="bond#wonderland",
+    asset_definition_id="4fEiy2n5VMFVfi6BzDJge519zAzg",
     quantity="10",
-    from_account="i105...",
-    to_account="i105...",
+    from_account="<i105-account-id>",
+    to_account="<i105-account-id>",
     metadata={"isin": "ABC123"},
 )
 payment = SettlementLeg(
-    asset_definition_id="usd#wonderland",
+    asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
     quantity="1000",
-    from_account="i105...",
-    to_account="i105...",
+    from_account="<i105-account-id>",
+    to_account="<i105-account-id>",
 )
 plan = SettlementPlan(order=SettlementExecutionOrder.PAYMENT_THEN_DELIVERY)
 
@@ -198,16 +198,16 @@ draft.settlement_dvp("trade_dvp", delivery, payment, plan=plan, metadata={"desk"
 draft.settlement_pvp(
     "trade_pvp",
     SettlementLeg(
-        asset_definition_id="usd#wonderland",
+        asset_definition_id="7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
         quantity="500",
-        from_account="i105...",
-        to_account="i105...",
+        from_account="<i105-account-id>",
+        to_account="<i105-account-id>",
     ),
     SettlementLeg(
-        asset_definition_id="eur#wonderland",
+        asset_definition_id="5tPkFK6s2zUcd1qUHyTmY7fDVa2n",
         quantity="460",
-        from_account="i105...",
-        to_account="i105...",
+        from_account="<i105-account-id>",
+        to_account="<i105-account-id>",
     ),
 )
 ```

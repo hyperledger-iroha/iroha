@@ -1,14 +1,3 @@
----
-lang: kk
-direction: ltr
-source: docs/source/nexus.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 44bd5a327c6fc2f99b106b23db7b8b9f5db78d465a5dd2a7149a207c8a81a806
-source_last_modified: "2026-01-30T18:06:03.227651+00:00"
-translation_last_reviewed: 2026-02-07
----
-
 #! Iroha 3 – Sora Nexus Ledger: Technical Design Specification
 
 This document proposes the Sora Nexus Ledger architecture for Iroha 3, evolving Iroha 2 toward a single global, logically unified ledger organized around Data Spaces (DS). Data Spaces provide strong privacy domains (“private data spaces”) and open participation (“public data spaces”). The design preserves composability across the global ledger while ensuring strict isolation and confidentiality for private‑DS data, and introduces data‑availability scaling via erasure coding across Kura (block storage) and WSV (World State View).
@@ -143,7 +132,7 @@ authority (private keys travel only in-memory inside Torii’s secure handler):
 - `GET /v1/accounts/{uaid}/portfolio` —
   Norito-backed aggregator that mirrors `ToriiClient.getUaidPortfolio` so wallets
   can render universal holdings without scraping per-dataspace state. Pass
-  `asset_id=<asset#definition::owner>` to filter the snapshot down to one asset.
+  `asset_id=<canonical_base58_asset_definition_id>` to filter the snapshot down to one asset.
 - `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` — fetch the
   canonical manifest JSON, lifecycle metadata, and manifest hash for audits.
 - `POST /v1/space-directory/manifests` — submit new or replacement manifests
@@ -376,6 +365,7 @@ Testing Strategy
 - Unit tests for data model types, Norito roundtrips, AMX syscall behaviors, and proof encoding/decoding.
 - IVM tests to pin ABI v1 syscall list/ABI hash/pointer‑type goldens.
 - Integration tests for atomic cross‑DS transactions (positive/negative), DA attester latency targets (≤300 ms), and performance isolation under load.
+- Reproducible localnet proof workflow: `scripts/run_nexus_cross_dataspace_atomic_swap.sh` and `docs/source/nexus_cross_dataspace_localnet.md` run and explain the `integration_tests/tests/nexus/cross_dataspace_localnet.rs` all-or-nothing ds1↔ds2 swap/rollback scenario.
 - Security tests for DS QC verification (ML‑DSA‑87), conflict detection/abort semantics, and confidential shard leakage prevention.
 
 ### NX-18 Telemetry & Runbook Assets
@@ -383,7 +373,7 @@ Testing Strategy
 - **Grafana board:** `dashboards/grafana/nexus_lanes.json` now exports the “Nexus Lane Finality & Oracles” dashboard requested by NX‑18. Panels cover `histogram_quantile()` on `iroha_slot_duration_ms`, `iroha_da_quorum_ratio`, DA availability warnings (`sumeragi_da_gate_block_total{reason="missing_local_data"}`), oracle price/staleness/TWAP/haircut gauges, and the live `iroha_settlement_buffer_xor` buffer panel so operators can prove the 1 s slot, DA, and treasury SLOs without bespoke queries.
 - **CI gate:** `scripts/telemetry/check_slot_duration.py` parses Prometheus snapshots, prints the p50/p95/p99 slot latency, and enforces the NX‑18 thresholds (p95 ≤ 1000 ms, p99 ≤ 1100 ms). The companion harness `scripts/telemetry/nx18_acceptance.py` gates DA quorum, oracle staleness/TWAP/haircuts, settlement buffers, and slot quantiles in one pass (`--json-out` persists evidence), and both run inside `ci/check_nexus_lane_smoke.sh` for RCs.
 - **Evidence bundler:** `scripts/telemetry/bundle_slot_artifacts.py` copies the metrics snapshot + JSON summary into `artifacts/nx18/` and emits `slot_bundle_manifest.json` with SHA-256 digests, ensuring every RC uploads the exact artefacts that triggered the NX‑18 gate.
-- **Release automation:** `scripts/run_release_pipeline.py` now invokes `ci/check_nexus_lane_smoke.sh` (skip with `--skip-nexus-lane-smoke`) and copies `artifacts/nx18/` into the release output so NX‑18 evidence rides alongside the bundle/image artefacts without a manual step.
+- **Release automation:** `scripts/run_release_pipeline.py` now invokes `ci/check_nexus_lane_smoke.sh` (skip with `--skip-nexus-lane-smoke`) and `ci/check_nexus_cross_dataspace_localnet.sh` (skip with `--skip-nexus-cross-dataspace-proof`), then copies `artifacts/nx18/` into the release output so NX‑18 evidence and cross-dataspace regression proofing ride alongside the bundle/image artefacts without a manual step.
 - **Runbook:** `docs/source/runbooks/nexus_lane_finality.md` documents the on-call workflow (thresholds, incident steps, evidence capture, chaos drills) that accompanies the dashboard, fulfilling the “publish operator dashboards/runbooks” bullet from NX‑18.
 - **Telemetry helpers:** reuse the existing `scripts/telemetry/compare_dashboards.py` to diff exported dashboards (preventing staging/prod drift) and `scripts/telemetry/check_nexus_audit_outcome.py` during routed-trace or chaos rehearsals so every NX‑18 drill archives the matching `nexus.audit.outcome` payload.
 

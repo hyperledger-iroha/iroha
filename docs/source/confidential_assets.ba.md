@@ -89,7 +89,7 @@ Swift SDKs хәҙер ҡалҡан инструкцияларын сығара �
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ lockstep.
 - Пер-иҫәп асҡыс сығарылыш иерархияһы:
   - `sk_spend` → `nk` (нулификатор асҡысы), `ivk` (уҡлау асҡысы), `ovk` (башҡа ҡарау асҡысы), `fvk`.
 - шифрланған иҫкәрмә файҙалы йөкләмәләр ҡулланыу AEAD менән ECDH-алынған уртаҡ асҡыстар; опциональ аудитор ҡарау асҡыстары активтар сәйәсәте өсөн сығыштарға беркетелгән булыуы мөмкин.
-- CLI өҫтәмәләре: `confidential create-keys`, `confidential send`, `confidential export-view-key`, аудитор өсөн расшифровкалау өсөн шифрлау иҫтәлек, һәм `iroha app zk envelope` ярҙамсы етештереү/тикшерергә Norito иҫтәлек офлайн конверт. Torii `POST /v1/confidential/derive-keyset` аша шул уҡ сығарылыш ағымын фашлай, гекс һәм base64 формаларын ҡайтара, шуға күрә янсыҡтар программалы рәүештә асҡыс иерархияларын ала ала.
+- CLI өҫтәмәләре: `confidential create-keys`, `confidential send`, `confidential export-view-key`, аудитор өсөн расшифровкалау өсөн шифрлау иҫтәлек, һәм `iroha app zk envelope` ярҙамсы етештереү/тикшерергә Norito иҫтәлек офлайн конверт.
 
 ## Газ, сикләүҙәр & DoS контроль
 - Детерминистик газ графигы:
@@ -279,8 +279,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -412,7 +412,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -444,8 +444,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -476,7 +476,7 @@ await new ToriiClient({ baseUrl: "https://torii" }).submitTransaction(signed);
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Был пар менән `rg 'iroha_confidential_tree_depth'` шул уҡ ҡырҡыуҙа раҫлау өсөн, тәрәнлек яңы йөкләмәләр менән үҫә, шул уҡ ваҡытта күсерелеү иҫәпләүселәре генә арта, ҡасан тарих ҡапҡастары өҫтәү. Был ҡиммәттәр Grafana экспорты менән теҙелешергә тейеш, һеҙ идара итеү дәлилдәре өйөмдәренә беркетергә тейеш.

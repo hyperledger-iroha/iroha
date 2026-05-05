@@ -1,45 +1,54 @@
 # soranet_pq
 
 `soranet_pq` provides the post-quantum cryptography building blocks required by
-the SoraNet handshake and relay tooling. It wraps the PQClean-backed ML-KEM
-(FIPS 203) and ML-DSA (FIPS 204) parameter sets via the `pqcrypto` crates and
-exposes helpers for deterministic HKDF derivations and hedged randomness.
+the SoraNet handshake and relay tooling. It wraps the current ML-KEM
+(FIPS 203) and ML-DSA (FIPS 204) parameter sets and exposes helpers for
+deterministic HKDF derivations and hedged randomness.
 
 ## Features
 
 - ML-KEM-512/768/1024 key generation, encapsulation, and decapsulation helpers.
 - ML-DSA-44/65/87 key generation, detached signing, and verification helpers.
 - HKDF derivation with protocol domain labels (`DH/es`, `KEM/1`, …).
-- ChaCha20-based hedged RNG that mixes seed material with live OS entropy.
+- ChaCha20-based hedged RNG that mixes seed material with live OS entropy and
+  reports whether the OS entropy draw succeeded.
 
 ## Example
 
 ```rust
 use soranet_pq::{
-    encapsulate_mlkem, decapsulate_mlkem, generate_mlkem_keypair, MlKemSuite,
-    generate_mldsa_keypair, sign_mldsa, verify_mldsa, MlDsaSuite,
+    decapsulate_mlkem, encapsulate_mlkem, generate_mldsa_keypair_from_os,
+    generate_mlkem_keypair_from_os, sign_mldsa_from_os, verify_mldsa, MlDsaSuite,
+    MlKemSuite,
 };
 
 // ML-KEM handshake
-let kem_keys = generate_mlkem_keypair(MlKemSuite::MlKem768);
-let (shared_a, ct) = encapsulate_mlkem(MlKemSuite::MlKem768, kem_keys.public_key()).unwrap();
+let kem_keys = generate_mlkem_keypair_from_os(MlKemSuite::MlKem768).unwrap();
+let (shared_a, ct) = soranet_pq::encapsulate_mlkem_from_os(
+    MlKemSuite::MlKem768,
+    kem_keys.public_key(),
+)
+.unwrap();
 let shared_b = decapsulate_mlkem(MlKemSuite::MlKem768, kem_keys.secret_key(), ct.as_bytes()).unwrap();
 assert_eq!(shared_a.as_bytes(), shared_b.as_bytes());
 
 // ML-DSA signatures
-let dsa_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
+let dsa_keys = generate_mldsa_keypair_from_os(MlDsaSuite::MlDsa65)
     .expect("ML-DSA keypair generation should succeed");
 let message = b"taikai-circuit";
-let sig = sign_mldsa(MlDsaSuite::MlDsa65, dsa_keys.secret_key(), message).unwrap();
-verify_mldsa(MlDsaSuite::MlDsa65, dsa_keys.public_key(), message, sig.as_bytes()).unwrap();
+let sig = sign_mldsa_from_os(MlDsaSuite::MlDsa65, dsa_keys.secret_key(), b"", message).unwrap();
+verify_mldsa(MlDsaSuite::MlDsa65, dsa_keys.public_key(), b"", message, sig.as_bytes()).unwrap();
 ```
 
 ## Notes
 
 - Secrets are wrapped in `Zeroizing` containers so memory is scrubbed on drop.
-- The PQClean implementations already include the constant-time checks mandated
-  by the standards; the crate adds domain separation helpers so the handshake
-  can safely feed the outputs into HKDF transcript chaining.
+- ML-KEM and ML-DSA entry points now require explicit hedged RNG objects or the
+  fallible `_from_os` convenience helpers.
+- The current backend uses the pqcrypto/PQClean FIPS implementations and calls
+  the PQClean derandomized hooks directly where the Rust wrappers do not expose
+  RNG injection. That keeps seeded and hedged randomness on the public execution
+  path while the backend remains replaceable behind the same API.
 
 ## C FFI
 

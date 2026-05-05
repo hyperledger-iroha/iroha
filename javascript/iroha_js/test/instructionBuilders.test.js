@@ -10,10 +10,25 @@ import {
   buildBurnTriggerRepetitionsInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
+  buildRegisterAssetDefinitionInstruction,
+  buildGrantAccountPermissionInstruction,
+  buildSetAssetDefinitionAliasInstruction,
   buildTransferAssetInstruction,
   buildTransferDomainInstruction,
   buildTransferAssetDefinitionInstruction,
   buildTransferNftInstruction,
+  buildRegisterRwaInstruction,
+  buildTransferRwaInstruction,
+  buildMergeRwasInstruction,
+  buildRedeemRwaInstruction,
+  buildFreezeRwaInstruction,
+  buildUnfreezeRwaInstruction,
+  buildHoldRwaInstruction,
+  buildReleaseRwaInstruction,
+  buildForceTransferRwaInstruction,
+  buildSetRwaControlsInstruction,
+  buildSetRwaKeyValueInstruction,
+  buildRemoveRwaKeyValueInstruction,
   buildCreateKaigiInstruction,
   buildJoinKaigiInstruction,
   buildLeaveKaigiInstruction,
@@ -23,8 +38,6 @@ import {
   buildRegisterKaigiRelayInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
-  buildDeactivateContractInstanceInstruction,
-  buildActivateContractInstanceInstruction,
   buildRemoveSmartContractBytesInstruction,
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
@@ -32,6 +45,7 @@ import {
   buildEnactReferendumInstruction,
   buildFinalizeReferendumInstruction,
   buildPersistCouncilForEpochInstruction,
+  buildSubmitAgendaProposalInstruction,
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
   buildCancelTwitterEscrowInstruction,
@@ -53,6 +67,7 @@ const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
+const SORA_I105_DISCRIMINANT = 0x2f1;
 
 function loadInstructionFixture(name) {
   const fixturePath = path.join(repoRoot, "fixtures", "norito_instructions", name);
@@ -67,12 +82,11 @@ function decodeFixtureInstruction(name) {
 import {
   normalizeAccountId as exportedNormalizeAccountId,
   normalizeAssetId as exportedNormalizeAssetId,
+  normalizeAssetHoldingId as exportedNormalizeAssetHoldingId,
 } from "../src/index.js";
 import { ValidationErrorCode } from "../src/validationError.js";
 import {
   AccountAddress,
-  AccountAddressError,
-  AccountAddressErrorCode,
 } from "../src/address.js";
 
 function hexToBytes(hex) {
@@ -103,7 +117,7 @@ function canonicalizeValue(value) {
   if (typeof value === "string") {
     if (!value.startsWith("hash:") && value.includes("#")) {
       try {
-        return exportedNormalizeAssetId(value);
+        return exportedNormalizeAssetHoldingId(value);
       } catch {
         return value;
       }
@@ -119,9 +133,17 @@ function canonicalizeClone(value) {
   return canonicalizeValue(JSON.parse(JSON.stringify(value)));
 }
 
-function canonicalizeAccountIdUsingNorito(accountId, domainId = DOMAIN_ID) {
+function canonicalizeAccountIdUsingNorito(accountId) {
   const encoded = noritoEncodeInstruction({
-    Register: { Account: { id: accountId, domain: domainId, metadata: {} } },
+    Register: {
+      Account: {
+        id: accountId,
+        label: null,
+        uaid: null,
+        opaque_ids: [],
+        metadata: {},
+      },
+    },
   });
   const decoded = noritoDecodeInstruction(encoded);
   return canonicalizeValue(decoded).Register.Account.id;
@@ -146,37 +168,35 @@ function buildLocal8Literal(address) {
   return `0x${truncated.toString("hex")}`;
 }
 
-const DOMAIN_ID = "wonderland";
+const DOMAIN_ID = "wonderland.sora";
 const ACCOUNT_SIGNATORY =
   "ED0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const ACCOUNT_PUBLIC_KEY = hexToBytes(ACCOUNT_SIGNATORY.slice(6));
-const ACCOUNT_ADDRESS = AccountAddress.fromAccount({
-  domain: DOMAIN_ID,
-  publicKey: ACCOUNT_PUBLIC_KEY,
+const ACCOUNT_ADDRESS = AccountAddress.fromAccount({ publicKey: ACCOUNT_PUBLIC_KEY,
 });
-const ACCOUNT_ID = ACCOUNT_ADDRESS.toI105();
+const ACCOUNT_ID = ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
 const ACCOUNT_ID_INPUT = ACCOUNT_ID;
 const ACCOUNT_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAccountIdUsingNorito(ACCOUNT_ID)
   : ACCOUNT_ID;
-const ASSET_DEFINITION_ID = "rose#wonderland";
-const ASSET_ID =
-  "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c4000000000000006165e1e191d7b79c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435330000000000000017000000000000000f00000000000000070000000000000064656661756c740c000000000000000400000000000000726f7365";
-const ASSET_ID_INPUT =
-  "norito:4E52543000000EAF5EF05DB6ED320EAF5EF05DB6ED3200C4000000000000006165E1E191D7B79C00810000000000000017000000000000000F00000000000000070000000000000064656661756C745A00000000000000000000004E00000000000000460000000000000065643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435330000000000000017000000000000000F00000000000000070000000000000064656661756C740C000000000000000400000000000000726F7365";
+const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+const ASSET_ID = `${ASSET_DEFINITION_ID}#${ACCOUNT_ID}`;
+const ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${ACCOUNT_ID_INPUT}`;
 const ASSET_ID_CANONICAL = hasNoritoBinding()
   ? canonicalizeAssetIdUsingNorito(ASSET_ID)
   : ASSET_ID;
-const NFT_ID = "dragon$wonderland";
+const NFT_ID = "dragon$wonderland.sora";
+const RWA_ID =
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.sora";
+const RWA_ID_INPUT =
+  "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF$commodities.sora";
 const SAMPLE_PUBLIC_KEY = hexToBytes(
   "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201",
 );
-const SAMPLE_ACCOUNT_ADDRESS = AccountAddress.fromAccount({
-  domain: DOMAIN_ID,
-  publicKey: SAMPLE_PUBLIC_KEY,
+const SAMPLE_ACCOUNT_ADDRESS = AccountAddress.fromAccount({ publicKey: SAMPLE_PUBLIC_KEY,
 });
-const SAMPLE_ACCOUNT_I105_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105();
-const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105Default();
+const SAMPLE_ACCOUNT_I105_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
+const SAMPLE_ACCOUNT_COMPRESSED_LITERAL = SAMPLE_ACCOUNT_ADDRESS.toI105(SORA_I105_DISCRIMINANT);
 const SAMPLE_ACCOUNT_CANONICAL = exportedNormalizeAccountId(SAMPLE_ACCOUNT_I105_LITERAL);
 const SAMPLE_ACCOUNT_LOCAL8_LITERAL = buildLocal8Literal(SAMPLE_ACCOUNT_ADDRESS);
 
@@ -263,7 +283,7 @@ test("normalizeAccountId exported accepts encoded account IDs", () => {
   assert.equal(canonical, ACCOUNT_ID_CANONICAL);
 });
 
-test("normalizeAccountId canonicalizes I105 and i105Default (`sora`) encodings", () => {
+test("normalizeAccountId canonicalizes I105 and i105 (`sora`) encodings", () => {
   const canonicalI105 = exportedNormalizeAccountId(SAMPLE_ACCOUNT_I105_LITERAL);
   assert.equal(canonicalI105, SAMPLE_ACCOUNT_CANONICAL);
   const canonicalCompressed = exportedNormalizeAccountId(SAMPLE_ACCOUNT_COMPRESSED_LITERAL);
@@ -274,26 +294,31 @@ test("normalizeAccountId rejects Local-8 selectors", () => {
   assert.throws(
     () => exportedNormalizeAccountId(SAMPLE_ACCOUNT_LOCAL8_LITERAL),
     (error) => {
-      assert(error instanceof AccountAddressError);
-      assert.equal(error.code, AccountAddressErrorCode.LOCAL_DIGEST_TOO_SHORT);
+      assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
+      assert.match(String(error?.message), /canonical I105 account id/i);
       return true;
     },
   );
 });
 
-test("normalizeAssetId exported canonicalizes encoded asset identifiers", () => {
-  const canonical = exportedNormalizeAssetId(ASSET_ID_INPUT);
-  assert.equal(canonical, ASSET_ID_CANONICAL);
+test("normalizeAssetId exported canonicalizes bare Base58 asset ids", () => {
+  const canonical = exportedNormalizeAssetId(ASSET_DEFINITION_ID);
+  assert.equal(canonical, ASSET_DEFINITION_ID);
 });
 
-test("normalizeAssetId rejects unsupported asset#domain#account literals", () => {
+test("normalizeAssetId rejects malformed asset literals", () => {
   assert.throws(
-    () => exportedNormalizeAssetId(`rose#wonderland#${ACCOUNT_ID}`),
-    /must not use 'asset#domain#account'/,
+    () => exportedNormalizeAssetId(ASSET_ID_INPUT),
+    /canonical Base58 asset id/,
   );
 });
 
-test("buildMintAssetInstruction produces Norito-compatible payload", () => {
+test("normalizeAssetHoldingId exported canonicalizes asset-holding identifiers", () => {
+  const canonical = exportedNormalizeAssetHoldingId(ASSET_ID_INPUT);
+  assert.equal(canonical, ASSET_ID_CANONICAL);
+});
+
+test("buildMintAssetInstruction produces canonical Norito payload", () => {
   const instruction = buildMintAssetInstruction({ assetId: ASSET_ID, quantity: 42 });
   assert.deepEqual(instruction, {
     Mint: { Asset: { object: "42", destination: ASSET_ID_CANONICAL } },
@@ -339,7 +364,7 @@ test("buildMintAssetInstruction rejects invalid Numeric literals", () => {
   );
 });
 
-test("buildBurnAssetInstruction produces Norito-compatible payload", () => {
+test("buildBurnAssetInstruction produces canonical Norito payload", () => {
   const instruction = buildBurnAssetInstruction({ assetId: ASSET_ID, quantity: "7" });
   assert.deepEqual(instruction, {
     Burn: { Asset: { object: "7", destination: ASSET_ID_CANONICAL } },
@@ -497,6 +522,157 @@ test("buildTransferNftInstruction covers nft transfer", () => {
   });
 });
 
+test("buildRegisterRwaInstruction normalizes richer lot payloads", () => {
+  const instruction = buildRegisterRwaInstruction({
+    rwa: {
+      domain: "commodities.sora",
+      quantity: "10.5",
+      spec: { scale: 1 },
+      primaryReference: "vault-cert-001",
+      metadata: { origin: "AE", lot: BigInt(3) },
+      parents: [{ rwa: RWA_ID, quantity: "1.25" }],
+      controls: {
+        controllerAccounts: [ACCOUNT_ID],
+        controllerRoles: ["auditor"],
+        freezeEnabled: true,
+        holdEnabled: true,
+      },
+    },
+  });
+  const decoded = encodeAndDecode(instruction);
+  assert.deepEqual(decoded, {
+    RegisterRwa: {
+      rwa: {
+        domain: "commodities.sora",
+        quantity: "10.5",
+        spec: { scale: 1 },
+        primary_reference: "vault-cert-001",
+        status: null,
+        metadata: { origin: "AE", lot: "3" },
+        parents: [{ rwa: RWA_ID, quantity: "1.25" }],
+        controls: {
+          controller_accounts: [ACCOUNT_ID_CANONICAL],
+          controller_roles: ["auditor"],
+          freeze_enabled: true,
+          hold_enabled: true,
+          force_transfer_enabled: false,
+          redeem_enabled: false,
+        },
+      },
+    },
+  });
+});
+
+test("buildTransferRwaInstruction covers rwa transfer", () => {
+  const instruction = buildTransferRwaInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    rwaId: RWA_ID_INPUT,
+    quantity: "3.25",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  const decoded = encodeAndDecode(instruction);
+  assert.deepEqual(decoded, {
+    TransferRwa: {
+      source: ACCOUNT_ID_CANONICAL,
+      rwa: RWA_ID,
+      quantity: "3.25",
+      destination: ACCOUNT_ID_CANONICAL,
+    },
+  });
+});
+
+test("rwa scalar instruction builders cover lifecycle operations", () => {
+  const merge = buildMergeRwasInstruction({
+    merge: {
+      parents: [{ rwa: RWA_ID, quantity: "1.5" }],
+      primaryReference: "blend-cert-007",
+      status: "blended",
+      metadata: { grade: "A" },
+    },
+  });
+  const redeem = buildRedeemRwaInstruction({ rwaId: RWA_ID, quantity: "2" });
+  const freeze = buildFreezeRwaInstruction({ rwaId: RWA_ID });
+  const unfreeze = buildUnfreezeRwaInstruction({ rwaId: RWA_ID });
+  const hold = buildHoldRwaInstruction({ rwaId: RWA_ID, quantity: "3" });
+  const release = buildReleaseRwaInstruction({ rwaId: RWA_ID, quantity: "1" });
+  const forceTransfer = buildForceTransferRwaInstruction({
+    rwaId: RWA_ID,
+    quantity: "4",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  const controls = buildSetRwaControlsInstruction({
+    rwaId: RWA_ID,
+    controls: { redeemEnabled: true },
+  });
+
+  assert.deepEqual(encodeAndDecode(merge), {
+    MergeRwas: {
+      parents: [{ rwa: RWA_ID, quantity: "1.5" }],
+      primary_reference: "blend-cert-007",
+      status: "blended",
+      metadata: { grade: "A" },
+    },
+  });
+  assert.deepEqual(encodeAndDecode(redeem), {
+    RedeemRwa: { rwa: RWA_ID, quantity: "2" },
+  });
+  assert.deepEqual(encodeAndDecode(freeze), {
+    FreezeRwa: { rwa: RWA_ID },
+  });
+  assert.deepEqual(encodeAndDecode(unfreeze), {
+    UnfreezeRwa: { rwa: RWA_ID },
+  });
+  assert.deepEqual(encodeAndDecode(hold), {
+    HoldRwa: { rwa: RWA_ID, quantity: "3" },
+  });
+  assert.deepEqual(encodeAndDecode(release), {
+    ReleaseRwa: { rwa: RWA_ID, quantity: "1" },
+  });
+  assert.deepEqual(encodeAndDecode(forceTransfer), {
+    ForceTransferRwa: {
+      rwa: RWA_ID,
+      quantity: "4",
+      destination: ACCOUNT_ID_CANONICAL,
+    },
+  });
+  assert.deepEqual(encodeAndDecode(controls), {
+    SetRwaControls: {
+      rwa: RWA_ID,
+      controls: {
+        controller_accounts: [],
+        controller_roles: [],
+        freeze_enabled: false,
+        hold_enabled: false,
+        force_transfer_enabled: false,
+        redeem_enabled: true,
+      },
+    },
+  });
+
+  const setMetadata = buildSetRwaKeyValueInstruction({
+    rwaId: RWA_ID,
+    key: "grade",
+    value: { country: "AE", sequence: BigInt(7) },
+  });
+  const removeMetadata = buildRemoveRwaKeyValueInstruction({
+    rwaId: RWA_ID,
+    key: "grade",
+  });
+  assert.deepEqual(encodeAndDecode(setMetadata), {
+    SetRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
+      value: { country: "AE", sequence: "7" },
+    },
+  });
+  assert.deepEqual(encodeAndDecode(removeMetadata), {
+    RemoveRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
+    },
+  });
+});
+
 test("buildRegisterDomainInstruction normalizes metadata payloads", () => {
   const instruction = buildRegisterDomainInstruction({
     domainId: DOMAIN_ID,
@@ -535,34 +711,105 @@ test("buildRegisterDomainInstruction accepts custom logo strings", () => {
 test("buildRegisterAccountInstruction defaults metadata and validates", () => {
   const instruction = buildRegisterAccountInstruction({
     accountId: ACCOUNT_ID,
-    domainId: DOMAIN_ID,
   });
   const account = instruction.Register.Account;
   assert.equal(account.id, ACCOUNT_ID_CANONICAL);
-  assert.equal(account.domain, DOMAIN_ID);
   assert.deepEqual(account.metadata, {});
   assert.equal(account.label ?? null, null);
+  assert.equal(account.uaid ?? null, null);
+  assert.deepEqual(account.opaque_ids, []);
   const decoded = encodeAndDecode(instruction);
   const decodedAccount = decoded.Register.Account;
   assert.equal(decodedAccount.id, ACCOUNT_ID_CANONICAL);
-  assert.equal(decodedAccount.domain, DOMAIN_ID);
   assert.deepEqual(decodedAccount.metadata, {});
+  assert.equal(decodedAccount.domain ?? null, null);
   assert.equal(decodedAccount.label ?? null, null);
-  assert.throws(
-    () =>
-      buildRegisterAccountInstruction({
-        accountId: ACCOUNT_ID,
-      }),
-    /domainId must be a non-empty string/i,
-  );
+  assert.equal(decodedAccount.uaid ?? null, null);
+  assert.deepEqual(decodedAccount.opaque_ids, []);
   assert.throws(
     () =>
       buildRegisterAccountInstruction({
         accountId: ACCOUNT_ID,
         domainId: DOMAIN_ID,
+      }),
+    /domainless/i,
+  );
+  assert.throws(
+    () =>
+      buildRegisterAccountInstruction({
+        accountId: ACCOUNT_ID,
         metadata: ["invalid"],
       }),
     /plain object/i,
+  );
+});
+
+test("buildRegisterAssetDefinitionInstruction preserves alias metadata", () => {
+  const instruction = buildRegisterAssetDefinitionInstruction({
+    assetDefinitionId: ASSET_DEFINITION_ID,
+    name: "demo",
+    description: "Demo settlement PoC asset",
+    alias: "demo#settlement.main",
+    scale: 2,
+    metadata: { purpose: "poc" },
+  });
+  assert.deepEqual(instruction, {
+    Register: {
+      AssetDefinition: {
+        id: ASSET_DEFINITION_ID,
+        name: "demo",
+        description: "Demo settlement PoC asset",
+        alias: "demo#settlement.main",
+        spec: { scale: 2 },
+        mintable: "Infinitely",
+        logo: null,
+        metadata: { purpose: "poc" },
+        balance_scope_policy: "Global",
+        confidential_policy: {
+          mode: "TransparentOnly",
+          vk_set_hash: null,
+          poseidon_params_id: null,
+          pedersen_params_id: null,
+          pending_transition: null,
+        },
+      },
+    },
+  });
+  assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
+});
+
+test("buildGrantAccountPermissionInstruction defaults payload", () => {
+  const instruction = buildGrantAccountPermissionInstruction({
+    accountId: ACCOUNT_ID,
+    permission: { name: "register_zk_asset" },
+  });
+  assert.deepEqual(instruction, {
+    Grant: {
+      Permission: {
+        object: {
+          name: "register_zk_asset",
+          payload: null,
+        },
+        destination: ACCOUNT_ID_CANONICAL,
+      },
+    },
+  });
+  assert.deepEqual(encodeAndDecode(instruction), canonicalizeClone(instruction));
+});
+
+test("buildSetAssetDefinitionAliasInstruction supports clearing aliases", () => {
+  assert.deepEqual(
+    buildSetAssetDefinitionAliasInstruction({
+      assetDefinitionId: ASSET_DEFINITION_ID,
+      alias: null,
+    }),
+    {
+      SetAssetDefinitionAlias: {
+        asset_definition_id: ASSET_DEFINITION_ID,
+        alias: null,
+        lease_expiry_ms: null,
+      },
+    },
   );
 });
 
@@ -570,7 +817,7 @@ const RELAY_ACCOUNT_ID = ACCOUNT_ID_CANONICAL;
 
 test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () => {
   const instruction = buildCreateKaigiInstruction({
-    id: { domainId: "wonderland", callName: "weekly-sync" },
+    id: { domainId: "wonderland.sora", callName: "weekly-sync" },
     host: ACCOUNT_ID,
     title: "Weekly Sync",
     description: "Roadmap alignment",
@@ -596,7 +843,7 @@ test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () =>
     Kaigi: {
       CreateKaigi: {
         call: {
-          id: { domain_id: "wonderland", call_name: "weekly-sync" },
+          id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
           host: ACCOUNT_ID_CANONICAL,
           title: "Weekly Sync",
           description: "Roadmap alignment",
@@ -618,6 +865,10 @@ test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () =>
             ],
           },
         },
+        commitment: null,
+        nullifier: null,
+        roster_root: null,
+        proof: null,
       },
     },
   };
@@ -627,7 +878,7 @@ test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () =>
 
 test("noritoDecodeInstruction decodes Kaigi manifests", () => {
   const instruction = buildCreateKaigiInstruction({
-    id: "wonderland:weekly-sync",
+    id: "wonderland.sora:weekly-sync",
     host: ACCOUNT_ID,
     gasRatePerMinute: 120,
     relayManifest: {
@@ -646,13 +897,61 @@ test("noritoDecodeInstruction decodes Kaigi manifests", () => {
   assert.deepEqual(canonicalizeClone(decoded), canonicalizeClone(instruction));
 });
 
+test("buildCreateKaigiInstruction accepts privacy artifacts", () => {
+  const commitmentBytes = Buffer.alloc(32, 0x44);
+  const nullifierBytes = Buffer.alloc(32, 0x55);
+  const rosterRootBytes = Buffer.alloc(32, 0x66);
+  const proofBytes = Buffer.from([0xca, 0xfe]);
+  const instruction = buildCreateKaigiInstruction({
+    id: "wonderland.sora:private-room",
+    host: ACCOUNT_ID,
+    privacyMode: "ZkRosterV1",
+    commitment: { commitment: commitmentBytes, aliasTag: "host" },
+    nullifier: { digest: nullifierBytes, issuedAtMs: 7 },
+    rosterRoot: rosterRootBytes,
+    proof: proofBytes,
+  });
+  const expected = {
+    Kaigi: {
+      CreateKaigi: {
+        call: {
+          id: { domain_id: "wonderland.sora", call_name: "private-room" },
+          host: ACCOUNT_ID_CANONICAL,
+          title: null,
+          description: null,
+          max_participants: null,
+          gas_rate_per_minute: 0,
+          metadata: {},
+          scheduled_start_ms: null,
+          billing_account: null,
+          privacy_mode: { mode: "ZkRosterV1", state: null },
+          room_policy: { policy: "Authenticated", state: null },
+          relay_manifest: null,
+        },
+        commitment: {
+          commitment: normalizedHashHex(commitmentBytes),
+          alias_tag: "host",
+        },
+        nullifier: {
+          digest: normalizedHashHex(nullifierBytes),
+          issued_at_ms: 7,
+        },
+        roster_root: normalizedHashHex(rosterRootBytes),
+        proof: proofBytes.toString("base64"),
+      },
+    },
+  };
+  assert.deepEqual(instruction, expected);
+  assert.deepEqual(encodeAndDecode(instruction), expected);
+});
+
 test("buildJoinKaigiInstruction normalizes buffers and hashes", () => {
   const commitmentBytes = Buffer.alloc(32, 0x11);
   const nullifierBytes = Buffer.alloc(32, 0x22);
   const rosterRootBytes = Buffer.alloc(32, 0x33);
   const proofBytes = Buffer.from([0xaa, 0xbb, 0xcc]);
   const instruction = buildJoinKaigiInstruction({
-    callId: "wonderland:weekly-sync",
+    callId: "wonderland.sora:weekly-sync",
     participant: ACCOUNT_ID,
     commitment: {
       commitment: commitmentBytes,
@@ -667,7 +966,7 @@ test("buildJoinKaigiInstruction normalizes buffers and hashes", () => {
   const expected = {
     Kaigi: {
       JoinKaigi: {
-        call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
+        call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         participant: ACCOUNT_ID_CANONICAL,
         commitment: {
           commitment: normalizedHashHex(commitmentBytes),
@@ -688,13 +987,13 @@ test("buildJoinKaigiInstruction normalizes buffers and hashes", () => {
 
 test("buildLeaveKaigiInstruction accepts minimal payload", () => {
   const instruction = buildLeaveKaigiInstruction({
-    callId: { domain_id: "wonderland", call_name: "weekly-sync" },
+    callId: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
     participant: ACCOUNT_ID,
   });
   const expected = {
     Kaigi: {
       LeaveKaigi: {
-        call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
+        call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         participant: ACCOUNT_ID_CANONICAL,
         commitment: null,
         nullifier: null,
@@ -709,14 +1008,52 @@ test("buildLeaveKaigiInstruction accepts minimal payload", () => {
 
 test("buildEndKaigiInstruction normalizes optional timestamp", () => {
   const instruction = buildEndKaigiInstruction({
-    callId: "wonderland:weekly-sync",
+    callId: "wonderland.sora:weekly-sync",
     endedAtMs: "1700001234567",
   });
   const expected = {
     Kaigi: {
       EndKaigi: {
-        call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
+        call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         ended_at_ms: 1700001234567,
+        commitment: null,
+        nullifier: null,
+        roster_root: null,
+        proof: null,
+      },
+    },
+  };
+  assert.deepEqual(instruction, expected);
+  assert.deepEqual(encodeAndDecode(instruction), expected);
+});
+
+test("buildEndKaigiInstruction accepts privacy artifacts", () => {
+  const commitmentBytes = Buffer.alloc(32, 0x77);
+  const nullifierBytes = Buffer.alloc(32, 0x88);
+  const rosterRootBytes = Buffer.alloc(32, 0x99);
+  const proofBytes = Buffer.from([0xaa, 0xbb, 0xcc]);
+  const instruction = buildEndKaigiInstruction({
+    callId: "wonderland.sora:weekly-sync",
+    commitment: { commitment: commitmentBytes, aliasTag: "host" },
+    nullifier: { digest: nullifierBytes, issuedAtMs: 13 },
+    rosterRoot: rosterRootBytes,
+    proof: proofBytes,
+  });
+  const expected = {
+    Kaigi: {
+      EndKaigi: {
+        call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
+        ended_at_ms: null,
+        commitment: {
+          commitment: normalizedHashHex(commitmentBytes),
+          alias_tag: "host",
+        },
+        nullifier: {
+          digest: normalizedHashHex(nullifierBytes),
+          issued_at_ms: 13,
+        },
+        roster_root: normalizedHashHex(rosterRootBytes),
+        proof: proofBytes.toString("base64"),
       },
     },
   };
@@ -728,7 +1065,7 @@ test("buildRecordKaigiUsageInstruction handles optional commitment", () => {
   const usageCommitment = Buffer.alloc(32, 0x55);
   const proof = Buffer.from([0xde, 0xad]);
   const instruction = buildRecordKaigiUsageInstruction({
-    callId: "wonderland:weekly-sync",
+    callId: "wonderland.sora:weekly-sync",
     durationMs: 60000,
     billedGas: "512",
     usageCommitment,
@@ -737,7 +1074,7 @@ test("buildRecordKaigiUsageInstruction handles optional commitment", () => {
   const expected = {
     Kaigi: {
       RecordKaigiUsage: {
-        call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
+        call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         duration_ms: 60000,
         billed_gas: 512,
         usage_commitment: normalizedHashHex(usageCommitment),
@@ -751,13 +1088,13 @@ test("buildRecordKaigiUsageInstruction handles optional commitment", () => {
 
 test("buildSetKaigiRelayManifestInstruction allows clearing manifest", () => {
   const instruction = buildSetKaigiRelayManifestInstruction({
-    callId: "wonderland:weekly-sync",
+    callId: "wonderland.sora:weekly-sync",
     relayManifest: null,
   });
   const expected = {
     Kaigi: {
       SetKaigiRelayManifest: {
-        call_id: { domain_id: "wonderland", call_name: "weekly-sync" },
+        call_id: { domain_id: "wonderland.sora", call_name: "weekly-sync" },
         relay_manifest: null,
       },
     },
@@ -790,6 +1127,10 @@ test("buildRegisterKaigiRelayInstruction encodes hpke key", () => {
 test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () => {
   const codeHashBytes = Buffer.alloc(32, 0xaa);
   const abiHashBytes = Buffer.alloc(32, 0xbb);
+  const signer = `ed25519:ed0120${"11".repeat(32)}`;
+  const signature = `ed25519:${"22".repeat(64)}`;
+  const signerCanonical = signer.split(":")[1];
+  const signatureCanonical = signature.split(":")[1].toUpperCase();
   const instruction = buildRegisterSmartContractCodeInstruction({
     manifest: {
       codeHash: codeHashBytes,
@@ -797,8 +1138,25 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
       compilerFingerprint: "rustc-1.79",
       featuresBitmap: "42",
       accessSetHints: {
-        readKeys: ["account:alice", "asset:rose#wonderland"],
+        readKeys: ["account:alice", "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
         writeKeys: ["contract:foo"],
+      },
+      entrypoints: [
+        {
+          name: "upgrade_ledger",
+          kind: "Kaizen",
+          permission: "can_upgrade",
+        },
+      ],
+      kotoba: [
+        {
+          msgId: "contract.title",
+          translations: [{ lang: "en", text: "Ledger Contract" }],
+        },
+      ],
+      provenance: {
+        signer,
+        signature,
       },
     },
   });
@@ -810,16 +1168,53 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
         compiler_fingerprint: "rustc-1.79",
         features_bitmap: 42,
         access_set_hints: {
-          read_keys: ["account:alice", "asset:rose#wonderland"],
+          read_keys: ["account:alice", "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
           write_keys: ["contract:foo"],
         },
-        entrypoints: null,
+        entrypoints: [
+          {
+            name: "upgrade_ledger",
+            kind: { kind: "Kaizen" },
+            permission: "can_upgrade",
+          },
+        ],
+        kotoba: [
+          {
+            msg_id: "contract.title",
+            translations: [{ lang: "en", text: "Ledger Contract" }],
+          },
+        ],
+        provenance: {
+          signer: signerCanonical,
+          signature: signatureCanonical,
+        },
+      },
+    },
+  };
+  const expectedDecoded = {
+    RegisterSmartContractCode: {
+      manifest: {
+        ...expected.RegisterSmartContractCode.manifest,
+        entrypoints: [
+          {
+            access_hints_complete: null,
+            access_hints_skipped: [],
+            kind: { kind: "Kaizen", value: null },
+            name: "upgrade_ledger",
+            params: [],
+            permission: "can_upgrade",
+            read_keys: [],
+            return_type: null,
+            triggers: [],
+            write_keys: [],
+          },
+        ],
       },
     },
   };
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
-  assert.deepEqual(decoded, expected);
+  assert.deepEqual(decoded, expectedDecoded);
 });
 
 test("buildRegisterSmartContractBytesInstruction encodes bytes deterministically", () => {
@@ -855,41 +1250,6 @@ test("buildRegisterSmartContractBytesInstruction rejects empty code bytes", () =
   );
 });
 
-test("buildDeactivateContractInstanceInstruction normalizes reason text", () => {
-  const instruction = buildDeactivateContractInstanceInstruction({
-    namespace: "apps",
-    contractId: "ledger",
-    reason: " rotate ",
-  });
-  const expected = {
-    DeactivateContractInstance: {
-      namespace: "apps",
-      contract_id: "ledger",
-      reason: " rotate ",
-    },
-  };
-  assert.deepEqual(instruction, expected);
-  assert.deepEqual(encodeAndDecode(instruction), expected);
-});
-
-test("buildActivateContractInstanceInstruction normalizes identifiers", () => {
-  const instruction = buildActivateContractInstanceInstruction({
-    namespace: "apps",
-    contractId: "governance",
-    codeHash: Buffer.alloc(32, 0x44),
-  });
-  const expected = {
-    ActivateContractInstance: {
-      namespace: "apps",
-      contract_id: "governance",
-      code_hash: normalizedHashHex(Buffer.alloc(32, 0x44)),
-    },
-  };
-  assert.deepEqual(instruction, expected);
-  const decoded = encodeAndDecode(instruction);
-  assert.deepEqual(decoded, expected);
-});
-
 test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
   const instruction = buildRemoveSmartContractBytesInstruction({
     codeHash: Buffer.alloc(32, 0x11),
@@ -912,8 +1272,7 @@ test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
 
 test("buildProposeDeployContractInstruction normalizes hashes and window", () => {
   const instruction = buildProposeDeployContractInstruction({
-    namespace: "apps",
-    contractId: "ledger",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     codeHash: "AA".repeat(32),
     abiHash: Buffer.alloc(32, 0xbb),
     abiVersion: "1",
@@ -922,8 +1281,7 @@ test("buildProposeDeployContractInstruction normalizes hashes and window", () =>
   });
   const expected = {
     ProposeDeployContract: {
-      namespace: "apps",
-      contract_id: "ledger",
+      contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
       code_hash_hex: "aa".repeat(32),
       abi_hash_hex: Buffer.alloc(32, 0xbb).toString("hex"),
       abi_version: "1",
@@ -965,7 +1323,7 @@ test("buildCastZkBallotInstruction defaults public inputs to empty object", () =
   assert.deepEqual(decoded, instruction);
 });
 
-test("buildCastZkBallotInstruction rejects deprecated public input keys", () => {
+test("buildCastZkBallotInstruction rejects unsupported public input keys", () => {
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
@@ -1051,20 +1409,21 @@ test("buildCastZkBallotInstruction requires complete lock hints", () => {
 });
 
 test("buildCastZkBallotInstruction rejects noncanonical owner", () => {
+  const nonCanonicalOwner = ACCOUNT_ADDRESS.toI105(0x02f2);
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
         electionId: "ref-5",
         proof: Buffer.from([0x06]),
         publicInputs: {
-          owner: ACCOUNT_ID_INPUT,
+          owner: nonCanonicalOwner,
           amount: "250",
           duration_blocks: 12,
         },
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.INVALID_ACCOUNT_ID);
-      assert.match(String(error?.message), /canonical (?:I105 )?account id/i);
+      assert.match(String(error?.message), /canonical .*i105 account id/i);
       return true;
     },
   );
@@ -1144,7 +1503,7 @@ test("buildPersistCouncilForEpochInstruction validates members and derivation", 
     epoch: 10,
     members: [ACCOUNT_ID],
     candidatesCount: 5,
-    derivedBy: "fallback",
+    derivedBy: "Vrf",
   });
   const expected = {
     PersistCouncilForEpoch: {
@@ -1153,12 +1512,68 @@ test("buildPersistCouncilForEpochInstruction validates members and derivation", 
       alternates: [],
       verified: 0,
       candidates_count: 5,
-      derived_by: "Fallback",
+      derived_by: "Vrf",
     },
   };
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expected);
+  assert.throws(
+    () =>
+      buildPersistCouncilForEpochInstruction({
+        epoch: 10,
+        members: [ACCOUNT_ID],
+        candidatesCount: 5,
+        derivedBy: "Manual",
+      }),
+    /derivedBy must be Vrf/,
+  );
+});
+
+test("buildSubmitAgendaProposalInstruction wraps the supplied proposal payload", () => {
+  const proposal = {
+    version: 1,
+    proposal_id: "AC-2026-001",
+    submitted_at_unix_ms: 1770000000000,
+    language: "en",
+    action: "add-to-denylist",
+    summary: {
+      title: "Blacklist proposal for bafy-test",
+      motivation: "Evidence review requested for the published CID.",
+      expected_impact: "Participating gateways would restrict delivery during review.",
+    },
+    tags: ["spam"],
+    targets: [
+      {
+        label: "bafy-test",
+        hash_family: "sorafs-root-cid",
+        hash_hex: "11".repeat(32),
+        reason: "spam moderation report",
+      },
+    ],
+    evidence: [
+      {
+        kind: "url",
+        uri: "https://example.invalid/case/1",
+        digest_blake3_hex: "22".repeat(32),
+        description: "Captured gateway evidence",
+      },
+    ],
+    submitter: {
+      name: "Explorer Moderator",
+      contact: "https://example.invalid/moderation",
+      organization: null,
+      pgp_fingerprint: null,
+    },
+    duplicates: [],
+  };
+  const instruction = buildSubmitAgendaProposalInstruction({ proposal });
+  assert.deepEqual(instruction, {
+    SubmitAgendaProposal: {
+      proposal,
+    },
+  });
+  assert.deepEqual(encodeAndDecode(instruction), instruction);
 });
 
 test("buildClaimTwitterFollowRewardInstruction wraps keyed hash", () => {
@@ -1228,7 +1643,7 @@ test("buildCancelTwitterEscrowInstruction wraps keyed hash", () => {
 
 test("buildRegisterZkAssetInstruction normalizes verifying key ids", () => {
   const instruction = buildRegisterZkAssetInstruction({
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     mode: "zk-native",
     transferVerifyingKey: "halo2/ipa:vk_transfer",
     unshieldVerifyingKey: { backend: "halo2/ipa", name: "vk_unshield" },
@@ -1242,7 +1657,7 @@ test("buildRegisterZkAssetInstruction normalizes verifying key ids", () => {
 test("buildScheduleConfidentialPolicyTransitionInstruction encodes transition metadata", () => {
   const transitionId = Buffer.alloc(32, 0xaa);
   const instruction = buildScheduleConfidentialPolicyTransitionInstruction({
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     newMode: "ShieldedOnly",
     effectiveHeight: "42",
     transitionId,
@@ -1258,17 +1673,17 @@ test("buildScheduleConfidentialPolicyTransitionInstruction encodes transition me
 test("buildCancelConfidentialPolicyTransitionInstruction wraps hash literal", () => {
   const transitionId = Buffer.alloc(32, 0xbb);
   const instruction = buildCancelConfidentialPolicyTransitionInstruction({
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     transitionId,
   });
   const payload = encodeAndDecode(instruction).zk.CancelConfidentialPolicyTransition;
-  assert.equal(payload.asset, "rose#wonderland");
+  assert.equal(payload.asset, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
   assert.equal(payload.transition_id, normalizedHashHex(transitionId));
 });
 
 test("buildShieldInstruction encodes encrypted payload fields", () => {
   const instruction = buildShieldInstruction({
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     fromAccountId: ACCOUNT_ID_INPUT,
     amount: "7",
     noteCommitment: Buffer.alloc(32, 0x01),
@@ -1289,7 +1704,7 @@ test("buildShieldInstruction rejects non-safe JSON numeric amounts", () => {
   assert.throws(
     () =>
       buildShieldInstruction({
-        assetDefinitionId: "rose#wonderland",
+        assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
         fromAccountId: ACCOUNT_ID_INPUT,
         amount: Number.MAX_SAFE_INTEGER + 1,
         noteCommitment: Buffer.alloc(32, 0x01),
@@ -1310,7 +1725,7 @@ test("buildShieldInstruction rejects non-safe JSON numeric amounts", () => {
 
 test("buildZkTransferInstruction normalizes proof attachments", () => {
   const instruction = buildZkTransferInstruction({
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     inputs: [Buffer.alloc(32, 0x11)],
     outputs: [Buffer.alloc(32, 0x22)],
     proof: {
@@ -1327,7 +1742,7 @@ test("buildZkTransferInstruction normalizes proof attachments", () => {
 
 test("buildUnshieldInstruction honours optional root hints", () => {
   const instruction = buildUnshieldInstruction({
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     destinationAccountId: ACCOUNT_ID_INPUT,
     publicAmount: 5,
     inputs: [Buffer.alloc(32, 0x55)],
@@ -1415,6 +1830,7 @@ test("buildSubmitBallotInstruction encodes ciphertext and proof", () => {
 });
 
 test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
+  const invalidNullifier = Array.from({ length: 32 }, (_, index) => (index === 0 ? 256 : 0));
   assert.throws(
     () =>
       buildSubmitBallotInstruction({
@@ -1425,7 +1841,7 @@ test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
           proof: Buffer.from("proof"),
           verifyingKeyRef: "halo2/ipa:vk_ballot",
         },
-        nullifier: [256],
+        nullifier: invalidNullifier,
       }),
     (error) => {
       assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);

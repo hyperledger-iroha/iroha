@@ -12,12 +12,23 @@
     },
     "./torii": "./dist/toriiClient.js",
     "./norito": "./dist/norito.js",
+    "./canonical-request": {
+      "import": "./dist/canonicalRequest.js",
+      "types": "./index.d.ts"
+    },
+    "./sccp": {
+      "import": "./dist/sccp.js",
+      "types": "./index.d.ts"
+    },
     "./crypto": {
       "browser": "./dist/crypto.browser.js",
       "import": "./dist/crypto.js",
       "types": "./index.d.ts"
     },
-    "./offline": "./dist/offlineEnvelope.js"
+    "./connect-browser": {
+      "import": "./dist/connect.browser.js",
+      "types": "./connect.browser.d.ts"
+    }
   },
   "typesVersions": {
     "*": {
@@ -27,25 +38,29 @@
       "norito": [
         "./index.d.ts"
       ],
+      "canonical-request": [
+        "./index.d.ts"
+      ],
+      "sccp": [
+        "./index.d.ts"
+      ],
       "crypto": [
         "./index.d.ts"
       ],
-      "offline": [
-        "./index.d.ts"
+      "connect-browser": [
+        "./connect.browser.d.ts"
       ]
     }
   },
   "scripts": {
+    "prepare": "npm run build:dist",
     "lint": "eslint --max-warnings=0 src scripts recipes test --ext .js,.mjs",
     "lint:test": "npm run lint && npm run build:native && npm test",
     "build:native": "node ./scripts/build-native.mjs && node ./scripts/copy-native.mjs",
     "build:dist": "node ./scripts/build-dist.mjs",
     "bundle:check": "node ./scripts/bundle-size-check.mjs",
     "test": "npm run build:native && node --test",
-    "test:js": "IROHA_JS_DISABLE_NATIVE=1 node --test",
-    "example:offline": "node ./recipes/offline_queue.mjs",
-    "example:offline:connect": "node ./recipes/offline_queue.mjs",
-    "example:offline:pipeline": "node ./recipes/offline_pipeline.mjs",
+    "test:dist": "npm run build:dist && node --test",
     "check:changelog": "node ./scripts/check-changelog.mjs",
     "release:update-docs": "node ./scripts/update-release-docs.mjs",
     "release:provenance": "node ./scripts/record-release-provenance.mjs",
@@ -79,6 +94,7 @@
   "files": [
     "README.md",
     "index.d.ts",
+    "connect.browser.d.ts",
     "package.json",
     "native/iroha_js_host.checksums.json",
     "dist",
@@ -97,6 +113,7 @@
   "license": "Apache-2.0",
   "private": false,
   "dependencies": {
+    "@noble/ciphers": "^1.2.0",
     "@noble/curves": "^1.4.0",
     "@noble/hashes": "^1.5.0",
     "buffer": "^6.0.3"

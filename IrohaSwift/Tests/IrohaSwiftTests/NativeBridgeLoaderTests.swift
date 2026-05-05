@@ -13,11 +13,11 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let original = try bundledBridgeBinary()
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let target = tempDir
-            .appendingPathComponent(original.identifier, isDirectory: true)
-            .appendingPathComponent("NoritoBridge.framework", isDirectory: true)
-        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-        let tampered = target.appendingPathComponent("NoritoBridge")
+        let tampered = stagedBridgeURL(root: tempDir, identifier: original.identifier)
+        try FileManager.default.createDirectory(
+            at: tampered.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         try FileManager.default.copyItem(at: original.url, to: tampered)
 
         var data = try Data(contentsOf: tampered)
@@ -33,6 +33,21 @@ final class NativeBridgeLoaderTests: XCTestCase {
         default:
             XCTFail("expected hash mismatch, got \(status)")
         }
+    }
+
+    func testManifestlessBridgeUsesPinnedFallbackHash() throws {
+        let original = try bundledBridgeBinary()
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let bridgeURL = stagedBridgeURL(root: tempDir, identifier: original.identifier)
+        try FileManager.default.createDirectory(
+            at: bridgeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.copyItem(at: original.url, to: bridgeURL)
+
+        let status = NoritoBridgeLoader.validateForTests(at: bridgeURL.path, allowUntrustedLocation: true)
+        XCTAssertEqual(status, .valid(path: bridgeURL.path, identifier: original.identifier))
     }
 
     func testUntrustedPathIsDeniedWhenOverridesDisabled() throws {
@@ -51,11 +66,11 @@ final class NativeBridgeLoaderTests: XCTestCase {
         let original = try bundledBridgeBinary()
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let target = tempDir
-            .appendingPathComponent(original.identifier, isDirectory: true)
-            .appendingPathComponent("NoritoBridge.framework", isDirectory: true)
-        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-        let bridgeURL = target.appendingPathComponent("NoritoBridge")
+        let bridgeURL = stagedBridgeURL(root: tempDir, identifier: original.identifier)
+        try FileManager.default.createDirectory(
+            at: bridgeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         try FileManager.default.copyItem(at: original.url, to: bridgeURL)
 
         var tamperedData = try Data(contentsOf: bridgeURL)
@@ -86,10 +101,11 @@ final class NativeBridgeLoaderTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let target = tempDir
             .appendingPathComponent("NoritoBridge.xcframework", isDirectory: true)
-            .appendingPathComponent(original.identifier, isDirectory: true)
-            .appendingPathComponent("NoritoBridge.framework", isDirectory: true)
-        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-        let bridgeURL = target.appendingPathComponent("NoritoBridge")
+        let bridgeURL = stagedBridgeURL(root: target, identifier: original.identifier)
+        try FileManager.default.createDirectory(
+            at: bridgeURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         try FileManager.default.copyItem(at: original.url, to: bridgeURL)
 
         var tamperedData = try Data(contentsOf: bridgeURL)
@@ -127,14 +143,20 @@ final class NativeBridgeLoaderTests: XCTestCase {
 
         var root = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { root.deleteLastPathComponent() }
-        let url = root
-            .appendingPathComponent("dist/NoritoBridge.xcframework")
-            .appendingPathComponent(identifier)
-            .appendingPathComponent("NoritoBridge.framework/NoritoBridge")
+        let url = stagedBridgeURL(
+            root: root.appendingPathComponent("dist/NoritoBridge.xcframework"),
+            identifier: identifier
+        )
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("NoritoBridge.xcframework missing at \(url.path)")
         }
         return (url, identifier)
+    }
+
+    private func stagedBridgeURL(root: URL, identifier: String) -> URL {
+        root
+            .appendingPathComponent(identifier, isDirectory: true)
+            .appendingPathComponent("libNoritoBridge.a")
     }
 }
 
@@ -160,7 +182,7 @@ final class BridgeAvailabilitySurfaceTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = TransferRequest(chainId: "00000000-0000-0000-0000-000000000000",
                                       authority: authority,
-                                      assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+                                      assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
                                       quantity: "1",
                                       destination: authority,
                                       description: nil,

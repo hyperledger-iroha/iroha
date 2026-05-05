@@ -522,11 +522,11 @@ mod tests {
     fn plan_create_args_build_request() {
         let provider = sample_account_id(1);
         let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "commerce".parse().unwrap(),
+            iroha_data_model::domain::DomainId::try_new("commerce", "universal").unwrap(),
             "plan".parse().unwrap(),
         );
         let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "pay".parse().unwrap(),
+            iroha_data_model::domain::DomainId::try_new("pay", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let plan = sample_plan(provider.clone(), asset_definition);
@@ -565,10 +565,12 @@ mod tests {
     fn subscription_create_args_build_request() {
         let subscriber = sample_account_id(2);
         let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "commerce".parse().unwrap(),
+            iroha_data_model::domain::DomainId::try_new("commerce", "universal").unwrap(),
             "plan".parse().unwrap(),
         );
-        let subscription_id: NftId = "sub-1$subscriptions".parse().expect("subscription id");
+        let subscription_id: NftId = "sub-1$subscriptions.universal"
+            .parse()
+            .expect("subscription id");
         let billing_trigger_id: TriggerId = "sub-1-bill".parse().expect("billing trigger");
         let usage_trigger_id: TriggerId = "sub-1-usage".parse().expect("usage trigger");
         let (private_key, private_key_str) = sample_private_key();
@@ -616,7 +618,9 @@ mod tests {
     #[test]
     fn subscription_action_args_build_request() {
         let subscriber = sample_account_id(2);
-        let subscription_id: NftId = "sub-1$subscriptions".parse().expect("subscription id");
+        let subscription_id: NftId = "sub-1$subscriptions.universal"
+            .parse()
+            .expect("subscription id");
         let (private_key, private_key_str) = sample_private_key();
         let args = SubscriptionActionArgs {
             subscription_id,
@@ -635,7 +639,9 @@ mod tests {
     #[test]
     fn subscription_usage_args_build_request() {
         let subscriber = sample_account_id(2);
-        let subscription_id: NftId = "sub-1$subscriptions".parse().expect("subscription id");
+        let subscription_id: NftId = "sub-1$subscriptions.universal"
+            .parse()
+            .expect("subscription id");
         let unit_key: Name = "compute_ms".parse().expect("unit key");
         let usage_trigger_id: TriggerId = "usage-1".parse().expect("usage trigger");
         let (private_key, private_key_str) = sample_private_key();
@@ -660,7 +666,7 @@ mod tests {
     fn load_plan_reads_json_file() {
         let provider = sample_account_id(1);
         let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "pay".parse().unwrap(),
+            iroha_data_model::domain::DomainId::try_new("pay", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let plan = sample_plan(provider, asset_definition);

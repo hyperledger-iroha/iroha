@@ -25,9 +25,9 @@ hashing deterministic. ይህ ሰነድ ቀኖናዊውን ቅጽበታዊ ገ�
 
 | መንገድ | ዓላማ | SHA-256 |
 |-------|--------|-----|
-| `artifacts/offline_poseidon/constants.ron` | ከ `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` የመነጨ ቀኖናዊ ቅጽበታዊ ገጽ እይታ; ለጂፒዩ ግንባታዎች የእውነት ምንጭ። | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | ቀኖናዊውን ቅጽበታዊ ገጽ እይታን ያንጸባርቃል ስለዚህ የስዊፍት ዩኒት ሙከራዎች እና የ XCFramework የጢስ ማውጫ የብረት ከርነሎች የሚጠብቁትን ተመሳሳይ ቋሚዎች ይጭናሉ። | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | የአንድሮይድ/Kotlin መጫዎቻዎች ለተመጣጣኝ እና ለተከታታይነት ሙከራዎች ተመሳሳይ መግለጫዎችን ይጋራሉ። | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | ከ `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` የመነጨ ቀኖናዊ ቅጽበታዊ ገጽ እይታ; ለጂፒዩ ግንባታዎች የእውነት ምንጭ። | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | ቀኖናዊውን ቅጽበታዊ ገጽ እይታን ያንጸባርቃል ስለዚህ የስዊፍት ዩኒት ሙከራዎች እና የ XCFramework የጢስ ማውጫ የብረት ከርነሎች የሚጠብቁትን ተመሳሳይ ቋሚዎች ይጭናሉ። | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | የአንድሮይድ/Kotlin መጫዎቻዎች ለተመጣጣኝ እና ለተከታታይነት ሙከራዎች ተመሳሳይ መግለጫዎችን ይጋራሉ። | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 እያንዳንዱ ሸማች ቋሚዎችን ወደ ጂፒዩ ከማስገባቱ በፊት ሃሹን ማረጋገጥ አለበት።
 የቧንቧ መስመር. አንጸባራቂው ሲቀየር (አዲስ ግቤት ወይም መገለጫ)፣ SHA እና
@@ -39,7 +39,7 @@ hashing deterministic. ይህ ሰነድ ቀኖናዊውን ቅጽበታዊ ገ�
 ረዳት ። ትዕዛዙ ሁለቱንም ቀኖናዊ ፋይል እና የኤስዲኬ መስተዋቶች ይጽፋል፡-
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 መድረሻዎቹን ለመሻር `--constants <path>`/`--vectors <path>` ይጠቀሙ ወይም

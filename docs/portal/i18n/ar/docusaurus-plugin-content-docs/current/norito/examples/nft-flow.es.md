@@ -19,7 +19,7 @@ translation_last_reviewed: 2026-02-07
 
 ## Recorrido del libro mayor
 
-- تأكد من وجود تعريف NFT (على سبيل المثال `n0#wonderland`) جنبًا إلى جنب مع حسابات المالك/المستقبل المستخدمة في الجزء (`i105...`، `i105...`).
+- تأكد من وجود تعريف NFT (على سبيل المثال `n0#wonderland`) جنبًا إلى جنب مع حسابات المالك/المستقبل المستخدمة في الجزء (`<i105-account-id>`، `<i105-account-id>`).
 - استدعاء نقطة الدخول `nft_issue_and_transfer` لالتقاط NFT ونقل Alice إلى Bob وإضافة شريط بيانات يصف الإصدار.
 - فحص حالة NFT الأكبر مع `iroha_cli ledger nfts list --account <id>` أو SDK المكافئة للتحقق من النقل، حيث يؤكد أن النشاط سيتم حذفه بمجرد تنفيذ تعليمات الانتظار.
 
@@ -35,11 +35,11 @@ translation_last_reviewed: 2026-02-07
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("i105...");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("i105...");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

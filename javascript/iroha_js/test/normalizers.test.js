@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { canonicalizeMultihashHex } from "../src/normalizers.js";
+import { canonicalizeMultihashHex, normalizeIdentifierInput } from "../src/normalizers.js";
 import { ValidationError, ValidationErrorCode } from "../src/validationError.js";
 
 test("canonicalizeMultihashHex rejects non-hex characters", () => {
@@ -23,6 +23,28 @@ test("canonicalizeMultihashHex rejects mismatched length varints", () => {
     (error) => {
       assert(error instanceof ValidationError);
       assert.equal(error.code, ValidationErrorCode.INVALID_MULTIHASH);
+      return true;
+    },
+  );
+});
+
+test("normalizeIdentifierInput canonicalizes phone and account-number inputs", () => {
+  assert.equal(
+    normalizeIdentifierInput(" +1 (555) 123-4567 ", "phone_e164", "phone"),
+    "+15551234567",
+  );
+  assert.equal(
+    normalizeIdentifierInput(" ab-12 / cd ", "account_number", "accountNumber"),
+    "AB12/CD",
+  );
+});
+
+test("normalizeIdentifierInput rejects malformed emails", () => {
+  assert.throws(
+    () => normalizeIdentifierInput("broken-email", "email_address", "email"),
+    (error) => {
+      assert(error instanceof ValidationError);
+      assert.equal(error.code, ValidationErrorCode.INVALID_STRING);
       return true;
     },
   );

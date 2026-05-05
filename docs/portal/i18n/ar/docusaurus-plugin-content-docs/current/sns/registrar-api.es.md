@@ -104,17 +104,17 @@ Struct ReservedAssignmentRequestV1 {
 
 ## 3. راحة نقاط النهاية| نقطة النهاية | الطريقة | الحمولة | الوصف |
 |----------|-------|--------|-------------|
-| `/v1/sns/registrations` | مشاركة | `RegisterNameRequestV1` | قم بالتسجيل أو إعادة إنشاء اسم. قم بإعادة تحديد مستوى السعر، وصلاحية الدفع/الإشراف، وإصدار أحداث التسجيل. |
-| `/v1/sns/registrations/{selector}/renew` | مشاركة | `RenewNameRequestV1` | تمديد النهاية. Aplica ventanas de gracia/redencion segun la politica. |
-| `/v1/sns/registrations/{selector}/transfer` | مشاركة | `TransferNameRequestV1` | قم بنقل بعض الملحقات الإضافية لمتطلبات الإدارة. |
-| `/v1/sns/registrations/{selector}/controllers` | ضع | `UpdateControllersRequestV1` | استبدال مجموعة وحدات التحكم؛ اتجاهات صالحة للحسابات التجارية. |
-| `/v1/sns/registrations/{selector}/freeze` | مشاركة | `FreezeNameRequestV1` | تجميد الوصي/المجلس. يتطلب تذكرة الوصي والرجوع إلى جدول أعمال الحكومة. |
-| `/v1/sns/registrations/{selector}/freeze` | حذف | `GovernanceHookV1` | قم بإلغاء تجميد العلاج؛ asegura تجاوز مجلس التسجيل. |
+| `/v1/sns/names` | مشاركة | `RegisterNameRequestV1` | قم بالتسجيل أو إعادة إنشاء اسم. قم بإعادة تحديد مستوى السعر، وصلاحية الدفع/الإشراف، وإصدار أحداث التسجيل. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | مشاركة | `RenewNameRequestV1` | تمديد النهاية. Aplica ventanas de gracia/redencion segun la politica. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | مشاركة | `TransferNameRequestV1` | قم بنقل بعض الملحقات الإضافية لمتطلبات الإدارة. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | ضع | `UpdateControllersRequestV1` | استبدال مجموعة وحدات التحكم؛ اتجاهات صالحة للحسابات التجارية. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | مشاركة | `FreezeNameRequestV1` | تجميد الوصي/المجلس. يتطلب تذكرة الوصي والرجوع إلى جدول أعمال الحكومة. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | حذف | `GovernanceHookV1` | قم بإلغاء تجميد العلاج؛ asegura تجاوز مجلس التسجيل. |
 | `/v1/sns/reserved/{selector}` | مشاركة | `ReservedAssignmentRequestV1` | تعيين الأسماء المحجوزة من قبل المضيف/المجلس. |
 | `/v1/sns/policies/{suffix_id}` | احصل على | -- | احصل على `SuffixPolicyV1` الفعلي (قابل للتخزين المؤقت). |
-| `/v1/sns/registrations/{selector}` | احصل على | -- | Devuelve `NameRecordV1` الفعلي + الحالة الفعالة (نشط، نعمة، وما إلى ذلك). |
+| `/v1/sns/names/{namespace}/{literal}` | احصل على | -- | Devuelve `NameRecordV1` الفعلي + الحالة الفعالة (نشط، نعمة، وما إلى ذلك). |
 
-** كود المحدد: ** الجزء `{selector}` يقبل I105، مدمج أو سداسي كانون ثاني ADDR-5؛ Torii يتم تطبيعه عبر `NameSelectorV1`.**نموذج الأخطاء:** جميع نقاط النهاية ترجع إلى Norito JSON مع `code`، `message`، `details`. تشتمل الرموز على `sns_err_reserved`، و`sns_err_payment_mismatch`، و`sns_err_policy_violation`، و`sns_err_governance_missing`.
+** كود المحدد: ** الجزء `{selector}` يقبل i105، مدمج أو سداسي كانون ثاني ADDR-5؛ Torii يتم تطبيعه عبر `NameSelectorV1`.**نموذج الأخطاء:** جميع نقاط النهاية ترجع إلى Norito JSON مع `code`، `message`، `details`. تشتمل الرموز على `sns_err_reserved`، و`sns_err_payment_mismatch`، و`sns_err_policy_violation`، و`sns_err_governance_missing`.
 
 ### 3.1 واجهة سطر الأوامر للمساعدين (متطلبات دليل المسجل N0)
 
@@ -125,7 +125,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -150,7 +150,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -158,7 +158,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -171,7 +171,7 @@ iroha sns freeze \
 iroha sns unfreeze \
   --selector makoto.sora \
   --governance-json /path/to/unfreeze_hook.json
-````--governance-json` يجب أن يحتوي على سجل `GovernanceHookV1` صالح (معرف الاقتراح، تجزئات التصويت، شركة المضيف/الوصي). كل أمر يشير ببساطة إلى نقطة النهاية `/v1/sns/registrations/{selector}/...` التي تتوافق مع مشغلي الإصدار التجريبي من الأسطح Torii التي تتعرف على SDKs تمامًا.
+````--governance-json` يجب أن يحتوي على سجل `GovernanceHookV1` صالح (معرف الاقتراح، تجزئات التصويت، شركة المضيف/الوصي). كل أمر يشير ببساطة إلى نقطة النهاية `/v1/sns/names/{namespace}/{literal}/...` التي تتوافق مع مشغلي الإصدار التجريبي من الأسطح Torii التي تتعرف على SDKs تمامًا.
 
 ## 4. خدمة gRPC
 
@@ -216,7 +216,7 @@ Torii التحقق من اختبار المنتج:1. معرف الاقتراح �
 
 1. يستشير العميل `/v1/sns/policies/{suffix_id}` للحصول على أسعار معقولة ومستويات متاحة.
 2. العميل آرما `RegisterNameRequestV1`:
-   - `selector` مشتق من الملصق I105 (المفضل) أو المجمع (الخيار الأفضل الثاني).
+   - `selector` مشتق من الملصق i105 (المفضل) أو المجمع (الخيار الأفضل الثاني).
    - `term_years` داخل حدود السياسة.
    - `payment` يشير إلى نقل وحدة التخزين/المضيف.
 3. Torii صالحة:
@@ -239,7 +239,7 @@ Torii التحقق من اختبار المنتج:1. معرف الاقتراح �
 
 1. يرسل ولي الأمر `FreezeNameRequestV1` مع التذكرة التي تشير إلى معرف الحادث.
 2. Torii يغير السجل إلى `NameStatus::Frozen`، ينبعث `NameFrozen`.
-3. من خلال العلاج، تجاوز انبعاث المجلس؛ يقوم المشغل بإرسال DELETE `/v1/sns/registrations/{selector}/freeze` مع `GovernanceHookV1`.
+3. من خلال العلاج، تجاوز انبعاث المجلس؛ يقوم المشغل بإرسال DELETE `/v1/sns/names/{namespace}/{literal}/freeze` مع `GovernanceHookV1`.
 4. Torii التحقق من صحة التجاوز، وإصدار `NameUnfrozen`.
 
 ## 7. التحقق من صحة رموز الخطأ

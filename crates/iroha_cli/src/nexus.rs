@@ -322,15 +322,16 @@ fn format_validator_summary(payload: &Value) -> Result<String> {
     let mut output = String::new();
     writeln!(
         &mut output,
-        "{:<36}  {:<18}  {:<22}  {:<20}  {:<11}",
-        "VALIDATOR", "STATUS", "ACTIVATION", "STAKE", "LAST_REWARD"
+        "{:<36}  {:<24}  {:<18}  {:<22}  {:<20}  {:<11}",
+        "VALIDATOR", "PEER_ID", "STATUS", "ACTIVATION", "STAKE", "LAST_REWARD"
     )?;
     for entry in entries {
         let row = build_validator_row(entry);
         writeln!(
             &mut output,
-            "{:<36}  {:<18}  {:<22}  {:<20}  {:<11}",
+            "{:<36}  {:<24}  {:<18}  {:<22}  {:<20}  {:<11}",
             truncate_field(&row.validator, 36),
+            truncate_field(&row.peer_id, 24),
             truncate_field(&row.status, 18),
             truncate_field(&row.activation, 22),
             truncate_field(&row.stake, 20),
@@ -395,6 +396,7 @@ fn lane_items(payload: &Value) -> Result<Vec<&Map>> {
 
 struct ValidatorRow {
     validator: String,
+    peer_id: String,
     status: String,
     activation: String,
     stake: String,
@@ -404,6 +406,11 @@ struct ValidatorRow {
 fn build_validator_row(entry: &Map) -> ValidatorRow {
     let validator = entry
         .get("validator")
+        .and_then(Value::as_str)
+        .unwrap_or("-")
+        .to_string();
+    let peer_id = entry
+        .get("peer_id")
         .and_then(Value::as_str)
         .unwrap_or("-")
         .to_string();
@@ -423,6 +430,7 @@ fn build_validator_row(entry: &Map) -> ValidatorRow {
 
     ValidatorRow {
         validator,
+        peer_id,
         status,
         activation,
         stake,
@@ -570,8 +578,12 @@ mod tests {
             (
                 "validator_ids".into(),
                 Value::Array(vec![
-                    Value::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
-                    Value::from("6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV"),
+                    Value::from(
+                        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                    ),
+                    Value::from(
+                        "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
+                    ),
                 ]),
             ),
             ("manifest_path".into(), Value::Null),
@@ -639,16 +651,19 @@ mod tests {
 
     #[test]
     fn validator_summary_formats_activation_and_status() {
+        use iroha_crypto::{Algorithm, KeyPair};
+
+        let validator = iroha::data_model::account::AccountId::new(
+            KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+        .canonical_i105()
+        .expect("canonical I105");
         let record = Map::from_iter([
             ("lane_id".into(), Value::from(0u64)),
-            (
-                "validator".into(),
-                Value::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
-            ),
-            (
-                "stake_account".into(),
-                Value::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
-            ),
+            ("validator".into(), Value::from(validator.clone())),
+            ("stake_account".into(), Value::from(validator.clone())),
             ("total_stake".into(), Value::from("1000")),
             ("self_stake".into(), Value::from("800")),
             (
@@ -669,7 +684,7 @@ mod tests {
         ]));
 
         let summary = format_validator_summary(&payload).expect("format summary");
-        assert!(summary.contains("6cmzPVPX944pj7vV"));
+        assert!(summary.contains(&truncate_field(&validator, 36)));
         assert!(summary.contains("Pending(epoch 2)"));
         assert!(summary.contains("epoch 1 @ 3601"));
         assert!(summary.contains("1000 (self 800)"));
@@ -677,6 +692,22 @@ mod tests {
 
     #[test]
     fn stake_summary_marks_pending_unbonds() {
+        use iroha_crypto::{Algorithm, KeyPair};
+
+        let validator = iroha::data_model::account::AccountId::new(
+            KeyPair::from_seed(vec![0x12; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+        .canonical_i105()
+        .expect("canonical I105");
+        let staker = iroha::data_model::account::AccountId::new(
+            KeyPair::from_seed(vec![0x13; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+        .canonical_i105()
+        .expect("canonical I105");
         let pending = Map::from_iter([
             ("request_id".into(), Value::from("deadbeef")),
             ("amount".into(), Value::from("250")),
@@ -684,14 +715,8 @@ mod tests {
         ]);
         let record = Map::from_iter([
             ("lane_id".into(), Value::from(0u64)),
-            (
-                "validator".into(),
-                Value::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
-            ),
-            (
-                "staker".into(),
-                Value::from("6cmzPVPX7WxKCts6hciUhyLdu7eZ7ZoHVuXXQ4YijdycaXbKykgP8jV"),
-            ),
+            ("validator".into(), Value::from(validator.clone())),
+            ("staker".into(), Value::from(staker.clone())),
             ("bonded".into(), Value::from("750")),
             (
                 "pending_unbonds".into(),
@@ -705,8 +730,8 @@ mod tests {
         ]));
 
         let summary = format_stake_summary(&payload).expect("format summary");
-        assert!(summary.contains("6cmzPVPX944pj7vV"));
-        assert!(summary.contains("6cmzPVPX7WxKCts6"));
+        assert!(summary.contains(&truncate_field(&validator, 32)));
+        assert!(summary.contains(&truncate_field(&staker, 32)));
         assert!(summary.contains("750"));
         assert!(summary.contains("pending (next @ 10)"));
     }

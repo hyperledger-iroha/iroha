@@ -89,7 +89,7 @@ Rust の財布を説明します。## 合意と機能のゲートに関するコ
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -237,7 +237,7 @@ Documenta は、オペレーションのランブックのロケールをオー�
 - アカウントの派生情報:
   - `sk_spend` -> `nk` (無効化キー)、`ivk` (受信表示キー)、`ovk` (送信表示キー)、`fvk`。
 - ECDH から派生した AEAD の共有キーを暗号化するペイロード。補助的な表示キーは監査オプションであり、資産の政治情報を出力します。
-- CLI に追加: `confidential create-keys`、`confidential send`、`confidential export-view-key`、説明メモ用の監査ツール、製造者/検査用エンベロープ Norito のヘルパー `iroha app zk envelope` オフライン。 Torii は、`POST /v1/confidential/derive-keyset` 経由でミスモ フルホ デ デリバシオンを説明し、16 進数の Base64 パラケ ウォレットを取得してクラベス プログラムを作成します。
+- CLI に追加: `confidential create-keys`、`confidential send`、`confidential export-view-key`、説明メモ用の監査ツール、製造者/検査用エンベロープ Norito のヘルパー `iroha app zk envelope` オフライン。
 
 ## ガス、DoS 制御の制限
 - ガスのスケジュール決定:

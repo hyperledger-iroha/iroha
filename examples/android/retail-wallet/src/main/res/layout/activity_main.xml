@@ -81,23 +81,7 @@
                     android:textAppearance="@style/TextAppearance.MaterialComponents.Body1" />
 
                 <TextView
-                    android:id="@+id/address_i105_default_label"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="16dp"
-                    android:text="@string/wallet_address_compressed_label"
-                    android:textAppearance="@style/TextAppearance.MaterialComponents.Body2" />
-
-                <TextView
-                    android:id="@+id/address_i105_default_value"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:fontFamily="monospace"
-                    android:textIsSelectable="true"
-                    android:textAppearance="@style/TextAppearance.MaterialComponents.Body1" />
-
-                <TextView
-                    android:id="@+id/address_i105_default_warning"
+                    android:id="@+id/address_i105_warning"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
@@ -110,29 +94,16 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
                     android:gravity="center_horizontal"
-                    android:orientation="horizontal"
-                    android:weightSum="2">
+                    android:orientation="horizontal">
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/address_copy_i105"
                         style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                        android:layout_width="0dp"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginEnd="8dp"
-                        android:layout_weight="1"
                         android:text="@string/wallet_copy_i105"
                         android:tooltipText="@string/wallet_copy_i105_tooltip"
                         android:contentDescription="@string/wallet_copy_i105_content_description" />
-
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/address_copy_i105_default"
-                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="@string/wallet_copy_compressed"
-                        android:tooltipText="@string/wallet_copy_compressed_tooltip"
-                        android:contentDescription="@string/wallet_copy_compressed_content_description" />
                 </LinearLayout>
 
                 <ImageView

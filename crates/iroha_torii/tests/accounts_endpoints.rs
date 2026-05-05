@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
 use iroha_core::{
@@ -12,7 +13,12 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
-use iroha_data_model::{Registrable, account::Account, domain::Domain, peer::PeerId};
+use iroha_data_model::{
+    Registrable,
+    account::Account,
+    domain::{Domain, DomainId},
+    peer::PeerId,
+};
 #[cfg(feature = "telemetry")]
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::ALICE_ID;
@@ -30,9 +36,10 @@ async fn accounts_endpoints_exist() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let mut world = World::with_assets([domain], [account], [], [], []);
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
@@ -104,6 +111,7 @@ async fn accounts_endpoints_exist() {
         .oneshot(
             Request::builder()
                 .uri("/v1/accounts?offset=0")
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -122,6 +130,7 @@ async fn accounts_endpoints_exist() {
                 .method("POST")
                 .uri("/v1/accounts/query")
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::from("{}"))
                 .unwrap(),
         )
@@ -141,6 +150,7 @@ async fn accounts_endpoints_exist() {
                 .uri(format!(
                     "/v1/accounts/{canonical_account}/permissions?offset=0"
                 ))
+                .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )

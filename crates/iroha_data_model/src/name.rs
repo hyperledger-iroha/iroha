@@ -67,7 +67,7 @@ impl Name {
             #[allow(clippy::non_ascii_literal)]
             return Err(ParseError {
                 reason: "The `@` character is reserved for scoped alias/public-key constructs, \
-                        `#` for alias separators (for example `name#domain@dataspace`), and `$` — for `nft$domain`.",
+                        `#` for alias separators (for example `name#domain.dataspace`), and `$` — for `nft$domain`.",
             });
         }
         Ok(())
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn name_rejects_account_literal_text() {
-        let err = Name::from_str("alice@hbl")
+        let err = Name::from_str("alice@banka")
             .expect_err("account-style literal must not be accepted as Name");
         assert!(
             err.to_string().contains("`@` character"),

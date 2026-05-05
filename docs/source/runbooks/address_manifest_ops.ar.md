@@ -173,7 +173,7 @@ address-manifest-<REVISION>/
   - `AddressLocal12Collision` — يطلق لحظة تصادم labelين Local‑12 في نفس digest. أوقف
     ترقيات البيان، نفّذ `scripts/address_local_toolkit.sh` لتأكيد الربط، ونسّق مع
     حوكمة Nexus قبل إعادة إصدار السجل المتأثر.
-  - `AddressInvalidRatioSlo` — يحذر عندما تتجاوز الإرسالات غير الصحيحة I105/المضغوطة
+  - `AddressInvalidRatioSlo` — يحذر عندما تتجاوز الإرسالات غير الصحيحة i105/المضغوطة
     (مع استثناء رفض Local‑8/strict‑mode) نسبة 0.1 % لمدة 10 دقائق. تحقق من
     `torii_address_invalid_total` حسب السياق/السبب ونسّق مع فريق SDK المالك قبل
     إعادة تفعيل الوضع الصارم.

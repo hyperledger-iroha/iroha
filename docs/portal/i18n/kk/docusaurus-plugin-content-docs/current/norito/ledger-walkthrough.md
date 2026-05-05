@@ -32,8 +32,8 @@ CLI және SDK әрекеті арасындағы тепе-теңдікті �
 демонстрациялық кілттерден алынған:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Алғашқы бірнеше тіркелгілерді тізімдеу арқылы мәндерді растаңыз:
@@ -52,7 +52,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts inside wonderland (replace --limit with a higher number if needed)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions that already exist
@@ -69,7 +69,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI жіберілген транзакция хэшін басып шығарады (мысалы,
@@ -78,7 +78,7 @@ CLI жіберілген транзакция хэшін басып шығара
 ## 3. Бірліктерді оператор шотына енгізу
 
 Активтер саны `(asset definition, account)` жұбында тұрады. Жалбыз 250
-`coffee#wonderland` бірліктері `$ADMIN_ACCOUNT`:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` бірліктері `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

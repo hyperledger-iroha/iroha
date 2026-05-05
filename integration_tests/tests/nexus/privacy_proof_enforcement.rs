@@ -2,7 +2,7 @@
 //! End-to-end check that privacy proofs attached to transactions can satisfy
 //! lane compliance policies requiring advertised commitments.
 
-use std::{collections::BTreeSet, str::FromStr, sync::Arc};
+use std::{collections::BTreeSet, sync::Arc};
 
 use eyre::Result;
 use iroha_core::{
@@ -18,8 +18,8 @@ use iroha_data_model::{
     account::AccountId,
     nexus::{
         DataSpaceId, JurisdictionSet, LaneCompliancePolicy, LaneCompliancePolicyId,
-        LaneComplianceRule, LaneId, LaneStorageProfile, LaneVisibility, ParticipantSelector,
-        LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
+        LaneComplianceRule, LaneId, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
+        LaneStorageProfile, LaneVisibility, ParticipantSelector,
     },
 };
 use iroha_test_samples::ALICE_ID;
@@ -48,7 +48,7 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
     let manifest = LaneManifestStatus {
         lane: lane_id,
         alias: "confidential-lane".to_string(),
-        dataspace: DataSpaceId::GLOBAL,
+        dataspace: DataSpaceId::UNIVERSAL,
         visibility: LaneVisibility::Public,
         storage: LaneStorageProfile::CommitmentOnly,
         governance: None,
@@ -80,7 +80,7 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
         id: LaneCompliancePolicyId::new(Hash::prehashed([0x11; 32])),
         version: 1,
         lane_id,
-        dataspace_id: DataSpaceId::GLOBAL,
+        dataspace_id: DataSpaceId::UNIVERSAL,
         jurisdiction: JurisdictionSet::default(),
         deny: Vec::new(),
         allow: vec![LaneComplianceRule {
@@ -105,8 +105,9 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
     let verified_set = verified;
     let ctx = LaneComplianceContext {
         lane_id,
-        dataspace_id: DataSpaceId::GLOBAL,
+        dataspace_id: DataSpaceId::UNIVERSAL,
         authority: &ALICE_ID,
+        authority_domains: &[],
         uaid: None,
         capability_tags: &[],
         lane_privacy_registry: Some(Arc::new(registry.clone())),

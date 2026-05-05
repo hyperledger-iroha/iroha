@@ -95,7 +95,7 @@ Swift SDK 现在可以发出屏蔽指令，无需定制 JSON 胶水：构造一�
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -254,7 +254,7 @@ Swift SDK 现在可以发出屏蔽指令，无需定制 JSON 胶水：构造一�
 - 每个帐户的密钥派生层次结构：
   - `sk_spend` → `nk`（无效键）、`ivk`（传入查看键）、`ovk`（传出查看键）、`fvk`。
 - 加密的票据有效负载使用 AEAD 和 ECDH 派生的共享密钥；可选的审计员查看键可以附加到每个资产策略的输出。
-- CLI 添加：`confidential create-keys`、`confidential send`、`confidential export-view-key`、用于解密备忘录的审核工具，以及用于离线生成/检查 Norito 备忘录信封的 `iroha app zk envelope` 帮助程序。 Torii 通过 `POST /v1/confidential/derive-keyset` 公开相同的派生流程，返回十六进制和 base64 形式，以便钱包可以以编程方式获取密钥层次结构。
+- CLI 添加：`confidential create-keys`、`confidential send`、`confidential export-view-key`、用于解密备忘录的审核工具，以及用于离线生成/检查 Norito 备忘录信封的 `iroha app zk envelope` 帮助程序。
 
 ## Gas、限制和 DoS 控制
 - 确定性气体调度：

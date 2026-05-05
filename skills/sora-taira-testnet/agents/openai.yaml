@@ -1,0 +1,4 @@
+interface:
+  display_name: "SORA Taira Testnet"
+  short_description: "Use Torii MCP on the Taira testnet"
+  default_prompt: "Use $sora-taira-testnet to inspect or mutate the SORA Taira testnet through its Torii MCP endpoint."

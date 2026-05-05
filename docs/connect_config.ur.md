@@ -38,7 +38,7 @@ Environment overrides (user config → actual config):
 - `CONNECT_DEDUPE_CAP` (`usize`; ڈیفالٹ: `8192`)
 - `CONNECT_RELAY_ENABLED` (bool؛ ڈیفالٹ: `true`)
 - `CONNECT_RELAY_STRATEGY` (string؛ ڈیفالٹ: `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (`u8`; ڈیفالٹ: `0`)
+- `CONNECT_P2P_TTL_HOPS` (`u8`; ڈیفالٹ: `8`)
 
 نوٹس:
 

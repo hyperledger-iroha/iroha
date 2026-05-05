@@ -2403,7 +2403,7 @@ mod tests {
     }
 
     fn oracle(name: &str, domain: &str) -> OracleId {
-        let _domain_id = DomainId::from_str(domain).expect("domain id");
+        let _domain_id = DomainId::try_new(domain, "universal").expect("domain id");
         let seed = format!("{name}:{domain}");
         let keypair = KeyPair::from_seed(seed.into_bytes(), Algorithm::Ed25519);
         AccountId::new(keypair.public_key().clone())
@@ -2837,7 +2837,7 @@ mod tests {
         let hash = request.hash();
         assert_eq!(
             hash.to_string(),
-            "59cfea4268fb255e2fdb550b37cb83df836d62744f835f121e5731ab62679bdb",
+            "171c9f2615c9c396a6d61f6b12a87798d44eeb324bd836f10dde6363150a3077",
             "update the connector request fixture if this hash intentionally changes"
         );
     }
@@ -3394,7 +3394,7 @@ mod tests {
         let digest = oracle_abi_hash();
         assert_eq!(
             digest.to_string(),
-            "25d675ad1e61609f0b5951743ecac11ae06ba3df9e4aaecdf10db61c2dd9507b",
+            "112e16c9ee590aff78c6a75d8ef383af33ec5b6f24c2293ec4939363c1348e55",
             "update the golden value if the schema intentionally changes"
         );
     }

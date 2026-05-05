@@ -24,13 +24,25 @@ use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
+fn sample_contract_address(
+    account_id: &iroha_data_model::account::AccountId,
+    deploy_nonce: u64,
+) -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        account_id,
+        deploy_nonce,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+    )
+    .expect("sample contract address")
+}
+
 fn setup_council_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
-    let alice_account =
-        Account::new(ALICE_ID.clone().to_account_id(domain_id.clone())).build(&ALICE_ID);
-    let bob_account = Account::new(BOB_ID.clone().to_account_id(domain_id.clone())).build(&BOB_ID);
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+    let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
     let domain = Domain::new(domain_id).build(&ALICE_ID);
     let world = World::with(
         [domain],
@@ -88,8 +100,7 @@ fn seed_referendum_and_proposal(state: &mut State, pid: [u8; 32], rid: &str) {
         .governance_referenda_mut()
         .insert(rid.to_string(), referendum);
     let payload = DeployContractProposal {
-        namespace: "apps".into(),
-        contract_id: "calc.v1".into(),
+        contract_address: sample_contract_address(&ALICE_ID, 0),
         code_hash_hex: ContractCodeHash::from_hex_str(&hex::encode([0x11; 32])).expect("code hash"),
         abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode([0x22; 32])).expect("abi hash"),
         abi_version: AbiVersion::new(1),
@@ -244,8 +255,7 @@ fn parliament_snapshot_allows_approvals_without_council_state() {
         iroha_core::state::GovernanceProposalRecord {
             proposer: ALICE_ID.clone(),
             kind: ProposalKind::DeployContract(DeployContractProposal {
-                namespace: "apps".into(),
-                contract_id: "jit-only.contract".into(),
+                contract_address: sample_contract_address(&ALICE_ID, 1),
                 code_hash_hex: ContractCodeHash::from_hex_str(&hex::encode([0x77; 32]))
                     .expect("code hash"),
                 abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode([0x88; 32]))

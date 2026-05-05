@@ -19,9 +19,9 @@ description: عرض إنشاء النطاقات بالتحديد والتسجي�
 
 ## Почаговый обдод еестра
 
-- تأكد من أن اسم الحساب (على سبيل المثال `i105...`) موجود، وهو ما يعكس التحسينات في Quickstart SDK.
+- تأكد من أن اسم الحساب (على سبيل المثال `<i105-account-id>`) موجود، وهو ما يعكس التحسينات في Quickstart SDK.
 - اختر هنا `register_and_mint` لإنشاء النشاط المقترح ROSE وشراء 250 وحدة لـ Alice في معاملة واحدة.
-- تحقق من التوازن عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account i105...` للتحقق من صحة البيانات بنجاح.
+- تحقق من التوازن عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account <i105-account-id>` للتحقق من صحة البيانات بنجاح.
 
 ## تطوير شامل SDK
 
@@ -43,8 +43,8 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("i105...");
-    let asset = asset_definition!("rose#wonderland");
+    let to = account!("<i105-account-id>");
+    let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }
 }

@@ -8,7 +8,7 @@ Compatibility Note
 - Kotodama compiles to Iroha Virtual Machine (IVM) bytecode (`.to`). It does not target “risc5”/RISC‑V or any external ISA. Any mention of RISC‑V (e.g., vector length control like `vsetvl`) is an analogy to aid understanding, not a statement of conformance. IVM’s instruction encodings and semantics are IVM‑specific and normative for this project.
 
 Note
-- This document is a living specification. Several described features are partially implemented or prototyped in the repository (e.g., Metal acceleration for SHA‑256 and vector ops, conflict-aware scheduler). CUDA/Metal offloads now ship parity/fallback gates and production Halo2 verifiers are exercised via real IPA proofs (`crates/ivm/tests/zk_open_envelope_determinism.rs`) so determinism and failure handling are covered. Remaining work such as full CUDA kernel coverage is tracked in `crates/ivm/README.md` and the roadmap. Optional backends (Metal, CUDA) are strictly best-effort: builds remain deterministic with scalar/SIMD fallbacks, and tests guard that disabling those features yields correct (non-accelerated) behaviour.
+- This document is a living specification. Some sections below are still forward-looking, but the current tree already ships deterministic Metal/CUDA helper surfaces with parity/fallback gates, and production Halo2 verifiers are exercised via real IPA proofs (`crates/ivm/tests/zk_open_envelope_determinism.rs`) so determinism and failure handling are covered. Optional backends (Metal, CUDA) are strictly best-effort: builds remain deterministic with scalar/SIMD fallbacks, and tests guard that disabling those features yields correct (non-accelerated) behaviour.
 - Acceleration toggles (developer aids, not production feature gates): `IVM_DISABLE_METAL=1` forces scalar/SIMD on macOS builds; `IVM_FORCE_METAL_ENUM=1` enumerates all devices instead of the default. For CUDA, `IVM_DISABLE_CUDA=1` forces CPU paths, `IVM_MAX_GPUS` caps device count, and `IVM_CUDA_NVCC`/`IVM_CUDA_GENCODE` allow PTX build overrides. These toggles never change observable results—only whether the optional backend is attempted.
 
 * **Deterministic Parallelism:** Leveraging multi-core processors for higher throughput **without sacrificing determinism**. The VM can execute independent operations in parallel but will always produce the same final state as a sequential execution, ensuring all network nodes remain in sync.
@@ -75,7 +75,7 @@ The IVM instruction set covers general arithmetic, logic, control flow, memory a
   * Hash functions: e.g. `SHA256BLOCK` (compress one 512-bit block with SHA-256), `BLAKE2s` or a Poseidon hash instruction for hashing field elements.
   * Signature primitives: e.g. an opcode to verify an Ed25519 signature or ECDSA signature given public key and message (this would consume a lot of gas but provides a native way to verify within the VM).
   * Encryption: e.g. `AESENC` for a round of AES encryption (if needed for certain applications, though full symmetric encryption can also be done by contracts).
-  * The current Rust implementation supports `SHA256BLOCK`, `SHA3BLOCK` (deterministic minimal form), `POSEIDON2`, `POSEIDON6`, `ECADD`, `ECMUL_VAR`, `PUBKGEN`, `VALCOM`, `AESENC`, `AESDEC`, `BLAKE2S` (deterministic minimal form), `ED25519VERIFY` (stubbed to return 0), and `PAIRING`. Opcodes such as `PARBEGIN` and `PAREND` are reserved and not yet implemented; `SETVL` is supported for logical vector-length selection.
+  * The current Rust implementation supports `SHA256BLOCK`, `SHA3BLOCK` (deterministic minimal form), `POSEIDON2`, `POSEIDON6`, `ECADD`, `ECMUL_VAR`, `PUBKGEN`, `VALCOM`, `AESENC`, `AESDEC`, `BLAKE2S` (deterministic minimal form), `ED25519VERIFY`, `ED25519BATCHVERIFY`, and `PAIRING`. Opcodes such as `PARBEGIN` and `PAREND` are reserved and not yet implemented; `SETVL` is supported for logical vector-length selection.
 
   These instructions are typically implemented to take advantage of hardware accelerators when available (for instance, `SHA256BLOCK` might use Intel SHA extensions if present, or a software routine if not). They are considered optional in the sense that not all contracts will use them, but they are part of the standard VM arsenal to support privacy and authentication use cases. Gas costs for these are set high relative to basic operations, reflecting their complexity. Note that while these are provided, higher-level protocols (like a full shielded transfer circuit) will use a combination of these primitives and ZK-oriented logic.
 
@@ -225,24 +225,19 @@ The current Rust implementation incorporates most features outlined in this spec
 
 ### Hardware Acceleration Roadmap
 
-To close the gap between scalar fallbacks and the planned CUDA/Metal pipelines, the implementation will proceed in small, verifiable increments:
+The current tree already ships the core helper surface; the roadmap now focuses
+on keeping those accelerators directly tested and extending them carefully.
 
 * **Vector hot path integration (delivered):** Interpreter vector ops (`VADD32/64`, `VAND`, `VXOR`, `VOR`, `VROT32`) now reuse the shared vector helpers with chunked logical vector lengths so Metal/CUDA/CPU paths are selected at runtime while preserving tag checks and deterministic fallbacks.
+* **CUDA helper surface hardening (delivered):** The explicit CUDA surface now covers vector helpers, SHA‑256 compression and Merkle leaf/reduction helpers, Keccak‑f1600, Poseidon2/6 permutations, AES rounds/batches, BN254 add/sub/mul, Ed25519 single/batch verification, and the scheduler bitonic-sort helper. Focused parity plus disable/fallback regressions pin these paths directly.
+* **CRC64 + Norito stage-1 refresh (delivered):** Chunked Metal/CUDA CRC64 helpers now feed `norito::core::hardware_crc64` with a 192 KiB default GPU cutoff (`NORITO_GPU_CRC64_MIN_BYTES` + `NORITO_CRC64_GPU_LIB` overrides) and parity tests that load stub helpers. JSON Stage‑1 cutovers were re-benchmarked (`examples/stage1_cutover` → `benchmarks/norito_stage1/cutover.csv`), keeping the scalar cutover at 4 KiB while aligning the GPU minimum to 192 KiB to amortise launch costs. Docs/status were updated alongside the new thresholds.【crates/norito/src/core/simd_crc64.rs:1】【crates/norito/src/lib.rs:4761】【docs/source/norito_stage1_cutover.md:1】【crates/norito/accelerators/jsonstage1_metal/src/lib.rs:1】【crates/norito/accelerators/jsonstage1_cuda/src/lib.rs:1】
 
-1. **CUDA Poseidon/BN254 bring-up**
-   - Define kernel interfaces and constant tables for Poseidon2/6 permutations and BN254 field ops.
-   - Implement Poseidon2 CUDA kernels with parity tests against the scalar backend, followed by Poseidon6 batching and BN254 add/mul/sub.
-   - Add benchmarks to capture GPU vs CPU crossover points and publish results in the performance docs.
-2. **Metal parity**
-   - Mirror the CUDA work by adding compute kernels for Poseidon and BN254, integrating them with `with_metal_state` and the warm-up hooks so pipelines compile ahead of use.
-   - Extend Metal self-tests to cover the new kernels and record benchmark data alongside CUDA.
-3. **Ed25519 acceleration**
-   - Prototype CUDA batch verification, add deterministic self-tests, then port the approach to Metal.
-   - Expose the accelerated verification through the syscall surface and regenerate bindings for downstream SDKs.
-4. **CRC64 + Norito stage-1 refresh (delivered)**
-   - Chunked Metal/CUDA CRC64 helpers now feed `norito::core::hardware_crc64` with a 192 KiB default GPU cutoff (`NORITO_GPU_CRC64_MIN_BYTES` + `NORITO_CRC64_GPU_LIB` overrides) and parity tests that load stub helpers. JSON Stage‑1 cutovers were re-benchmarked (`examples/stage1_cutover` → `benchmarks/norito_stage1/cutover.csv`), keeping the scalar cutover at 4 KiB while aligning the GPU minimum to 192 KiB to amortise launch costs. Docs/status were updated alongside the new thresholds.【crates/norito/src/core/simd_crc64.rs:1】【crates/norito/src/lib.rs:4761】【docs/source/norito_stage1_cutover.md:1】【crates/norito/accelerators/jsonstage1_metal/src/lib.rs:1】【crates/norito/accelerators/jsonstage1_cuda/src/lib.rs:1】
-5. **Documentation & bindings cadence**
-   - After each stage, regenerate Python/Java bindings, update `status.md`, and extend this document with implementation notes and benchmark summaries.
+1. **Live-hardware validation**
+   - Keep rerunning CUDA parity, self-tests, and benchmark crossover measurements on real GPU hosts so operator guidance tracks actual hardware behavior.
+2. **Metal parity expansion**
+   - Continue mirroring the applicable CUDA helper surface on Metal where those kernels are not yet present, preserving the same deterministic fallback contract.
+3. **Documentation & bindings cadence**
+   - Regenerate bindings and update the status/roadmap/docs as the accelerator surface grows, so downstream SDKs and operator docs stay aligned with the shipped behavior.
 
 Each sub-task will land with exhaustive scalar vs GPU parity checks to preserve determinism across heterogeneous hardware, and the acceleration feature flags remain opt-in until the full test matrix is green.
 

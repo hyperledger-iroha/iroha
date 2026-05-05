@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn shared_data_event_from_arc_preserves_arc_pointer() {
         let metadata = MetadataChanged {
-            target: DomainId::from_str("wonderland").expect("domain id"),
+            target: DomainId::try_new("wonderland", "universal").expect("domain id"),
             key: Name::from_str("flag").expect("metadata key"),
             value: Json::from(norito::json!("ok")),
         };
@@ -146,7 +146,7 @@ mod tests {
             hash: hash_a,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }
         .into();
@@ -154,7 +154,7 @@ mod tests {
             hash: hash_b,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Queued,
         }
         .into();
@@ -465,6 +465,7 @@ mod conversions {
         AssetEventFilter            => DataEventFilter => EventFilterBox,
         AssetDefinitionEventFilter  => DataEventFilter => EventFilterBox,
         NftEventFilter              => DataEventFilter => EventFilterBox,
+        RwaEventFilter              => DataEventFilter => EventFilterBox,
         TriggerEventFilter          => DataEventFilter => EventFilterBox,
         RoleEventFilter             => DataEventFilter => EventFilterBox,
         ConfigurationEventFilter    => DataEventFilter => EventFilterBox,
@@ -488,6 +489,11 @@ impl IntoSchema for SharedDataEvent {
 
     fn update_schema_map(metamap: &mut MetaMap) {
         data::DataEvent::update_schema_map(metamap);
+        if !metamap.contains_key::<Self>()
+            && let Some(metadata) = metamap.get::<data::DataEvent>()
+        {
+            metamap.insert::<Self>(metadata.clone());
+        }
     }
 }
 

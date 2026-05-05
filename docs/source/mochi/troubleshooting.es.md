@@ -25,7 +25,7 @@ elemento de la hoja de ruta "Documentación e implementación" al convertir los 
 
 1. Capture la raíz de datos que está utilizando MOCHI. El valor predeterminado sigue
    `$TMPDIR/mochi/<profile-slug>`; Las rutas personalizadas aparecen en la barra de título de la interfaz de usuario y
-   vía `cargo run -p mochi-ui-egui -- --data-root ...`.
+   vía `cargo run -p mochi-ui -- --data-root ...`.
 2. Ejecute `./ci/check_mochi.sh` desde la raíz del espacio de trabajo. Esto valida el núcleo,
    UI y cajas de integración antes de comenzar a modificar las configuraciones.
 3. Tenga en cuenta el valor predeterminado (`single-peer` o `four-peer-bft`). La topología generada
@@ -68,7 +68,7 @@ Si la interfaz de usuario informa "no se pudo generar el proceso" o "permiso den
 en binarios en buen estado:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ El proceso ya está escuchando en el rango predeterminado (8080/1337). Relanzar 
 con bases explícitas:
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 El constructor desplegará puertos secuenciales desde esas bases, así que reserve un rango
@@ -119,7 +119,7 @@ para ajustar la ventana de reintento para trabajos de CI que deben fallar rápid
    - reinicie los pares con las anulaciones de entorno/CLI conservadas.
 3. Si debes hacer esto manualmente:
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

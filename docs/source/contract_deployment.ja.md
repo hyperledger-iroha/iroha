@@ -4,70 +4,146 @@
 lang: ja
 direction: ltr
 source: docs/source/contract_deployment.md
-status: complete
+status: needs-update
 translator: manual
+source_hash: d3aefb7ebdeb3b9b2d41a3a04ca6c7007e2eb6ac9580a85b7fbdeb9392375660
+source_last_modified: "2026-04-04T12:14:12.575161+00:00"
+translation_last_reviewed: 2026-04-05
 ---
 
-# コントラクトデプロイ（.to）— API & ワークフロー
+> Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-ステータス: Torii / CLI / Core の受理テストで検証済み（2025 年 11 月）
+Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 2025).
 
-## 概要
+## Overview
 
-- Torii へ .to バイトコードを送信する、または `RegisterSmartContractCode` / `RegisterSmartContractBytes` を直接発行することで IVM バイトコードをデプロイします。
-- ノードは `code_hash` と正規の ABI ハッシュを再計算し、一致しない場合は決定論的に拒否します。
-- マニフェストはオンチェーンの `contract_manifests`、コードバイトは `contract_code` レジストリに保存されます。マニフェストはハッシュ参照のみで小型を維持し、コードは `code_hash` キーで格納されます。
-- 保護されたネームスペースは、デプロイ前にガバナンス提案の施行を必要とできます。受理パスは提案ペイロードを参照し、`(namespace, contract_id, code_hash, abi_hash)` の一致を強制します。
+- Deploy compiled IVM bytecode (`.to`) by submitting it to Torii or by issuing
+  `RegisterSmartContractCode`/`RegisterSmartContractBytes` instructions
+  directly.
+- Contract `.to` artifacts are self-describing: the required `CNTR` section
+  embeds the contract interface ahead of the executable stream, and Torii
+  derives the on-chain `ContractManifest` from that section after verification.
+- Nodes recompute `code_hash` and the canonical ABI hash locally; mismatches
+  reject deterministically.
+- Stored artifacts live under the on-chain `contract_manifests` and
+  `contract_code` registries. Manifests reference hashes only and remain small;
+  code bytes are keyed by `code_hash`.
+- Protected namespaces can require an enacted governance proposal before a
+  deployment is admitted. The admission path looks up the proposal payload and
+  enforces `(contract_address, code_hash, abi_hash)` equality when the
+  namespace is protected.
 
-## 保存されるアーティファクトと保持
+## Stored Artifacts & Retention
 
-- `RegisterSmartContractCode` は指定 `code_hash` のマニフェストを挿入（上書き）します。同じハッシュが既に存在する場合は置換されます。
-- `RegisterSmartContractBytes` は `contract_code[code_hash]` にコンパイル済みコードを保存します。同一ハッシュで既存バイト列がある場合は完全一致が必要で、差異は不変条件違反になります。
-- コードサイズ上限はカスタムパラメータ `max_contract_code_bytes`（既定 16 MiB）。大きなアーティファクトを登録する前に `SetParameter(Custom)` トランザクションで更新します。
-- 保持期間は無期限です。マニフェストとコードは明示的に削除するまで残り、TTL や GC はありません。
+- `RegisterSmartContractCode` inserts/overwrites the manifest for a given
+  `code_hash`. When the same hash already exists, it is replaced with the new
+  manifest.
+- `RegisterSmartContractBytes` stores the compiled program under
+  `contract_code[code_hash]`. If bytes for a hash already exist they must match
+  exactly; differing bytes raise an invariant violation.
+- Code size is capped by the custom parameter `max_contract_code_bytes`
+  (default 16 MiB). Override it with a `SetParameter(Custom)` transaction before
+  registering larger artifacts.
+- Retention is unbounded: manifests and code remain available until explicitly
+  removed in a future governance workflow. There is no TTL or automatic GC.
 
-## 受理パイプライン
+## Admission pipeline
 
-- 検証時に IVM ヘッダーを解析し、`version_major == 1`、`abi_version == 1` を強制します。未対応バージョンは即拒否となりランタイムトグルは存在しません。
-- 既に `code_hash` のマニフェストがある場合、保存済みハッシュと提出プログラムから計算したハッシュが一致するか確認し、差異は `Manifest{Code,Abi}HashMismatch` を投げます。
-- 保護ネームスペース宛てトランザクションはメタデータ `gov_namespace` と `gov_contract_id` を含める必要があります。受理パスは施行済み `DeployContract` 提案と照合し、一致がなければ `NotPermitted` で拒否します。
+- Contract deployment parses the artifact, requires IVM `1.1`, requires the
+  embedded `CNTR` section, and verifies the embedded interface against the
+  decoded executable stream before any manifest is stored.
+- Verification fails closed on malformed sections, duplicate/invalid
+  entrypoints, invalid `entry_pc` targets, invalid trigger callbacks, feature
+  / ABI mismatches, or unsupported metadata.
+- The canonical manifest is built from the verified `CNTR` payload, signed by
+  the submitting key, and then stored together with the uploaded bytecode.
+- Transactions targeting protected namespaces must include metadata key
+  `gov_contract_address`. The admission path compares the derived dataspace and
+  address against enacted `DeployContract` proposals; if no matching proposal
+  exists the transaction is rejected with `NotPermitted`.
 
-## Torii エンドポイント（feature `app_api`）
+## Torii endpoints (feature `app_api`)
 
-- **POST `/v1/contracts/deploy`**  
-  リクエスト: `DeployContractDto`（`authority`, `private_key`, `code_b64`）。ハッシュ計算とマニフェスト生成後、`RegisterSmartContractCode` と `RegisterSmartContractBytes` を単一トランザクションで送信します。レスポンス: `{ ok, code_hash_hex, abi_hash_hex }`。
-- **POST `/v1/contracts/code`**  
-  リクエスト: `RegisterContractCodeDto`（`authority`, `private_key`, `manifest`）。マニフェストのみ登録します。
-- **POST `/v1/contracts/instance`**  
-  リクエスト: `DeployAndActivateInstanceDto`（`authority`, `private_key`, `namespace`, `contract_id`, `code_b64`, 任意の `manifest` 上書き）。デプロイとアクティベーションを原子的に実行します。レスポンス: `{ ok, namespace, contract_id, code_hash_hex, abi_hash_hex }`。
-- **POST `/v1/contracts/instance/activate`**  
-  リクエスト: `ActivateInstanceDto`（`authority`, `private_key`, `namespace`, `contract_id`, `code_hash`）。既存アーティファクトを指定インスタンスにバインドします。レスポンス: `{ ok: true }`。
-- **GET `/v1/contracts/code/{code_hash}`**  
-  `{ manifest: { code_hash, abi_hash } }` を返します。
-- **GET `/v1/contracts/code-bytes/{code_hash}`**  
-  保存済み `.to` バイト列を Base64 で返します（`{ code_b64 }`）。
+- `POST /v1/contracts/deploy`
+  - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
+  - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
+    derives the manifest from the artifact itself, allocates a fresh immutable
+    `contract_address`, binds the requested stable `contract_alias` to that
+    address, prepends a domainless self-registration for the authority, and
+    submits the resulting transaction on behalf of the caller.
+  - Redeploying the same `contract_alias` performs an in-place upgrade:
+    Torii deploys a new address, rebinds the alias atomically, and deactivates
+    the previous address.
+  - Response: `DeployContractBundleReceiptDto` with bundle metadata plus one entry in `contracts[]` for this single-contract shortcut.
+  - Errors: invalid base64, invalid contract artifact, size cap exceeded,
+    governance gating for protected namespaces, or fee/balance failures.
+- `GET /v1/contracts/code/{code_hash}`
+  - Returns `{ manifest: { code_hash, abi_hash } }`.
+    Additional manifest fields are preserved internally but omitted here for a
+    stable API.
+- `GET /v1/contracts/code-bytes/{code_hash}`
+  - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
 
-全てのコントラクト系エンドポイントは共有レートリミッタ `torii.deploy_rate_per_origin_per_sec` / `torii.deploy_burst_per_origin` を使用します（既定 4 req/s、バースト 8。`X-API-Token`、リモート IP、エンドポイント名の組み合わせでオリジンを識別）。無効化する場合は `null` を指定します。制限に達すると HTTP 429 とともに `torii_contract_throttled_total{endpoint="code|deploy|instance|activate"}` が増加し、ハンドラー内エラーは `torii_contract_errors_total{endpoint=…}` に記録されます。
+All contract lifecycle endpoints share a dedicated deploy limiter configured via
+`torii.deploy_rate_per_origin_per_sec` (tokens per second) and
+`torii.deploy_burst_per_origin` (burst tokens). Defaults are 4 req/s with a burst of
+8 for each token/key derived from `X-API-Token`, the remote IP, or the endpoint hint.
+Set either field to `null` to disable the limiter for trusted operators. When the
+limiter fires, Torii increments the
+`torii_contract_throttled_total{endpoint="deploy"}` telemetry counter and
+returns HTTP 429; any handler error increments
+`torii_contract_errors_total{endpoint=…}` for alerting.
 
-## ガバナンス統合と保護ネームスペース
+## Governance integration & protected namespaces
 
-- カスタムパラメータ `gov_protected_namespaces`（JSON 配列）を設定すると受理ゲートが有効化されます。Torii `/v1/gov/protected-namespaces` と CLI (`iroha_cli app gov protected set/get`) が補助します。
-- `ProposeDeployContract`（または `/v1/gov/proposals/deploy-contract`）で作成される提案は `(namespace, contract_id, code_hash, abi_hash, abi_version)` を記録します。
-- 住民投票が可決し `EnactReferendum` で施行されると、同じメタデータとコードを持つデプロイが受理されます。
-- トランザクションには `gov_namespace` / `gov_contract_id` のペアを必ず指定します。CLI は `--namespace` / `--contract-id` で自動付与します。
+- Set the custom parameter `gov_protected_namespaces` (JSON array of namespace
+  strings) to enable admission gating. Torii exposes helpers under
+  `/v1/gov/protected-namespaces` and the CLI mirrors them via
+  `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
+- Unprotected namespaces are public: any signer may register code bytes,
+  register manifests, and deploy alias-backed public contracts there.
+- Proposals created with `ProposeDeployContract` (or the Torii
+  `/v1/gov/proposals/deploy-contract` endpoint) capture
+  `(contract_address, code_hash, abi_hash, abi_version)`.
+- Once the referendum passes, `EnactReferendum` marks the proposal Enacted and
+  admission will accept deployments that carry matching metadata and code.
+- Transactions must include `gov_contract_address=<contract-address>`. CLI
+  helpers populate the governance metadata automatically when you pass
+  `--contract-address` or `--contract-alias`.
+- If the lane manifest sets a validator quorum above one, include
+  `gov_manifest_approvers` (JSON array of validator account IDs) so the queue can count
+  the additional approvals alongside the transaction authority. Lanes also reject
+  metadata that references namespaces not present in the manifest's
+  `protected_namespaces` set.
 
-## CLI ヘルパー
+## CLI helpers
 
-- `iroha_cli app contracts deploy` — Torii デプロイを呼び出し、ハッシュ計算を自動化。
-- `iroha_cli app contracts manifest get` — マニフェスト取得。
-- `iroha_cli app contracts code get` — 保存済み `.to` をダウンロード。
-- `iroha_cli app contracts instances` — 有効コントラクトインスタンスを一覧表示。
-- `iroha_cli app gov deploy propose` ほか各種ガバナンスコマンドで保護ネームスペースワークフローを支援します。
+- `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path> --contract-alias <name::dataspace>`
+  submits the alias-first Torii deploy request (computing hashes on the fly).
+- `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
+  `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
+  embedded `CNTR`, and optionally signs it for inspection, printing JSON or
+  writing to `--out`.
+- `iroha_cli app contracts simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
+  runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
+  (counts and instruction ids) without touching the network.
+- `iroha_cli app contracts manifest get --code-hash <hex>` fetches the manifest via Torii
+  and optionally writes it to disk.
+- `iroha_cli app contracts code get --code-hash <hex> --out <path>` downloads
+  the stored `.to` image.
+- Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
+  `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and
+  expose JSON artefacts for auditing.
 
-## テストとカバレッジ
+## Testing & coverage
 
-- `crates/iroha_core/tests/contract_code_bytes.rs` がコード保存とサイズ上限を検証。
-- `crates/iroha_core/tests/gov_enact_deploy.rs` が施行経路を検証し、`gov_protected_gate.rs` が保護ネームスペースの受理を E2E テスト。
-- Torii ルートはリクエスト／レスポンスのユニットテスト、CLI は JSON 往復の統合テストを持ちます。
+- Unit tests under `crates/iroha_core/tests/contract_code_bytes.rs` cover code
+  storage, idempotency, and the size cap.
+- `crates/iroha_core/tests/gov_enact_deploy.rs` validates manifest insertion via
+  enactment, and `crates/iroha_core/tests/gov_protected_gate.rs` exercises
+  protected-namespace admission end-to-end.
+- Torii routes include request/response unit tests, and the CLI commands have
+  integration tests ensuring JSON round-trips remain stable.
 
-詳細は `docs/source/governance_api.md` を参照してください。
+Refer to `docs/source/governance_api.md` for detailed referendum payloads and
+ballot workflows.

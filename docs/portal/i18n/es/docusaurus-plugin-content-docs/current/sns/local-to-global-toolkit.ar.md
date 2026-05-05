@@ -16,7 +16,7 @@ Utilice el dispositivo `docs/source/sns/local_to_global_toolkit.md` para conecta
 
 - `scripts/address_local_toolkit.sh` desde la CLI de `iroha`:
   - `audit.json` -- Está conectado a `iroha tools address audit --format json`.
-  - `normalized.txt` -- literales I105 (المفضل) / comprimido (`sora`) (الخيار الثاني) محولة لكل selector من نطاق Local.
+  - `normalized.txt` -- literales i105 (المفضل) / comprimido (`sora`) (الخيار الثاني) محولة لكل selector من نطاق Local.
 - استخدم السكربت مع لوحة ingest للعناوين (`dashboards/grafana/address_ingest.json`)
   وقواعد Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) لاثبات ان cutover Local-8 /
   Local-12 de marzo. راقب لوحات التصادم Local-8 y Local-12 والتنبيهات
@@ -33,7 +33,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 الخيارات:
 
-- `--format I105` para `sora...` para I105.
+- `--format i105` para `sora...` para i105.
 - `domainless output (default)` لاصدار literales بدون نطاق.
 - `--audit-only` لتخطي خطوة التحويل.
 - `--allow-errors` Para obtener más información, consulte la CLI.

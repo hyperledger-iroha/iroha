@@ -89,11 +89,11 @@ translator: machine-google-reviewed
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
 انشانکن کام کے بوجھ سے پہلے اور اس کے بعد فوری طور پر اقدار کو ریکارڈ کریں۔ a
-ہر اثاثہ میں سنگل کمانڈ کافی ہے۔ `xor#wonderland` کے لئے مثال:
+ہر اثاثہ میں سنگل کمانڈ کافی ہے۔ `4cuvDVPuLBKJyN6dPbRQhmLh68sU` کے لئے مثال:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 خام آؤٹ پٹ (یا Prometheus اسنیپ شاٹ) کو انشانکن ٹکٹ سے منسلک کریں

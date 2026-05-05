@@ -7,7 +7,7 @@ pub mod fslock_ports;
 use core::{fmt, future::Future, time::Duration};
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet, hash_map::DefaultHasher},
+    collections::{BTreeSet, HashMap, HashSet, hash_map::DefaultHasher},
     ffi::OsString,
     fs,
     hash::{Hash as StdHash, Hasher},
@@ -51,27 +51,35 @@ use iroha_crypto::{
 use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
     ChainId,
-    account::AccountId,
+    account::{AccountAddress, AccountId},
     block::consensus::{ConsensusGenesisParams, NposGenesisParams},
+    domain::NewDomain,
     isi::{
-        InstructionBox, SetParameter, set_instruction_registry,
+        InstructionBox, SetParameter,
+        register::RegisterBox,
+        set_instruction_registry,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
+    metadata::Metadata,
     parameter::{
         CustomParameter, SmartContractParameter, SumeragiParameter,
         system::{SumeragiNposParameters, consensus_metadata},
+    },
+    sns::{
+        DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameStatus, PaymentProofV1, RegisterNameRequestV1,
     },
     transaction::Executable,
 };
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
 use iroha_primitives::{
     addr::{SocketAddr, socket_addr},
+    json::Json,
     time::TimeSource,
     unique_vec::UniqueVec,
 };
 use iroha_telemetry::metrics::Status;
 use iroha_test_samples::{
-    ALICE_ID, ALICE_KEYPAIR, PEER_KEYPAIR, REAL_GENESIS_ACCOUNT_KEYPAIR,
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, CARPENTER_ID, PEER_KEYPAIR, REAL_GENESIS_ACCOUNT_KEYPAIR,
     SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
 };
 use iroha_version::codec::EncodeVersioned;
@@ -111,6 +119,149 @@ pub fn genesis_factory_with_post_topology(
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
     )
 }
+
+fn test_domain_name_controller(account: &AccountId) -> Result<NameControllerV1> {
+    let address = AccountAddress::from_account_id(account)
+        .map_err(|err| eyre!("convert account `{account}` to SNS controller: {err}"))?;
+    Ok(NameControllerV1::account(&address))
+}
+
+fn test_domain_register_request(
+    domain: &DomainId,
+    owner: &AccountId,
+) -> Result<RegisterNameRequestV1> {
+    let domain_label = domain.to_string();
+    Ok(RegisterNameRequestV1 {
+        selector: iroha_data_model::sns::NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_label)
+            .map_err(|err| eyre!("build SNS selector for domain `{domain}`: {err}"))?,
+        owner: owner.clone(),
+        controllers: vec![test_domain_name_controller(owner)?],
+        term_years: 1,
+        pricing_class_hint: None,
+        payment: PaymentProofV1 {
+            asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
+            gross_amount: 120,
+            net_amount: 120,
+            settlement_tx: Json::from("mock-settlement"),
+            payer: owner.clone(),
+            signature: Json::from("mock-signature"),
+        },
+        governance: None,
+        metadata: Metadata::default(),
+    })
+}
+
+/// Ensure a runtime domain registration has the SNS lease required by the executor.
+pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> Result<()> {
+    let domain_exists = client
+        .query(FindDomains::new())
+        .execute_all()?
+        .into_iter()
+        .any(|existing| existing.id() == domain);
+    if domain_exists {
+        return Ok(());
+    }
+
+    let domain_label = domain.to_string();
+    match client
+        .sns()
+        .get_name(iroha::sns::SnsNamespacePath::Domain, &domain_label)
+    {
+        Ok(record) if record.owner == client.account && record.status == NameStatus::Active => {
+            Ok(())
+        }
+        Ok(record) => Err(eyre!(
+            "domain `{domain}` requires an active SNS lease owned by `{}`; found owner `{}` with status {:?}",
+            client.account,
+            record.owner,
+            record.status
+        )),
+        Err(_) => {
+            let request = test_domain_register_request(domain, &client.account)?;
+            client.sns().register(&request)?;
+            Ok(())
+        }
+    }
+}
+
+/// Ensure a runtime domain registration has the SNS lease required by the executor on every peer
+/// in a test network.
+pub fn ensure_domain_registration_lease_for_network(
+    network: &Network,
+    domain: &DomainId,
+) -> Result<()> {
+    for peer in network.peers() {
+        ensure_domain_registration_lease(&peer.client(), domain)?;
+    }
+    Ok(())
+}
+
+/// Ensure SNS leases exist for every runtime `Register<Domain>` instruction in an executable.
+pub fn ensure_domain_registration_leases_for_executable(
+    client: &Client,
+    executable: &Executable,
+) -> Result<()> {
+    let Executable::Instructions(instructions) = executable else {
+        return Ok(());
+    };
+    let mut domains = BTreeSet::new();
+    for instruction in instructions {
+        let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
+            continue;
+        };
+        if let RegisterBox::Domain(register_domain) = register {
+            domains.insert(register_domain.object.id.clone());
+        }
+    }
+    for domain in domains {
+        ensure_domain_registration_lease(client, &domain)?;
+    }
+    Ok(())
+}
+
+/// Ensure SNS leases exist on every peer for every runtime `Register<Domain>` instruction in an
+/// executable.
+pub fn ensure_domain_registration_leases_for_network_executable(
+    network: &Network,
+    executable: &Executable,
+) -> Result<()> {
+    let Executable::Instructions(instructions) = executable else {
+        return Ok(());
+    };
+    let mut domains = BTreeSet::new();
+    for instruction in instructions {
+        let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
+            continue;
+        };
+        if let RegisterBox::Domain(register_domain) = register {
+            domains.insert(register_domain.object.id.clone());
+        }
+    }
+    for domain in domains {
+        ensure_domain_registration_lease_for_network(network, &domain)?;
+    }
+    Ok(())
+}
+
+/// Register a runtime domain after provisioning its required SNS lease.
+pub fn submit_register_domain_with_lease(client: &Client, domain: NewDomain) -> Result<()> {
+    ensure_domain_registration_lease(client, &domain.id)?;
+    client.submit_blocking(Register::domain(domain))?;
+    Ok(())
+}
+
+/// Register a runtime domain after provisioning its required SNS lease on every peer in a test
+/// network.
+pub fn submit_register_domain_with_network_lease(
+    network: &Network,
+    client: &Client,
+    domain: NewDomain,
+) -> Result<()> {
+    ensure_domain_registration_lease_for_network(network, &domain.id)?;
+    client.submit_blocking(Register::domain(domain))?;
+    Ok(())
+}
+
 const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
 // Fast localnet pipeline time for test networks; callers can opt into Sumeragi defaults.
 const LOCALNET_PIPELINE_TIME: Duration = Duration::from_secs(1);
@@ -160,6 +311,8 @@ const PIPELINE_INDEX_ENTRY_SIZE_U64: u64 = PIPELINE_INDEX_ENTRY_SIZE as u64;
 const STARTUP_STATUS_WARN_GRACE: Duration = Duration::from_secs(5);
 /// Minimum spacing between repeated warning logs for startup status failures after the grace.
 const STARTUP_STATUS_WARN_INTERVAL: Duration = Duration::from_secs(5);
+/// Low-priority `/status` fallback cadence after startup has already been observed.
+const STATUS_FALLBACK_INTERVAL: Duration = Duration::from_secs(2);
 
 type GenesisBuilderFn = Box<
     dyn Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
@@ -247,6 +400,14 @@ fn status_error_is_connection_refused(err: &Report) -> bool {
     })
 }
 
+fn status_error_is_torii_query_backpressure(err: &Report) -> bool {
+    err.chain().any(|cause| {
+        let message = cause.to_string();
+        message.contains("429 Too Many Requests")
+            && message.contains("Reached the limit of parallel queries")
+    })
+}
+
 /// Try binding to all provided addresses to detect missing socket permissions early.
 fn preflight_bind_addresses(
     addresses: impl IntoIterator<Item = SocketAddr>,
@@ -256,6 +417,14 @@ fn preflight_bind_addresses(
         drop(listener);
     }
     Ok(())
+}
+
+fn should_run_bind_preflight_for_runs_started(runs_started: usize) -> bool {
+    // Only probe sockets before the first start attempt. Restarting a peer or a full
+    // network after a partial bootstrap can briefly leave API/P2P ports in a kernel
+    // cleanup state, and the actual `irohad`/Tokio listeners are a better source of truth
+    // than this best-effort preflight probe on those retries.
+    runs_started == 0
 }
 
 fn sync_timeout_env() -> Duration {
@@ -299,7 +468,8 @@ fn client_status_timeout_env() -> Duration {
 }
 
 fn client_request_timeout_env() -> Duration {
-    // Default 30s; override with IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS or *_MS.
+    // Keep the integration-client default aligned with the client library's
+    // routed Torii budget; override with IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS or *_MS.
     let secs = read_env_duration(
         "IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS",
         Duration::from_secs(0),
@@ -309,7 +479,7 @@ fn client_request_timeout_env() -> Duration {
     }
     read_env_duration(
         "IROHA_TEST_CLIENT_REQUEST_TIMEOUT_MS",
-        Duration::from_secs(30),
+        iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
     )
 }
 
@@ -602,11 +772,53 @@ fn resolve_target_dir(repo: &Path) -> PathBuf {
     repo.join("target").join(IROHA_TEST_TARGET_SUBDIR)
 }
 
+fn profile_hint_from_exe_path(current_exe: &Path) -> Option<String> {
+    let mut dir = current_exe.parent()?;
+    if dir.file_name().is_some_and(|value| value == "deps") {
+        dir = dir.parent()?;
+    }
+    let profile = dir.file_name()?.to_str()?.trim();
+    if profile.is_empty() {
+        None
+    } else {
+        Some(profile.to_owned())
+    }
+}
+
+fn current_exe_profile_hint() -> Option<String> {
+    let current_exe = std::env::current_exe().ok()?;
+    profile_hint_from_exe_path(&current_exe)
+}
+
 fn default_build_profile() -> String {
     if let Ok(profile) = std::env::var(IROHA_TEST_BUILD_PROFILE_ENV) {
         return profile;
     }
-    std::env::var("PROFILE").unwrap_or_else(|_| "release".to_string())
+    if let Ok(profile) = std::env::var("PROFILE") {
+        return profile;
+    }
+    current_exe_profile_hint().unwrap_or_else(|| "release".to_string())
+}
+
+fn first_existing_candidate<'a>(
+    candidates: impl IntoIterator<Item = Cow<'a, Path>>,
+) -> Option<PathBuf> {
+    for candidate in candidates {
+        if let Ok(resolved) = candidate.as_ref().canonicalize() {
+            return Some(resolved);
+        }
+    }
+    None
+}
+
+fn colocated_binary_candidate_for(current_exe: &Path, bin: &str) -> Option<PathBuf> {
+    let current_dir = current_exe.parent()?;
+    current_dir.join(bin).canonicalize().ok()
+}
+
+fn current_exe_colocated_binary(bin: &str) -> Option<PathBuf> {
+    let current_exe = std::env::current_exe().ok()?;
+    colocated_binary_candidate_for(&current_exe, bin)
 }
 
 fn build_cache_dir(target_dir: &Path) -> PathBuf {
@@ -1309,6 +1521,19 @@ fn allow_reentrant_build(running_under_cargo: bool) -> bool {
     bool_env_override("IROHA_TEST_ALLOW_REENTRANT_BUILD").unwrap_or(true)
 }
 
+fn cached_binary_if_present(cache: &OnceLock<PathBuf>) -> Option<PathBuf> {
+    let cached = cache.get()?;
+    if cached.exists() {
+        return Some(cached.clone());
+    }
+
+    warn!(
+        binary = %cached.display(),
+        "cached program path is missing; resolving again"
+    );
+    None
+}
+
 impl Program {
     /// Resolve program path.
     ///
@@ -1329,17 +1554,6 @@ impl Program {
             } else {
                 raw.to_owned()
             }
-        }
-
-        fn try_candidates<'a>(
-            candidates: impl IntoIterator<Item = Cow<'a, Path>>,
-        ) -> Option<PathBuf> {
-            for candidate in candidates {
-                if let Ok(resolved) = candidate.as_ref().canonicalize() {
-                    return Some(resolved);
-                }
-            }
-            None
         }
 
         let ProgramSpec {
@@ -1368,13 +1582,13 @@ impl Program {
         // Fast path via cache (only when no override is present)
         match self {
             Program::Irohad => {
-                if let Some(p) = IROHAD_BIN.get() {
-                    return Ok(p.clone());
+                if let Some(path) = cached_binary_if_present(&IROHAD_BIN) {
+                    return Ok(path);
                 }
             }
             Program::Iroha => {
-                if let Some(p) = IROHA_BIN.get() {
-                    return Ok(p.clone());
+                if let Some(path) = cached_binary_if_present(&IROHA_BIN) {
+                    return Ok(path);
                 }
             }
         }
@@ -1387,6 +1601,19 @@ impl Program {
         let cargo_bin_candidate = std::env::var(&cargo_bin_env)
             .ok()
             .and_then(|p| PathBuf::from(p).canonicalize().ok());
+        let colocated_candidate = current_exe_colocated_binary(&bin);
+
+        if let Some(found) = colocated_candidate.clone() {
+            match self {
+                Program::Irohad => {
+                    let _ = IROHAD_BIN.set(found.clone());
+                }
+                Program::Iroha => {
+                    let _ = IROHA_BIN.set(found.clone());
+                }
+            }
+            return Ok(found);
+        }
 
         // 3) Prepare candidate locations under the current target directory
         let profile = default_build_profile();
@@ -1402,6 +1629,9 @@ impl Program {
         if let Some(path) = cargo_bin_candidate {
             push_candidate(path);
         }
+        if let Some(path) = colocated_candidate {
+            push_candidate(path);
+        }
         push_candidate(primary_binary.clone());
         push_candidate(target_dir.join(format!("debug/{bin}")));
         push_candidate(target_dir.join(format!("release/{bin}")));
@@ -1412,7 +1642,7 @@ impl Program {
         push_candidate(default_target.join(format!("release/{bin}")));
 
         let prebuild_candidate =
-            try_candidates(candidates.iter().map(|p| Cow::Borrowed(p.as_path())));
+            first_existing_candidate(candidates.iter().map(|p| Cow::Borrowed(p.as_path())));
 
         // 4) Decide whether to (re)build.
         //    We default to building to avoid using stale binaries across source changes.
@@ -1458,7 +1688,15 @@ impl Program {
         }
 
         // 5) Return the best candidate after the (optional) build
-        if let Some(found) = try_candidates(candidates.iter().map(|p| Cow::Borrowed(p.as_path()))) {
+        let post_build_candidates = if skip_build {
+            first_existing_candidate(candidates.iter().map(|p| Cow::Borrowed(p.as_path())))
+        } else {
+            first_existing_candidate(
+                iter::once(Cow::Borrowed(primary_binary.as_path()))
+                    .chain(candidates.iter().map(|p| Cow::Borrowed(p.as_path()))),
+            )
+        };
+        if let Some(found) = post_build_candidates {
             match self {
                 Program::Irohad => {
                     let _ = IROHAD_BIN.set(found.clone());
@@ -1619,10 +1857,14 @@ fn network_permit_wait_timeout() -> Option<Duration> {
 }
 
 fn try_acquire_file_permit(limit: usize) -> Option<FilePermit> {
+    let dir = permit_dir();
+    try_acquire_file_permit_in(&dir, limit)
+}
+
+fn try_acquire_file_permit_in(dir: &Path, limit: usize) -> Option<FilePermit> {
     if limit == 0 {
         return None;
     }
-    let dir = permit_dir();
     fs::create_dir_all(&dir).expect("failed to create network permit directory");
     let pid = std::process::id();
     let started = SystemTime::now()
@@ -1806,6 +2048,7 @@ pub struct Network {
     block_time: Duration,
     commit_time: Duration,
     block_sync_gossip_period: Duration,
+    sync_timeout_override: Option<Duration>,
     peer_startup_timeout_override: Option<Duration>,
     consensus_profile: ConsensusBootstrapProfile,
     genesis_key_pair: KeyPair,
@@ -2025,13 +2268,19 @@ impl Network {
     where
         I: IntoIterator<Item = usize>,
     {
-        let preflight = preflight_bind_addresses(
-            self.peers
-                .iter()
-                .flat_map(|peer| [peer.p2p_address(), peer.api_address()]),
-        );
-        if let Err(err) = preflight {
-            return Err(err).wrap_err("preflight bind failed for network peers");
+        if self
+            .peers
+            .iter()
+            .all(NetworkPeer::should_run_bind_preflight)
+        {
+            let preflight = preflight_bind_addresses(
+                self.peers
+                    .iter()
+                    .flat_map(|peer| [peer.p2p_address(), peer.api_address()]),
+            );
+            if let Err(err) = preflight {
+                return Err(err).wrap_err("preflight bind failed for network peers");
+            }
         }
 
         // Ensure we resolve `irohad` once before spawning peers; caches for subsequent calls.
@@ -2227,13 +2476,13 @@ impl Network {
         let mut elapsed = Duration::ZERO;
 
         loop {
-            if peer.has_committed_block(1) {
+            if peer.has_observed_block(1) {
                 info!(
                     index,
                     %mnemonic,
                     role,
                     waited = ?elapsed,
-                    "observed block 1 via storage before status polling"
+                    "observed block 1 via best-effort snapshot before status polling"
                 );
                 return Ok(());
             }
@@ -2269,13 +2518,13 @@ impl Network {
                                 return Ok(());
                             }
                             latest_status = Some(status);
-                            if peer.has_committed_block(1) {
+                            if peer.has_observed_block(1) {
                                 info!(
                                     index,
                                     %mnemonic,
                                     role,
                                     waited = ?elapsed,
-                                    "observed block 1 via storage inspection"
+                                    "observed block 1 via best-effort snapshot after status poll"
                                 );
                                 return Ok(());
                             }
@@ -2293,13 +2542,13 @@ impl Network {
                                 ?stderr_log,
                                 "status query failed while waiting for block 1"
                             );
-                            if peer.has_committed_block(1) {
+                            if peer.has_observed_block(1) {
                                 info!(
                                     index,
                                     %mnemonic,
                                     role,
                                     waited = ?elapsed,
-                                    "observed block 1 via storage after status failure"
+                                    "observed block 1 via best-effort snapshot after status failure"
                                 );
                                 return Ok(());
                             }
@@ -2317,13 +2566,13 @@ impl Network {
                                 ?stderr_log,
                                 "status query timed out while waiting for block 1"
                             );
-                            if peer.has_committed_block(1) {
+                            if peer.has_observed_block(1) {
                                 info!(
                                     index,
                                     %mnemonic,
                                     role,
                                     waited = ?elapsed,
-                                    "observed block 1 via storage after status timeout"
+                                    "observed block 1 via best-effort snapshot after status timeout"
                                 );
                                 return Ok(());
                             }
@@ -2344,13 +2593,13 @@ impl Network {
                             status_view_changes = status.view_changes,
                             "still waiting for block 1 after genesis submission"
                         );
-                    } else if peer.has_committed_block(1) {
+                    } else if peer.has_observed_block(1) {
                         info!(
                             index,
                             %mnemonic,
                             role,
                             waited = ?elapsed,
-                            "observed block 1 via storage while status polling failed"
+                            "observed block 1 via best-effort snapshot while status polling failed"
                         );
                         return Ok(());
                     } else {
@@ -2387,7 +2636,7 @@ impl Network {
     }
 
     pub fn sync_timeout(&self) -> Duration {
-        sync_timeout_env()
+        self.sync_timeout_override.unwrap_or_else(sync_timeout_env)
     }
 
     pub fn peer_startup_timeout(&self) -> Duration {
@@ -2453,8 +2702,8 @@ impl Network {
 
     /// Base configuration including the current peers and any additional peers provided.
     ///
-    /// Useful for bootstrapping peers that were registered after the network was built by
-    /// threading their PoP into `trusted_peers_pop` so they are not excluded from consensus.
+    /// Useful for bootstrapping validator peers that were registered after the network was built by
+    /// threading their PoP into `trusted_peers_pop` so they participate in consensus.
     pub fn config_layers_with_additional_peers<'a>(
         &'a self,
         additional_peers: impl IntoIterator<Item = &'a NetworkPeer>,
@@ -2527,10 +2776,13 @@ impl Network {
             .peers
             .first()
             .and_then(|peer| resolve_actual_config(peer, &config_layers));
+        let genesis_crypto = actual_config
+            .as_ref()
+            .map(|config| config::manifest_crypto_from_actual(&config.crypto));
         let da_proof_policies = actual_config
             .as_ref()
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
-        let nexus_config = actual_config.map(|config| config.nexus);
+        let nexus_config = actual_config.as_ref().map(|config| config.nexus.clone());
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
 
         if let Some(cached_genesis) = self.cached_genesis.get() {
@@ -2665,6 +2917,7 @@ impl Network {
             self.topology_entries.clone(),
             self.genesis_key_pair.clone(),
             self.chain_id(),
+            genesis_crypto,
             da_proof_policies,
             nexus_config,
             Some(consensus_handshake_meta),
@@ -3245,6 +3498,7 @@ pub struct NetworkBuilder {
     n_peers: usize,
     config_layers: Vec<Table>,
     pipeline_time: Option<Duration>,
+    sync_timeout: Option<Duration>,
     peer_startup_timeout: Option<Duration>,
     ivm_fuel: IvmFuelConfig,
     genesis_isi: Vec<Vec<InstructionBox>>,
@@ -4182,6 +4436,7 @@ impl NetworkBuilder {
             n_peers: 1,
             config_layers: vec![],
             pipeline_time: Some(LOCALNET_PIPELINE_TIME),
+            sync_timeout: None,
             peer_startup_timeout: None,
             ivm_fuel: IvmFuelConfig::Auto,
             genesis_isi: vec![vec![]],
@@ -4256,6 +4511,16 @@ impl NetworkBuilder {
         self
     }
 
+    /// Override the block-sync / height-convergence timeout for this network instance.
+    ///
+    /// Use this for heavier fixtures whose end-to-end block convergence may exceed the
+    /// environment-level default. The timeout must be strictly positive.
+    pub fn with_sync_timeout(mut self, timeout: Duration) -> Self {
+        assert!(timeout > Duration::ZERO, "sync timeout must be positive");
+        self.sync_timeout = Some(timeout);
+        self
+    }
+
     /// Set the total consensus pipeline time (block production + commit).
     ///
     /// The value is interpreted with millisecond precision. Internally we split it into
@@ -4287,6 +4552,11 @@ impl NetworkBuilder {
         debug_assert!(DEFAULT_PIPELINE_TIME > Duration::from_secs(3));
         self.pipeline_time = None;
         self
+    }
+
+    /// Return the pipeline time that will be injected into genesis, if explicitly configured.
+    pub fn configured_pipeline_time(&self) -> Option<Duration> {
+        self.pipeline_time
     }
 
     /// Override the block gossip period used by block sync and gossip topics.
@@ -4483,11 +4753,34 @@ impl NetworkBuilder {
     /// Build the [`Network`]. Doesn't start it.
     pub fn build(self) -> Network {
         let permit = acquire_network_permit();
+        self.build_with_permit(permit)
+    }
+
+    /// Build the [`Network`] using permit files rooted under `dir`.
+    ///
+    /// This is useful for tests that need an isolated permit namespace while unrelated
+    /// workspace tests are building other networks concurrently.
+    pub fn build_with_permit_dir(self, dir: impl AsRef<Path>) -> Network {
+        let dir = dir.as_ref();
+        let limit = network_parallelism_limit();
+        let file_permit = try_acquire_file_permit_in(dir, limit).unwrap_or_else(|| {
+            panic!(
+                "failed to acquire network permit in isolated dir {} (limit={limit})",
+                dir.display()
+            )
+        });
+        self.build_with_permit(NetworkPermit {
+            _file_permit: file_permit,
+        })
+    }
+
+    fn build_with_permit(self, permit: NetworkPermit) -> Network {
         let NetworkBuilder {
             env,
             n_peers,
             mut config_layers,
             pipeline_time,
+            sync_timeout,
             peer_startup_timeout,
             ivm_fuel,
             mut genesis_isi,
@@ -4607,6 +4900,23 @@ impl NetworkBuilder {
                 effective_redundant_send_r,
             ));
         }
+        let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
+        config_layers_for_parse.push(
+            Table::new()
+                .write("chain", config::chain_id().to_string())
+                .write(
+                    ["genesis", "public_key"],
+                    genesis_key_pair.public_key().to_string(),
+                ),
+        );
+        config_layers_for_parse.push(trusted_peers_layer_for_parse(
+            &peers,
+            auto_populate_trusted_peer_pops,
+        ));
+        config_layers_for_parse.extend(config_layers.iter().cloned());
+        let resolved_npos_config = peers
+            .first()
+            .and_then(|peer| resolve_actual_config(peer, &config_layers_for_parse));
         let cached_genesis = OnceLock::new();
         let cached_genesis_augmented = OnceLock::new();
         if let Some(builder_fn) = custom_genesis.as_ref() {
@@ -4618,7 +4928,7 @@ impl NetworkBuilder {
                 &genesis_account_id,
                 &peer_topology,
                 &genesis_key_pair,
-                None,
+                resolved_npos_config.as_ref().map(|config| &config.nexus),
             );
             cached_genesis
                 .set(block)
@@ -4684,24 +4994,6 @@ impl NetworkBuilder {
             (block_time_ms, commit_time_ms)
         });
 
-        let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
-        config_layers_for_parse.push(
-            Table::new()
-                .write("chain", config::chain_id().to_string())
-                .write(
-                    ["genesis", "public_key"],
-                    genesis_key_pair.public_key().to_string(),
-                ),
-        );
-        config_layers_for_parse.push(trusted_peers_layer_for_parse(
-            &peers,
-            auto_populate_trusted_peer_pops,
-        ));
-        config_layers_for_parse.extend(config_layers.iter().cloned());
-
-        let resolved_npos_config = peers
-            .first()
-            .and_then(|peer| resolve_actual_config(peer, &config_layers_for_parse));
         let consensus_chain_id = resolved_npos_config
             .as_ref()
             .map(|config| config.common.chain.clone())
@@ -4779,12 +5071,18 @@ impl NetworkBuilder {
             npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
         if let Some(stake_amount) = npos_bootstrap {
             let stake_amount = resolve_npos_bootstrap_stake(&genesis_isi, stake_amount);
-            let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-            let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+            let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
+            let ivm_domain = DomainId::try_new("ivm", "universal").expect("ivm domain");
+            let universal_domain =
+                DomainId::try_new("universal", "universal").expect("universal domain");
             let stake_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "nexus".parse().unwrap(),
+                DomainId::try_new("nexus", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
+            let fee_asset_id: AssetDefinitionId =
+                iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                    .parse()
+                    .expect("default nexus fee asset id");
             let bootstrap_gas_keypair = KeyPair::from_seed(
                 b"iroha_test_network::npos_bootstrap_gas_account".to_vec(),
                 Algorithm::Ed25519,
@@ -4796,6 +5094,7 @@ impl NetworkBuilder {
             let mut writer = TomlWriter::new(&mut bootstrap_layer);
             writer
                 .write(["nexus", "enabled"], true)
+                .write(["nexus", "fees", "fee_asset_id"], fee_asset_id.to_string())
                 .write(
                     ["nexus", "staking", "stake_asset_id"],
                     stake_asset_id.to_string(),
@@ -4813,25 +5112,23 @@ impl NetworkBuilder {
             let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
                 .with_name("NPOS Stake".to_owned())
                 .with_metadata(Metadata::default());
+            let fee_definition = AssetDefinition::new(fee_asset_id.clone(), NumericSpec::default())
+                .with_name("Nexus Fee".to_owned())
+                .with_metadata(Metadata::default());
+            let fee_seed_amount = 1_000_000_u32;
 
             let mut bootstrap_tx = vec![
                 Register::domain(Domain::new(nexus_domain.clone())).into(),
                 Register::domain(Domain::new(ivm_domain.clone())).into(),
-                Register::account(Account::new(
-                    gas_account_id.to_account_id(nexus_domain.clone()),
-                ))
-                .into(),
+                Register::domain(Domain::new(universal_domain)).into(),
+                Register::account(Account::new(gas_account_id.clone())).into(),
                 Register::asset_definition(definition).into(),
+                Register::asset_definition(fee_definition).into(),
             ];
 
-            for peer in &peer_ids {
-                let validator_id = AccountId::new(peer.public_key().clone());
-                bootstrap_tx.push(
-                    Register::account(Account::new(
-                        validator_id.to_account_id(nexus_domain.clone()),
-                    ))
-                    .into(),
-                );
+            for peer in &peers {
+                let validator_id = peer.account_id();
+                bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
                 bootstrap_tx.push(
                     Mint::asset_numeric(
                         stake_amount,
@@ -4839,16 +5136,38 @@ impl NetworkBuilder {
                     )
                     .into(),
                 );
+                bootstrap_tx.push(
+                    Mint::asset_numeric(
+                        fee_seed_amount,
+                        AssetId::new(fee_asset_id.clone(), validator_id),
+                    )
+                    .into(),
+                );
+            }
+            for account_id in [
+                ALICE_ID.clone(),
+                BOB_ID.clone(),
+                CARPENTER_ID.clone(),
+                gas_account_id,
+            ] {
+                bootstrap_tx.push(
+                    Mint::asset_numeric(
+                        fee_seed_amount,
+                        AssetId::new(fee_asset_id.clone(), account_id),
+                    )
+                    .into(),
+                );
             }
             genesis_post_topology_isi.push(bootstrap_tx);
 
             let mut validator_tx = Vec::new();
-            for peer in &peer_ids {
-                let validator_id = AccountId::new(peer.public_key().clone());
+            for peer in &peers {
+                let validator_id = peer.account_id();
                 validator_tx.push(
                     RegisterPublicLaneValidator {
                         lane_id: LaneId::SINGLE,
                         validator: validator_id.clone(),
+                        peer_id: peer.id(),
                         stake_account: validator_id.clone(),
                         initial_stake: Numeric::from(stake_amount),
                         metadata: Metadata::default(),
@@ -4866,6 +5185,54 @@ impl NetworkBuilder {
             genesis_post_topology_isi.push(validator_tx);
         }
 
+        if custom_genesis.is_none() {
+            let agent_wallet_asset_definition =
+                AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
+                    .expect("soracloud agent wallet asset definition id");
+            let hf_shared_lease_asset_definition =
+                AssetDefinitionId::parse_address_literal("5PeSrQmLNwwKtruJvDZrbrm9RuMw")
+                    .expect("soracloud HF shared lease asset definition id");
+            let mut soracloud_validator_bootstrap = Vec::new();
+            let mut seeded_accounts = BTreeSet::new();
+            let register_validator_accounts = npos_bootstrap.is_none();
+
+            for peer in &peers {
+                let account_id = peer.account_id();
+                if !seeded_accounts.insert(account_id.clone()) {
+                    continue;
+                }
+                if register_validator_accounts {
+                    soracloud_validator_bootstrap
+                        .push(Register::account(Account::new(account_id.clone())).into());
+                }
+                soracloud_validator_bootstrap.push(
+                    Grant::account_permission(
+                        Permission::new("CanManageSoracloud".into(), Json::new(())),
+                        account_id.clone(),
+                    )
+                    .into(),
+                );
+                soracloud_validator_bootstrap.push(
+                    Mint::asset_numeric(
+                        500_000_u32,
+                        AssetId::new(agent_wallet_asset_definition.clone(), account_id.clone()),
+                    )
+                    .into(),
+                );
+                soracloud_validator_bootstrap.push(
+                    Mint::asset_numeric(
+                        500_000_u32,
+                        AssetId::new(hf_shared_lease_asset_definition.clone(), account_id),
+                    )
+                    .into(),
+                );
+            }
+
+            if !soracloud_validator_bootstrap.is_empty() {
+                genesis_post_topology_isi.push(soracloud_validator_bootstrap);
+            }
+        }
+
         replace_da_enabled_parameter(&mut genesis_isi, da_enabled);
         replace_da_enabled_parameter(&mut genesis_post_topology_isi, da_enabled);
 
@@ -4874,6 +5241,9 @@ impl NetworkBuilder {
         let da_proof_policies = resolved_npos_config
             .as_ref()
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
+        let genesis_crypto = resolved_npos_config
+            .as_ref()
+            .map(|config| config::manifest_crypto_from_actual(&config.crypto));
         let nexus_config = resolved_npos_config
             .as_ref()
             .map(|config| config.nexus.clone());
@@ -4884,6 +5254,7 @@ impl NetworkBuilder {
             topology_entries.clone(),
             genesis_key_pair.clone(),
             consensus_chain_id.clone(),
+            genesis_crypto,
             da_proof_policies,
             nexus_config,
             None,
@@ -5135,6 +5506,7 @@ impl NetworkBuilder {
             block_time,
             commit_time,
             block_sync_gossip_period,
+            sync_timeout_override: sync_timeout,
             peer_startup_timeout_override: peer_startup_timeout,
             consensus_profile,
             genesis_key_pair,
@@ -5332,6 +5704,10 @@ pub struct NetworkPeer {
 }
 
 impl NetworkPeer {
+    fn should_run_bind_preflight(&self) -> bool {
+        should_run_bind_preflight_for_runs_started(self.runs_count.load(Ordering::Relaxed))
+    }
+
     fn record_probe_status(
         probe: &Arc<StdMutex<PeerStartupProbe>>,
         status: &Status,
@@ -5382,9 +5758,11 @@ impl NetworkPeer {
         config_layers: impl Iterator<Item = T>,
         genesis: Option<&GenesisBlock>,
     ) -> Result<()> {
-        let preflight = preflight_bind_addresses([self.p2p_address(), self.api_address()]);
-        if let Err(err) = preflight {
-            return Err(err).wrap_err("preflight bind failed for peer");
+        if self.should_run_bind_preflight() {
+            let preflight = preflight_bind_addresses([self.p2p_address(), self.api_address()]);
+            if let Err(err) = preflight {
+                return Err(err).wrap_err("preflight bind failed for peer");
+            }
         }
 
         let mut run_guard = self.run.lock().await;
@@ -5445,23 +5823,44 @@ impl NetworkPeer {
         let use_sora_profile = config_requires_sora_profile(&config_layers);
 
         let irohad = Program::Irohad.resolve_async().await?;
-        let mut cmd = tokio::process::Command::new(irohad);
-        strip_config_env_overrides(&mut cmd);
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .arg("--config")
-            .arg(config_path)
-            .arg("--terminal-colors=true");
-        cmd.env("KURA_STORE_DIR", storage_dir.as_os_str());
-        if use_sora_profile {
-            cmd.arg("--sora");
-        }
-        if std::env::var_os("IROHA_SKIP_BIND_CHECKS").is_none() {
-            cmd.env("IROHA_SKIP_BIND_CHECKS", "1");
-        }
-        cmd.current_dir(&self.dir);
-        let mut child = cmd.spawn().wrap_err("failed to spawn `irohad`")?;
+        let make_irohad_command = |binary: &Path| {
+            let mut cmd = tokio::process::Command::new(binary);
+            strip_config_env_overrides(&mut cmd);
+            cmd.stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .arg("--config")
+                .arg(&config_path)
+                .arg("--terminal-colors=true");
+            cmd.env("KURA_STORE_DIR", storage_dir.as_os_str());
+            if use_sora_profile {
+                cmd.arg("--sora");
+            }
+            if std::env::var_os("IROHA_SKIP_BIND_CHECKS").is_none() {
+                cmd.env("IROHA_SKIP_BIND_CHECKS", "1");
+            }
+            cmd.current_dir(&self.dir);
+            cmd
+        };
+        let mut child = match make_irohad_command(&irohad).spawn() {
+            Ok(child) => child,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                warn!(
+                    binary = %irohad.display(),
+                    "cached `irohad` path vanished before spawn; rebuilding and retrying once"
+                );
+                let refreshed = spawn_blocking(|| Program::Irohad.resolve_force_build())
+                    .await
+                    .wrap_err("failed to join blocking task while refreshing `irohad` path")??;
+                make_irohad_command(&refreshed).spawn().wrap_err_with(|| {
+                    eyre!(
+                        "failed to spawn `irohad` after refreshing binary path: {}",
+                        refreshed.display()
+                    )
+                })?
+            }
+            Err(err) => return Err(err).wrap_err("failed to spawn `irohad`"),
+        };
         let pid = child.id();
         let stderr_log_ready = Arc::new(Notify::new());
         let (fatal_tx, fatal_rx) = watch::channel(false);
@@ -5541,7 +5940,6 @@ impl NetworkPeer {
                 async move {
                     if let Err(err) = peer_exit.monitor(shutdown_rx).await {
                         error!("something went very bad during peer exit monitoring: {err}");
-                        panic!()
                     }
                 }
                 .instrument(span.clone()),
@@ -5632,8 +6030,9 @@ impl NetworkPeer {
                                     }
                                     Err(err) => {
                                         NetworkPeer::record_probe_error(&startup_probe, &err);
-                                        if status_error_is_connection_refused(&err)
-                                            && !http_seen.load(Ordering::Relaxed)
+                                        if (status_error_is_connection_refused(&err)
+                                            && !http_seen.load(Ordering::Relaxed))
+                                            || status_error_is_torii_query_backpressure(&err)
                                         {
                                             debug!(
                                                 error = %err,
@@ -5783,7 +6182,6 @@ impl NetworkPeer {
                     // status via different codecs back-to-back.
 
                     loop {
-                        const STATUS_FALLBACK_INTERVAL: Duration = Duration::from_millis(500);
                         let mut fallback_interval = tokio::time::interval(STATUS_FALLBACK_INTERVAL);
                         let poll_client = client.clone();
 
@@ -5834,8 +6232,9 @@ impl NetworkPeer {
                                             status
                                         }
                                         Err(err) => {
-                                        if status_error_is_connection_refused(&err)
-                                            && !http_seen.load(Ordering::Relaxed)
+                                        if (status_error_is_connection_refused(&err)
+                                            && !http_seen.load(Ordering::Relaxed))
+                                            || status_error_is_torii_query_backpressure(&err)
                                         {
                                             debug!(
                                                 error = %err,
@@ -6084,12 +6483,12 @@ impl NetworkPeer {
                         has_genesis,
                         elapsed,
                         self.is_running(),
-                        self.has_committed_block(1),
+                        self.has_observed_block(1),
                     ) {
                         warn!(
                             ?elapsed,
                             mnemonic = self.mnemonic(),
-                            "peer startup fallback: block 1 observed before Torii /status readiness"
+                            "peer startup fallback: block 1 observed via best-effort snapshot before Torii /status readiness"
                         );
                         return Ok(());
                     }
@@ -6201,10 +6600,17 @@ impl NetworkPeer {
         if height == 0 {
             return false;
         }
-        let storage_dir = self.dir.join("storage");
+        let storage_dir = self.kura_store_dir();
         pipeline_dirs(&storage_dir)
             .into_iter()
             .any(|dir| self.has_indexed_pipeline_sidecar(&dir, height))
+    }
+
+    fn has_observed_block(&self, height: u64) -> bool {
+        height > 0
+            && self
+                .best_effort_block_height()
+                .is_some_and(|snapshot| snapshot.total >= height)
     }
 
     fn has_indexed_pipeline_sidecar(&self, pipeline_dir: &Path, height: u64) -> bool {
@@ -6275,6 +6681,10 @@ impl NetworkPeer {
         self.key_pair.public_key()
     }
 
+    pub fn account_id(&self) -> AccountId {
+        AccountId::new(self.streaming_public_key().clone())
+    }
+
     pub fn streaming_key_pair(&self) -> &KeyPair {
         &self.streaming_key_pair
     }
@@ -6307,7 +6717,7 @@ impl NetworkPeer {
         self.network_peer_id()
     }
 
-    /// [`PeerId`] representing the network identity (Ed25519) used for Torii/P2P.
+    /// [`PeerId`] representing the BLS peer identity used in topology and PoP validation.
     pub fn network_peer_id(&self) -> PeerId {
         PeerId::new(self.key_pair.public_key().clone())
     }
@@ -6439,14 +6849,17 @@ impl NetworkPeer {
         let status_timeout = client_status_timeout_env();
         let request_timeout = client_request_timeout_env();
         let ttl = client_ttl_env(status_timeout);
+        let default_account_domain = iroha_data_model::domain::DomainId::try_new(
+            iroha::account_address::default_domain_name().as_ref(),
+            "universal",
+        )
+        .expect("default account domain should be fully qualified")
+        .to_string();
         let config = ConfigReader::new()
             .with_toml_source(TomlSource::inline(
                 Table::new()
                     .write("chain", config::chain_id().to_string())
-                    .write(
-                        ["account", "domain"],
-                        iroha::account_address::default_domain_name().to_string(),
-                    )
+                    .write(["account", "domain"], default_account_domain)
                     .write(
                         ["account", "public_key"],
                         account_id.signatory().to_string(),
@@ -7194,6 +7607,79 @@ mod shutdown_tests {
     }
 
     #[tokio::test]
+    async fn shutdown_treats_already_exited_child_as_graceful_completion() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("exit 0");
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        let child = cmd.spawn().expect("spawn short-lived child");
+
+        let (events, _rx) = broadcast::channel(4);
+        let (block_height, _rx) = watch::channel(None);
+        let (_fatal_tx, fatal_rx) = watch::channel(false);
+        let mut peer_exit = PeerExit {
+            child,
+            span: tracing::Span::none(),
+            is_running: Arc::new(AtomicBool::new(true)),
+            is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
+            events,
+            block_height,
+            fatal_rx,
+            stderr_log_ready: Arc::new(Notify::new()),
+            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let status = peer_exit
+            .shutdown_or_kill()
+            .await
+            .expect("already-exited child should be handled cleanly");
+
+        assert!(
+            status.success(),
+            "expected successful exit status, got {status:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn monitor_handles_shutdown_race_after_child_already_exited() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("exit 0");
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        let child = cmd.spawn().expect("spawn short-lived child");
+
+        let (events, _rx) = broadcast::channel(4);
+        let (block_height, _rx) = watch::channel(None);
+        let (_fatal_tx, fatal_rx) = watch::channel(false);
+        let stderr_log_ready = Arc::new(Notify::new());
+        let peer_exit = PeerExit {
+            child,
+            span: tracing::Span::none(),
+            is_running: Arc::new(AtomicBool::new(true)),
+            is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
+            events,
+            block_height,
+            fatal_rx,
+            stderr_log_ready: Arc::clone(&stderr_log_ready),
+            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            stderr_log_ready.notify_waiters();
+        });
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        shutdown_tx
+            .send(())
+            .expect("shutdown signal should be delivered");
+
+        tokio::time::timeout(Duration::from_secs(1), peer_exit.monitor(shutdown_rx))
+            .await
+            .expect("peer monitor should complete")
+            .expect("already-exited child should be treated as graceful during shutdown race");
+    }
+
+    #[tokio::test]
     async fn log_drain_exits_on_shutdown_notify() {
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("stdout.log");
@@ -7475,7 +7961,7 @@ impl PeerExit {
     async fn monitor(mut self, shutdown: oneshot::Receiver<()>) -> Result<()> {
         let status = if *self.fatal_rx.borrow() {
             self.span
-                .in_scope(|| warn!("forcing peer shutdown after fatal signal"));
+                .in_scope(|| debug!("forcing peer shutdown after fatal signal"));
             self.shutdown_or_kill().await?
         } else {
             tokio::select! {
@@ -7483,7 +7969,7 @@ impl PeerExit {
                 _ = shutdown => self.shutdown_or_kill().await?,
                 changed = self.fatal_rx.changed() => {
                     if changed.is_ok() && *self.fatal_rx.borrow() {
-                        self.span.in_scope(|| warn!("forcing peer shutdown after fatal signal"));
+                        self.span.in_scope(|| debug!("forcing peer shutdown after fatal signal"));
                     }
                     self.shutdown_or_kill().await?
                 }
@@ -7508,8 +7994,21 @@ impl PeerExit {
 
     async fn wait_log(&self, notify: &Arc<Notify>, label: &'static str) {
         if (timeout(LOG_FLUSH_TIMEOUT, notify.notified()).await).is_err() {
-            self.span
-                .in_scope(|| warn!(log = label, "timed out waiting for log flush"));
+            let fatal_shutdown = *self.fatal_rx.borrow();
+            let normal_shutdown = self.is_normal_shutdown_started.load(Ordering::Relaxed);
+            if fatal_shutdown || normal_shutdown {
+                self.span.in_scope(|| {
+                    debug!(
+                        log = label,
+                        fatal_shutdown,
+                        normal_shutdown,
+                        "timed out waiting for log flush during shutdown"
+                    )
+                });
+            } else {
+                self.span
+                    .in_scope(|| warn!(log = label, "timed out waiting for log flush"));
+            }
         }
     }
 
@@ -7521,9 +8020,27 @@ impl PeerExit {
         self.is_normal_shutdown_started
             .store(true, Ordering::Relaxed);
 
+        if let Some(status) = self
+            .child
+            .try_wait()
+            .wrap_err("failed to poll child exit status before shutdown")?
+        {
+            self.span.in_scope(
+                || info!(%status, "child already exited before shutdown signal could be delivered"),
+            );
+            return Ok(status);
+        }
+
+        if self.child.id().is_none() {
+            self.span.in_scope(|| {
+                info!("child already exited before shutdown signal could be delivered")
+            });
+            return self.child.wait().await.wrap_err("wait failure");
+        }
+
         self.span.in_scope(|| info!("sending SIGTERM"));
         signal::kill(
-            Pid::from_raw(self.child.id().ok_or(eyre!("race condition"))? as i32),
+            Pid::from_raw(self.child.id().expect("checked child id above") as i32),
             signal::Signal::SIGTERM,
         )
         .wrap_err("failed to send SIGTERM")?;
@@ -8068,6 +8585,19 @@ mod tests {
     }
 
     #[test]
+    fn sync_timeout_override_is_applied() {
+        if skip_network_tests("sync_timeout_override_is_applied") {
+            return;
+        }
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_min_peers(4)
+                .with_sync_timeout(Duration::from_secs(300)),
+        );
+        assert_eq!(network.sync_timeout(), Duration::from_secs(300));
+    }
+
+    #[test]
     fn with_base_seed_if_unset_sets_only_when_missing() {
         let builder = NetworkBuilder::new().with_base_seed_if_unset("seed-a");
         assert_eq!(builder.seed.as_deref(), Some("seed-a"));
@@ -8271,6 +8801,47 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn wait_for_block_1_with_watchdog_uses_best_effort_height_without_storage() {
+        let dir = tempdir().expect("tempdir");
+        let (events_tx, _events_rx) = tokio::sync::broadcast::channel(4);
+        let (block_height, _rx) = tokio::sync::watch::channel(Some(BlockHeight {
+            total: 1,
+            non_empty: 1,
+        }));
+
+        let peer = NetworkPeer {
+            mnemonic: "wait-block-best-effort".to_string(),
+            span: tracing::Span::none(),
+            key_pair: KeyPair::random(),
+            streaming_key_pair: KeyPair::random(),
+            bls_key_pair: None,
+            bls_pop: None,
+            dir: dir.path().to_path_buf(),
+            run: Arc::new(tokio::sync::Mutex::new(None)),
+            runs_count: Arc::new(AtomicUsize::new(0)),
+            is_running: Arc::new(AtomicBool::new(true)),
+            events: events_tx,
+            block_height,
+            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
+            startup_probe: Arc::new(StdMutex::new(PeerStartupProbe::default())),
+            start_context: Arc::new(StdMutex::new(None)),
+            port_p2p: Arc::new(AllocatedPort::new()),
+            port_api: Arc::new(AllocatedPort::new()),
+        };
+
+        let mnemonic = peer.mnemonic().to_string();
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            Network::wait_for_block_1_with_watchdog(&peer, 0, &mnemonic, "test"),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "wait_for_block_1_with_watchdog should return when best-effort height already reached block 1"
+        );
+    }
+
     /// Restores environment variable to its previous value when dropped.
     struct EnvVarGuard {
         key: &'static str,
@@ -8323,6 +8894,13 @@ mod tests {
     }
 
     #[test]
+    fn bind_preflight_runs_only_before_first_start_attempt() {
+        assert!(should_run_bind_preflight_for_runs_started(0));
+        assert!(!should_run_bind_preflight_for_runs_started(1));
+        assert!(!should_run_bind_preflight_for_runs_started(2));
+    }
+
+    #[test]
     fn startup_warn_gate_waits_for_grace() {
         let grace = Duration::from_millis(25);
         let gate = StartupWarnGate::new(grace);
@@ -8350,6 +8928,22 @@ mod tests {
     }
 
     #[test]
+    fn status_error_is_torii_query_backpressure_detects_status_throttle() {
+        let report = eyre!(
+            "Norito decode failed: Unexpected status response; status: 429 Too Many Requests; response body: Reached the limit of parallel queries"
+        );
+
+        assert!(status_error_is_torii_query_backpressure(&report));
+    }
+
+    #[test]
+    fn status_error_is_torii_query_backpressure_ignores_other_throttles() {
+        let report = eyre!("Unexpected status response; status: 429 Too Many Requests");
+
+        assert!(!status_error_is_torii_query_backpressure(&report));
+    }
+
+    #[test]
     fn client_status_timeout_defaults_are_generous() {
         let _guard = lock_env_guard(&CLIENT_ENV_GUARD);
         let _secs_guard = EnvVarGuard::cleared("IROHA_TEST_CLIENT_STATUS_TIMEOUT_SECS");
@@ -8359,6 +8953,19 @@ mod tests {
             client_status_timeout_env(),
             CLIENT_STATUS_TIMEOUT_DEFAULT,
             "default client status timeout should tolerate slow integration runs",
+        );
+    }
+
+    #[test]
+    fn client_request_timeout_defaults_match_client_config_default() {
+        let _guard = lock_env_guard(&CLIENT_ENV_GUARD);
+        let _secs_guard = EnvVarGuard::cleared("IROHA_TEST_CLIENT_REQUEST_TIMEOUT_SECS");
+        let _ms_guard = EnvVarGuard::cleared("IROHA_TEST_CLIENT_REQUEST_TIMEOUT_MS");
+
+        assert_eq!(
+            client_request_timeout_env(),
+            iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT,
+            "test-network clients should inherit the same routed request budget as normal clients",
         );
     }
 
@@ -8548,6 +9155,39 @@ mod tests {
     }
 
     #[test]
+    fn has_committed_block_uses_resolved_kura_store_dir() {
+        let env = Environment::new();
+        let peer = NetworkPeer::builder().build(&env);
+        let custom_storage_dir = peer.dir.join("custom-storage");
+        let pipeline_dir = custom_storage_dir
+            .join("blocks")
+            .join("lane_000_default")
+            .join("pipeline");
+        fs::create_dir_all(&pipeline_dir).expect("create custom pipeline dir");
+        write_sidecar_index(&pipeline_dir, 1);
+
+        {
+            let mut context = peer
+                .start_context
+                .lock()
+                .expect("startup context lock should not be poisoned");
+            *context = Some(PeerStartContext {
+                run_num: 1,
+                config_path: peer.dir.join("run-1-config.toml"),
+                genesis_path: None,
+                stdout_path: peer.dir.join("run-1-stdout.log"),
+                stderr_path: peer.dir.join("run-1-stderr.log"),
+                kura_store_dir_key: "kura.store_dir".to_string(),
+                kura_store_dir: custom_storage_dir.clone(),
+                kura_store_dir_value: custom_storage_dir.display().to_string(),
+            });
+        }
+
+        assert!(peer.has_committed_block(1));
+        assert!(!peer.has_committed_block(2));
+    }
+
+    #[test]
     fn detect_block_height_reads_lane_pipeline_index() {
         let env = Environment::new();
         let peer = NetworkPeer::builder().build(&env);
@@ -8699,7 +9339,7 @@ mod tests {
 
     #[test]
     fn enables_norito_rpc_ga_stage_for_test_networks() {
-        let network = NetworkBuilder::new().build();
+        let network = build_with_isolated_permit(NetworkBuilder::new());
         let base_layer = network
             .config_layers()
             .find(|layer| {
@@ -8985,13 +9625,30 @@ mod tests {
         let _clear_profile = EnvVarGuard::cleared("PROFILE");
         let _clear_override = EnvVarGuard::cleared(IROHA_TEST_BUILD_PROFILE_ENV);
         let default_profile = default_build_profile();
-        assert_eq!(default_profile, "release");
+        assert_eq!(
+            default_profile,
+            current_exe_profile_hint().unwrap_or_else(|| "release".to_string())
+        );
 
         let _override_guard = EnvVarRestore::set("PROFILE", "release");
         assert_eq!(default_build_profile(), "release");
 
         let _override_guard = EnvVarRestore::set(IROHA_TEST_BUILD_PROFILE_ENV, "debug");
         assert_eq!(default_build_profile(), "debug");
+    }
+
+    #[test]
+    fn profile_hint_from_exe_path_detects_profile_before_deps_dir() {
+        let hint = profile_hint_from_exe_path(Path::new(
+            "/tmp/iroha-target/debug/deps/integration_tests-abcdef",
+        ));
+        assert_eq!(hint.as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn profile_hint_from_exe_path_detects_non_deps_profile_dir() {
+        let hint = profile_hint_from_exe_path(Path::new("/tmp/iroha-target/ci/iroha3d"));
+        assert_eq!(hint.as_deref(), Some("ci"));
     }
 
     #[cfg(unix)]
@@ -9344,6 +10001,72 @@ exit 0
     }
 
     #[test]
+    fn first_existing_candidate_prefers_earlier_existing_path() {
+        let temp = tempdir().expect("temporary workspace");
+        let primary = temp.path().join("primary-bin");
+        let fallback = temp.path().join("fallback-bin");
+        fs::write(&primary, b"primary").expect("write primary candidate");
+        fs::write(&fallback, b"fallback").expect("write fallback candidate");
+
+        let resolved = first_existing_candidate([
+            Cow::Borrowed(primary.as_path()),
+            Cow::Borrowed(fallback.as_path()),
+        ])
+        .expect("first existing candidate should resolve");
+
+        assert_eq!(resolved, primary.canonicalize().expect("canonical primary"));
+    }
+
+    #[test]
+    fn first_existing_candidate_skips_missing_paths() {
+        let temp = tempdir().expect("temporary workspace");
+        let missing = temp.path().join("missing-bin");
+        let fallback = temp.path().join("fallback-bin");
+        fs::write(&fallback, b"fallback").expect("write fallback candidate");
+
+        let resolved = first_existing_candidate([
+            Cow::Borrowed(missing.as_path()),
+            Cow::Borrowed(fallback.as_path()),
+        ])
+        .expect("fallback candidate should resolve");
+
+        assert_eq!(
+            resolved,
+            fallback.canonicalize().expect("canonical fallback")
+        );
+    }
+
+    #[test]
+    fn colocated_binary_candidate_for_resolves_sibling_binary() {
+        let temp = tempdir().expect("temporary workspace");
+        let current_exe = temp.path().join("release/izanami");
+        let sibling = temp.path().join("release/iroha3d");
+        fs::create_dir_all(current_exe.parent().expect("current exe parent"))
+            .expect("create release dir");
+        fs::write(&current_exe, b"izanami").expect("write current exe");
+        fs::write(&sibling, b"iroha3d").expect("write sibling binary");
+
+        let resolved = colocated_binary_candidate_for(&current_exe, "iroha3d")
+            .expect("sibling binary should resolve");
+
+        assert_eq!(resolved, sibling.canonicalize().expect("canonical sibling"));
+    }
+
+    #[test]
+    fn colocated_binary_candidate_for_ignores_missing_sibling_binary() {
+        let temp = tempdir().expect("temporary workspace");
+        let current_exe = temp.path().join("release/izanami");
+        fs::create_dir_all(current_exe.parent().expect("current exe parent"))
+            .expect("create release dir");
+        fs::write(&current_exe, b"izanami").expect("write current exe");
+
+        assert!(
+            colocated_binary_candidate_for(&current_exe, "iroha3d").is_none(),
+            "missing sibling binary should not resolve"
+        );
+    }
+
+    #[test]
     fn reentrant_builds_enabled_under_cargo_by_default() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
@@ -9502,6 +10225,7 @@ exit 0
                             .map(|set| set.inner().clone())
                     })
                     .collect::<Vec<_>>(),
+                Executable::ContractCall(_) => Vec::new(),
                 Executable::Ivm(_) => Vec::new(),
                 Executable::IvmProved(_) => Vec::new(),
             })
@@ -9983,13 +10707,14 @@ exit 0
             }
         }
 
-        let default_network = NetworkBuilder::new().with_peers(3).build();
+        let default_network = build_with_isolated_permit(NetworkBuilder::new().with_peers(3));
         assert_trusted_entries(&default_network);
 
-        let explicit_network = NetworkBuilder::new()
-            .with_peers(2)
-            .with_auto_populated_trusted_peers()
-            .build();
+        let explicit_network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(2)
+                .with_auto_populated_trusted_peers(),
+        );
         assert_trusted_entries(&explicit_network);
     }
 
@@ -10270,14 +10995,14 @@ exit 0
 
     #[test]
     fn config_layers_without_pop_excludes_bls_entries() {
-        let network = NetworkBuilder::new()
-            .without_auto_populated_trusted_peers()
-            .with_peers(2)
-            .build();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .without_auto_populated_trusted_peers()
+                .with_peers(2),
+        );
         let mut layers = network.config_layers();
         let _trusted = layers.next().expect("trusted peers layer");
         let base = layers.next().expect("base config layer").into_owned();
-        dbg!(&base);
 
         assert!(base.get("trusted_peers_bls").is_none());
         assert!(base.get("trusted_peers_pop").is_none());
@@ -10515,10 +11240,11 @@ exit 0
         let conflict = InstructionBox::from(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
         )));
-        let network = NetworkBuilder::new()
-            .with_genesis_instruction(conflict)
-            .with_data_availability_enabled(false)
-            .build();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_genesis_instruction(conflict)
+                .with_data_availability_enabled(false),
+        );
         let isi = network.genesis_isi();
         let da_enabled_values = isi
             .iter()
@@ -10589,13 +11315,14 @@ exit 0
     #[test]
     fn default_npos_builder_bootstraps_validators() {
         init_instruction_registry();
-        let network = NetworkBuilder::new()
-            .with_peers(2)
-            .with_auto_populated_trusted_peers()
-            .with_config_layer(|layer| {
-                layer.write(["sumeragi", "consensus_mode"], "npos");
-            })
-            .build();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(2)
+                .with_auto_populated_trusted_peers()
+                .with_config_layer(|layer| {
+                    layer.write(["sumeragi", "consensus_mode"], "npos");
+                }),
+        );
         let genesis = network.genesis();
         let mut has_register = false;
         let mut has_activate = false;
@@ -10669,7 +11396,8 @@ exit 0
     #[test]
     fn post_topology_instructions_are_included_in_genesis() {
         init_instruction_registry();
-        let domain_id: DomainId = "post_topology_test".parse().expect("domain");
+        let domain_id: DomainId =
+            DomainId::try_new("post_topology_test", "universal").expect("domain");
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(1)
@@ -10776,8 +11504,117 @@ exit 0
     }
 
     #[test]
+    fn npos_bootstrap_seeds_default_fee_asset_for_runtime_signers() {
+        init_instruction_registry();
+        let network = NetworkBuilder::new()
+            .with_peers(2)
+            .with_auto_populated_trusted_peers()
+            .with_config_layer(|layer| {
+                layer.write(["sumeragi", "consensus_mode"], "npos");
+            })
+            .build();
+        let genesis = network.genesis();
+        let fee_asset_definition_id: AssetDefinitionId = defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .expect("default nexus fee asset id");
+        let first_validator_id = network
+            .peers()
+            .first()
+            .expect("validator peer")
+            .account_id();
+        let mut saw_definition = false;
+        let mut saw_alice_mint = false;
+        let mut saw_validator_mint = false;
+
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if let Some(register) = instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+                        && let iroha_data_model::isi::RegisterBox::AssetDefinition(register) =
+                            register
+                        && register.object.id == fee_asset_definition_id
+                    {
+                        saw_definition = true;
+                    }
+                    if let Some(mint) = instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::MintBox>()
+                        && let iroha_data_model::isi::MintBox::Asset(mint) = mint
+                        && mint.destination.definition() == &fee_asset_definition_id
+                    {
+                        if mint.destination.account() == &*ALICE_ID {
+                            saw_alice_mint = true;
+                        }
+                        if mint.destination.account() == &first_validator_id {
+                            saw_validator_mint = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert!(
+            saw_definition,
+            "npos bootstrap should register the default nexus fee asset definition"
+        );
+        assert!(
+            saw_alice_mint,
+            "npos bootstrap should fund ALICE with the default nexus fee asset"
+        );
+        assert!(
+            saw_validator_mint,
+            "npos bootstrap should fund validators with the default nexus fee asset"
+        );
+    }
+
+    #[test]
+    fn default_builder_grants_soracloud_management_to_validator_runtime_signers() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(2)
+                .with_auto_populated_trusted_peers(),
+        );
+        let genesis = network.genesis();
+        let validator_ids = network
+            .peers()
+            .iter()
+            .map(NetworkPeer::account_id)
+            .collect::<BTreeSet<_>>();
+        let mut granted = BTreeSet::new();
+
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    let Some(grant) = instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::GrantBox>()
+                    else {
+                        continue;
+                    };
+                    let iroha_data_model::isi::GrantBox::Permission(grant) = grant else {
+                        continue;
+                    };
+                    if grant.object.name() == "CanManageSoracloud"
+                        && validator_ids.contains(&grant.destination)
+                    {
+                        granted.insert(grant.destination.clone());
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            granted, validator_ids,
+            "default test-network genesis should grant CanManageSoracloud to validator runtime signers"
+        );
+    }
+
+    #[test]
     fn default_builder_sets_parseable_nexus_account_literals() {
-        let network = NetworkBuilder::new().build();
+        let network = build_with_isolated_permit(NetworkBuilder::new());
 
         let mut merged = Table::new();
         for layer in network.config_layers() {
@@ -10811,7 +11648,7 @@ exit 0
 
     #[test]
     fn default_builder_uses_localnet_pipeline_time() {
-        let network = NetworkBuilder::new().build();
+        let network = build_with_isolated_permit(NetworkBuilder::new());
 
         assert_eq!(network.pipeline_time(), LOCALNET_PIPELINE_TIME);
 
@@ -10855,7 +11692,8 @@ exit 0
     #[test]
     fn explicit_pipeline_time_injects_sumeragi_params() {
         let duration = Duration::from_secs(9);
-        let network = NetworkBuilder::new().with_pipeline_time(duration).build();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_pipeline_time(duration));
 
         assert_eq!(network.pipeline_time(), duration);
 
@@ -10922,6 +11760,16 @@ exit 0
     }
 
     #[test]
+    fn configured_pipeline_time_reports_explicit_override() {
+        let duration = Duration::from_secs(9);
+        let builder = NetworkBuilder::new().with_pipeline_time(duration);
+        assert_eq!(builder.configured_pipeline_time(), Some(duration));
+
+        let default_builder = NetworkBuilder::new().with_default_pipeline_time();
+        assert_eq!(default_builder.configured_pipeline_time(), None);
+    }
+
+    #[test]
     fn data_availability_parameter_is_injected() {
         let network = NetworkBuilder::new()
             .with_peers(2)
@@ -10971,9 +11819,8 @@ exit 0
     #[test]
     fn block_sync_gossip_period_override_is_applied() {
         let period = Duration::from_millis(750);
-        let network = NetworkBuilder::new()
-            .with_block_sync_gossip_period(period)
-            .build();
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_block_sync_gossip_period(period));
 
         let mut layers = network.config_layers();
         let _trusted = layers.next().expect("trusted peers layer present");
@@ -11012,6 +11859,11 @@ exit 0
         let env = Environment::new();
         let peer = NetworkPeerBuilder::new().build(&env);
         assert_eq!(peer.id().public_key().algorithm(), Algorithm::BlsNormal);
+        assert_eq!(
+            peer.account_id(),
+            AccountId::new(peer.streaming_public_key().clone()),
+            "runtime account identity should use the streaming key"
+        );
         assert_eq!(
             peer.streaming_public_key().algorithm(),
             Algorithm::Ed25519,
@@ -11058,8 +11910,9 @@ exit 0
     fn uses_shared_instruction_registry() {
         init_instruction_registry();
 
-        let instruction =
-            RegisterBox::Domain(Register::domain(Domain::new("test".parse().unwrap())));
+        let instruction = RegisterBox::Domain(Register::domain(Domain::new(
+            DomainId::try_new("test", "universal").unwrap(),
+        )));
         let instruction_box: InstructionBox = instruction.into();
         let bytes = norito::to_bytes(&instruction_box).expect("encode");
         let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("decode");
@@ -11118,6 +11971,27 @@ exit 0
         } else {
             remove_env_var(super::PROGRAM_IROHA_ENV);
         }
+    }
+
+    #[test]
+    fn cached_binary_if_present_returns_existing_path() {
+        let cache = OnceLock::new();
+        let current_exe = env::current_exe().expect("current test binary path");
+        cache
+            .set(current_exe.clone())
+            .expect("cache should be empty for test");
+
+        assert_eq!(cached_binary_if_present(&cache), Some(current_exe));
+    }
+
+    #[test]
+    fn cached_binary_if_present_ignores_missing_path() {
+        let cache = OnceLock::new();
+        let missing = repo_root().join("target/test-bin-dummy/missing-irohad");
+        let _ = fs::remove_file(&missing);
+        cache.set(missing).expect("cache should be empty for test");
+
+        assert!(cached_binary_if_present(&cache).is_none());
     }
 
     #[test]
@@ -11230,7 +12104,7 @@ exit 0
     fn genesis_is_cached_and_deterministic() {
         // Repeated calls to `Network::genesis()` must return the exact same block
         // so that multiple peers submitting genesis use identical bytes.
-        let network = NetworkBuilder::new().with_peers(4).build();
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let g1 = network.genesis();
         let g2 = network.genesis();
 

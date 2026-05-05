@@ -9,7 +9,7 @@ from the mono-repo. It packages the CLI helpers and runbooks required by roadmap
 
 - `scripts/address_local_toolkit.sh` wraps the `iroha` CLI to produce:
   - `audit.json` — structured output from `iroha tools address audit --format json`.
-  - `normalized.txt` — converted preferred I105 literals for every Local-domain selector.
+  - `normalized.txt` — converted preferred i105 literals for every Local-domain selector.
 - Pair the script with the address ingest dashboard (`dashboards/grafana/address_ingest.json`)
   and Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) to prove the Local-8 /
   Local-12 cutover is safe. Watch the Local-8 and Local-12 collision panels plus the
@@ -30,7 +30,7 @@ scripts/address_local_toolkit.sh \
 
 Options:
 
-- `--format i105` for `i105` output instead of I105.
+- `--format i105` for `i105` output instead of i105.
 - `--audit-only` to skip the conversion step.
 - `--allow-errors` to keep scanning when malformed rows appear (matches the CLI behaviour).
 

@@ -236,7 +236,7 @@ const SERIAL_GUARD_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 const MIN_NETWORK_PEERS: usize = 4; // DA-enabled consensus can stall with fewer peers.
 const DEFAULT_NETWORK_PARALLELISM_PEERS: usize = 64; // Match iroha_test_network default.
-const NETWORK_START_ATTEMPTS: usize = 2;
+const NETWORK_START_ATTEMPTS: usize = 3;
 const NETWORK_START_RETRY_DELAY: Duration = Duration::from_secs(1);
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
@@ -250,6 +250,9 @@ fn serialize_networks_enabled() -> bool {
     if let Some(value) = test_override_serialization() {
         return value;
     }
+    if current_test_binary_prefers_serialization() {
+        return true;
+    }
     let Ok(raw) = env::var(SERIALIZE_NETWORKS_ENV) else {
         return false;
     };
@@ -257,6 +260,21 @@ fn serialize_networks_enabled() -> bool {
         raw.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+fn current_test_binary_prefers_serialization() -> bool {
+    env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .is_some_and(|name| test_binary_prefers_serialization(&name))
+}
+
+fn test_binary_prefers_serialization(name: &str) -> bool {
+    let canonical = name.split_once('-').map_or(name, |(prefix, _)| prefix);
+    matches!(canonical, "consensus_and_da")
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1018,6 +1036,8 @@ mod tests {
     fn network_parallelism_env_override_applies() {
         let _env_guard = lock_env_guard();
         wait_for_network_permits_to_drain("network_parallelism_env_override_applies");
+        let _serialize_guard = EnvRestore::remove(SERIALIZE_NETWORKS_ENV);
+        let _parallelism_guard = EnvRestore::remove(NETWORK_PARALLELISM_ENV);
         let _override_guard = override_network_parallelism(None, Some(2));
 
         let guard = serial_guard();
@@ -1038,6 +1058,13 @@ mod tests {
         assert_eq!(limit, 1);
         assert_eq!(in_use, 1);
         drop(guard);
+    }
+
+    #[test]
+    fn consensus_grouped_binary_prefers_serialization() {
+        assert!(test_binary_prefers_serialization("consensus_and_da"));
+        assert!(test_binary_prefers_serialization("consensus_and_da-abcdef"));
+        assert!(!test_binary_prefers_serialization("network_functional"));
     }
 
     #[test]

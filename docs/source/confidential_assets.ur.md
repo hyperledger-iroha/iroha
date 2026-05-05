@@ -45,7 +45,7 @@ SPDX-License-Identifier: Apache-2.0
 سوئفٹ ایس ڈی کے اب بغیر کسی بیسپوک JSON گلو کے شیلڈ ہدایات کا اخراج کرسکتے ہیں: تعمیر a
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ``` بائٹ نوٹ کے عہد کے ساتھ ، خفیہ کردہ پے لوڈ ، اور ڈیبٹ میٹا ڈیٹا ،
 پھر دستخط اور ریلے کے لئے `IrohaSDK.submit(shield:keypair:)` (یا `submitAndWait`) پر کال کریں
 `/v1/pipeline/transactions` پر ٹرانزیکشن۔ مددگار عزم کی لمبائی کی توثیق کرتا ہے ،
@@ -92,7 +92,7 @@ Norito انکوڈر میں `ConfidentialEncryptedPayload`
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -241,7 +241,7 @@ Norito انکوڈر میں `ConfidentialEncryptedPayload`
 - فی اکاؤنٹ کلیدی مشتق درجہ بندی:
   - `sk_spend` → `nk` (nullifier KEY) ، `ivk` (آنے والی دیکھنے کی کلید) ، `ovk` (سبکدوش ہونے والی دیکھنے کی کلید) ، `fvk`۔
 - خفیہ کردہ نوٹ پے لوڈ ECDH سے ماخوذ مشترکہ چابیاں کے ساتھ AEAD استعمال کرتے ہیں۔ اختیاری آڈیٹر ویو کیز ہر اثاثہ پالیسی کے آؤٹ پٹس کے ساتھ منسلک ہوسکتی ہیں۔
-- CLI اضافے: `confidential create-keys` ، `confidential send` ، `confidential export-view-key` ، میمو کو ڈکرپٹنگ کے لئے آڈیٹر ٹولنگ ، اور Norito میمو لفافوں کو آف لائن تیار کرنے/معائنہ کرنے کے لئے `iroha app zk envelope` مددگار۔ Torii ایک ہی مشتق بہاؤ کو `POST /v1/confidential/derive-keyset` کے ذریعے بے نقاب کرتا ہے ، ہیکس اور بیس 64 دونوں فارموں کو واپس کرتا ہے تاکہ بٹوے اہم درجہ بندی کو پروگرام میں لایا جاسکے۔
+- CLI اضافے: `confidential create-keys` ، `confidential send` ، `confidential export-view-key` ، میمو کو ڈکرپٹنگ کے لئے آڈیٹر ٹولنگ ، اور Norito میمو لفافوں کو آف لائن تیار کرنے/معائنہ کرنے کے لئے `iroha app zk envelope` مددگار۔
 
 ## گیس ، حدود اور ڈاس کنٹرولز
 - گیس کا تعی .ن شیڈول:
@@ -394,7 +394,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -426,8 +426,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -458,7 +458,7 @@ Grafana وائرنگ سے پہلے آپ مقامی طور پر میٹرک کی �
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 اسی کھرچنے پر `rg 'iroha_confidential_tree_depth'` کے ساتھ جوڑا جو اس بات کی تصدیق کے لئے کہ نئے وعدوں کے ساتھ گہرائی میں اضافہ ہوتا ہے جبکہ انخلا کے کاؤنٹر صرف اس وقت بڑھتے ہیں جب تاریخ کیپس اندراجات کو تراشتے ہیں۔ ان اقدار کو Grafana ڈیش بورڈ ایکسپورٹ کے ساتھ جو آپ گورننس شواہد کے بنڈل سے منسلک کرتے ہیں۔

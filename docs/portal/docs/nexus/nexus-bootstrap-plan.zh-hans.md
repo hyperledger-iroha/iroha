@@ -32,10 +32,10 @@ translator: machine-google-reviewed
 ## 网络环境
 - 运行两个具有不同网络前缀的 Nexus 环境：
 - **Sora Nexus（主网）** – 生产网络前缀 `nexus`，托管规范治理和 SoraFS/SoraNet 搭载服务（链 ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`）。
-- **Sora Testus（测试网）** – 暂存网络前缀 `testus`，镜像主网配置以进行集成测试和预发布验证（链 UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`）。
-- 为每个环境维护单独的创世文件、治理密钥和基础设施足迹。 Testus 充当升级到 Nexus 之前所有 SoraFS/SoraNet 部署的试验场。
-- CI/CD 管道应首先部署到 Testus，执行自动冒烟测试，并在检查通过后需要手动升级到 Nexus。
-- 参考配置包位于 `configs/soranexus/nexus/`（主网）和 `configs/soranexus/testus/`（测试网）下，每个包含示例 `config.toml`、`genesis.json` 和 Torii 准入目录。
+- **Sora Taira（测试网）** – 暂存网络前缀 `taira`，镜像主网配置以进行集成测试和预发布验证（链 UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`）。
+- 为每个环境维护单独的创世文件、治理密钥和基础设施足迹。 Taira 充当升级到 Nexus 之前所有 SoraFS/SoraNet 部署的试验场。
+- CI/CD 管道应首先部署到 Taira，执行自动冒烟测试，并在检查通过后需要手动升级到 Nexus。
+- 参考配置包位于 `configs/soranexus/nexus/`（主网）和 `configs/soranexus/taira/`（测试网）下，每个包含示例 `config.toml`、`genesis.json` 和 Torii 准入目录。
 
 ## 步骤 1 – 配置审查
 1. 审核现有文档：

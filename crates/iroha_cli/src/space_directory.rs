@@ -181,7 +181,8 @@ impl Run for ManifestEncodeArgs {
         let manifest: AssetPermissionManifest = norito::json::from_slice(&json_bytes)
             .wrap_err("manifest JSON could not be parsed as AssetPermissionManifest")?;
 
-        let encoded = manifest.encode();
+        let encoded = norito::to_bytes(&manifest)
+            .wrap_err("failed to encode manifest as canonical Norito payload")?;
 
         let out_path = self.resolve_out();
         if let Some(parent) = out_path.parent()
@@ -363,8 +364,8 @@ pub struct ManifestScaffoldAllowArgs {
     /// Method/entry-point for the allow entry.
     #[arg(long = "allow-method", value_name = "NAME", id = "allow_method")]
     pub method: Option<String>,
-    /// Asset identifier (e.g. `xor#sora`) for the allow entry.
-    #[arg(long = "allow-asset", value_name = "DEF#DOMAIN", id = "allow_asset")]
+    /// Asset identifier (e.g. `61CtjvNd9T3THAR65GsMVHr82Bjc`) for the allow entry.
+    #[arg(long = "allow-asset", value_name = "ASSET-ID", id = "allow_asset")]
     pub asset: Option<String>,
     /// AMX role enforced by the allow entry (`initiator` or `participant`).
     #[arg(long = "allow-role", value_name = "ROLE", id = "allow_role")]
@@ -395,8 +396,8 @@ pub struct ManifestScaffoldDenyArgs {
     /// Method/entry-point for the deny entry.
     #[arg(long = "deny-method", value_name = "NAME", id = "deny_method")]
     pub method: Option<String>,
-    /// Asset identifier (e.g. `xor#sora`) for the deny entry.
-    #[arg(long = "deny-asset", value_name = "DEF#DOMAIN", id = "deny_asset")]
+    /// Asset identifier (e.g. `61CtjvNd9T3THAR65GsMVHr82Bjc`) for the deny entry.
+    #[arg(long = "deny-asset", value_name = "ASSET-ID", id = "deny_asset")]
     pub asset: Option<String>,
     /// AMX role enforced by the deny entry.
     #[arg(long = "deny-role", value_name = "ROLE", id = "deny_role")]
@@ -694,9 +695,10 @@ impl ManifestScaffoldProfileArgs {
             .clone()
             .unwrap_or_else(|| format!("profile.{dataspace}.v1"));
         let activation_epoch = self.activation_epoch.unwrap_or(manifest.activation_epoch);
-        let governance_issuer = self.governance_issuer.clone().unwrap_or_else(|| {
-            "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan".to_owned()
-        });
+        let governance_issuer = self
+            .governance_issuer
+            .clone()
+            .unwrap_or_else(|| "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A".to_owned());
         let governance_ticket = self
             .governance_ticket
             .clone()
@@ -704,8 +706,8 @@ impl ManifestScaffoldProfileArgs {
         let governance_quorum = self.governance_quorum.unwrap_or(1);
         let validators = if self.validators.is_empty() {
             vec![
-                "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned(),
-                "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ".to_owned(),
+                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
+                "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB".to_owned(),
             ]
         } else {
             self.validators.clone()
@@ -722,8 +724,8 @@ impl ManifestScaffoldProfileArgs {
         let da_quorum = self.da_quorum.unwrap_or(4);
         let da_attesters = if self.da_attesters.is_empty() {
             vec![
-                "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL".to_owned(),
-                "6cmzPVPX4QdPT36dHgSFoznxS3MV99eV8CzeuZFTeqqsBgXDUYfft81".to_owned(),
+                "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6".to_owned(),
+                "sorauﾛ1NcﾐuﾛﾀKﾓhﾈgｽXｦDTﾏｴtﾔﾐ8PJPfSﾕPuﾃ884ｳﾇヰ4ﾇJKTL36".to_owned(),
             ]
         } else {
             self.da_attesters.clone()
@@ -1227,7 +1229,7 @@ fn opt_name(value: Option<&str>, flag: &str) -> Result<Option<Name>> {
 fn opt_asset(value: Option<&str>, flag: &str) -> Result<Option<AssetDefinitionId>> {
     value
         .map(|raw| {
-            raw.parse::<AssetDefinitionId>()
+            AssetDefinitionId::parse_address_literal(raw)
                 .wrap_err_with(|| format!("failed to parse {flag}"))
         })
         .transpose()
@@ -1352,9 +1354,14 @@ mod tests {
         assert!(hash_path.exists(), "missing hash payload");
 
         let encoded = std::fs::read(&to_path).expect("read encoded manifest");
-        let mut reader: &[u8] = &encoded;
-        let decoded = AssetPermissionManifest::decode(&mut reader).expect("decode Norito manifest");
+        let decoded: AssetPermissionManifest =
+            norito::decode_from_bytes(&encoded).expect("decode Norito manifest");
         assert_eq!(decoded, manifest, "encoded manifest differs");
+        assert_eq!(
+            encoded,
+            norito::to_bytes(&manifest).expect("encode canonical Norito manifest"),
+            "encode command must emit canonical Norito bytes"
+        );
 
         let expected_hash = iroha_crypto::Hash::new(&encoded);
         let hash_body = std::fs::read_to_string(&hash_path).expect("read manifest hash file");
@@ -1389,7 +1396,14 @@ mod tests {
         let allow_args = ManifestScaffoldAllowArgs {
             program: Some("cbdc.transfer".to_owned()),
             method: Some("transfer".to_owned()),
-            asset: Some("aid:6e156b5010e645f883eb831946b88db8".to_owned()),
+            asset: Some(
+                AssetDefinitionId::new(
+                    iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
+                        .expect("domain"),
+                    "cbdc".parse().expect("name"),
+                )
+                .to_string(),
+            ),
             role: Some("initiator".to_owned()),
             max_amount: Some("500000000".to_owned()),
             window: Some("per-day".to_owned()),
@@ -1404,21 +1418,21 @@ mod tests {
         let profile_args = ManifestScaffoldProfileArgs {
             profile_id: Some("profile.cbdc.preview".to_owned()),
             governance_issuer: Some(
-                "6cmzPVPX8DcdUnE1nGLZBU1opw24wjxczQNqhCCYvMzKfJR2rGs9tan".to_owned(),
+                "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A".to_owned(),
             ),
             governance_ticket: Some("gov-ticket".to_owned()),
             governance_quorum: Some(4),
             validators: vec![
-                "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned(),
-                "6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ".to_owned(),
+                "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
+                "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB".to_owned(),
             ],
             validator_quorum: Some(2),
             protected_namespaces: vec!["cbdc".to_owned(), "gov".to_owned()],
             da_class: Some("A".to_owned()),
             da_quorum: Some(8),
             da_attesters: vec![
-                "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL".to_owned(),
-                "6cmzPVPX4QdPT36dHgSFoznxS3MV99eV8CzeuZFTeqqsBgXDUYfft81".to_owned(),
+                "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6".to_owned(),
+                "sorauﾛ1NcﾐuﾛﾀKﾓhﾈgｽXｦDTﾏｴtﾔﾐ8PJPfSﾕPuﾃ884ｳﾇヰ4ﾇJKTL36".to_owned(),
             ],
             da_rotation_epochs: Some(96),
             composability_group: Some(
@@ -1529,6 +1543,9 @@ mod tests {
         assert!(hash_path.exists(), "custom hash path was not created");
 
         let encoded = std::fs::read(&out_path).expect("read encoded manifest");
+        let decoded: AssetPermissionManifest =
+            norito::decode_from_bytes(&encoded).expect("decode canonical Norito manifest");
+        assert_eq!(decoded, manifest, "custom output encoded manifest differs");
         let expected_hash = iroha_crypto::Hash::new(&encoded);
         let hash_body = std::fs::read_to_string(&hash_path).expect("read manifest hash file");
         assert_eq!(
@@ -1615,6 +1632,8 @@ mod tests {
             let cfg = Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account: account_id,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
@@ -1626,6 +1645,7 @@ mod tests {
                 transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
                 connect_queue_root: iroha::config::default_connect_queue_root(),
+                soracloud_http_witness_file: None,
                 sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
                 sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
                 sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),

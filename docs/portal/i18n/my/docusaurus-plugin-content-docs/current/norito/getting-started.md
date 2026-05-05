@@ -86,7 +86,7 @@ Base64 ပေးဆောင်မှု-
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority i105... \
+  --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` `iroha` CLI et envelopper les éléments suivants :
   - `audit.json` -- `iroha tools address audit --format json` pour sortie structurée
-  - `normalized.txt` -- ہر Sélecteur de domaine local کے لیے I105 (ترجیحی) / compressé (`sora`, deuxième meilleur) littéraux۔
+  - `normalized.txt` -- ہر Sélecteur de domaine local کے لیے i105 (ترجیحی) / compressé (`sora`, deuxième meilleur) littéraux۔
 - Tableau de bord d'acquisition d'adresses (`dashboards/grafana/address_ingest.json`)
   Dans les règles d'Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) pour les règles d'Alertmanager
   Basculement Local-8 / Local-12 Local-8 et Local-12 panneaux de collision ici
@@ -33,7 +33,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 اختیارات:
 
-- `--format i105` I105 pour sortie `sora...` pour sortie
+- `--format i105` i105 pour sortie `sora...` pour sortie
 - `domainless output (default)` تاکہ littéraux nus نکلیں۔
 - Étape de conversion `--audit-only`
 - `--allow-errors` lignes mal formées lors de l'analyse des lignes (comportement CLI ici)

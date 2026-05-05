@@ -537,12 +537,11 @@ enum ScaleAdjust {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
         account::AccountId,
         asset::AssetDefinitionId,
+        domain::DomainId,
         metadata::Metadata,
         soranet::incentives::{
             RelayComplianceStatusV1, RelayRewardDisputeStatusV1, RelayRewardInstructionV1,
@@ -558,7 +557,10 @@ mod tests {
     fn default_policy() -> RelayBondPolicyV1 {
         RelayBondPolicyV1 {
             minimum_exit_bond: numeric(1_000),
-            bond_asset_id: AssetDefinitionId::new("sora".parse().unwrap(), "xor".parse().unwrap()),
+            bond_asset_id: AssetDefinitionId::new(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            ),
             uptime_floor_per_mille: 900,
             slash_penalty_basis_points: 250,
             activation_grace_epochs: 0,
@@ -569,7 +571,10 @@ mod tests {
         RelayBondLedgerEntryV1 {
             relay_id: [0_u8; 32],
             bonded_amount: numeric(amount),
-            bond_asset_id: AssetDefinitionId::new("sora".parse().unwrap(), "xor".parse().unwrap()),
+            bond_asset_id: AssetDefinitionId::new(
+                DomainId::try_new("sora", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            ),
             bonded_since_unix: 1_000,
             exit_capable,
         }
@@ -691,8 +696,10 @@ mod tests {
     #[test]
     fn skip_when_asset_mismatch() {
         let mut cfg = config();
-        cfg.policy.bond_asset_id =
-            AssetDefinitionId::new("sora".parse().unwrap(), "usd".parse().unwrap());
+        cfg.policy.bond_asset_id = AssetDefinitionId::new(
+            DomainId::try_new("sora", "universal").unwrap(),
+            "usd".parse().unwrap(),
+        );
         let calc = RelayRewardCalculator::new(cfg).expect("config valid");
         let metrics = metrics(RelayComplianceStatusV1::Clean, 3_600, 3_600, 1_000_000);
         let bond = bond(true, 2_000);
@@ -759,7 +766,7 @@ mod tests {
             epoch: 11,
             beneficiary: sample_account("relay"),
             payout_asset_id: AssetDefinitionId::new(
-                "sora".parse().unwrap(),
+                DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
             payout_amount: Numeric::new(12_345, 3),
@@ -797,7 +804,7 @@ mod tests {
             epoch: 21,
             beneficiary: sample_account("relay"),
             payout_asset_id: AssetDefinitionId::new(
-                "sora".parse().unwrap(),
+                DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
             payout_amount: Numeric::new(7_500, 2),

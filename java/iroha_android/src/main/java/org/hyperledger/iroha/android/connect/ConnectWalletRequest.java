@@ -14,12 +14,15 @@ import org.hyperledger.iroha.android.crypto.Blake2b;
 public final class ConnectWalletRequest {
 
   private static final String SCHEME = "iroha";
+  private static final String LAUNCH_SCHEME = "irohaconnect";
   private static final String HOST = "connect";
+  private static final String LAUNCH_HOST = "wc";
   private static final int SID_LENGTH = 32;
 
   private final String sidBase64Url;
   private final byte[] sessionId;
   private final String token;
+  private final String relayToken;
   private final String chainId;
   private final URI baseUri;
   private final URI webSocketUri;
@@ -28,12 +31,14 @@ public final class ConnectWalletRequest {
       final String sidBase64Url,
       final byte[] sessionId,
       final String token,
+      final String relayToken,
       final String chainId,
       final URI baseUri,
       final URI webSocketUri) {
     this.sidBase64Url = sidBase64Url;
     this.sessionId = sessionId.clone();
     this.token = token;
+    this.relayToken = relayToken;
     this.chainId = chainId;
     this.baseUri = baseUri;
     this.webSocketUri = webSocketUri;
@@ -43,13 +48,15 @@ public final class ConnectWalletRequest {
       throws ConnectProtocolException {
     Objects.requireNonNull(uri, "uri");
     Objects.requireNonNull(defaultBaseUri, "defaultBaseUri");
-    final String scheme = normalize(uri.getScheme());
-    final String host = normalize(uri.getHost());
+    final URI normalizedUri = normalizeConnectUri(uri);
+    final String scheme = normalize(normalizedUri.getScheme());
+    final String host = normalize(normalizedUri.getHost());
     if (!SCHEME.equals(scheme) || !HOST.equals(host)) {
-      throw new ConnectProtocolException("Connect deep link must use iroha://connect");
+      throw new ConnectProtocolException(
+          "Connect deep link must use iroha://connect or irohaconnect://connect");
     }
 
-    final Map<String, String> query = parseQuery(uri.getRawQuery());
+    final Map<String, String> query = parseQuery(normalizedUri.getRawQuery());
     final String sid = firstPresent(query, "sid");
     if (sid == null || sid.isBlank()) {
       throw new ConnectProtocolException("Missing required query parameter: sid");
@@ -64,12 +71,17 @@ public final class ConnectWalletRequest {
     if (token == null || token.isBlank()) {
       throw new ConnectProtocolException("Missing required query parameter: token_wallet");
     }
+    final String relayToken =
+        firstNonBlank(firstPresent(query, "relay"), firstPresent(query, "token_relay"), firstPresent(query, "tokenRelay"));
+    if (relayToken == null || relayToken.isBlank()) {
+      throw new ConnectProtocolException("Missing required query parameter: relay");
+    }
 
     final String chainId = trimToNull(firstPresent(query, "chain_id"));
     final URI baseUri = resolveBaseUri(trimToNull(firstPresent(query, "node")), defaultBaseUri);
     final URI wsUri = buildWalletWebSocketUri(baseUri, sid);
 
-    return new ConnectWalletRequest(sid, sessionId, token, chainId, baseUri, wsUri);
+    return new ConnectWalletRequest(sid, sessionId, token, relayToken, chainId, baseUri, wsUri);
   }
 
   public static ConnectWalletRequest parse(final String rawUri, final URI defaultBaseUri)
@@ -92,6 +104,10 @@ public final class ConnectWalletRequest {
 
   public String token() {
     return token;
+  }
+
+  public String relayToken() {
+    return relayToken;
   }
 
   public String chainId() {
@@ -146,6 +162,44 @@ public final class ConnectWalletRequest {
     return null;
   }
 
+  private static URI normalizeConnectUri(final URI uri) throws ConnectProtocolException {
+    final String scheme = normalize(uri.getScheme());
+    final String host = normalize(uri.getHost());
+    if (SCHEME.equals(scheme) && HOST.equals(host)) {
+      return uri;
+    }
+    if (LAUNCH_SCHEME.equals(scheme) && HOST.equals(host)) {
+      return rebuildCanonicalConnectUri(uri);
+    }
+    if (LAUNCH_SCHEME.equals(scheme) && LAUNCH_HOST.equals(host)) {
+      final Map<String, String> query = parseQuery(uri.getRawQuery());
+      final String embeddedUri = trimToNull(firstPresent(query, "uri"));
+      if (embeddedUri == null) {
+        throw new ConnectProtocolException("Missing required query parameter: uri");
+      }
+      try {
+        return normalizeConnectUri(new URI(embeddedUri));
+      } catch (final URISyntaxException ex) {
+        throw new ConnectProtocolException("Embedded connect URI is malformed", ex);
+      }
+    }
+    return uri;
+  }
+
+  private static URI rebuildCanonicalConnectUri(final URI uri)
+      throws ConnectProtocolException {
+    try {
+      return new URI(
+          SCHEME,
+          uri.getRawAuthority(),
+          uri.getRawPath(),
+          uri.getRawQuery(),
+          uri.getRawFragment());
+    } catch (final URISyntaxException ex) {
+      throw new ConnectProtocolException("Connect deep link URI is malformed", ex);
+    }
+  }
+
   private static Map<String, String> parseQuery(final String rawQuery) {
     final Map<String, String> query = new LinkedHashMap<>();
     if (rawQuery == null || rawQuery.isEmpty()) {
@@ -183,10 +237,10 @@ public final class ConnectWalletRequest {
     }
   }
 
-  private static URI resolveBaseUri(final String nodeValue, final URI fallback)
+  private static URI resolveBaseUri(final String nodeValue, final URI defaultUri)
       throws ConnectProtocolException {
     if (nodeValue == null || nodeValue.isEmpty()) {
-      return fallback;
+      return defaultUri;
     }
     URI parsed = tryParse(nodeValue);
     if (parsed != null && parsed.getScheme() != null && parsed.getHost() != null) {

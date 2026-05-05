@@ -32,7 +32,7 @@ lors de la validation des flux d’actifs confidentiels. Il complète le playboo
   éventuellement s'étendre à une seule définition d'actif. Exemple CLI :
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - Les métadonnées de politique et les transitions en attente sont disponibles via

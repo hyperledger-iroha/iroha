@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - CLI `scripts/address_local_toolkit.sh` カプセル化 `iroha` の製造:
   - `audit.json` -- `iroha tools address audit --format json` の構造を出撃します。
-  - `normalized.txt` -- literaux I105 (優先) / 圧縮 (`sora`) (2 番目の選択) は、ドメイン ローカルの選択を変換します。
+  - `normalized.txt` -- literaux i105 (優先) / 圧縮 (`sora`) (2 番目の選択) は、ドメイン ローカルの選択を変換します。
 - ダッシュボードのアドレス取り込みスクリプトの関連付け (`dashboards/grafana/address_ingest.json`)
   その他の規則 Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) は、ローカル 8 のカットオーバーを実行します /
   Local-12 est sur. Local-8 および Local-12 およびアラートの衝突監視
@@ -33,7 +33,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 オプション:
 
-- `--format I105` 出撃 `sora...` I105 を使用します。
+- `--format i105` 出撃 `sora...` i105 を使用します。
 - `domainless output (default)` を注いでください。
 - `--audit-only` 無視者が変換を実行します。
 - `--allow-errors` は、不正な形式の機器のスキャンを継続します (CLI の対応)。

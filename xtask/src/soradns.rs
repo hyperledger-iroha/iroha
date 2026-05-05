@@ -15,7 +15,8 @@ use iroha_data_model::{
     soradns::{RAD_VERSION_V1, ResolverAttestationDocumentV1, ResolverDirectoryRecordV1},
 };
 use iroha_primitives::soradns::{
-    GatewayHostBindings, GatewayHostError, canonical_gateway_suffix, derive_gateway_hosts,
+    GatewayHostBindings, GatewayHostError, GatewayHostProfile, canonical_gateway_suffix,
+    derive_gateway_hosts, derive_gateway_hosts_with_profile, pretty_gateway_suffix,
 };
 use norito::{
     decode_from_bytes,
@@ -36,6 +37,12 @@ const DEFAULT_HSTS_TEMPLATE: &str = "max-age=63072000; includeSubDomains; preloa
 const DEFAULT_PERMISSIONS_POLICY: &str = "accelerometer=(), ambient-light-sensor=(), autoplay=(), camera=(), clipboard-read=(self), clipboard-write=(self), encrypted-media=(), fullscreen=(self), geolocation=(), gyroscope=(), hid=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), speaker-selection=(), usb=(), xr-spatial-tracking=()";
 pub const DEFAULT_ACME_DIRECTORY_URL: &str = "https://acme-v02.api.letsencrypt.org/directory";
 
+/// Return the default pretty-host suffix used by SoraDNS gateway tooling.
+#[must_use]
+pub fn default_pretty_gateway_suffix() -> String {
+    pretty_gateway_suffix().to_string()
+}
+
 /// Summary of gateway host derivation for a SoraDNS entry.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct HostSummary {
@@ -47,7 +54,7 @@ pub struct HostSummary {
     pub canonical_label: String,
     /// Canonical host (`<hash>.gw.sora.id`).
     pub canonical_host: String,
-    /// Pretty host (`<fqdn>.gw.sora.name`).
+    /// Pretty host (`<fqdn>.<pretty-suffix>`).
     pub pretty_host: String,
     /// Wildcard entry that must be authorised for canonical hosts.
     pub canonical_wildcard: &'static str,
@@ -155,6 +162,8 @@ pub struct AcmePlanOptions {
     pub include_canonical_wildcard: bool,
     /// Whether to include pretty host certificates.
     pub include_pretty_hosts: bool,
+    /// Pretty-host suffix used for human-readable gateway hosts.
+    pub pretty_suffix: String,
     /// Timestamp recorded in the resulting plan.
     pub generated_at: OffsetDateTime,
 }
@@ -183,7 +192,7 @@ pub struct AcmePlanHost {
     pub canonical_host: String,
     /// Wildcard covering the canonical namespace.
     pub canonical_wildcard: String,
-    /// Pretty host (`<alias>.gw.sora.name`).
+    /// Pretty host (`<alias>.<pretty-suffix>`).
     pub pretty_host: String,
     /// Planned certificate permutations.
     pub certificates: Vec<AcmeCertificatePlan>,
@@ -224,6 +233,8 @@ pub struct CacheInvalidationPlanOptions {
     pub names: Vec<String>,
     /// Whether to add pretty hosts to the purge target list.
     pub include_pretty_hosts: bool,
+    /// Pretty-host suffix used for human-readable gateway hosts.
+    pub pretty_suffix: String,
     /// HTTP paths that must be purged.
     pub paths: Vec<String>,
     /// HTTP method to use when issuing purge requests.
@@ -266,7 +277,7 @@ pub struct CacheInvalidationEntry {
     pub canonical_host: String,
     /// Wildcard covering the canonical namespace.
     pub canonical_wildcard: String,
-    /// Pretty host (`<alias>.gw.sora.name`).
+    /// Pretty host (`<alias>.<pretty-suffix>`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pretty_host: Option<String>,
     /// Concrete purge targets derived from the alias.
@@ -289,6 +300,8 @@ pub struct RoutePlanOptions {
     pub names: Vec<String>,
     /// Whether to include pretty hosts in the plan.
     pub include_pretty_hosts: bool,
+    /// Pretty-host suffix used for human-readable gateway hosts.
+    pub pretty_suffix: String,
     /// Timestamp recorded in the resulting plan.
     pub generated_at: OffsetDateTime,
 }
@@ -600,12 +613,24 @@ pub enum GatewayBindingVerifyError {
 }
 
 /// Derive canonical/pretty gateway hosts for every supplied SoraDNS name.
+#[cfg(test)]
 pub fn derive_host_summaries(names: &[String]) -> Result<Vec<HostSummary>, HostSummaryError> {
+    derive_host_summaries_with_pretty_suffix(names, pretty_gateway_suffix())
+}
+
+/// Derive canonical/pretty gateway hosts with a custom pretty-host suffix.
+pub fn derive_host_summaries_with_pretty_suffix(
+    names: &[String],
+    pretty_suffix: &str,
+) -> Result<Vec<HostSummary>, HostSummaryError> {
     let mut summaries = Vec::with_capacity(names.len());
+    let profile = GatewayHostProfile::new(pretty_suffix);
     for name in names {
-        let bindings = derive_gateway_hosts(name).map_err(|source| HostSummaryError::Derive {
-            name: name.clone(),
-            source,
+        let bindings = derive_gateway_hosts_with_profile(name, profile).map_err(|source| {
+            HostSummaryError::Derive {
+                name: name.clone(),
+                source,
+            }
         })?;
         let summary = HostSummary::from_bindings(name, &bindings);
         validate_canonical_derivation(&summary)?;
@@ -616,7 +641,8 @@ pub fn derive_host_summaries(names: &[String]) -> Result<Vec<HostSummary>, HostS
 
 /// Build a deterministic ACME certificate plan for the supplied aliases.
 pub fn build_acme_plan(options: &AcmePlanOptions) -> Result<AcmePlan, HostSummaryError> {
-    let summaries = derive_host_summaries(&options.names)?;
+    let summaries =
+        derive_host_summaries_with_pretty_suffix(&options.names, &options.pretty_suffix)?;
     let generated_at = options
         .generated_at
         .format(&Rfc3339)
@@ -673,7 +699,8 @@ pub fn build_acme_plan(options: &AcmePlanOptions) -> Result<AcmePlan, HostSummar
 pub fn build_cache_invalidation_plan(
     options: &CacheInvalidationPlanOptions,
 ) -> Result<CacheInvalidationPlan, HostSummaryError> {
-    let mut summaries = derive_host_summaries(&options.names)?;
+    let mut summaries =
+        derive_host_summaries_with_pretty_suffix(&options.names, &options.pretty_suffix)?;
     summaries.sort_by(|lhs, rhs| lhs.normalized_name.cmp(&rhs.normalized_name));
     let generated_at = options
         .generated_at
@@ -727,7 +754,8 @@ pub fn build_cache_invalidation_plan(
 
 /// Build a promotion/rollback plan for the supplied aliases.
 pub fn build_route_plan(options: &RoutePlanOptions) -> Result<RoutePlan, HostSummaryError> {
-    let mut summaries = derive_host_summaries(&options.names)?;
+    let mut summaries =
+        derive_host_summaries_with_pretty_suffix(&options.names, &options.pretty_suffix)?;
     summaries.sort_by(|lhs, rhs| lhs.normalized_name.cmp(&rhs.normalized_name));
     let generated_at = options
         .generated_at
@@ -1640,6 +1668,8 @@ fn resolve_header_template(
 pub struct GarTemplateOptions {
     /// Registered SoraDNS name (may include uppercase letters; helper normalises it).
     pub name: String,
+    /// Pretty-host suffix used for human-readable gateway hosts.
+    pub pretty_suffix: String,
     /// Manifest CID authorised by the GAR.
     pub manifest_cid: String,
     /// Optional BLAKE3-256 digest (hex) of the manifest.
@@ -1676,7 +1706,10 @@ pub enum GarTemplateError {
 pub fn build_gar_template(
     options: &GarTemplateOptions,
 ) -> Result<SerdeJsonValue, GarTemplateError> {
-    let bindings = derive_gateway_hosts(&options.name)?;
+    let bindings = derive_gateway_hosts_with_profile(
+        &options.name,
+        GatewayHostProfile::new(&options.pretty_suffix),
+    )?;
     let manifest_cid = options.manifest_cid.trim();
     if manifest_cid.is_empty() {
         return Err(GarTemplateError::EmptyManifestCid);
@@ -1748,16 +1781,30 @@ pub fn normalize_manifest_digest(value: &str) -> Result<String, GarTemplateError
 }
 
 /// Verification options supplied when validating GAR payloads.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct GarVerifyOptions {
     /// Registered SoraDNS name used to derive canonical hosts.
     pub name: String,
+    /// Pretty-host suffix used for human-readable gateway hosts.
+    pub pretty_suffix: String,
     /// Optional manifest CID expectation.
     pub expected_manifest_cid: Option<String>,
     /// Optional manifest digest expectation.
     pub expected_manifest_digest: Option<String>,
     /// Telemetry labels that must appear in the GAR payload.
     pub required_telemetry_labels: Vec<String>,
+}
+
+impl Default for GarVerifyOptions {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            pretty_suffix: default_pretty_gateway_suffix(),
+            expected_manifest_cid: None,
+            expected_manifest_digest: None,
+            required_telemetry_labels: Vec::new(),
+        }
+    }
 }
 
 /// Summary returned after validating a GAR payload.
@@ -2074,11 +2121,14 @@ pub fn verify_gar_payload(
             labels
         }
     };
-    let bindings =
-        derive_gateway_hosts(&options.name).map_err(|source| GarVerifyError::HostDerive {
-            name: options.name.clone(),
-            source,
-        })?;
+    let bindings = derive_gateway_hosts_with_profile(
+        &options.name,
+        GatewayHostProfile::new(&options.pretty_suffix),
+    )
+    .map_err(|source| GarVerifyError::HostDerive {
+        name: options.name.clone(),
+        source,
+    })?;
     let summary = HostSummary::from_bindings(&options.name, &bindings);
     let summary_name = summary.normalized_name.clone();
     let normalized_payload_name = gar_name.to_ascii_lowercase();
@@ -3132,6 +3182,7 @@ mod tests {
         let manifest_digest = "ABCDEF12".repeat(8);
         let options = GarTemplateOptions {
             name: "Docs.Sora".to_string(),
+            pretty_suffix: default_pretty_gateway_suffix(),
             manifest_cid: "bafybeigdyrzt2vx7demoexamplecid".to_string(),
             manifest_digest: Some(manifest_digest.clone()),
             csp_template: None,
@@ -3310,6 +3361,7 @@ mod tests {
     fn gar_template_includes_defaults() {
         let options = GarTemplateOptions {
             name: "Docs.Sora".to_string(),
+            pretty_suffix: default_pretty_gateway_suffix(),
             manifest_cid: "bafybeigdyrzt".to_string(),
             manifest_digest: Some(
                 "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789".to_string(),
@@ -3369,6 +3421,7 @@ mod tests {
     fn gar_template_respects_overrides_and_patterns() {
         let options = GarTemplateOptions {
             name: "Portal.Sora".to_string(),
+            pretty_suffix: default_pretty_gateway_suffix(),
             manifest_cid: "bafyportalmanifest".to_string(),
             manifest_digest: Some("FF".repeat(32)),
             csp_template: Some("default-src 'self' sorafs://".to_string()),
@@ -3428,6 +3481,7 @@ mod tests {
     fn gar_template_rejects_invalid_digest() {
         let options = GarTemplateOptions {
             name: "docs.sora".to_string(),
+            pretty_suffix: default_pretty_gateway_suffix(),
             manifest_cid: "bafybeigdyrzt".to_string(),
             manifest_digest: Some("bad-digest".to_string()),
             csp_template: None,
@@ -3475,6 +3529,7 @@ mod tests {
             &gar_path,
             &GarVerifyOptions {
                 name: "docs.sora".to_string(),
+                pretty_suffix: default_pretty_gateway_suffix(),
                 expected_manifest_cid: Some(manifest_cid.to_string()),
                 expected_manifest_digest: Some(manifest_digest.to_string()),
                 required_telemetry_labels: vec!["dg-3".to_string()],
@@ -3525,6 +3580,7 @@ mod tests {
             &gar_path,
             &GarVerifyOptions {
                 name: "docs.sora".to_string(),
+                pretty_suffix: default_pretty_gateway_suffix(),
                 ..GarVerifyOptions::default()
             },
         )
@@ -3553,6 +3609,7 @@ mod tests {
             &gar_path,
             &GarVerifyOptions {
                 name: "docs.sora".to_string(),
+                pretty_suffix: default_pretty_gateway_suffix(),
                 expected_manifest_cid: Some("differentcid".to_string()),
                 ..GarVerifyOptions::default()
             },
@@ -3744,6 +3801,7 @@ mod tests {
             directory_url: "https://acme.invalid/directory".to_string(),
             include_canonical_wildcard: true,
             include_pretty_hosts: true,
+            pretty_suffix: default_pretty_gateway_suffix(),
             generated_at: OffsetDateTime::UNIX_EPOCH,
         };
         let plan = build_acme_plan(&options).expect("plan renders");
@@ -3787,6 +3845,7 @@ mod tests {
         let options = RoutePlanOptions {
             names: vec!["docs.sora".to_string()],
             include_pretty_hosts: true,
+            pretty_suffix: default_pretty_gateway_suffix(),
             generated_at: OffsetDateTime::UNIX_EPOCH,
         };
         let plan = build_route_plan(&options).expect("plan renders");

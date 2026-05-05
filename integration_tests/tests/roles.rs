@@ -78,11 +78,9 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
 
     let alice_id = ALICE_ID.clone();
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
-    let wonderland: DomainId = "wonderland".parse()?;
 
     // Registering Mouse
-    let register_mouse =
-        Register::account(Account::new(mouse_id.to_account_id(wonderland.clone())));
+    let register_mouse = Register::account(Account::new(mouse_id.clone()));
     test_client.submit_blocking(register_mouse)?;
 
     // Registering role
@@ -95,7 +93,7 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
     test_client.submit_blocking(register_role)?;
 
     // Transfer domain ownership to Mouse so Alice no longer has implicit owner privileges.
-    let wonderland: DomainId = "wonderland".parse()?;
+    let wonderland: DomainId = DomainId::try_new("wonderland", "universal")?;
     let transfer_domain = Transfer::domain(alice_id.clone(), wonderland, mouse_id.clone());
     test_client.submit_blocking(transfer_domain)?;
 
@@ -147,11 +145,9 @@ fn unregistered_role_removed_from_account() -> Result<()> {
     let role_id: RoleId = "root".parse().expect("Valid");
     let alice_id = ALICE_ID.clone();
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
-    let wonderland: DomainId = "wonderland".parse()?;
 
     // Registering Mouse
-    let register_mouse =
-        Register::account(Account::new(mouse_id.to_account_id(wonderland.clone())));
+    let register_mouse = Register::account(Account::new(mouse_id.clone()));
     test_client.submit_blocking(register_mouse)?;
 
     // Register root role
@@ -225,12 +221,12 @@ fn role_permissions_are_deduplicated() {
         return;
     };
     let test_client = network.client();
-    let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
+    let wonderland: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("wonderland domain");
     let rose_definition =
         AssetDefinitionId::new(wonderland.clone(), "rose".parse().expect("valid rose name"));
     let rose_asset = AssetId::new(rose_definition, ALICE_ID.clone());
-    let rose_asset_lower = rose_asset.canonical_encoded();
-    let rose_asset_upper = rose_asset_lower.to_ascii_uppercase();
+    let rose_asset_lower = rose_asset.canonical_literal();
 
     let allow_alice_to_transfer_rose_1 = Permission::new(
         "CanTransferAsset".parse().unwrap(),
@@ -246,13 +242,9 @@ fn role_permissions_are_deduplicated() {
     // Different content, but same meaning
     let allow_alice_to_transfer_rose_2 = Permission::new(
         "CanTransferAsset".parse().unwrap(),
-        iroha_primitives::json::Json::new(
-            norito::json::object([(
-                "asset",
-                norito::json::to_value(&rose_asset_upper).expect("serialize asset"),
-            )])
-            .expect("serialize permission payload"),
-        ),
+        iroha_primitives::json::Json::from_string_unchecked(format!(
+            r#"{{ "asset" : "{rose_asset_lower}" }}"#
+        )),
     );
 
     let role_id: RoleId = "role_id".parse().expect("Valid");
@@ -289,11 +281,9 @@ fn grant_revoke_role_permissions() -> Result<()> {
 
     let alice_id = ALICE_ID.clone();
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
-    let wonderland: DomainId = "wonderland".parse()?;
 
     // Registering Mouse
-    let register_mouse =
-        Register::account(Account::new(mouse_id.to_account_id(wonderland.clone())));
+    let register_mouse = Register::account(Account::new(mouse_id.clone()));
     test_client.submit_blocking(register_mouse)?;
 
     // Registering role
@@ -303,7 +293,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
     test_client.submit_blocking(register_role)?;
 
     // Transfer domain ownership to Mouse
-    let domain_id = "wonderland".parse::<DomainId>()?;
+    let domain_id = DomainId::try_new("wonderland", "universal")?;
     let transfer_domain = Transfer::domain(alice_id.clone(), domain_id, mouse_id.clone());
     test_client.submit_blocking(transfer_domain)?;
 

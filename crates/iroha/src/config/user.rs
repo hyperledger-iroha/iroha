@@ -5,7 +5,7 @@ use std::{path::PathBuf, time::Duration};
 use error_stack::{Report, ResultExt};
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_config_base::{
-    ReadConfig, WithOrigin,
+    ParameterOrigin, ReadConfig, WithOrigin,
     attach::ConfigValueAndOrigin,
     util::{DurationMs, Emitter, EmitterResultExt},
 };
@@ -21,6 +21,34 @@ use crate::{
 
 /// Minimal allowed transaction time-to-live.
 const MIN_TRANSACTION_TTL: Duration = Duration::from_secs(1);
+const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+const PUBLIC_NEXUS_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000753";
+const PUBLIC_TAIRA_TORII_HOST: &str = "taira.sora.org";
+const PUBLIC_NEXUS_TORII_HOST: &str = "torii.nexus.sora.org";
+const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
+const NEXUS_CHAIN_DISCRIMINANT: u16 = 753;
+
+fn known_chain_discriminant_for_chain_id(chain_id: &ChainId) -> Option<u16> {
+    match chain_id.as_str() {
+        "iroha3-taira" | PUBLIC_TAIRA_CHAIN_ID => Some(TAIRA_CHAIN_DISCRIMINANT),
+        "iroha3-nexus" | PUBLIC_NEXUS_CHAIN_ID => Some(NEXUS_CHAIN_DISCRIMINANT),
+        _ => None,
+    }
+}
+
+fn known_chain_discriminant_for_torii_url(torii_url: &Url) -> Option<(u16, &'static str)> {
+    match torii_url.host_str() {
+        Some(PUBLIC_TAIRA_TORII_HOST) => Some((
+            TAIRA_CHAIN_DISCRIMINANT,
+            "derived from Torii host `taira.sora.org`",
+        )),
+        Some(PUBLIC_NEXUS_TORII_HOST) => Some((
+            NEXUS_CHAIN_DISCRIMINANT,
+            "derived from Torii host `torii.nexus.sora.org`",
+        )),
+        _ => None,
+    }
+}
 
 /// Root of the user-facing configuration loaded from TOML + env.
 #[derive(Clone, Debug, ReadConfig)]
@@ -57,6 +85,9 @@ pub struct Root {
     #[config(nested)]
     /// SoraFS-specific configuration.
     pub sorafs: Sorafs,
+    #[config(nested)]
+    /// Soracloud-specific client behavior.
+    pub soracloud: Soracloud,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -98,6 +129,12 @@ pub enum ParseError {
     /// Connect queue root path was empty after parsing.
     #[error("`connect.queue_root` must not be empty")]
     EmptyConnectQueueRoot,
+    /// Invalid account domain literal.
+    #[error("Account domain must use `domain.dataspace` format: `{value}`")]
+    InvalidAccountDomain {
+        /// Raw configured value.
+        value: String,
+    },
 }
 
 type ReportResult<T, E> = core::result::Result<T, Report<[E]>>;
@@ -119,9 +156,10 @@ impl Root {
             torii_request_timeout_ms,
             account:
                 Account {
-                    domain: domain_id,
+                    domain: domain_literal,
                     public_key,
                     private_key,
+                    chain_discriminant,
                 },
             transaction:
                 Transaction {
@@ -131,6 +169,7 @@ impl Root {
                 },
             connect: Connect { queue_root },
             sorafs,
+            soracloud,
         } = self;
 
         let mut emitter = Emitter::new();
@@ -243,9 +282,25 @@ impl Root {
             );
         }
 
+        let chain_discriminant = match chain_discriminant.origin() {
+            ParameterOrigin::Default { .. } => known_chain_discriminant_for_chain_id(&chain_id)
+                .map(|value| (value, format!("derived from chain `{}`", chain_id.as_str())))
+                .or_else(|| {
+                    known_chain_discriminant_for_torii_url(&torii_api_url)
+                        .map(|(value, source)| (value, source.to_owned()))
+                })
+                .map(|(value, source)| WithOrigin::new(value, ParameterOrigin::custom(source)))
+                .unwrap_or(chain_discriminant),
+            _ => chain_discriminant,
+        };
+
         let (public_key, public_key_origin) = public_key.into_tuple();
         let (private_key, private_key_origin) = private_key.into_tuple();
-        let _ = &domain_id;
+        if DomainId::parse_fully_qualified(&domain_literal).is_err() {
+            emitter.emit(Report::new(ParseError::InvalidAccountDomain {
+                value: domain_literal.clone(),
+            }));
+        }
         let key_pair = KeyPair::new(public_key.clone(), private_key)
             .attach(ConfigValueAndOrigin::new("[REDACTED]", public_key_origin))
             .attach(ConfigValueAndOrigin::new("[REDACTED]", private_key_origin))
@@ -270,6 +325,7 @@ impl Root {
             rollout_phase,
             anonymity_policy,
         } = sorafs;
+        let Soracloud { http_witness_file } = soracloud;
 
         let alias_policy = alias_cache.into_policy();
         let rollout_phase_value =
@@ -307,6 +363,7 @@ impl Root {
         Ok(super::Config {
             chain: chain_id,
             account: account_id,
+            account_chain_discriminant: chain_discriminant.into_value(),
             key_pair: key_pair.unwrap(),
             torii_api_url,
             torii_api_version,
@@ -317,6 +374,7 @@ impl Root {
             transaction_status_timeout: tx_timeout.into_value().get(),
             transaction_add_nonce: tx_add_nonce,
             connect_queue_root: queue_root_path,
+            soracloud_http_witness_file: http_witness_file,
             sorafs_alias_cache: alias_policy,
             sorafs_anonymity_policy: default_anonymity_policy,
             sorafs_rollout_phase: rollout_phase_value,
@@ -329,13 +387,19 @@ impl Root {
 pub struct Account {
     /// Domain of the account.
     #[config(env = "ACCOUNT_DOMAIN")]
-    pub domain: DomainId,
+    pub domain: String,
     /// Public key of the account.
     #[config(env = "ACCOUNT_PUBLIC_KEY")]
     pub public_key: WithOrigin<PublicKey>,
     /// Private key of the account.
     #[config(env = "ACCOUNT_PRIVATE_KEY")]
     pub private_key: WithOrigin<PrivateKey>,
+    /// I105 chain discriminant used when parsing and rendering account literals.
+    #[config(
+        env = "ACCOUNT_CHAIN_DISCRIMINANT",
+        default = "defaults::common::chain_discriminant()"
+    )]
+    pub chain_discriminant: WithOrigin<u16>,
 }
 
 /// Transaction defaults used by the client.
@@ -366,6 +430,13 @@ impl Default for Connect {
             queue_root: WithOrigin::inline(super::default_connect_queue_root()),
         }
     }
+}
+
+/// Soracloud-specific client settings.
+#[derive(Debug, Clone, Default, ReadConfig)]
+pub struct Soracloud {
+    /// Optional path to a JSON canonical request witness used for multisig Soracloud HTTP.
+    pub http_witness_file: Option<PathBuf>,
 }
 
 /// SoraFS-specific configuration.
@@ -474,9 +545,16 @@ mod tests {
                 crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             )),
             account: Account {
-                domain: DomainId::from_str("wonderland").expect("domain id"),
+                domain: "wonderland.universal".to_owned(),
                 public_key: WithOrigin::inline(key_pair.public_key().clone()),
                 private_key: WithOrigin::inline(key_pair.private_key().clone()),
+                chain_discriminant: WithOrigin::new(
+                    defaults::common::chain_discriminant(),
+                    ParameterOrigin::default(iroha_config_base::ParameterId::from([
+                        "account",
+                        "chain_discriminant",
+                    ])),
+                ),
             },
             transaction: Transaction {
                 time_to_live_ms: WithOrigin::inline(DurationMs::from(ttl)),
@@ -485,6 +563,7 @@ mod tests {
             },
             connect: Connect::default(),
             sorafs: Sorafs::default(),
+            soracloud: Soracloud::default(),
         }
     }
 
@@ -501,6 +580,51 @@ mod tests {
     }
 
     #[test]
+    fn parse_preserves_account_chain_discriminant() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        root.account.chain_discriminant = WithOrigin::inline(777);
+
+        let config = root.parse().expect("configuration should be valid");
+
+        assert_eq!(config.account_chain_discriminant, 777);
+    }
+
+    #[test]
+    fn parse_infers_taira_account_chain_discriminant_from_chain_id() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        root.chain = ChainId::from(PUBLIC_TAIRA_CHAIN_ID);
+
+        let config = root.parse().expect("configuration should be valid");
+
+        assert_eq!(config.account_chain_discriminant, TAIRA_CHAIN_DISCRIMINANT);
+    }
+
+    #[test]
+    fn parse_infers_taira_account_chain_discriminant_from_torii_url_when_chain_id_unknown() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        root.chain = ChainId::from("00000000-0000-0000-0000-000000000000");
+        root.torii_url =
+            WithOrigin::inline(Url::parse("https://taira.sora.org/").expect("valid torii url"));
+
+        let config = root.parse().expect("configuration should be valid");
+
+        assert_eq!(config.account_chain_discriminant, TAIRA_CHAIN_DISCRIMINANT);
+    }
+
+    #[test]
+    fn parse_infers_nexus_account_chain_discriminant_from_torii_url_when_chain_id_unknown() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        root.chain = ChainId::from("00000000-0000-0000-0000-000000000000");
+        root.torii_url = WithOrigin::inline(
+            Url::parse("https://torii.nexus.sora.org/").expect("valid torii url"),
+        );
+
+        let config = root.parse().expect("configuration should be valid");
+
+        assert_eq!(config.account_chain_discriminant, NEXUS_CHAIN_DISCRIMINANT);
+    }
+
+    #[test]
     fn parse_preserves_torii_request_timeout() {
         let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
         let timeout = Duration::from_secs(7);
@@ -509,6 +633,17 @@ mod tests {
         let config = root.parse().expect("configuration should be valid");
 
         assert_eq!(config.torii_request_timeout, timeout);
+    }
+
+    #[test]
+    fn parse_preserves_soracloud_http_witness_file() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        let witness_file = PathBuf::from("/tmp/soracloud-witness.json");
+        root.soracloud.http_witness_file = Some(witness_file.clone());
+
+        let config = root.parse().expect("configuration should be valid");
+
+        assert_eq!(config.soracloud_http_witness_file, Some(witness_file));
     }
 
     #[test]
@@ -547,6 +682,26 @@ mod tests {
                 .iter()
                 .any(|error| matches!(error, ParseError::EmptyConnectQueueRoot)),
             "expected `ParseError::EmptyConnectQueueRoot`, found {parse_errors:?}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_bare_account_domain_without_panicking() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        root.account.domain = "wonderland".to_owned();
+
+        let err = root
+            .parse()
+            .expect_err("bare account domain should be rejected");
+        let parse_errors: Vec<_> = err
+            .frames()
+            .filter_map(|frame| frame.downcast_ref::<ParseError>())
+            .collect();
+        assert!(
+            parse_errors
+                .iter()
+                .any(|error| matches!(error, ParseError::InvalidAccountDomain { value } if value == "wonderland")),
+            "expected `ParseError::InvalidAccountDomain`, found {parse_errors:?}"
         );
     }
 }

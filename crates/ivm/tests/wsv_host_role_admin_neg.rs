@@ -4,7 +4,7 @@ use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
     mock_wsv::{
-        AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost,
+        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
     },
     syscalls,
 };
@@ -27,19 +27,32 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn test_account(domain: DomainId, public_key: PublicKey) -> ScopedAccountId {
-    ScopedAccountId::new(domain, public_key)
+fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
+    AccountId::new(public_key)
 }
 
-fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let buf = to_bytes(account).expect("encode account into Norito");
-    make_tlv(PointerType::AccountId as u16, &buf)
+fn make_account_tlv(account: &AccountId) -> Vec<u8> {
+    let account = account.to_string();
+    make_tlv(PointerType::AccountId as u16, account.as_bytes())
+}
+
+fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
+    let payload = to_bytes(account).expect("encode account into Norito");
+    let mut out = Vec::with_capacity(7 + payload.len() + 32);
+    out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload.as_ref());
+    let h: [u8; 32] = Hash::new(&payload).into();
+    out.extend_from_slice(&h);
+    out
 }
 
 #[test]
 fn delete_role_with_assignees_fails() {
-    let alice_domain: DomainId = "domain".parse().unwrap();
-    let bob_domain: DomainId = "wonder".parse().unwrap();
+    let alice_domain: DomainId =
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let bob_domain: DomainId = iroha_data_model::DomainId::try_new("wonder", "universal").unwrap();
     let alice_pk: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
@@ -51,7 +64,7 @@ fn delete_role_with_assignees_fails() {
     let alice = test_account(alice_domain, alice_pk);
     let bob = test_account(bob_domain, bob_pk);
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonder".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
 
@@ -60,11 +73,7 @@ fn delete_role_with_assignees_fails() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -76,7 +85,7 @@ fn delete_role_with_assignees_fails() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    let acc = make_account_tlv(&bob);
+    let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
@@ -131,8 +140,9 @@ fn delete_role_with_assignees_fails() {
 
 #[test]
 fn grant_nonexistent_role_fails() {
-    let alice_domain: DomainId = "domain".parse().unwrap();
-    let bob_domain: DomainId = "wonder".parse().unwrap();
+    let alice_domain: DomainId =
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let bob_domain: DomainId = iroha_data_model::DomainId::try_new("wonder", "universal").unwrap();
     let alice_pk: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
@@ -148,11 +158,7 @@ fn grant_nonexistent_role_fails() {
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
 
@@ -164,7 +170,7 @@ fn grant_nonexistent_role_fails() {
     vm.load_program(&prog_dom).unwrap();
     vm.run().expect("register domain");
 
-    let acc = make_account_tlv(&bob);
+    let acc = make_account_norito_tlv(&bob);
     vm.memory.preload_input(0, &acc).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_acc = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);

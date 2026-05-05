@@ -83,23 +83,47 @@ pub fn validate_asset_description(
     Ok(())
 }
 
-/// Validate optional alias literal for an asset definition.
+/// Validate optional alias literal for an asset definition against one allowed name stem.
+///
+/// ASCII case differences are ignored so UX display labels like `CBDC` can still bind aliases
+/// such as `cbdc#centralbank`.
 ///
 /// # Errors
-/// Returns [`crate::error::ParseError`] when the alias does not match the asset name.
+/// Returns [`crate::error::ParseError`] when the alias does not match the allowed asset name stem.
 pub fn validate_asset_alias(
     alias: Option<&AssetDefinitionAlias>,
     expected_name: &str,
 ) -> Result<(), crate::error::ParseError> {
+    validate_asset_alias_against_names(alias, [expected_name])
+}
+
+/// Validate optional alias literal for an asset definition against a set of allowed name stems.
+///
+/// ASCII case differences are ignored for each allowed stem.
+///
+/// # Errors
+/// Returns [`crate::error::ParseError`] when the alias does not match any allowed asset name stem.
+pub fn validate_asset_alias_against_names<I, S>(
+    alias: Option<&AssetDefinitionAlias>,
+    expected_names: I,
+) -> Result<(), crate::error::ParseError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
     let Some(alias) = alias else {
         return Ok(());
     };
-    if alias.name_segment() != expected_name {
-        return Err(crate::error::ParseError::new(
-            "asset alias name segment must match asset name exactly",
-        ));
+    let alias_name = alias.name_segment();
+    if expected_names
+        .into_iter()
+        .any(|expected_name| alias_name.eq_ignore_ascii_case(expected_name.as_ref()))
+    {
+        return Ok(());
     }
-    Ok(())
+    Err(crate::error::ParseError::new(
+        "asset alias name segment must match the asset name",
+    ))
 }
 
 #[model]
@@ -169,7 +193,7 @@ mod model {
         #[getset(get = "pub")]
         #[registrable_builder(default = None)]
         pub description: Option<String>,
-        /// Optional alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+        /// Optional alias literal (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
         #[getset(get = "pub")]
         #[registrable_builder(default = None)]
         pub alias: Option<AssetDefinitionAlias>,
@@ -871,12 +895,14 @@ impl HasMetadata for NewAssetDefinition {
 #[cfg(test)]
 mod validation_tests {
     use super::*;
+    use crate::domain::DomainId;
 
     #[test]
     fn constructors_leave_name_empty_without_explicit_with_name() {
-        let id: AssetDefinitionId = "aid:550e8400e29b41d4a716446655440000"
-            .parse()
-            .expect("asset definition id");
+        let id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("name"),
+        );
 
         let numeric = AssetDefinition::numeric(id.clone());
         assert!(
@@ -911,9 +937,22 @@ mod validation_tests {
 
     #[test]
     fn asset_alias_validation_requires_name_segment_match() {
-        let alias: AssetDefinitionAlias = "usd#issuer@main".parse().expect("alias");
+        let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("alias");
         validate_asset_alias(Some(&alias), "usd").expect("matching name segment");
         assert!(validate_asset_alias(Some(&alias), "US Dollar").is_err());
+    }
+
+    #[test]
+    fn asset_alias_validation_accepts_ascii_case_differences() {
+        let alias: AssetDefinitionAlias = "cbdc#centralbank".parse().expect("alias");
+        validate_asset_alias(Some(&alias), "CBDC").expect("matching name segment");
+    }
+
+    #[test]
+    fn asset_alias_validation_accepts_any_allowed_stem() {
+        let alias: AssetDefinitionAlias = "usd#issuer.main".parse().expect("alias");
+        validate_asset_alias_against_names(Some(&alias), ["US Dollar", "usd"])
+            .expect("projected id name should also be accepted");
     }
 }
 
@@ -929,7 +968,7 @@ mod json_tests {
 
     #[test]
     fn new_asset_definition_json_roundtrip_preserves_policy() {
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let id = AssetDefinitionId::new(domain, Name::from_str("rose").expect("asset name"));
         let mut metadata = Metadata::default();
         metadata.insert("unit".parse().expect("metadata key"), "bloom");
@@ -951,7 +990,7 @@ mod json_tests {
             id,
             name: "Rose".to_owned(),
             description: Some("Flower-backed settlement unit".to_owned()),
-            alias: Some("Rose#issuer@main".parse().expect("asset alias")),
+            alias: Some("Rose#issuer.main".parse().expect("asset alias")),
             spec: NumericSpec::fractional(4),
             mintable: Mintable::Limited(MintabilityTokens::try_new(5).expect("tokens")),
             logo: Some(
@@ -986,7 +1025,7 @@ mod json_tests {
 
     #[test]
     fn new_asset_definition_fast_from_json_matches_value() {
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let id = AssetDefinitionId::new(domain, Name::from_str("rose").expect("asset name"));
         let new_definition = NewAssetDefinition {
             id,

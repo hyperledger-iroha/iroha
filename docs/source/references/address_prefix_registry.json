@@ -21,8 +21,8 @@
       ]
     },
     {
-      "network": "sora-testus",
-      "display_name": "Sora Testus (Testnet)",
+      "network": "sora-taira",
+      "display_name": "Sora Taira (Testnet)",
       "chain_id": "809574f5-fee7-5e69-bfcf-52451e42d50f",
       "chain_discriminant": {
         "decimal": 369,
@@ -34,7 +34,7 @@
       },
       "status": "testnet",
       "notes": [
-        "Canonical prefix for the public Testus network.",
+        "Canonical prefix for the public Taira network.",
         "Use this prefix for staging and pre-release validation ahead of Nexus promotion."
       ]
     },

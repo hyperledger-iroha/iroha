@@ -14,6 +14,8 @@
 #![allow(semicolon_in_expressions_from_macros)]
 
 #[allow(unused_extern_crates)]
+extern crate bech32;
+#[allow(unused_extern_crates)]
 extern crate self as iroha_data_model;
 // NOTE: Documentation coverage is enforced at the workspace level. If a
 // module lacks coverage, add targeted documentation at the module boundary
@@ -72,6 +74,8 @@ pub mod domain;
 pub mod error;
 /// Canonical error codes and structured contexts surfaced by AMX/DA/settlement.
 pub mod errors;
+/// Generic native asset escrow records.
+pub mod escrow;
 /// Event payloads emitted by the ledger.
 pub mod events;
 /// Executor configuration and API types.
@@ -103,6 +107,8 @@ pub mod merge;
 pub mod metadata;
 /// Ministry transparency/governance payload types.
 pub mod ministry;
+/// Musubi package registry data types for Kotodama source packages.
+pub mod musubi;
 /// Name parsing and validation utilities.
 pub mod name;
 /// Nexus-lane scaffolding and identifiers.
@@ -127,12 +133,16 @@ pub mod proof;
 pub mod qr_stream;
 /// Query builders, predicates, and parameter types.
 pub mod query;
+/// Generic hidden-program RAM-LFE program policies and receipts.
+pub mod ram_lfe;
 /// Repo agreement descriptors and governance knobs.
 pub mod repo;
 /// Role-based access control definitions.
 pub mod role;
 /// Runtime upgrade payloads and manifests.
 pub mod runtime;
+/// Real-world asset lot structures and controls.
+pub mod rwa;
 /// Smart contract descriptors and execution metadata.
 pub mod smart_contract;
 /// Sora Name Service registrar data structures.
@@ -339,6 +349,7 @@ pub mod prelude {
         content::prelude::*,
         domain::prelude::*,
         error::EnumTryAsError,
+        escrow::prelude::*,
         events::prelude::*,
         executor::prelude::*,
         fastpq::*,
@@ -352,16 +363,20 @@ pub mod prelude {
             DataSpaceCatalog, DataSpaceCatalogError, DataSpaceId, DataSpaceMetadata,
             DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementScope,
             DomainEndorsementSignature, LaneCatalog, LaneCatalogError, LaneConfig, LaneId,
-            LaneIdError, LaneLifecyclePlan, LaneRelayEnvelope, LaneStorageProfile,
-            LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
+            LaneIdError, LaneLifecyclePlan, LaneRelayEnvelope, LaneRelayEnvelopeRef,
+            LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility,
+            LaneVisibilityParseError, VerifiedLaneRelayRecord,
         },
         nft::prelude::*,
         parameter::prelude::*,
         peer::prelude::*,
         permission::prelude::*,
         query::prelude::*,
+        ram_lfe::prelude::*,
         repo::prelude::*,
         role::prelude::*,
+        rwa::prelude::*,
+        smart_contract::prelude::*,
         sns::prelude::*,
         social::prelude::*,
         sorafs_uri::SorafsUri,

@@ -79,11 +79,11 @@ within configured bounds:
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
 Record the values immediately before and after the calibration workload. A
-single command per asset is sufficient; example for `xor#wonderland`:
+single command per asset is sufficient; example for `4cuvDVPuLBKJyN6dPbRQhmLh68sU`:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Attach the raw output (or Prometheus snapshot) to the calibration ticket so the

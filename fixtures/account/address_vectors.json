@@ -8,7 +8,7 @@
         },
         "expected_prefix": 753,
         "format": "i105",
-        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HS1",
+        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSｲ",
         "note": "Checksum tampering on I105 alias for the default-domain vector."
       },
       {
@@ -24,22 +24,23 @@
         "note": "Encoded with prefix NETWORK_PREFIX + 1 while validators expect NETWORK_PREFIX."
       },
       {
-        "case_id": "i105_default-invalid-character",
+        "case_id": "i105-invalid-character",
         "expected_error": {
-          "kind": "ChecksumMismatch"
+          "char": "0",
+          "kind": "InvalidI105Char"
         },
-        "format": "i105_default",
-        "input": "sorauﾛANﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-        "note": "Introduces ASCII 'A' outside the Sora I105-default alphabet."
+        "format": "i105",
+        "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HS0",
+        "note": "Introduces a glyph outside the canonical I105 alphabet."
       },
       {
-        "case_id": "i105_default-checksum-mismatch",
+        "case_id": "i105-checksum-mismatch-default-sentinel",
         "expected_error": {
           "kind": "ChecksumMismatch"
         },
-        "format": "i105_default",
+        "format": "i105",
         "input": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HS1",
-        "note": "Checksum nibble replaced to trigger Bech32m verification failure."
+        "note": "Checksum bytes replaced to trigger canonical I105 verification failure."
       },
       {
         "case_id": "canonical-invalid-hex",
@@ -85,9 +86,7 @@
           "i105": {
             "prefix": 753,
             "string": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
-          },
-          "i105_default": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
-          "i105_default_fullwidth": "ｓｏｒａuロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
+          }
         },
         "input": {
           "normalized_domain": "default",
@@ -114,9 +113,7 @@
           "i105": {
             "prefix": 753,
             "string": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
-          },
-          "i105_default": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
-          "i105_default_fullwidth": "ｓｏｒａuロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D"
+          }
         },
         "input": {
           "normalized_domain": "treasury",
@@ -166,9 +163,7 @@
           "i105": {
             "prefix": 753,
             "string": "soraﾁｷVMXfkAweDFﾃqSkhXｳrdUｲﾋﾆ4eYqｻｱYsﾐヰｦt4ｵｻｳｷHヰkNﾁｦﾒﾐwjQgmﾜdnｸ9h5BSkヱﾜﾙvｾ6ｻyWtSﾖﾛAｶaヱﾛﾚｻxﾄﾒｼMAyｽ8ｿjDZﾅｲｽMwﾁBﾓヰ9ﾎヰﾛRﾕQｺk3ｷﾆﾘｼmDﾗyiRGﾕfGｺHaﾏVY5phTKQ316"
-          },
-          "i105_default": "soraﾁｷVMXfkAweDFﾃqSkhXｳrdUｲﾋﾆ4eYqｻｱYsﾐヰｦt4ｵｻｳｷHヰkNﾁｦﾒﾐwjQgmﾜdnｸ9h5BSkヱﾜﾙvｾ6ｻyWtSﾖﾛAｶaヱﾛﾚｻxﾄﾒｼMAyｽ8ｿjDZﾅｲｽMwﾁBﾓヰ9ﾎヰﾛRﾕQｺk3ｷﾆﾘｼmDﾗyiRGﾕfGｺHaﾏVY5phTKQ316",
-          "i105_default_fullwidth": "ｓｏｒａチキVMXfkAweDFテqSkhXウrdUイヒニ4eYqサアYsミヰヲt4オサウキHヰkNチヲメミwjQgmワdnク9h5BSkヱワルvセ6サyWtSヨロAカaヱロレサxトメシMAyス8ソjDZナイスMwチBモヰ9ホヰロRユQコk3キニリシmDラyiRGユfGコHaマVY5phTKQ316"
+          }
         },
         "input": {
           "member_keys_hex": [
@@ -221,9 +216,7 @@
           "i105": {
             "prefix": 753,
             "string": "soramYXkｿuDｦMﾆHJﾚｱkﾄ4ZﾃﾃYZZﾔヱ1ﾕｿNﾂnLmyﾅｽeﾈ3ｸﾁ1XｸhﾜVｾqﾗｦ1EyﾎﾛAﾕsﾄKﾛtgyﾎｾﾔ6ﾉ5rjtﾍieﾗnjﾕﾆ7zｽEﾅｲA1qﾏAﾍｿｶNR44XV"
-          },
-          "i105_default": "soramYXkｿuDｦMﾆHJﾚｱkﾄ4ZﾃﾃYZZﾔヱ1ﾕｿNﾂnLmyﾅｽeﾈ3ｸﾁ1XｸhﾜVｾqﾗｦ1EyﾎﾛAﾕsﾄKﾛtgyﾎｾﾔ6ﾉ5rjtﾍieﾗnjﾕﾆ7zｽEﾅｲA1qﾏAﾍｿｶNR44XV",
-          "i105_default_fullwidth": "ｓｏｒａmYXkソuDヲMニHJレアkト4ZテテYZZヤヱ1ユソNツnLmyナスeネ3クチ1XクhワVセqラヲ1EyホロAユsトKロtgyホセヤ6ノ5rjtヘieラnjユニ7zスEナイA1qマAヘソカNR44XV"
+          }
         },
         "input": {
           "member_keys_hex": [
@@ -288,9 +281,7 @@
           "i105": {
             "prefix": 753,
             "string": "soraﾐ7AﾃjFﾖﾋFヱEkﾒ8e5NﾎTﾑｸﾖｻtｿiPﾜﾀﾌah2ｿEﾌｦｴAJｦ8ヱﾀヰｻqｲxｵｱKeﾂｳkｷadJgXｴﾔBﾗｳG7ﾕtﾈｺjsrVﾜutｽRｽZFsｲﾁﾇqｦRﾍｼﾚﾄﾔX3ﾜFｾNkｼyﾅZﾕHgﾁﾗｦspHgEﾓcnﾄｿ3ｴ5wｦｷｺﾎeﾇk2ﾄQUag1ヱｼﾛﾆｹｷpXizxﾇﾁbｺMﾚヱRKCinoｦTﾁCTtﾔﾑoﾌjKﾉyKｲWﾚAGMQH2"
-          },
-          "i105_default": "soraﾐ7AﾃjFﾖﾋFヱEkﾒ8e5NﾎTﾑｸﾖｻtｿiPﾜﾀﾌah2ｿEﾌｦｴAJｦ8ヱﾀヰｻqｲxｵｱKeﾂｳkｷadJgXｴﾔBﾗｳG7ﾕtﾈｺjsrVﾜutｽRｽZFsｲﾁﾇqｦRﾍｼﾚﾄﾔX3ﾜFｾNkｼyﾅZﾕHgﾁﾗｦspHgEﾓcnﾄｿ3ｴ5wｦｷｺﾎeﾇk2ﾄQUag1ヱｼﾛﾆｹｷpXizxﾇﾁbｺMﾚヱRKCinoｦTﾁCTtﾔﾑoﾌjKﾉyKｲWﾚAGMQH2",
-          "i105_default_fullwidth": "ｓｏｒａミ7AテjFヨヒFヱEkメ8e5NホTムクヨサtソiPワタフah2ソEフヲエAJヲ8ヱタヰサqイxオアKeツウkキadJgXエヤBラウG7ユtネコjsrVワutスRスZFsイチヌqヲRヘシレトヤX3ワFセNkシyナZユHgチラヲspHgEモcnトソ3エ5wヲキコホeヌk2トQUag1ヱシロニケキpXizxヌチbコMレヱRKCinoヲTチCTtヤムoフjKノyKイWレAGMQH2"
+          }
         },
         "input": {
           "member_keys_hex": [

@@ -1,12 +1,14 @@
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
 ---
 lang: ar
 direction: rtl
 source: docs/source/data_model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 683bfb31442f8f4ce7b1bf5038f9dba92fe092545e655f43b51195c21535d3c4
-source_last_modified: "2026-03-12T11:24:23.059339+00:00"
-translation_last_reviewed: 2026-03-12
+source_hash: 8055b28096f5884d2636a19a98e92a74599802fa1bd3ff350dbb636d1300b1f8
+source_last_modified: "2026-03-30T18:22:55.957443+00:00"
+translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---
 
@@ -24,44 +26,51 @@ translator: machine-google-reviewed
 ## السمات الأساسية والمساعدين- `Identifiable`: للكيانات `Id` و`fn id(&self) -> &Self::Id` المستقر. يجب أن يتم اشتقاقها باستخدام `IdEqOrdHash` لسهولة الخريطة/المجموعة.
 - `Registrable`/`Registered`: تستخدم العديد من الكيانات (على سبيل المثال، `Domain`، `AssetDefinition`، `Role`) نمط الإنشاء. يربط `Registered` نوع وقت التشغيل بنوع منشئ خفيف الوزن (`With`) مناسب لمعاملات التسجيل.
 - `HasMetadata`: الوصول الموحد إلى خريطة المفتاح/القيمة `Metadata`.
-- `IntoKeyValue`: مساعد تقسيم التخزين لتخزين `Key` (ID) و`Value` (البيانات) بشكل منفصل لتقليل التكرار.
+- `IntoKeyValue`: مساعد تقسيم التخزين لتخزين `Key` (المعرف) و`Value` (البيانات) بشكل منفصل لتقليل التكرار.
 - `Owned<T>`/`Ref<'world, K, V>`: أغلفة خفيفة الوزن تستخدم في المخازن ومرشحات الاستعلام لتجنب النسخ غير الضرورية.
 
 ## الأسماء والمعرفات- `Name`: معرف نصي صالح. لا يسمح بالمسافات البيضاء والأحرف المحجوزة `@`، `#`، `$` (المستخدمة في المعرفات المركبة). قابلة للإنشاء عبر `FromStr` مع التحقق من الصحة. تتم تسوية الأسماء إلى Unicode NFC عند التحليل (يتم التعامل مع التهجئة المكافئة قانونيًا على أنها متطابقة ومخزنة). الاسم الخاص `genesis` محجوز (تم تحديده بشكل غير حساس لحالة الأحرف).
 - `IdBox`: مظروف من النوع الإجمالي لأي معرف معتمد (`DomainId`، `AccountId`، `AssetDefinitionId`، `AssetId`، `NftId`، `PeerId`، `TriggerId`، `RoleId`، `Permission`، `CustomParameterId`). مفيد للتدفقات العامة وترميز Norito كنوع واحد.
 - `ChainId`: معرف سلسلة غير شفاف يستخدم لحماية إعادة التشغيل في المعاملات.نماذج سلسلة من المعرفات (قابلة للتعثر مع `Display`/`FromStr`):
 - `DomainId`: `name` (على سبيل المثال، `wonderland`).
-- `AccountId`: معرف الحساب الأساسي بدون نطاق المشفر عبر `AccountAddress` كـ I105 فقط. يجب أن تكون مدخلات المحلل اللغوي I105 الأساسية؛ يتم رفض لاحقات المجال (`@domain`)، وأحرف I105 الأساسية، وأحرف الاسم المستعار، وإدخال المحلل اللغوي السداسي الكنسي، وحمولات `norito:` القديمة، ونماذج محلل الحساب `uaid:`/`opaque:`.
-- `AssetDefinitionId`: `aid:<32-lower-hex-no-dash>` الأساسي (UUID-v4 بايت).
-- `AssetId`: `norito:<hex>` الحرفي المشفر الأساسي (النماذج النصية القديمة غير مدعومة في الإصدار الأول).
+- `AccountId`: معرف الحساب الأساسي بدون نطاق المشفر عبر `AccountAddress` كـ I105 فقط. يجب أن تكون مدخلات المحلل اللغوي الصارمة هي I105 الأساسية؛ يتم رفض لاحقات المجال (`@domain`)، والحرفية للاسم المستعار للحساب، وإدخال المحلل اللغوي السداسي الأساسي، وحمولات `norito:` القديمة، ونماذج المحلل اللغوي للحساب `uaid:`/`opaque:`. تستخدم الأسماء المستعارة للحسابات على السلسلة `name@domain.dataspace` أو `name@dataspace` وتتوافق مع قيم `AccountId` الأساسية.
+- `AssetDefinitionId`: عنوان Base58 الأساسي غير البادئ على وحدات البايت الأساسية لتعريف الأصول. هذا هو معرف الأصول العامة. تستخدم الأسماء المستعارة للأصول على السلسلة `name#domain.dataspace` أو `name#dataspace` وتحل فقط مع معرف الأصل Base58 الأساسي هذا.
+- `AssetId`: معرف الأصول العامة في نموذج Base58 الأساسي. يتم تحويل الأسماء المستعارة للأصول مثل `name#dataspace` أو `name#domain.dataspace` إلى `AssetId`. قد تعرض مقتنيات دفتر الأستاذ الداخلي أيضًا حقول `asset + account + optional dataspace` المقسمة عند الحاجة، ولكن هذا الشكل المركب ليس هو `AssetId` العام.
 - `NftId`: `nft$domain` (على سبيل المثال، `rose$garden`).
 - `PeerId`: `public_key` (تتم المساواة بين الأقران عن طريق المفتاح العام).
 
-## الكيانات
-
-### المجال
+## الكيانات### المجال
 - `DomainId { name: Name }` – اسم فريد.
 -`Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - المنشئ: `NewDomain` مع `with_logo`، `with_metadata`، ثم `Registrable::build(authority)` يعين `owned_by`.### الحساب
-- `AccountId` هي هوية الحساب بدون مجال الأساسية التي يتم مفتاحها بواسطة وحدة التحكم والمشفرة كـ I105 الأساسية.
-- يحمل `ScopedAccountId { account: AccountId, domain: DomainId }` سياق المجال الصريح فقط عندما يكون العرض محدد النطاق مطلوبًا.
-- `Account { id, metadata, label?, uaid? }` — `label` هو اسم مستعار ثابت اختياري تستخدمه سجلات إعادة المفتاح، ويحمل `uaid` نطاق Nexus [معرف الحساب العالمي] (./universal_accounts_guide.md) الاختياري.
-- المنشئ: `NewAccount` عبر `Account::new(id)`؛ يتطلب التسجيل مجال `ScopedAccountId` صريحًا ولا يستنتج واحدًا من الإعدادات الافتراضية.
-
-### تعريفات الأصول والأصول
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` معروض نصيًا كـ `aid:<32-hex-no-dash>`.
+- `AccountId` هي هوية الحساب الأساسية بدون مجال والتي يتم مفتاحها بواسطة وحدة التحكم والمشفرة كـ I105 الأساسية.
+- `Account { id, metadata, label?, uaid?, opaque_ids[] }` — `label` هو `AccountAlias` أساسي اختياري يستخدم بواسطة سجلات إعادة المفتاح، ويحمل `uaid` نطاق Nexus الاختياري [معرف الحساب العالمي] (./universal_accounts_guide.md)، و يتتبع `opaque_ids` المعرفات المخفية المرتبطة بمعرف UAID هذا. لم تعد حالة الحساب المخزن تحمل أي حقل مجال مرتبط.
+- بناة:
+  - يقوم `NewAccount` عبر `Account::new(id)` بتسجيل موضوع الحساب الأساسي بدون مجال.
+- نموذج الاسم المستعار:
+  - لا تشتمل هوية الحساب Canonical مطلقًا على مجال أو مقطع مساحة بيانات.
+  - قيم `AccountAlias` هي روابط SNS منفصلة موضوعة أعلى `AccountId`.
+  - الأسماء المستعارة المؤهلة للمجال مثل `merchant@banka.paynet` تحمل كلاً من المجال ومساحة البيانات في ربط الاسم المستعار.
+  - الأسماء المستعارة لجذر مساحة البيانات مثل `merchant@paynet` تحمل مساحة البيانات فقط وبالتالي تقترن بشكل طبيعي مع `Account::new(...)`.
+  - يجب أن تقوم الاختبارات والتركيبات بتثبيت `AccountId` العالمي أولاً، ثم إضافة عقود إيجار الاسم المستعار وأذونات الاسم المستعار وأي حالة مملوكة للنطاق بشكل منفصل بدلاً من تشفير افتراضات المجال في هوية الحساب نفسها.
+  - يركز البحث العام عن الحساب المفرد الآن على الأسماء المستعارة (`FindAliasesByAccountId`)؛ تظل هوية الحساب نفسها بلا مجال.### تعريفات الأصول والأصول
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` معروض نصيًا كعنوان Base58 غير مسبوق مع الإصدار والمجموع الاختباري.
 -`AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
   - `name` مطلوب نص عرض ذو واجهة بشرية ويجب ألا يحتوي على `#`/`@`.
   - `alias` اختياري ويجب أن يكون واحدًا مما يلي:
-    -`<name>#<domain>@<dataspace>`
+    -`<name>#<domain>.<dataspace>`
     -`<name>#<dataspace>`
     مع الجزء الأيسر المطابق تمامًا لـ `AssetDefinition.name`.
+  - يتم تخزين حالة تأجير الاسم المستعار بشكل مخوّل في سجل ربط الاسم المستعار المستمر؛ يتم اشتقاق الحقل `alias` المضمن عند إعادة قراءة التعريفات من خلال واجهات برمجة التطبيقات الأساسية/Torii.
+  - قد تتضمن استجابات تعريف الأصول Torii `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`، حيث يكون `status` واحدًا من `permanent`، أو `leased_active`، أو `leased_grace`، أو `expired_pending_cleanup`.
+  - يستخدم حل الاسم المستعار أحدث طابع زمني للكتلة المخصصة بدلاً من ساعة حائط العقدة. بمجرد مرور `grace_until_ms`، تتوقف محددات الاسم المستعار عن الحل فورًا حتى إذا لم تقم عملية التنظيف بإزالة الارتباط القديم بعد؛ قد تستمر قراءات التعريف المباشر في الإبلاغ عن الارتباط العالق كـ `expired_pending_cleanup`.
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`.
-  - الإنشاءات: `AssetDefinition::new(id, spec)` أو الراحة `numeric(id)`؛ مطلوب `name` ويجب تعيينه عبر `.with_name(...)`.
+  - الإنشاءات: `AssetDefinition::new(id, spec)` أو `numeric(id)` الملائم؛ مطلوب `name` ويجب تعيينه عبر `.with_name(...)`.
 -`AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- `Asset { id, value: Numeric }` مع `AssetEntry`/`AssetValue` سهل التخزين.
-- `AssetBalanceScope`: `Global` للأرصدة غير المقيدة و`Dataspace(DataSpaceId)` للأرصدة المقيدة بمساحة البيانات.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` مكشوف لواجهات برمجة التطبيقات الموجزة.### إن إف تي
+- `Asset { id, value: Numeric }` مع `AssetEntry`/`AssetValue` سهل التخزين.- `AssetBalanceScope`: `Global` للأرصدة غير المقيدة و`Dataspace(DataSpaceId)` للأرصدة المقيدة بمساحة البيانات.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` مكشوف لواجهات برمجة التطبيقات الموجزة.
+
+### إن إف تي
 -`NftId { domain: DomainId, name: Name }`.
 - `Nft { id, content: Metadata, owned_by: AccountId }` (المحتوى عبارة عن بيانات تعريف مفتاح/قيمة عشوائية).
 - المنشئ: `NewNft` عبر `Nft::new(id, content)`.
@@ -101,9 +110,9 @@ translator: machine-google-reviewed
 - `InstructionBox`: غلاف `Box<dyn Instruction>` المملوك مع النسخ/المعادل/ord الذي يتم تنفيذه عبر معرف النوع + البايتات المشفرة.
 - يتم تنظيم عائلات التعليمات المدمجة تحت:
   - `mint_burn`، و`transfer`، و`register`، ومجموعة `transparent` من المساعدين.
-  - اكتب التعدادات لتدفقات التعريف: `InstructionType`، والمجاميع المعبأة مثل `SetKeyValueBox` (domain/account/asset_def/nft/trigger).
+  - اكتب التعدادات للتدفقات التعريفية: `InstructionType`، والمجاميع المعبأة مثل `SetKeyValueBox` (domain/account/asset_def/nft/trigger).
 - الأخطاء: نموذج الأخطاء الغني ضمن `isi::error` (أخطاء نوع التقييم، العثور على الأخطاء، قابلية التعدين، الرياضيات، المعلمات غير الصالحة، التكرار، الثوابت).
-- تسجيل التعليمات: يقوم الماكرو `instruction_registry!{ ... }` بإنشاء سجل فك تشفير وقت التشغيل مرتبطًا بنوع الاسم. يتم استخدامه بواسطة استنساخ `InstructionBox` وNorito serde لتحقيق التسلسل الديناميكي (إلغاء). إذا لم يتم تعيين أي سجل بشكل صريح عبر `set_instruction_registry(...)`، فسيتم تثبيت السجل الافتراضي المضمن مع كافة ISI الأساسية بتكاسل عند الاستخدام الأول للحفاظ على الثنائيات قوية.
+- تسجيل التعليمات: يقوم الماكرو `instruction_registry!{ ... }` بإنشاء سجل فك تشفير وقت التشغيل مرتبطًا بنوع الاسم. يتم استخدامه بواسطة استنساخ `InstructionBox` وNorito serde لتحقيق التسلسل الديناميكي (إلغاء). إذا لم يتم تعيين أي سجل بشكل صريح عبر `set_instruction_registry(...)`، فسيتم تثبيت السجل الافتراضي المضمن مع ISI الأساسي بالكامل بتكاسل عند الاستخدام الأول للحفاظ على الثنائيات قوية.
 
 ## المعاملات- `Executable`: إما `Instructions(ConstVec<InstructionBox>)` أو `Ivm(IvmBytecode)`. يتم إجراء تسلسل `IvmBytecode` كـ base64 (نوع جديد شفاف فوق `Vec<u8>`).
 - `TransactionBuilder`: إنشاء حمولة معاملة باستخدام `chain` و`authority` و`creation_time_ms` و`time_to_live_ms` الاختيارية و`nonce` و`metadata` و `Executable`.
@@ -164,7 +173,7 @@ translator: machine-google-reviewed
 ### واجهة برمجة التطبيقات الشفافة (`transparent_api`)- الغرض: الكشف عن الوصول الكامل والقابل للتغيير إلى بنيات/تعدادات `#[model]` للمكونات الداخلية مثل Torii والمنفذين واختبارات التكامل. بدونها، تكون هذه العناصر غير شفافة عن قصد، لذا لا ترى حزم SDK الخارجية سوى المنشئات الآمنة والحمولات المشفرة.
 - الميكانيكا: يعيد الماكرو `iroha_data_model_derive::model` كتابة كل حقل عام باستخدام `#[cfg(feature = "transparent_api")] pub` ويحتفظ بنسخة خاصة للإنشاء الافتراضي. يؤدي تمكين الميزة إلى قلب تلك cfgs، لذا فإن تدمير `Account`، و`Domain`، و`Asset`، وما إلى ذلك، يصبح قانونيًا خارج الوحدات النمطية المحددة الخاصة بها.
 - الكشف عن السطح: يقوم الصندوق بتصدير ثابت `TRANSPARENT_API: bool` (الذي تم إنشاؤه إما إلى `transparent_api.rs` أو `non_transparent_api.rs`). يمكن للكود المصب التحقق من هذه العلامة والفرع عندما يحتاج إلى الرجوع إلى المساعدين غير الشفافين.
-- التمكين: أضف `features = ["transparent_api"]` إلى التبعية في `Cargo.toml`. تقوم صناديق مساحة العمل التي تحتاج إلى إسقاط JSON (على سبيل المثال، `iroha_torii`) بإعادة توجيه العلامة تلقائيًا، ولكن يجب على المستهلكين الخارجيين إيقاف تشغيلها ما لم يتحكموا في النشر ويقبلوا سطح واجهة برمجة التطبيقات الأوسع.
+- التمكين: أضف `features = ["transparent_api"]` إلى التبعية في `Cargo.toml`. تقوم صناديق مساحة العمل التي تحتاج إلى إسقاط JSON (على سبيل المثال، `iroha_torii`) بإعادة توجيه العلامة تلقائيًا، ولكن يجب على مستهلكي الطرف الثالث إيقاف تشغيلها ما لم يتحكموا في النشر ويقبلوا سطح واجهة برمجة التطبيقات الأوسع.
 
 ## أمثلة سريعة
 
@@ -176,17 +185,20 @@ use iroha_crypto::KeyPair;
 use iroha_primitives::numeric::Numeric;
 
 // Domain
-let domain_id: DomainId = "wonderland".parse().unwrap();
+let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
 let new_domain = Domain::new(domain_id.clone()).with_metadata(Metadata::default());
 
 // Account
 let kp = KeyPair::random();
 let account_id = AccountId::new(kp.public_key().clone());
-let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
+let new_account = Account::new(account_id.clone())
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id = AssetDefinitionId::new(
+    domain_id.clone(),
+    "usd".parse().unwrap(),
+);
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -230,36 +242,36 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / المرجع السريع للاسم المستعار (CLI + Torii):
+معرف تعريف الأصل / المرجع السريع للاسم المستعار (CLI + Torii):
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with a canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
-# Mint using alias + account components (no manual norito hex copy/paste)
+# Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
-  --account sorauﾛ1P... \
+  --definition-alias pkr#bankb.paynet \
+  --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```مذكرة الهجرة:
 - لا يتم قبول معرفات تعريف الأصول `name#domain` القديمة في الإصدار 1.
-- تظل معرفات الأصول الخاصة بالنعناع/النسخ/النقل هي `norito:<hex>` الأساسية؛ بناء لهم مع:
-  -`iroha tools encode asset-id --definition aid:... --account <i105>`
-  - أو `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
+- تستخدم محددات الأصول العامة تنسيقًا واحدًا لتعريف الأصول فقط: معرفات Base58 الأساسية. تظل الأسماء المستعارة محددات اختيارية، ولكنها تتوافق مع نفس المعرف الأساسي.
+- تعالج عمليات البحث عن الأصول العامة الأرصدة المملوكة باستخدام `asset + account + optional scope`؛ تعد القيم الحرفية `AssetId` المشفرة الخام تمثيلًا داخليًا وليست جزءًا من سطح محدد Torii/CLI.
+- يقبل `POST /v1/assets/definitions/query` و`GET /v1/assets/definitions` عوامل تصفية/فرز تعريف الأصول عبر `alias_binding.status`، و`alias_binding.lease_expiry_ms`، و`alias_binding.grace_until_ms`، و`alias_binding.bound_at_ms` بالإضافة إلى `id`، `name`، و`alias`، و`metadata.*`.
 
 ## الإصدار
 

@@ -9,6 +9,18 @@ import {
   buildTransferAssetDefinitionInstruction,
   buildTransferDomainInstruction,
   buildTransferNftInstruction,
+  buildRegisterRwaInstruction,
+  buildTransferRwaInstruction,
+  buildMergeRwasInstruction,
+  buildRedeemRwaInstruction,
+  buildFreezeRwaInstruction,
+  buildUnfreezeRwaInstruction,
+  buildHoldRwaInstruction,
+  buildReleaseRwaInstruction,
+  buildForceTransferRwaInstruction,
+  buildSetRwaControlsInstruction,
+  buildSetRwaKeyValueInstruction,
+  buildRemoveRwaKeyValueInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
   buildRegisterMultisigInstruction,
@@ -21,8 +33,6 @@ import {
   buildRegisterKaigiRelayInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
-  buildDeactivateContractInstanceInstruction,
-  buildActivateContractInstanceInstruction,
   buildRemoveSmartContractBytesInstruction,
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
@@ -53,6 +63,26 @@ function normalizeAuthority(authority) {
 function resolveNativeBinding() {
   // Allow tests to inject a fake binding.
   return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
+}
+
+function composeAssetHoldingIdFromDefinitionAndAccount(assetDefinitionId, accountId, context) {
+  const definition = String(assetDefinitionId ?? "").trim();
+  if (!definition) {
+    throw new TypeError(`${context}.assetDefinitionId must be a non-empty string`);
+  }
+  if (
+    /\s/.test(definition) ||
+    definition.includes("%") ||
+    definition.includes("/") ||
+    definition.includes("?") ||
+    definition.includes(":")
+  ) {
+    throw new TypeError(
+      `${context}.assetDefinitionId must be a canonical unprefixed Base58 asset definition id`,
+    );
+  }
+  const normalizedAccountId = normalizeAccountId(accountId, `${context}.accountId`);
+  return `${definition}#${normalizedAccountId}`;
 }
 
 function serializeInstructionPayloads(instructions, context) {
@@ -131,20 +161,6 @@ export function resignSignedTransaction(signedTransaction, privateKey) {
     throw new Error("private key must be a 32- or 64-byte Ed25519 key");
   }
   return Buffer.from(native.signTransaction(txBuffer, keyBuffer));
-}
-
-/**
- * Convert a versioned signed transaction payload into Norito bytes for Torii `/transaction` submit routes.
- * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
- * @returns {Buffer}
- */
-export function encodeSignedTransactionNorito(signedTransaction) {
-  const native = resolveNativeBinding();
-  if (!native || typeof native.encodeSignedTransactionNorito !== "function") {
-    throw new Error("native binding 'encodeSignedTransactionNorito' is unavailable");
-  }
-  const txBuffer = toBuffer(signedTransaction);
-  return Buffer.from(native.encodeSignedTransactionNorito(txBuffer));
 }
 
 /**
@@ -367,6 +383,7 @@ export function buildPrecommitTriggerAction(options) {
 export function buildMintAssetTransaction({
   chainId,
   authority,
+  assetHoldingId,
   assetId,
   quantity,
   metadata = null,
@@ -375,7 +392,7 @@ export function buildMintAssetTransaction({
   nonce = null,
   privateKey,
 }) {
-  const instruction = buildMintAssetInstruction({ assetId, quantity });
+  const instruction = buildMintAssetInstruction({ assetHoldingId: assetHoldingId ?? assetId, quantity });
   return buildTransaction({
     chainId,
     authority,
@@ -395,6 +412,7 @@ export function buildMintAssetTransaction({
 export function buildBurnAssetTransaction({
   chainId,
   authority,
+  assetHoldingId,
   assetId,
   quantity,
   metadata = null,
@@ -403,7 +421,7 @@ export function buildBurnAssetTransaction({
   nonce = null,
   privateKey,
 }) {
-  const instruction = buildBurnAssetInstruction({ assetId, quantity });
+  const instruction = buildBurnAssetInstruction({ assetHoldingId: assetHoldingId ?? assetId, quantity });
   return buildTransaction({
     chainId,
     authority,
@@ -482,6 +500,7 @@ export function buildMintTriggerTransaction({
 export function buildTransferAssetTransaction({
   chainId,
   authority,
+  sourceAssetHoldingId,
   sourceAssetId,
   quantity,
   destinationAccountId,
@@ -492,7 +511,7 @@ export function buildTransferAssetTransaction({
   privateKey,
 }) {
   const instruction = buildTransferAssetInstruction({
-    sourceAssetId,
+    sourceAssetHoldingId: sourceAssetHoldingId ?? sourceAssetId,
     quantity,
     destinationAccountId,
   });
@@ -523,7 +542,7 @@ function buildRegisterDomainInstructions({ domain, mints = [] }) {
   mints.forEach((mint) => {
     instructions.push(
       buildMintAssetInstruction({
-        assetId: mint.assetId,
+        assetHoldingId: mint.assetHoldingId ?? mint.assetId,
         quantity: mint.quantity,
       }),
     );
@@ -535,21 +554,24 @@ function buildRegisterDomainInstructions({ domain, mints = [] }) {
  * Build instructions combining an account registration with a follow-up transfer.
  */
 function buildRegisterAccountInstructions({ account, transfers = [] }) {
+  if (account.domainId !== undefined || account.domain !== undefined) {
+    throw new TypeError("account registration is domainless; bind account aliases separately");
+  }
   const instructions = [];
   instructions.push(
     buildRegisterAccountInstruction({
       accountId: account.accountId,
-      domainId: account.domainId ?? account.domain,
       metadata: account.metadata,
     }),
   );
   transfers.forEach((transfer) => {
-    if (!transfer.sourceAssetId) {
-      throw new TypeError("transfer.sourceAssetId is required");
+    const sourceAssetHoldingId = transfer.sourceAssetHoldingId ?? transfer.sourceAssetId;
+    if (!sourceAssetHoldingId) {
+      throw new TypeError("transfer.sourceAssetHoldingId is required");
     }
     instructions.push(
       buildTransferAssetInstruction({
-        sourceAssetId: transfer.sourceAssetId,
+        sourceAssetHoldingId,
         quantity: transfer.quantity,
         destinationAccountId: transfer.destinationAccountId,
       }),
@@ -616,7 +638,7 @@ function buildRegisterAssetDefinitionInstructions({ assetDefinition, mints = [] 
   mints.forEach((mint) => {
     instructions.push(
       buildMintAssetInstruction({
-        assetId: mint.assetId,
+        assetHoldingId: mint.assetHoldingId ?? mint.assetId,
         quantity: mint.quantity,
       }),
     );
@@ -624,28 +646,49 @@ function buildRegisterAssetDefinitionInstructions({ assetDefinition, mints = [] 
   return instructions;
 }
 
-function resolveAssetIdForMint(assetDefinitionId, mint) {
-  if (mint.assetId) {
-    return ToriiClient._normalizeAssetId(mint.assetId, "mint.assetId");
+function resolveAssetHoldingIdForMint(assetDefinitionId, mint, context = "mint") {
+  const providedAssetHoldingId = mint.assetHoldingId ?? mint.assetId;
+  if (providedAssetHoldingId) {
+    const normalizedAssetHoldingId = ToriiClient._normalizeAssetHoldingId(
+      providedAssetHoldingId,
+      mint.assetHoldingId !== undefined ? `${context}.assetHoldingId` : `${context}.assetId`,
+    );
+    if (!mint.accountId) {
+      return normalizedAssetHoldingId;
+    }
+    const derivedAssetHoldingId = composeAssetHoldingIdFromDefinitionAndAccount(
+      assetDefinitionId,
+      mint.accountId,
+      context,
+    );
+    if (normalizedAssetHoldingId !== derivedAssetHoldingId) {
+      throw new TypeError(
+        `${context}.assetHoldingId must match ${context}.assetDefinitionId + ${context}.accountId`,
+      );
+    }
+    return normalizedAssetHoldingId;
   }
   if (!mint.accountId) {
-    throw new TypeError("mint.assetId is required");
+    throw new TypeError(
+      `${context}.assetId, ${context}.assetHoldingId, or ${context}.accountId must be provided`,
+    );
   }
-  throw new TypeError(
-    "mint.accountId is no longer supported; provide an encoded mint.assetId",
-  );
+  return composeAssetHoldingIdFromDefinitionAndAccount(assetDefinitionId, mint.accountId, context);
 }
 
 function normalizeDomainMintSpec(value, context) {
   if (!value || typeof value !== "object") {
     throw new TypeError(`${context} must be an object`);
   }
-  const assetId = value.assetId;
-  if (typeof assetId !== "string" || assetId.length === 0) {
+  const assetHoldingId = value.assetHoldingId ?? value.assetId;
+  if (typeof assetHoldingId !== "string" || assetHoldingId.length === 0) {
     throw new TypeError(`${context}.assetId must be a non-empty string`);
   }
   return {
-    assetId: ToriiClient._normalizeAssetId(assetId, `${context}.assetId`),
+    assetHoldingId: ToriiClient._normalizeAssetHoldingId(
+      assetHoldingId,
+      value.assetHoldingId !== undefined ? `${context}.assetHoldingId` : `${context}.assetId`,
+    ),
     quantity: value.quantity,
   };
 }
@@ -661,20 +704,13 @@ function normalizeAssetDefinitionMintSpec(assetDefinitionId, value, context) {
   if (!value || typeof value !== "object") {
     throw new TypeError(`${context} must be an object`);
   }
-  const assetIdValue = value.assetId;
-  const accountIdValue = value.accountId;
-  if (accountIdValue !== undefined && accountIdValue !== null) {
-    throw new TypeError(
-      `${context}.accountId is no longer supported; provide encoded ${context}.assetId`,
-    );
-  }
-  if (assetIdValue === undefined || assetIdValue === null) {
-    throw new TypeError(`${context}.assetId must be provided`);
-  }
-  const assetId = ToriiClient._normalizeAssetId(assetIdValue, `${context}.assetId`);
+  const assetHoldingId = resolveAssetHoldingIdForMint(assetDefinitionId, value, context);
   return {
-    assetId,
-    accountId: null,
+    assetHoldingId,
+    accountId:
+      value.accountId === undefined || value.accountId === null
+        ? null
+        : normalizeAccountId(value.accountId, `${context}.accountId`),
     quantity: value.quantity,
   };
 }
@@ -697,12 +733,14 @@ function normalizeTransferSpec(value, context, options = {}) {
     throw new TypeError(`${context} must be an object`);
   }
   const spec = {
-    sourceAssetId: value.sourceAssetId,
+    sourceAssetHoldingId: value.sourceAssetHoldingId ?? value.sourceAssetId,
     quantity: value.quantity,
     destinationAccountId: value.destinationAccountId,
   };
-  if (requireSource && !spec.sourceAssetId) {
-    throw new TypeError(`${context}.sourceAssetId is required`);
+  if (requireSource && !spec.sourceAssetHoldingId) {
+    throw new TypeError(
+      `${context}.sourceAssetId is required (or ${context}.sourceAssetHoldingId)`,
+    );
   }
   return spec;
 }
@@ -748,18 +786,18 @@ export function buildMintAndTransferTransaction({
     throw new TypeError("transfer or transfers options are required");
   }
   const mintInstruction = buildMintAssetInstruction(mint);
-  const defaultSource = mint.assetId;
-  if (!defaultSource && transferSpecs.some((spec) => spec.sourceAssetId === undefined)) {
+  const defaultSource = mint.assetHoldingId ?? mint.assetId;
+  if (!defaultSource && transferSpecs.some((spec) => spec.sourceAssetHoldingId === undefined)) {
     throw new TypeError(
-      "mint.assetId is required when transfer sourceAssetId is omitted",
+      "mint.assetHoldingId is required when transfer sourceAssetHoldingId is omitted",
     );
   }
   const instructions = [mintInstruction];
   for (const spec of transferSpecs) {
-    const sourceAssetId = spec.sourceAssetId ?? defaultSource;
+    const sourceAssetHoldingId = spec.sourceAssetHoldingId ?? defaultSource;
     instructions.push(
       buildTransferAssetInstruction({
-        sourceAssetId,
+        sourceAssetHoldingId,
         quantity: spec.quantity,
         destinationAccountId: spec.destinationAccountId,
       }),
@@ -999,11 +1037,12 @@ export function buildRegisterAssetDefinitionMintAndTransferTransaction({
         : [];
 
   if (transferSpecs.length > 0) {
-    const defaultSourceAssetId = mintSpecs[0].assetId;
+    const defaultSourceAssetHoldingId = mintSpecs[0].assetHoldingId;
     for (const spec of transferSpecs) {
       instructions.push(
         buildTransferAssetInstruction({
-          sourceAssetId: spec.sourceAssetId ?? defaultSourceAssetId,
+          sourceAssetHoldingId:
+            spec.sourceAssetHoldingId ?? defaultSourceAssetHoldingId,
           quantity: spec.quantity,
           destinationAccountId: spec.destinationAccountId,
         }),
@@ -1075,6 +1114,346 @@ export function buildTransferNftTransaction({
     nftId,
     destinationAccountId,
   });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `RegisterRwa` instruction.
+ */
+export function buildRegisterRwaTransaction({
+  chainId,
+  authority,
+  rwa,
+  rwaJson,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildRegisterRwaInstruction({ rwa, rwaJson });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `TransferRwa` instruction.
+ */
+export function buildTransferRwaTransaction({
+  chainId,
+  authority,
+  sourceAccountId,
+  rwaId,
+  quantity,
+  destinationAccountId,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildTransferRwaInstruction({
+    sourceAccountId,
+    rwaId,
+    quantity,
+    destinationAccountId,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `MergeRwas` instruction.
+ */
+export function buildMergeRwasTransaction({
+  chainId,
+  authority,
+  merge,
+  mergeJson,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildMergeRwasInstruction({ merge, mergeJson });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `RedeemRwa` instruction.
+ */
+export function buildRedeemRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  quantity,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildRedeemRwaInstruction({ rwaId, quantity });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `FreezeRwa` instruction.
+ */
+export function buildFreezeRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildFreezeRwaInstruction({ rwaId });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing an `UnfreezeRwa` instruction.
+ */
+export function buildUnfreezeRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildUnfreezeRwaInstruction({ rwaId });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `HoldRwa` instruction.
+ */
+export function buildHoldRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  quantity,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildHoldRwaInstruction({ rwaId, quantity });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `ReleaseRwa` instruction.
+ */
+export function buildReleaseRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  quantity,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildReleaseRwaInstruction({ rwaId, quantity });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `ForceTransferRwa` instruction.
+ */
+export function buildForceTransferRwaTransaction({
+  chainId,
+  authority,
+  rwaId,
+  quantity,
+  destinationAccountId,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildForceTransferRwaInstruction({
+    rwaId,
+    quantity,
+    destinationAccountId,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `SetRwaControls` instruction.
+ */
+export function buildSetRwaControlsTransaction({
+  chainId,
+  authority,
+  rwaId,
+  controls,
+  controlsJson,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildSetRwaControlsInstruction({
+    rwaId,
+    controls,
+    controlsJson,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `SetRwaKeyValue` instruction.
+ */
+export function buildSetRwaKeyValueTransaction({
+  chainId,
+  authority,
+  rwaId,
+  key,
+  value,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildSetRwaKeyValueInstruction({ rwaId, key, value });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build a transaction containing a `RemoveRwaKeyValue` instruction.
+ */
+export function buildRemoveRwaKeyValueTransaction({
+  chainId,
+  authority,
+  rwaId,
+  key,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildRemoveRwaKeyValueInstruction({ rwaId, key });
   return buildTransaction({
     chainId,
     authority,
@@ -1189,6 +1568,476 @@ export function buildEndKaigiTransaction({
     nonce,
     privateKey,
   });
+}
+
+function normalizeInlineVerifyingKeyRecord(value, context) {
+  const record =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? value
+      : null;
+  if (!record) {
+    throw new TypeError(`${context}.verifyingKey must be an object`);
+  }
+  const inlineKey =
+    record.inline_key ??
+    record.inlineKey ??
+    null;
+  if (!inlineKey || typeof inlineKey !== "object" || Array.isArray(inlineKey)) {
+    throw new TypeError(`${context}.verifyingKey.inline_key must be present`);
+  }
+  const bytesBase64 = String(
+    inlineKey.bytes_b64 ??
+      inlineKey.bytesBase64 ??
+      "",
+  ).trim();
+  if (!bytesBase64) {
+    throw new TypeError(`${context}.verifyingKey.inline_key.bytes_b64 must be present`);
+  }
+  return {
+    record,
+    backend: String(record.id?.backend ?? record.backend ?? "").trim(),
+    circuitId: String(
+      record.record?.circuit_id ?? record.circuit_id ?? record.circuitId ?? "",
+    ).trim(),
+    bytes: Buffer.from(bytesBase64, "base64"),
+  };
+}
+
+function normalizeWholeNumberLiteral(value, context) {
+  const normalized = String(value ?? "").trim();
+  if (!/^\d+$/.test(normalized)) {
+    throw new TypeError(`${context} must be a whole-number string`);
+  }
+  return normalized;
+}
+
+function normalizeFixed32HexInput(value, context) {
+  if (typeof value === "string") {
+    const normalized = value.trim().replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(normalized)) {
+      throw new TypeError(`${context} must be a 32-byte hex string`);
+    }
+    return normalized;
+  }
+  const buffer = toNamedBuffer(value, context);
+  if (buffer.length !== 32) {
+    throw new TypeError(`${context} must be 32 bytes`);
+  }
+  return Buffer.from(buffer).toString("hex");
+}
+
+function toNamedBuffer(value, context) {
+  if (Buffer.isBuffer(value)) {
+    return value;
+  }
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  }
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(value);
+  }
+  throw new TypeError(`${context} must be a Buffer or ArrayBuffer view`);
+}
+
+/**
+ * Build a deterministic confidential XOR fee-spend envelope for private Kaigi.
+ */
+export function buildPrivateKaigiFeeSpend({
+  chainId,
+  assetDefinitionId,
+  actionHash,
+  anchorRootHex,
+  feeAmount,
+  verifyingKey,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildPrivateKaigiFeeSpend !== "function") {
+    throw new Error(
+      "native binding 'buildPrivateKaigiFeeSpend' is unavailable",
+    );
+  }
+  const vk = normalizeInlineVerifyingKeyRecord(
+    verifyingKey,
+    "privateKaigiFeeSpend",
+  );
+  const result = native.buildPrivateKaigiFeeSpend(
+    String(chainId ?? "").trim(),
+    String(assetDefinitionId ?? "").trim(),
+    toBuffer(actionHash),
+    String(anchorRootHex ?? "").trim(),
+    String(feeAmount ?? "").trim(),
+    vk.backend,
+    vk.circuitId,
+    vk.bytes,
+  );
+  return {
+    asset_definition_id: String(result.assetDefinitionId ?? result.asset_definition_id),
+    anchor_root: Buffer.from(result.anchorRoot ?? result.anchor_root),
+    nullifiers: Array.isArray(result.nullifiers)
+      ? result.nullifiers.map((entry) => Buffer.from(entry))
+      : [],
+    output_commitments: Array.isArray(result.outputCommitments ?? result.output_commitments)
+      ? (result.outputCommitments ?? result.output_commitments).map((entry) => Buffer.from(entry))
+      : [],
+    encrypted_change_payloads: Array.isArray(
+      result.encryptedChangePayloads ?? result.encrypted_change_payloads,
+    )
+      ? (result.encryptedChangePayloads ?? result.encrypted_change_payloads).map((entry) =>
+          Buffer.from(entry),
+        )
+      : [],
+    proof: Buffer.from(result.proof),
+  };
+}
+
+/**
+ * Build a confidential transfer v2 proof envelope.
+ */
+export function buildConfidentialTransferProofV2({
+  chainId,
+  assetDefinitionId,
+  spendKey,
+  treeCommitments,
+  inputs,
+  outputs,
+  rootHintHex,
+  verifyingKey,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildConfidentialTransferProofV2 !== "function") {
+    throw new Error(
+      "native binding 'buildConfidentialTransferProofV2' is unavailable",
+    );
+  }
+  const vk = normalizeInlineVerifyingKeyRecord(
+    verifyingKey,
+    "confidentialTransferProofV2",
+  );
+  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
+  if (spendKeyBuffer.length !== 32) {
+    throw new TypeError("spendKey must be 32 bytes");
+  }
+  const normalizedInputs = Array.isArray(inputs)
+    ? inputs.map((input, index) => ({
+        amount: normalizeWholeNumberLiteral(input?.amount, `inputs[${index}].amount`),
+        rhoHex: normalizeFixed32HexInput(
+          input?.rhoHex ?? input?.rho,
+          `inputs[${index}].rho`,
+        ),
+        diversifierHex:
+          input?.diversifierHex !== undefined ||
+          input?.diversifier_hex !== undefined ||
+          input?.diversifier !== undefined
+            ? normalizeFixed32HexInput(
+                input?.diversifierHex ?? input?.diversifier_hex ?? input?.diversifier,
+                `inputs[${index}].diversifier`,
+              )
+            : undefined,
+        leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
+      }))
+    : [];
+  const normalizedOutputs = Array.isArray(outputs)
+    ? outputs.map((output, index) => ({
+        amount: normalizeWholeNumberLiteral(output?.amount, `outputs[${index}].amount`),
+        rhoHex: normalizeFixed32HexInput(
+          output?.rhoHex ?? output?.rho,
+          `outputs[${index}].rho`,
+        ),
+        ownerTagHex: normalizeFixed32HexInput(
+          output?.ownerTagHex ?? output?.owner_tag_hex ?? output?.ownerTag,
+          `outputs[${index}].ownerTag`,
+        ),
+      }))
+    : [];
+  const normalizedTreeCommitments = Array.isArray(treeCommitments)
+    ? treeCommitments.map((entry, index) =>
+        normalizeFixed32HexInput(entry, `treeCommitments[${index}]`),
+      )
+    : [];
+  const result = native.buildConfidentialTransferProofV2(
+    String(chainId ?? "").trim(),
+    String(assetDefinitionId ?? "").trim(),
+    spendKeyBuffer,
+    normalizedTreeCommitments,
+    normalizedInputs,
+    normalizedOutputs,
+    normalizeFixed32HexInput(rootHintHex, "rootHintHex"),
+    vk.backend,
+    vk.circuitId,
+    vk.bytes,
+  );
+  return {
+    nullifiers: Array.isArray(result.nullifiers)
+      ? result.nullifiers.map((entry) => Buffer.from(entry))
+      : [],
+    outputCommitments: Array.isArray(result.outputCommitments ?? result.output_commitments)
+      ? (result.outputCommitments ?? result.output_commitments).map((entry) => Buffer.from(entry))
+      : [],
+    root: Buffer.from(result.root),
+    proof: Buffer.from(result.proof),
+  };
+}
+
+/**
+ * Build a confidential unshield v2 proof envelope.
+ */
+export function buildConfidentialUnshieldProofV2({
+  chainId,
+  assetDefinitionId,
+  spendKey,
+  treeCommitments,
+  inputs,
+  publicAmount,
+  rootHintHex,
+  verifyingKey,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildConfidentialUnshieldProofV2 !== "function") {
+    throw new Error(
+      "native binding 'buildConfidentialUnshieldProofV2' is unavailable",
+    );
+  }
+  const vk = normalizeInlineVerifyingKeyRecord(
+    verifyingKey,
+    "confidentialUnshieldProofV2",
+  );
+  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
+  if (spendKeyBuffer.length !== 32) {
+    throw new TypeError("spendKey must be 32 bytes");
+  }
+  const normalizedInputs = Array.isArray(inputs)
+    ? inputs.map((input, index) => ({
+        amount: normalizeWholeNumberLiteral(input?.amount, `inputs[${index}].amount`),
+        rhoHex: normalizeFixed32HexInput(
+          input?.rhoHex ?? input?.rho,
+          `inputs[${index}].rho`,
+        ),
+        diversifierHex:
+          input?.diversifierHex !== undefined ||
+          input?.diversifier_hex !== undefined ||
+          input?.diversifier !== undefined
+            ? normalizeFixed32HexInput(
+                input?.diversifierHex ?? input?.diversifier_hex ?? input?.diversifier,
+                `inputs[${index}].diversifier`,
+              )
+            : undefined,
+        leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
+      }))
+    : [];
+  const normalizedTreeCommitments = Array.isArray(treeCommitments)
+    ? treeCommitments.map((entry, index) =>
+        normalizeFixed32HexInput(entry, `treeCommitments[${index}]`),
+      )
+    : [];
+  const result = native.buildConfidentialUnshieldProofV2(
+    String(chainId ?? "").trim(),
+    String(assetDefinitionId ?? "").trim(),
+    spendKeyBuffer,
+    normalizedTreeCommitments,
+    normalizedInputs,
+    normalizeWholeNumberLiteral(publicAmount, "publicAmount"),
+    normalizeFixed32HexInput(rootHintHex, "rootHintHex"),
+    vk.backend,
+    vk.circuitId,
+    vk.bytes,
+  );
+  return {
+    nullifiers: Array.isArray(result.nullifiers)
+      ? result.nullifiers.map((entry) => Buffer.from(entry))
+      : [],
+    root: Buffer.from(result.root),
+    proof: Buffer.from(result.proof),
+  };
+}
+
+/**
+ * Build a confidential unshield v3 proof envelope with optional private change.
+ */
+export function buildConfidentialUnshieldProofV3({
+  chainId,
+  assetDefinitionId,
+  spendKey,
+  treeCommitments,
+  inputs,
+  outputs,
+  publicAmount,
+  rootHintHex,
+  verifyingKey,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildConfidentialUnshieldProofV3 !== "function") {
+    throw new Error(
+      "native binding 'buildConfidentialUnshieldProofV3' is unavailable",
+    );
+  }
+  const vk = normalizeInlineVerifyingKeyRecord(
+    verifyingKey,
+    "confidentialUnshieldProofV3",
+  );
+  const spendKeyBuffer = toNamedBuffer(spendKey, "spendKey");
+  if (spendKeyBuffer.length !== 32) {
+    throw new TypeError("spendKey must be 32 bytes");
+  }
+  const normalizedInputs = Array.isArray(inputs)
+    ? inputs.map((input, index) => ({
+        amount: normalizeWholeNumberLiteral(input?.amount, `inputs[${index}].amount`),
+        rhoHex: normalizeFixed32HexInput(
+          input?.rhoHex ?? input?.rho,
+          `inputs[${index}].rho`,
+        ),
+        diversifierHex:
+          input?.diversifierHex !== undefined ||
+          input?.diversifier_hex !== undefined ||
+          input?.diversifier !== undefined
+            ? normalizeFixed32HexInput(
+                input?.diversifierHex ?? input?.diversifier_hex ?? input?.diversifier,
+                `inputs[${index}].diversifier`,
+              )
+            : undefined,
+        leafIndex: Number(input?.leafIndex ?? input?.leaf_index ?? 0),
+      }))
+    : [];
+  const normalizedOutputs = Array.isArray(outputs)
+    ? outputs.map((output, index) => ({
+        amount: normalizeWholeNumberLiteral(output?.amount, `outputs[${index}].amount`),
+        rhoHex: normalizeFixed32HexInput(
+          output?.rhoHex ?? output?.rho,
+          `outputs[${index}].rho`,
+        ),
+      }))
+    : [];
+  const normalizedTreeCommitments = Array.isArray(treeCommitments)
+    ? treeCommitments.map((entry, index) =>
+        normalizeFixed32HexInput(entry, `treeCommitments[${index}]`),
+      )
+    : [];
+  const result = native.buildConfidentialUnshieldProofV3(
+    String(chainId ?? "").trim(),
+    String(assetDefinitionId ?? "").trim(),
+    spendKeyBuffer,
+    normalizedTreeCommitments,
+    normalizedInputs,
+    normalizedOutputs,
+    normalizeWholeNumberLiteral(publicAmount, "publicAmount"),
+    normalizeFixed32HexInput(rootHintHex, "rootHintHex"),
+    vk.backend,
+    vk.circuitId,
+    vk.bytes,
+  );
+  return {
+    nullifiers: Array.isArray(result.nullifiers)
+      ? result.nullifiers.map((entry) => Buffer.from(entry))
+      : [],
+    outputCommitments: Array.isArray(result.outputCommitments ?? result.output_commitments)
+      ? (result.outputCommitments ?? result.output_commitments).map((entry) => Buffer.from(entry))
+      : [],
+    root: Buffer.from(result.root),
+    proof: Buffer.from(result.proof),
+  };
+}
+
+/**
+ * Build an authority-free private `TransactionEntrypoint::PrivateKaigi(Create)`.
+ */
+export function buildPrivateCreateKaigiTransaction({
+  chainId,
+  call,
+  artifacts,
+  feeSpend,
+  metadata = null,
+  creationTimeMs = null,
+  nonce = null,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildPrivateCreateKaigiTransaction !== "function") {
+    throw new Error(
+      "native binding 'buildPrivateCreateKaigiTransaction' is unavailable",
+    );
+  }
+  const result = native.buildPrivateCreateKaigiTransaction(
+    String(chainId ?? "").trim(),
+    JSON.stringify(call ?? {}),
+    JSON.stringify(artifacts ?? {}),
+    JSON.stringify(feeSpend ?? {}),
+    normalizeMetadataPayload(metadata, "privateCreateKaigi.metadata"),
+    creationTimeMs,
+    nonce,
+  );
+  return {
+    transactionEntrypoint: Buffer.from(result.transactionEntrypoint),
+    hash: Buffer.from(result.hash),
+    actionHash: Buffer.from(result.actionHash),
+  };
+}
+
+/**
+ * Build an authority-free private `TransactionEntrypoint::PrivateKaigi(Join)`.
+ */
+export function buildPrivateJoinKaigiTransaction({
+  chainId,
+  callId,
+  artifacts,
+  feeSpend,
+  metadata = null,
+  creationTimeMs = null,
+  nonce = null,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildPrivateJoinKaigiTransaction !== "function") {
+    throw new Error(
+      "native binding 'buildPrivateJoinKaigiTransaction' is unavailable",
+    );
+  }
+  const result = native.buildPrivateJoinKaigiTransaction(
+    String(chainId ?? "").trim(),
+    String(callId ?? "").trim(),
+    JSON.stringify(artifacts ?? {}),
+    JSON.stringify(feeSpend ?? {}),
+    normalizeMetadataPayload(metadata, "privateJoinKaigi.metadata"),
+    creationTimeMs,
+    nonce,
+  );
+  return {
+    transactionEntrypoint: Buffer.from(result.transactionEntrypoint),
+    hash: Buffer.from(result.hash),
+    actionHash: Buffer.from(result.actionHash),
+  };
+}
+
+/**
+ * Build an authority-free private `TransactionEntrypoint::PrivateKaigi(End)`.
+ */
+export function buildPrivateEndKaigiTransaction({
+  chainId,
+  callId,
+  endedAtMs = null,
+  artifacts,
+  feeSpend,
+  metadata = null,
+  creationTimeMs = null,
+  nonce = null,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.buildPrivateEndKaigiTransaction !== "function") {
+    throw new Error(
+      "native binding 'buildPrivateEndKaigiTransaction' is unavailable",
+    );
+  }
+  const result = native.buildPrivateEndKaigiTransaction(
+    String(chainId ?? "").trim(),
+    String(callId ?? "").trim(),
+    endedAtMs,
+    JSON.stringify(artifacts ?? {}),
+    JSON.stringify(feeSpend ?? {}),
+    normalizeMetadataPayload(metadata, "privateEndKaigi.metadata"),
+    creationTimeMs,
+    nonce,
+  );
+  return {
+    transactionEntrypoint: Buffer.from(result.transactionEntrypoint),
+    hash: Buffer.from(result.hash),
+    actionHash: Buffer.from(result.actionHash),
+  };
 }
 
 /**
@@ -1690,70 +2539,6 @@ export function buildRegisterSmartContractBytesTransaction({
 }
 
 /**
- * Build a transaction containing a `DeactivateContractInstance` instruction.
- */
-export function buildDeactivateContractInstanceTransaction({
-  chainId,
-  authority,
-  namespace,
-  contractId,
-  reason = null,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-}) {
-  const instruction = buildDeactivateContractInstanceInstruction({
-    namespace,
-    contractId,
-    reason,
-  });
-  return buildTransaction({
-    chainId,
-    authority,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-  });
-}
-
-/**
- * Build a transaction containing an `ActivateContractInstance` instruction.
- */
-export function buildActivateContractInstanceTransaction({
-  chainId,
-  authority,
-  namespace,
-  contractId,
-  codeHash,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-}) {
-  const instruction = buildActivateContractInstanceInstruction({
-    namespace,
-    contractId,
-    codeHash,
-  });
-  return buildTransaction({
-    chainId,
-    authority,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-  });
-}
-
-/**
  * Build a transaction containing a `RemoveSmartContractBytes` instruction.
  */
 export function buildRemoveSmartContractBytesTransaction({
@@ -1826,20 +2611,87 @@ export async function submitSignedTransaction(
   throw new Error("timed out waiting for transaction status");
 }
 
+/**
+ * Submit a raw transaction entrypoint payload and optionally wait for a terminal status.
+ * @param {ToriiClient} client
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} transactionEntrypoint
+ * @param {{ hashHex: string, waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number }} options
+ * @returns {Promise<{hash: string, submission: any, status?: any}>}
+ */
+export async function submitTransactionEntrypoint(
+  client,
+  transactionEntrypoint,
+  options,
+) {
+  if (!(client instanceof ToriiClient)) {
+    throw new TypeError("client must be an instance of ToriiClient");
+  }
+  if (!options || typeof options !== "object") {
+    throw new TypeError("options.hashHex is required for entrypoint submission");
+  }
+  const hashHex = String(options.hashHex ?? "").trim();
+  if (!/^[0-9a-fA-F]{64}$/.test(hashHex)) {
+    throw new TypeError("options.hashHex must be a 32-byte hex string");
+  }
+  const payload = toBuffer(transactionEntrypoint);
+  const submission = await client.submitTransaction(payload);
+
+  if (!options.waitForCommit) {
+    return { hash: hashHex.toLowerCase(), submission };
+  }
+
+  const pollIntervalMs = options.pollIntervalMs ?? 500;
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const deadline = Date.now() + timeoutMs;
+
+  let status;
+  while (Date.now() <= deadline) {
+    status = await client.getTransactionStatus(hashHex, { allowShortHash: true });
+    if (isTerminalStatus(status)) {
+      return { hash: hashHex.toLowerCase(), submission, status };
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await delay(pollIntervalMs);
+  }
+
+  throw new Error("timed out waiting for transaction status");
+}
+
 function isTerminalStatus(status) {
   if (!status || typeof status !== "object") {
     return false;
   }
-  const value = status.status;
-  if (typeof value !== "string") {
+  const labels = [];
+  const collect = (value) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    if (typeof value.status === "string") {
+      labels.push(value.status);
+    } else if (value.status && typeof value.status === "object") {
+      collect(value.status);
+    }
+    if (typeof value.kind === "string") {
+      labels.push(value.kind);
+    }
+    if (typeof value.type === "string") {
+      labels.push(value.type);
+    }
+  };
+  collect(status);
+  if (labels.length === 0) {
     return false;
   }
-  const normalized = value.toLowerCase();
-  return (
-    normalized.includes("committed") ||
-    normalized.includes("rejected") ||
-    normalized.includes("failed")
-  );
+  return labels.some((label) => {
+    const normalized = label.toLowerCase();
+    return (
+      normalized.includes("committed") ||
+      normalized.includes("applied") ||
+      normalized.includes("rejected") ||
+      normalized.includes("failed") ||
+      normalized.includes("expired")
+    );
+  });
 }
 
 function toBuffer(value) {

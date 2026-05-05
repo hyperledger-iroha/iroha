@@ -89,7 +89,7 @@ Example response:
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -236,7 +236,7 @@ Confidential ledgerはnoteのfreshness証明とgovernance監査の再現に十�
 - アカウントごとのキー導出階層:
   - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - 暗号化note payloadはECDH由来の共有鍵でAEADを使用する。必要に応じてauditor view keysをasset policyに従ってoutputsへ付与できる。
-- CLI追加: `confidential create-keys`, `confidential send`, `confidential export-view-key`, メモ復号のauditor tooling, オフラインでNorito memo envelopeを生成/検査する `iroha app zk envelope` helper。Toriiは `POST /v1/confidential/derive-keyset` で同じ導出フローを提供し、hexとbase64形式を返すのでwalletがプログラムでキー階層を取得できる。
+- CLI追加: `confidential create-keys`, `confidential send`, `confidential export-view-key`, メモ復号のauditor tooling, オフラインでNorito memo envelopeを生成/検査する `iroha app zk envelope` helper。
 
 ## ガス、制限、DoS対策
 - 決定論的ガススケジュール:

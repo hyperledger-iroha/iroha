@@ -6,6 +6,7 @@ import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 
 public final class SignedTransactionHasherTests {
 
@@ -85,7 +86,7 @@ public final class SignedTransactionHasherTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", seed))
-            .setAuthority("alice@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x2C))
             .setCreationTimeMs(1_700_000_000_000L + seed)
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)

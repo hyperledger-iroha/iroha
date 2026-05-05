@@ -23,11 +23,11 @@ fn parse_hash_literal(literal: &str) -> Hash {
 #[test]
 fn join_kaigi_accepts_canonical_commitment_literal() {
     let call = KaigiId::new(
-        DomainId::from_str("wonderland").expect("domain"),
+        DomainId::try_new("wonderland", "universal").expect("domain"),
         Name::from_str("weekly-sync").expect("call name"),
     );
     let participant =
-        AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+        AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("account id");
     let commitment_literal =

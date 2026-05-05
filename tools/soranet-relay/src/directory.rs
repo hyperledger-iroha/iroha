@@ -19,7 +19,9 @@ use iroha_crypto::soranet::{
 };
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use rand::{CryptoRng, RngCore, SeedableRng, rngs::StdRng};
-use soranet_pq::{MlDsaError, MlDsaKeyPair, MlDsaSuite, generate_mldsa_keypair};
+use soranet_pq::{
+    MlDsaError, MlDsaKeyPair, MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair,
+};
 use thiserror::Error;
 
 use crate::guard::{
@@ -1147,7 +1149,7 @@ mod tests {
         handshake::HandshakeSuite,
     };
     use rand::{SeedableRng, rngs::StdRng};
-    use soranet_pq::generate_mldsa_keypair;
+    use soranet_pq::generate_mldsa_keypair_from_os as generate_mldsa_keypair;
     use tempfile::tempdir;
 
     use super::*;

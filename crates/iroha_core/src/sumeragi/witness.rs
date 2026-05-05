@@ -29,9 +29,24 @@ use crate::state::{StateBlock, WorldReadOnly};
 
 #[derive(Default)]
 struct BlockWitness {
+    active: bool,
     reads: BTreeMap<Vec<u8>, Vec<u8>>,  // key -> value (pre)
     writes: BTreeMap<Vec<u8>, Vec<u8>>, // key -> value (post; empty for delete)
     fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>,
+}
+
+/// Exclusive access guard for the global execution witness recorder.
+///
+/// Dropping the guard clears any unfinished capture so early validation returns
+/// or panics cannot leak stale witness records into the next block.
+pub struct ExecWitnessGuard {
+    _guard: MutexGuard<'static, ()>,
+}
+
+impl Drop for ExecWitnessGuard {
+    fn drop(&mut self) {
+        clear_block();
+    }
 }
 
 static SLOT: OnceLock<Mutex<BlockWitness>> = OnceLock::new();
@@ -45,16 +60,40 @@ fn exec_witness_lock() -> &'static Mutex<()> {
     EXEC_WITNESS_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-/// Hold exclusive access to the global witness recorder for the duration of a block execution.
-pub fn exec_witness_guard() -> MutexGuard<'static, ()> {
-    exec_witness_lock()
+fn lock_slot() -> MutexGuard<'static, BlockWitness> {
+    slot()
         .lock()
-        .expect("exec witness guard lock poisoned")
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn with_active_slot(f: impl FnOnce(&mut BlockWitness)) {
+    let mut g = lock_slot();
+    if g.active {
+        f(&mut g);
+    }
+}
+
+fn clear_block() {
+    let mut g = lock_slot();
+    g.active = false;
+    g.reads.clear();
+    g.writes.clear();
+    g.fastpq_transcripts.clear();
+}
+
+/// Hold exclusive access to the global witness recorder for the duration of a block execution.
+pub fn exec_witness_guard() -> ExecWitnessGuard {
+    ExecWitnessGuard {
+        _guard: exec_witness_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    }
 }
 
 /// Start a new witness capture for the current block (clears previous data).
 pub fn start_block() {
-    let mut g = slot().lock().unwrap();
+    let mut g = lock_slot();
+    g.active = true;
     g.reads.clear();
     g.writes.clear();
     g.fastpq_transcripts.clear();
@@ -62,7 +101,7 @@ pub fn start_block() {
 
 /// Drain the accumulated witness into an `ExecWitness` and clear the store.
 pub fn drain_exec_witness() -> ExecWitness {
-    let mut g = slot().lock().unwrap();
+    let mut g = lock_slot();
     let mut reads: Vec<ExecKv> = Vec::with_capacity(g.reads.len());
     let mut writes: Vec<ExecKv> = Vec::with_capacity(g.writes.len());
     for (k, v) in &g.reads {
@@ -79,6 +118,7 @@ pub fn drain_exec_witness() -> ExecWitness {
     }
     g.reads.clear();
     g.writes.clear();
+    g.active = false;
     let fastpq_map = std::mem::take(&mut g.fastpq_transcripts);
     let fastpq_transcripts = map_to_bundles(fastpq_map);
     ExecWitness {
@@ -161,26 +201,29 @@ pub fn record_read_account_kv(
 ) {
     let k = key_account_kv(id, key);
     let v = val.map(bytes_from_json).unwrap_or_default();
-    let mut g = slot().lock().unwrap();
-    g.reads.entry(k).or_insert(v);
+    with_active_slot(|g| {
+        g.reads.entry(k).or_insert(v);
+    });
 }
 
 /// Record a write (post-value) of account metadata.
 pub fn record_write_account_kv(id: &AccountId, key: &Name, val: &iroha_primitives::json::Json) {
     let k = key_account_kv(id, key);
     let v = bytes_from_json(val);
-    let mut g = slot().lock().unwrap();
-    g.writes.insert(k, v);
+    with_active_slot(|g| {
+        g.writes.insert(k, v);
+    });
 }
 
 /// Record a delete (post empty) of account metadata, with read pre-value supplied.
 pub fn record_delete_account_kv(id: &AccountId, key: &Name, pre: &iroha_primitives::json::Json) {
     let k = key_account_kv(id, key);
-    let mut g = slot().lock().unwrap();
-    g.reads
-        .entry(k.clone())
-        .or_insert_with(|| bytes_from_json(pre));
-    g.writes.insert(k, Vec::new());
+    with_active_slot(|g| {
+        g.reads
+            .entry(k.clone())
+            .or_insert_with(|| bytes_from_json(pre));
+        g.writes.insert(k, Vec::new());
+    });
 }
 
 /// Record a read (pre-value) of domain metadata.
@@ -191,48 +234,54 @@ pub fn record_read_domain_kv(
 ) {
     let k = key_domain_kv(id, key);
     let v = val.map(bytes_from_json).unwrap_or_default();
-    let mut g = slot().lock().unwrap();
-    g.reads.entry(k).or_insert(v);
+    with_active_slot(|g| {
+        g.reads.entry(k).or_insert(v);
+    });
 }
 /// Record a write (post-value) of domain metadata.
 pub fn record_write_domain_kv(id: &DomainId, key: &Name, val: &iroha_primitives::json::Json) {
     let k = key_domain_kv(id, key);
     let v = bytes_from_json(val);
-    let mut g = slot().lock().unwrap();
-    g.writes.insert(k, v);
+    with_active_slot(|g| {
+        g.writes.insert(k, v);
+    });
 }
 /// Record a delete (post empty) of domain metadata, with read pre-value supplied.
 pub fn record_delete_domain_kv(id: &DomainId, key: &Name, pre: &iroha_primitives::json::Json) {
     let k = key_domain_kv(id, key);
-    let mut g = slot().lock().unwrap();
-    g.reads
-        .entry(k.clone())
-        .or_insert_with(|| bytes_from_json(pre));
-    g.writes.insert(k, Vec::new());
+    with_active_slot(|g| {
+        g.reads
+            .entry(k.clone())
+            .or_insert_with(|| bytes_from_json(pre));
+        g.writes.insert(k, Vec::new());
+    });
 }
 
 /// Record a read (pre-value) of NFT metadata.
 pub fn record_read_nft_kv(id: &NftId, key: &Name, val: Option<&iroha_primitives::json::Json>) {
     let k = key_nft_kv(id, key);
     let v = val.map(bytes_from_json).unwrap_or_default();
-    let mut g = slot().lock().unwrap();
-    g.reads.entry(k).or_insert(v);
+    with_active_slot(|g| {
+        g.reads.entry(k).or_insert(v);
+    });
 }
 /// Record a write (post-value) of NFT metadata.
 pub fn record_write_nft_kv(id: &NftId, key: &Name, val: &iroha_primitives::json::Json) {
     let k = key_nft_kv(id, key);
     let v = bytes_from_json(val);
-    let mut g = slot().lock().unwrap();
-    g.writes.insert(k, v);
+    with_active_slot(|g| {
+        g.writes.insert(k, v);
+    });
 }
 /// Record a delete (post empty) of NFT metadata, with read pre-value supplied.
 pub fn record_delete_nft_kv(id: &NftId, key: &Name, pre: &iroha_primitives::json::Json) {
     let k = key_nft_kv(id, key);
-    let mut g = slot().lock().unwrap();
-    g.reads
-        .entry(k.clone())
-        .or_insert_with(|| bytes_from_json(pre));
-    g.writes.insert(k, Vec::new());
+    with_active_slot(|g| {
+        g.reads
+            .entry(k.clone())
+            .or_insert_with(|| bytes_from_json(pre));
+        g.writes.insert(k, Vec::new());
+    });
 }
 
 /// Record asset balance read (pre-value) for an asset.
@@ -241,16 +290,18 @@ pub fn record_read_asset(id: &AssetId, val: Option<&iroha_primitives::numeric::N
     let v = val
         .map(|n| Json::new(n.clone()).get().as_bytes().to_vec())
         .unwrap_or_default();
-    let mut g = slot().lock().unwrap();
-    g.reads.entry(k).or_insert(v);
+    with_active_slot(|g| {
+        g.reads.entry(k).or_insert(v);
+    });
 }
 
 /// Record asset balance write (post-value) for an asset.
 pub fn record_write_asset(id: &AssetId, val: &iroha_primitives::numeric::Numeric) {
     let k = key_asset_balance(id);
     let v = Json::new(val.clone()).get().as_bytes().to_vec();
-    let mut g = slot().lock().unwrap();
-    g.writes.insert(k, v);
+    with_active_slot(|g| {
+        g.writes.insert(k, v);
+    });
 }
 
 /// Record asset definition total supply read (pre-value).
@@ -262,8 +313,9 @@ pub fn record_read_asset_def_total(
     let v = val
         .map(|n| Json::new(n.clone()).get().as_bytes().to_vec())
         .unwrap_or_default();
-    let mut g = slot().lock().unwrap();
-    g.reads.entry(k).or_insert(v);
+    with_active_slot(|g| {
+        g.reads.entry(k).or_insert(v);
+    });
 }
 
 /// Record asset definition total supply write (post-value).
@@ -273,17 +325,19 @@ pub fn record_write_asset_def_total(
 ) {
     let k = key_asset_def_total(id);
     let v = Json::new(val.clone()).get().as_bytes().to_vec();
-    let mut g = slot().lock().unwrap();
-    g.writes.insert(k, v);
+    with_active_slot(|g| {
+        g.writes.insert(k, v);
+    });
 }
 
 /// Record a FASTPQ transfer transcript so `ExecWitness` consumers can replay transfers.
 pub fn record_fastpq_transcript(transcript: &TransferTranscript) {
-    let mut g = slot().lock().unwrap();
-    g.fastpq_transcripts
-        .entry(transcript.batch_hash)
-        .or_default()
-        .push(transcript.clone());
+    with_active_slot(|g| {
+        g.fastpq_transcripts
+            .entry(transcript.batch_hash)
+            .or_default()
+            .push(transcript.clone());
+    });
 }
 
 /// Record a read (pre-value) of asset-definition metadata.
@@ -294,8 +348,9 @@ pub fn record_read_asset_def_kv(
 ) {
     let k = key_asset_def_kv(id, key);
     let v = val.map(bytes_from_json).unwrap_or_default();
-    let mut g = slot().lock().unwrap();
-    g.reads.entry(k).or_insert(v);
+    with_active_slot(|g| {
+        g.reads.entry(k).or_insert(v);
+    });
 }
 /// Record a write (post-value) of asset-definition metadata.
 pub fn record_write_asset_def_kv(
@@ -305,8 +360,9 @@ pub fn record_write_asset_def_kv(
 ) {
     let k = key_asset_def_kv(id, key);
     let v = bytes_from_json(val);
-    let mut g = slot().lock().unwrap();
-    g.writes.insert(k, v);
+    with_active_slot(|g| {
+        g.writes.insert(k, v);
+    });
 }
 /// Record a delete (post empty) of asset-definition metadata, with read pre-value supplied.
 pub fn record_delete_asset_def_kv(
@@ -315,11 +371,12 @@ pub fn record_delete_asset_def_kv(
     pre: &iroha_primitives::json::Json,
 ) {
     let k = key_asset_def_kv(id, key);
-    let mut g = slot().lock().unwrap();
-    g.reads
-        .entry(k.clone())
-        .or_insert_with(|| bytes_from_json(pre));
-    g.writes.insert(k, Vec::new());
+    with_active_slot(|g| {
+        g.reads
+            .entry(k.clone())
+            .or_insert_with(|| bytes_from_json(pre));
+        g.writes.insert(k, Vec::new());
+    });
 }
 
 /// Parse an access key string and record a pure read (if supported).
@@ -352,7 +409,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         let mut it = rest.splitn(2, ':');
         if let (Some(dom_s), Some(name_s)) = (it.next(), it.next()) {
             if let (Ok(dom), Ok(name)) = (
-                iroha_data_model::domain::DomainId::from_str(dom_s),
+                iroha_data_model::domain::DomainId::parse_fully_qualified(dom_s),
                 Name::from_str(name_s),
             ) {
                 if let Ok(domv) = state_block.world.domain(&dom) {
@@ -368,7 +425,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         let mut it = rest.splitn(2, ':');
         if let (Some(ad_s), Some(name_s)) = (it.next(), it.next()) {
             if let (Ok(ad), Ok(name)) = (
-                iroha_data_model::asset::AssetDefinitionId::from_str(ad_s),
+                iroha_data_model::asset::AssetDefinitionId::parse_address_literal(ad_s),
                 Name::from_str(name_s),
             ) {
                 if let Ok(def) = state_block.world.asset_definition(&ad) {
@@ -411,8 +468,9 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
                     .any(|r| r == &role);
                 let k = enc_key_prefix(0xC1, &acc.to_string(), &role.to_string());
                 let v = Json::new(present).get().as_bytes().to_vec();
-                let mut g = slot().lock().unwrap();
-                g.reads.entry(k).or_insert(v);
+                with_active_slot(|g| {
+                    g.reads.entry(k).or_insert(v);
+                });
             }
         }
     }
@@ -423,8 +481,9 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
             out.push(0xC2);
             out.extend_from_slice(rest.as_bytes());
             let v = Json::new(present).get().as_bytes().to_vec();
-            let mut g = slot().lock().unwrap();
-            g.reads.entry(out).or_insert(v);
+            with_active_slot(|g| {
+                g.reads.entry(out).or_insert(v);
+            });
         }
     }
     if let Some(rest) = access_key.strip_prefix("perm.account:") {
@@ -442,8 +501,9 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
             let canonical_account = acc.to_string();
             let k = enc_key_prefix(0xC3, &canonical_account, perm_s);
             let v = Json::new(present).get().as_bytes().to_vec();
-            let mut g = slot().lock().unwrap();
-            g.reads.entry(k).or_insert(v);
+            with_active_slot(|g| {
+                g.reads.entry(k).or_insert(v);
+            });
         }
     }
     if let Some(rest) = access_key.strip_prefix("perm.role:") {
@@ -459,19 +519,20 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
                 .is_some_and(|r| r.permissions().any(|p| p.name() == perm_s));
             let k = enc_key_prefix(0xC4, role_s, perm_s);
             let v = Json::new(present).get().as_bytes().to_vec();
-            let mut g = slot().lock().unwrap();
-            g.reads.entry(k).or_insert(v);
+            with_active_slot(|g| {
+                g.reads.entry(k).or_insert(v);
+            });
         }
     }
     if let Some(rest) = access_key.strip_prefix("asset:")
-        && let Ok(id) = iroha_data_model::asset::AssetId::parse_encoded(rest)
+        && let Ok(id) = iroha_data_model::asset::AssetId::parse_literal(rest)
     {
         let pre = state_block.world.assets().get(&id).map(|v| &**v);
         record_read_asset(&id, pre);
         // no further processing needed for asset access
     }
     if let Some(rest) = access_key.strip_prefix("asset_def:")
-        && let Ok(ad) = iroha_data_model::asset::AssetDefinitionId::from_str(rest)
+        && let Ok(ad) = iroha_data_model::asset::AssetDefinitionId::parse_address_literal(rest)
     {
         if let Ok(def) = state_block.world.asset_definition(&ad) {
             record_read_asset_def_total(&ad, Some(def.total_quantity()));
@@ -485,7 +546,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
 #[allow(dead_code)]
 /// Snapshot the current witness without clearing it (for debugging/inspection).
 pub fn snapshot_exec_witness() -> ExecWitness {
-    let g = slot().lock().unwrap();
+    let g = lock_slot();
     let mut reads: Vec<ExecKv> = Vec::with_capacity(g.reads.len());
     let mut writes: Vec<ExecKv> = Vec::with_capacity(g.writes.len());
     for (k, v) in &g.reads {
@@ -526,7 +587,7 @@ mod tests {
         start_block();
         // Simulate asset balance read+write
         let ad = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let aid = iroha_data_model::asset::AssetId::new(ad.clone(), (*ALICE_ID).clone());
@@ -582,7 +643,10 @@ mod tests {
 
         let _guard = exec_witness_guard();
         start_block();
-        let asset = AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
@@ -615,6 +679,55 @@ mod tests {
         assert!(witness.fastpq_batches.is_empty());
         assert!(witness.reads.is_empty());
         assert!(witness.writes.is_empty());
+    }
+
+    #[test]
+    fn inactive_recorder_ignores_out_of_block_records() {
+        use iroha_data_model::{asset::id::AssetDefinitionId, fastpq::TransferTranscript};
+        use iroha_primitives::numeric::Numeric;
+
+        let _guard = exec_witness_guard();
+        let _ = drain_exec_witness();
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset = AssetId::new(asset_definition, (*ALICE_ID).clone());
+        record_read_asset(&asset, Some(&Numeric::from(7u32)));
+        record_fastpq_transcript(&TransferTranscript {
+            batch_hash: Hash::prehashed([0x22; Hash::LENGTH]),
+            deltas: Vec::new(),
+            authority_digest: crate::fastpq::authority_digest(&ALICE_ID),
+            poseidon_preimage_digest: None,
+        });
+
+        let witness = drain_exec_witness();
+        assert!(witness.reads.is_empty());
+        assert!(witness.writes.is_empty());
+        assert!(witness.fastpq_transcripts.is_empty());
+        assert!(witness.fastpq_batches.is_empty());
+    }
+
+    #[test]
+    fn guard_drop_clears_unfinished_capture() {
+        use iroha_primitives::numeric::Numeric;
+
+        let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset = AssetId::new(asset_definition, (*ALICE_ID).clone());
+        let guard = exec_witness_guard();
+        start_block();
+        record_read_asset(&asset, Some(&Numeric::from(11u32)));
+        drop(guard);
+
+        let _guard = exec_witness_guard();
+        let witness = drain_exec_witness();
+        assert!(witness.reads.is_empty());
+        assert!(witness.writes.is_empty());
+        assert!(witness.fastpq_transcripts.is_empty());
+        assert!(witness.fastpq_batches.is_empty());
     }
 
     #[test]

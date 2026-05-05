@@ -10,31 +10,21 @@ use std::{
     path::PathBuf,
     ptr, slice,
     str::FromStr as _,
-    sync::OnceLock,
     time::Duration,
 };
 
 use base64::{Engine as _, engine::general_purpose as b64gp};
-use blake2::{
-    Blake2bVar,
-    digest::{Update, VariableOutput},
-};
 use blake3::hash as blake3_hash;
-use curve25519_dalek::{
-    constants::RISTRETTO_BASEPOINT_POINT,
-    ristretto::{CompressedRistretto, RistrettoPoint},
-    scalar::Scalar,
-};
 use iroha_crypto::{
     Algorithm, EcdsaSecp256k1Sha256, Error as CryptoError, Hash, KeyGenOption, KeyPair, PrivateKey,
-    PublicKey, Signature,
+    PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
     kex::KeyExchangeScheme,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature},
 };
 use iroha_data_model::{
     ChainId,
     account::{
-        AccountId, ScopedAccountId,
+        AccountId,
         address::{AccountAddress, AccountAddressError},
     },
     asset::id::{AssetDefinitionId, AssetId},
@@ -42,29 +32,24 @@ use iroha_data_model::{
     da::manifest::DaManifestV1,
     domain::DomainId,
     governance::types::AtWindow,
+    identifier::{IdentifierResolutionReceipt, IdentifierResolutionReceiptPayload},
     isi::{
         InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, SetAssetKeyValue, SetKeyValue,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, VotingMode,
         },
+        identifier::ClaimIdentifier,
         mint_burn::{Burn, Mint},
         transfer::Transfer,
         zk,
     },
+    metadata::Metadata,
     name::Name,
-    offline::{
-        OFFLINE_FASTPQ_COUNTER_PROOF_DOMAIN, OFFLINE_FASTPQ_HKDF_DOMAIN,
-        OFFLINE_FASTPQ_PROOF_VERSION_V1, OFFLINE_FASTPQ_REPLAY_CHAIN_DOMAIN,
-        OFFLINE_FASTPQ_REPLAY_PROOF_DOMAIN, OFFLINE_FASTPQ_SUM_NONCE_DOMAIN,
-        OFFLINE_FASTPQ_SUM_PROOF_DOMAIN, OfflineBuildClaim, OfflineBuildClaimPlatform,
-        OfflineFastpqCounterProof, OfflineFastpqReplayProof, OfflineFastpqSumProof,
-        OfflinePlatformProof, OfflineProofBlindingSeed, OfflineProofRequestCounter,
-        OfflineProofRequestReplay, OfflineProofRequestSum, OfflineReceiptChallengePreimage,
-        OfflineSpendReceipt, OfflineSpendReceiptPayload, PoseidonDigest, chain_bound_receipt_hash,
-        compute_receipts_root,
-    },
     proof::{ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId},
+    ram_lfe::RamLfeReceiptAttestation,
+    ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
+    rwa::RwaId,
     smart_contract::manifest::ContractManifest,
     transaction::{
         Executable, SignedTransaction, TransactionSubmissionReceipt, signed::TransactionBuilder,
@@ -73,13 +58,11 @@ use iroha_data_model::{
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
 use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_torii_shared::{connect as proto, connect_sdk};
+use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
-use libc::{c_char, c_int, c_uchar, c_ulong, c_ulonglong, free, malloc};
-use norito::core::DecodeFromSlice;
+use libc::{c_char, c_int, c_uchar, c_ulong, free, malloc};
+use norito::decode_from_bytes;
 use norito::json::{Map as JsonMap, Value as JsonValue};
-use norito::{decode_from_bytes, to_bytes};
-use rand::{RngCore, rng};
-use sha2::{Digest, Sha256, Sha512};
 use sorafs_car::{
     ChunkStore, ChunkStoreError, InMemoryPayload, PorProof, build_plan_from_da_manifest,
     local_fetch::{
@@ -88,7 +71,8 @@ use sorafs_car::{
         TransportHintInput,
     },
 };
-use zeroize::Zeroize;
+
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 2;
 
 const ERR_NULL_PTR: c_int = -1;
 const ERR_UTF8: c_int = -2;
@@ -136,31 +120,15 @@ const ERR_FETCH_SCOREBOARD_BUILD: c_int = -111;
 const ERR_FETCH_EXECUTION: c_int = -112;
 const ERR_FETCH_UNKNOWN_CHUNKER: c_int = -113;
 const ERR_ACCOUNT_ADDRESS: c_int = -200;
-const ERR_OFFLINE_RECEIVER: c_int = -300;
-const ERR_OFFLINE_ASSET: c_int = -301;
-const ERR_OFFLINE_NONCE: c_int = -303;
-const ERR_OFFLINE_SERIALIZE: c_int = -304;
-const ERR_OFFLINE_COMMITMENT: c_int = -305;
-const ERR_OFFLINE_BLINDING: c_int = -306;
+const ERR_ASSET_ID_PARSE: c_int = -301;
+const ERR_JSON_SERIALIZE: c_int = -304;
+const ERR_OFFLINE_NOTE_V2_PROVE: c_int = -310;
 const ERR_DA_PROOF_SUMMARY: c_int = -401;
 const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
 const ERR_ZK_ASSET_MODE: c_int = -404;
 const ERR_CONNECT_ENCODE: c_int = -405;
-
-const OFFLINE_BALANCE_PROOF_VERSION: u8 = 1;
-const OFFLINE_DELTA_PROOF_BYTES: usize = 96;
-const OFFLINE_RANGE_PROOF_BITS: usize = 64;
-const OFFLINE_RANGE_PROOF_PER_BIT_BYTES: usize = 192;
-const OFFLINE_RANGE_PROOF_BYTES: usize =
-    OFFLINE_RANGE_PROOF_BITS * OFFLINE_RANGE_PROOF_PER_BIT_BYTES;
-const OFFLINE_BALANCE_PROOF_BYTES: usize =
-    1 + OFFLINE_DELTA_PROOF_BYTES + OFFLINE_RANGE_PROOF_BYTES;
-const OFFLINE_PROOF_TRANSCRIPT_LABEL: &[u8] = b"iroha.offline.balance.v1";
-const OFFLINE_RANGE_PROOF_TRANSCRIPT_LABEL: &[u8] = b"iroha.offline.balance.range.v1";
-const OFFLINE_GENERATOR_LABEL: &[u8] = b"iroha.offline.balance.generator.H.v1";
-
-static PEDERSEN_H: OnceLock<RistrettoPoint> = OnceLock::new();
+const ERR_IDENTIFIER_RECEIPT: c_int = -406;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -182,12 +150,9 @@ enum BridgeError {
     ProofAttachment,
     InvalidNullifiers,
     InvalidRootHint,
-    OfflineReceiver,
-    OfflineAsset,
-    OfflineNonce,
-    OfflineSerialize,
-    OfflineCommitment,
-    OfflineBlinding,
+    AssetId,
+    JsonSerialize,
+    OfflineNoteV2Prove,
     UnsupportedAlgorithm,
     MetadataTarget,
     MetadataKey,
@@ -196,6 +161,7 @@ enum BridgeError {
     Hex,
     AccountList,
     MultisigSpec,
+    IdentifierReceipt,
     VerifyingKeyId,
     ZkAssetMode,
     SecpParse,
@@ -223,12 +189,9 @@ impl BridgeError {
             BridgeError::ProofAttachment => ERR_PROOF_ATTACHMENT,
             BridgeError::InvalidNullifiers => ERR_INVALID_NULLIFIERS,
             BridgeError::InvalidRootHint => ERR_INVALID_ROOT_HINT,
-            BridgeError::OfflineReceiver => ERR_OFFLINE_RECEIVER,
-            BridgeError::OfflineAsset => ERR_OFFLINE_ASSET,
-            BridgeError::OfflineNonce => ERR_OFFLINE_NONCE,
-            BridgeError::OfflineSerialize => ERR_OFFLINE_SERIALIZE,
-            BridgeError::OfflineCommitment => ERR_OFFLINE_COMMITMENT,
-            BridgeError::OfflineBlinding => ERR_OFFLINE_BLINDING,
+            BridgeError::AssetId => ERR_ASSET_ID_PARSE,
+            BridgeError::JsonSerialize => ERR_JSON_SERIALIZE,
+            BridgeError::OfflineNoteV2Prove => ERR_OFFLINE_NOTE_V2_PROVE,
             BridgeError::UnsupportedAlgorithm => ERR_UNSUPPORTED_ALGORITHM,
             BridgeError::MetadataTarget => ERR_METADATA_TARGET,
             BridgeError::MetadataKey => ERR_METADATA_KEY,
@@ -237,6 +200,7 @@ impl BridgeError {
             BridgeError::Hex => ERR_HEX,
             BridgeError::AccountList => ERR_ACCOUNT_LIST,
             BridgeError::MultisigSpec => ERR_MULTISIG_SPEC,
+            BridgeError::IdentifierReceipt => ERR_IDENTIFIER_RECEIPT,
             BridgeError::VerifyingKeyId => ERR_VERIFYING_KEY_ID,
             BridgeError::ZkAssetMode => ERR_ZK_ASSET_MODE,
             BridgeError::SecpParse => ERR_SECP_PARSE,
@@ -247,6 +211,16 @@ impl BridgeError {
 }
 
 type BridgeResult<T> = Result<T, BridgeError>;
+
+/// Return the current native bridge C ABI version.
+///
+/// Clients that resolve symbols dynamically must check this before calling other
+/// entrypoints; stale bridge artifacts can otherwise crash before Rust receives
+/// enough arguments to validate the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_bridge_abi_version() -> u32 {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION
+}
 
 fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
     use AccountAddressError::*;
@@ -280,9 +254,6 @@ fn account_address_error_fields(err: &AccountAddressError) -> Option<JsonMap> {
         }
         InvalidI105Char(ch) => {
             fields.insert("char".into(), JsonValue::from(ch.to_string()));
-        }
-        InvalidI105Digit(digit) => {
-            fields.insert("digit".into(), JsonValue::from(u64::from(*digit)));
         }
         MultisigMemberOverflow(count) => {
             fields.insert("count".into(), JsonValue::from(*count as u64));
@@ -387,10 +358,6 @@ fn parse_account_id(value: String) -> BridgeResult<AccountId> {
         .map_err(|_| BridgeError::Authority)
 }
 
-fn parse_scoped_account_id(value: String) -> BridgeResult<ScopedAccountId> {
-    ScopedAccountId::from_str(&value).map_err(|_| BridgeError::Authority)
-}
-
 fn parse_destination(value: String) -> BridgeResult<AccountId> {
     AccountId::parse_encoded(&value)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
@@ -403,25 +370,7 @@ fn parse_asset_definition(value: String) -> BridgeResult<AssetDefinitionId> {
         return Err(BridgeError::AssetDefinition);
     }
 
-    if let Ok(id) = trimmed.parse::<AssetDefinitionId>() {
-        return Ok(id);
-    }
-
-    let (name, domain) = trimmed
-        .split_once('#')
-        .ok_or(BridgeError::AssetDefinition)?;
-    let name = Name::from_str(name).map_err(|_| BridgeError::AssetDefinition)?;
-    let domain = DomainId::from_str(domain).map_err(|_| BridgeError::AssetDefinition)?;
-    Ok(AssetDefinitionId::new(domain, name))
-}
-
-fn encode_asset_id_literal(
-    asset_definition_literal: String,
-    account_literal: String,
-) -> BridgeResult<String> {
-    let definition = parse_asset_definition(asset_definition_literal)?;
-    let account = parse_account_id(account_literal)?;
-    Ok(AssetId::new(definition, account).canonical_encoded())
+    AssetDefinitionId::parse_address_literal(trimmed).map_err(|_| BridgeError::AssetDefinition)
 }
 
 fn parse_quantity(value: String) -> BridgeResult<Numeric> {
@@ -479,6 +428,28 @@ fn parse_voting_mode(code: u8) -> BridgeResult<VotingMode> {
 
 fn parse_name(value: String) -> BridgeResult<Name> {
     Name::from_str(&value).map_err(|_| BridgeError::MetadataKey)
+}
+
+unsafe fn parse_optional_account_id_bridge(
+    ptr: *const c_char,
+    len: c_ulong,
+) -> BridgeResult<Option<AccountId>> {
+    if ptr.is_null() || len == 0 {
+        return Ok(None);
+    }
+    let raw = unsafe { read_string_bridge(ptr, len)? };
+    parse_account_id(raw).map(Some)
+}
+
+fn build_fee_sponsor_metadata(fee_sponsor: Option<AccountId>) -> Metadata {
+    let mut metadata = Metadata::default();
+    if let Some(fee_sponsor) = fee_sponsor {
+        metadata.insert(
+            Name::from_str("fee_sponsor").expect("fee_sponsor is a valid metadata key"),
+            Json::new(fee_sponsor.to_string()),
+        );
+    }
+    metadata
 }
 
 fn parse_json_value(bytes: &[u8]) -> BridgeResult<Json> {
@@ -588,19 +559,23 @@ fn parse_account_list(bytes: &[u8]) -> BridgeResult<Vec<AccountId>> {
 enum MetadataTarget {
     Domain(DomainId),
     Account(AccountId),
+    Rwa(RwaId),
     AssetDefinition(AssetDefinitionId),
     Asset(AssetId),
 }
 
 fn parse_metadata_target(kind: u8, object: String) -> BridgeResult<MetadataTarget> {
     match kind {
-        0 => object
-            .parse::<DomainId>()
+        0 => DomainId::parse_fully_qualified(&object)
             .map(MetadataTarget::Domain)
             .map_err(|_| BridgeError::MetadataTarget),
         1 => parse_account_id(object).map(MetadataTarget::Account),
+        4 => object
+            .parse::<RwaId>()
+            .map(MetadataTarget::Rwa)
+            .map_err(|_| BridgeError::MetadataTarget),
         2 => parse_asset_definition(object).map(MetadataTarget::AssetDefinition),
-        3 => AssetId::parse_encoded(&object)
+        3 => AssetId::parse_literal(&object)
             .map(MetadataTarget::Asset)
             .map_err(|_| BridgeError::MetadataTarget),
         _ => Err(BridgeError::MetadataTarget),
@@ -615,6 +590,7 @@ fn build_set_metadata_instruction(
     match target {
         MetadataTarget::Domain(id) => InstructionBox::from(SetKeyValue::domain(id, key, value)),
         MetadataTarget::Account(id) => InstructionBox::from(SetKeyValue::account(id, key, value)),
+        MetadataTarget::Rwa(id) => InstructionBox::from(SetKeyValue::rwa(id, key, value)),
         MetadataTarget::AssetDefinition(id) => {
             InstructionBox::from(SetKeyValue::asset_definition(id, key, value))
         }
@@ -626,6 +602,7 @@ fn build_remove_metadata_instruction(target: MetadataTarget, key: Name) -> Instr
     match target {
         MetadataTarget::Domain(id) => InstructionBox::from(RemoveKeyValue::domain(id, key)),
         MetadataTarget::Account(id) => InstructionBox::from(RemoveKeyValue::account(id, key)),
+        MetadataTarget::Rwa(id) => InstructionBox::from(RemoveKeyValue::rwa(id, key)),
         MetadataTarget::AssetDefinition(id) => {
             InstructionBox::from(RemoveKeyValue::asset_definition(id, key))
         }
@@ -674,664 +651,6 @@ fn write_hash(
     Ok(())
 }
 
-fn pedersen_generator_h() -> &'static RistrettoPoint {
-    PEDERSEN_H.get_or_init(|| RistrettoPoint::hash_from_bytes::<Sha512>(OFFLINE_GENERATOR_LABEL))
-}
-
-fn decode_commitment_point(bytes: &[u8]) -> BridgeResult<RistrettoPoint> {
-    if bytes.len() != 32 {
-        return Err(BridgeError::OfflineCommitment);
-    }
-    let compressed =
-        CompressedRistretto::from_slice(bytes).map_err(|_| BridgeError::OfflineCommitment)?;
-    compressed
-        .decompress()
-        .ok_or(BridgeError::OfflineCommitment)
-}
-
-fn decode_scalar_bytes(bytes: &[u8]) -> BridgeResult<Scalar> {
-    if bytes.len() != 32 {
-        return Err(BridgeError::OfflineBlinding);
-    }
-    let mut array: [u8; 32] = bytes.try_into().map_err(|_| BridgeError::OfflineBlinding)?;
-    let scalar = Scalar::from_bytes_mod_order(array);
-    array.zeroize();
-    Ok(scalar)
-}
-
-fn numeric_to_scalar(value: &Numeric) -> BridgeResult<Scalar> {
-    let mantissa = value.try_mantissa_u128().ok_or(BridgeError::Quantity)?;
-    let mut bytes = [0u8; 32];
-    bytes[..16].copy_from_slice(&mantissa.to_le_bytes());
-    Ok(Scalar::from_bytes_mod_order(bytes))
-}
-
-fn numeric_to_le_bytes(value: &Numeric) -> BridgeResult<[u8; 16]> {
-    let mantissa = value.try_mantissa_u128().ok_or(BridgeError::Quantity)?;
-    let signed = i128::try_from(mantissa).map_err(|_| BridgeError::Quantity)?;
-    Ok(signed.to_le_bytes())
-}
-
-fn numeric_to_u64(value: &Numeric) -> BridgeResult<u64> {
-    let mantissa = value.try_mantissa_u128().ok_or(BridgeError::Quantity)?;
-    u64::try_from(mantissa).map_err(|_| BridgeError::Quantity)
-}
-
-fn transcript_context(chain_id: &ChainId) -> [u8; 32] {
-    Hash::new(chain_id.as_str().as_bytes()).into()
-}
-
-fn transcript_challenge(
-    c_init: &RistrettoPoint,
-    c_res: &RistrettoPoint,
-    delta_bytes: &[u8; 16],
-    context: &[u8; 32],
-    u: &RistrettoPoint,
-    r_point: &RistrettoPoint,
-) -> Scalar {
-    let mut hasher = Blake2bVar::new(64).expect("valid Blake2b length");
-    hasher.update(OFFLINE_PROOF_TRANSCRIPT_LABEL);
-    hasher.update(c_init.compress().as_bytes());
-    hasher.update(c_res.compress().as_bytes());
-    hasher.update(delta_bytes);
-    hasher.update(context);
-    hasher.update(u.compress().as_bytes());
-    hasher.update(r_point.compress().as_bytes());
-    let mut output = [0u8; 64];
-    hasher
-        .finalize_variable(&mut output)
-        .expect("output size matches");
-    let scalar = Scalar::from_bytes_mod_order_wide(&output);
-    output.zeroize();
-    scalar
-}
-
-fn range_proof_challenge(
-    context: &[u8; 32],
-    bit_index: u8,
-    commitment: &RistrettoPoint,
-    a0: &RistrettoPoint,
-    a1: &RistrettoPoint,
-) -> Scalar {
-    let mut hasher = Blake2bVar::new(64).expect("valid Blake2b length");
-    hasher.update(OFFLINE_RANGE_PROOF_TRANSCRIPT_LABEL);
-    hasher.update(context);
-    hasher.update(&[bit_index]);
-    hasher.update(commitment.compress().as_bytes());
-    hasher.update(a0.compress().as_bytes());
-    hasher.update(a1.compress().as_bytes());
-    let mut output = [0u8; 64];
-    hasher
-        .finalize_variable(&mut output)
-        .expect("output size matches");
-    let scalar = Scalar::from_bytes_mod_order_wide(&output);
-    output.zeroize();
-    scalar
-}
-
-fn random_scalar(rng: &mut impl RngCore) -> Scalar {
-    let mut bytes = [0u8; 64];
-    rng.fill_bytes(&mut bytes);
-    let scalar = Scalar::from_bytes_mod_order_wide(&bytes);
-    bytes.zeroize();
-    scalar
-}
-
-fn generate_range_proof(
-    chain_id: &ChainId,
-    value: u64,
-    resulting_blinding: &Scalar,
-) -> BridgeResult<Vec<u8>> {
-    let context = transcript_context(chain_id);
-    let mut rng = rng();
-    let mut blindings = Vec::with_capacity(OFFLINE_RANGE_PROOF_BITS);
-    let mut sum = Scalar::ZERO;
-    for bit_index in 0..(OFFLINE_RANGE_PROOF_BITS - 1) {
-        let blinding = random_scalar(&mut rng);
-        sum += Scalar::from(1u64 << bit_index) * blinding;
-        blindings.push(blinding);
-    }
-    let last_weight = Scalar::from(1u64 << (OFFLINE_RANGE_PROOF_BITS - 1));
-    let last_blinding = (resulting_blinding - sum) * last_weight.invert();
-    blindings.push(last_blinding);
-
-    let mut proof = Vec::with_capacity(OFFLINE_RANGE_PROOF_BYTES);
-    for (bit_index, blinding) in blindings.iter().enumerate() {
-        let bit = ((value >> bit_index) & 1) == 1;
-        let bit_scalar = Scalar::from(u64::from(bit));
-        let commitment = RISTRETTO_BASEPOINT_POINT * bit_scalar + pedersen_generator_h() * blinding;
-        let (a0, a1, mut e0, mut s0, mut s1) = if bit {
-            let mut alpha = random_scalar(&mut rng);
-            let e0 = random_scalar(&mut rng);
-            let s0 = random_scalar(&mut rng);
-            let a0 = pedersen_generator_h() * s0 - commitment * e0;
-            let a1 = pedersen_generator_h() * alpha;
-            let challenge = range_proof_challenge(&context, bit_index as u8, &commitment, &a0, &a1);
-            let mut e1 = challenge - e0;
-            let s1 = alpha + e1 * blinding;
-            alpha.zeroize();
-            e1.zeroize();
-            (a0, a1, e0, s0, s1)
-        } else {
-            let mut alpha = random_scalar(&mut rng);
-            let mut e1 = random_scalar(&mut rng);
-            let s1 = random_scalar(&mut rng);
-            let a0 = pedersen_generator_h() * alpha;
-            let commitment_minus_g = commitment - RISTRETTO_BASEPOINT_POINT;
-            let a1 = pedersen_generator_h() * s1 - commitment_minus_g * e1;
-            let challenge = range_proof_challenge(&context, bit_index as u8, &commitment, &a0, &a1);
-            let e0 = challenge - e1;
-            let s0 = alpha + e0 * blinding;
-            alpha.zeroize();
-            e1.zeroize();
-            (a0, a1, e0, s0, s1)
-        };
-        proof.extend_from_slice(commitment.compress().as_bytes());
-        proof.extend_from_slice(a0.compress().as_bytes());
-        proof.extend_from_slice(a1.compress().as_bytes());
-        proof.extend_from_slice(e0.to_bytes().as_ref());
-        proof.extend_from_slice(s0.to_bytes().as_ref());
-        proof.extend_from_slice(s1.to_bytes().as_ref());
-        e0.zeroize();
-        s0.zeroize();
-        s1.zeroize();
-    }
-    for blinding in &mut blindings {
-        blinding.zeroize();
-    }
-    sum.zeroize();
-    Ok(proof)
-}
-
-fn generate_offline_balance_proof(
-    chain_id: ChainId,
-    claimed_delta: &Numeric,
-    resulting_value: &Numeric,
-    initial_commitment: &[u8],
-    resulting_commitment: &[u8],
-    initial_blinding: &[u8],
-    resulting_blinding: &[u8],
-) -> BridgeResult<Vec<u8>> {
-    if claimed_delta.scale() != resulting_value.scale() {
-        return Err(BridgeError::Quantity);
-    }
-    let c_init = decode_commitment_point(initial_commitment)?;
-    let c_res = decode_commitment_point(resulting_commitment)?;
-    let mut delta_scalar = numeric_to_scalar(claimed_delta)?;
-    let mut delta_bytes = numeric_to_le_bytes(claimed_delta)?;
-    let resulting_value_u64 = numeric_to_u64(resulting_value)?;
-    let mut blind_init = decode_scalar_bytes(initial_blinding)?;
-    let mut blind_res = decode_scalar_bytes(resulting_blinding)?;
-    let mut blind_delta = blind_res - blind_init;
-    let context = transcript_context(&chain_id);
-    let u = c_res - c_init;
-    let mut rng = rng();
-    let mut alpha = random_scalar(&mut rng);
-    let mut beta = random_scalar(&mut rng);
-    let r_point = RISTRETTO_BASEPOINT_POINT * alpha + pedersen_generator_h() * beta;
-    let challenge = transcript_challenge(&c_init, &c_res, &delta_bytes, &context, &u, &r_point);
-    let mut s_g = alpha + challenge * delta_scalar;
-    let mut s_h = beta + challenge * blind_delta;
-
-    let expected_commitment = RISTRETTO_BASEPOINT_POINT * Scalar::from(resulting_value_u64)
-        + pedersen_generator_h() * blind_res;
-    if expected_commitment != c_res {
-        alpha.zeroize();
-        beta.zeroize();
-        s_g.zeroize();
-        s_h.zeroize();
-        blind_init.zeroize();
-        blind_res.zeroize();
-        blind_delta.zeroize();
-        delta_scalar.zeroize();
-        delta_bytes.zeroize();
-        return Err(BridgeError::OfflineCommitment);
-    }
-
-    let mut proof = Vec::with_capacity(OFFLINE_BALANCE_PROOF_BYTES);
-    proof.push(OFFLINE_BALANCE_PROOF_VERSION);
-    proof.extend_from_slice(r_point.compress().as_bytes());
-    proof.extend_from_slice(s_g.to_bytes().as_ref());
-    proof.extend_from_slice(s_h.to_bytes().as_ref());
-    let range_proof = generate_range_proof(&chain_id, resulting_value_u64, &blind_res)?;
-    proof.extend_from_slice(&range_proof);
-    alpha.zeroize();
-    beta.zeroize();
-    s_g.zeroize();
-    s_h.zeroize();
-    blind_init.zeroize();
-    blind_res.zeroize();
-    blind_delta.zeroize();
-    delta_scalar.zeroize();
-    delta_bytes.zeroize();
-    Ok(proof)
-}
-
-fn update_offline_commitment(
-    initial_commitment: &[u8],
-    claimed_delta: &Numeric,
-    initial_blinding: &[u8],
-    resulting_blinding: &[u8],
-) -> BridgeResult<[u8; 32]> {
-    let c_init = decode_commitment_point(initial_commitment)?;
-    let mut delta_scalar = numeric_to_scalar(claimed_delta)?;
-    let mut blind_init = decode_scalar_bytes(initial_blinding)?;
-    let mut blind_res = decode_scalar_bytes(resulting_blinding)?;
-    let mut blind_delta = blind_res - blind_init;
-    let updated =
-        c_init + RISTRETTO_BASEPOINT_POINT * delta_scalar + pedersen_generator_h() * blind_delta;
-    let compressed = updated.compress();
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(compressed.as_bytes());
-    delta_scalar.zeroize();
-    blind_init.zeroize();
-    blind_res.zeroize();
-    blind_delta.zeroize();
-    Ok(bytes)
-}
-
-fn derive_offline_blinding_from_seed(
-    initial_blinding: &[u8],
-    certificate_id: Hash,
-    counter: u64,
-) -> BridgeResult<[u8; 32]> {
-    let mut initial = decode_scalar_bytes(initial_blinding)?;
-    let seed = OfflineProofBlindingSeed::derive(certificate_id, counter);
-    let mut delta = blinding_scalar_from_seed(&seed);
-    let resulting = initial + delta;
-    let bytes = resulting.to_bytes();
-    initial.zeroize();
-    delta.zeroize();
-    Ok(bytes)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn compute_offline_receipt_challenge(
-    chain_id_raw: String,
-    invoice_id: String,
-    receiver_raw: String,
-    asset_raw: String,
-    amount_raw: String,
-    issued_at_ms: u64,
-    sender_certificate_id_raw: String,
-    nonce_raw: String,
-) -> BridgeResult<(Vec<u8>, [u8; Hash::LENGTH], [u8; 32])> {
-    if chain_id_raw.trim().is_empty() {
-        return Err(BridgeError::ChainId);
-    }
-    let chain_id = ChainId::from_str(&chain_id_raw).map_err(|_| BridgeError::ChainId)?;
-    let receiver = AccountId::parse_encoded(&receiver_raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| BridgeError::OfflineReceiver)?;
-    let asset = AssetId::parse_encoded(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
-    let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
-    let sender_certificate_id =
-        Hash::from_str(&sender_certificate_id_raw).map_err(|_| BridgeError::OfflineNonce)?;
-    let nonce = Hash::from_str(&nonce_raw).map_err(|_| BridgeError::OfflineNonce)?;
-    let preimage = OfflineReceiptChallengePreimage {
-        invoice_id,
-        receiver,
-        asset,
-        amount,
-        issued_at_ms,
-        sender_certificate_id,
-        nonce,
-    };
-    let bytes = to_bytes(&preimage).map_err(|_| BridgeError::OfflineSerialize)?;
-    let iroha_hash = chain_bound_receipt_hash(&chain_id, &bytes);
-    let mut iroha_bytes = [0u8; Hash::LENGTH];
-    iroha_bytes.copy_from_slice(iroha_hash.as_ref());
-    let client_hash: [u8; 32] = Sha256::digest(iroha_hash.as_ref()).into();
-    Ok((bytes, iroha_bytes, client_hash))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn encode_offline_spend_receipt_payload(
-    tx_id_hex: String,
-    from_raw: String,
-    to_raw: String,
-    asset_raw: String,
-    amount_raw: String,
-    issued_at_ms: u64,
-    invoice_id: String,
-    platform_proof_json: String,
-    sender_certificate_id_hex: String,
-) -> BridgeResult<Vec<u8>> {
-    let tx_id = Hash::from_str(&tx_id_hex).map_err(|_| BridgeError::OfflineNonce)?;
-    let from = AccountId::parse_encoded(&from_raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| BridgeError::Authority)?;
-    let to = AccountId::parse_encoded(&to_raw)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| BridgeError::Destination)?;
-    let asset = AssetId::parse_encoded(&asset_raw).map_err(|_| BridgeError::OfflineAsset)?;
-    let amount = Numeric::from_str(&amount_raw).map_err(|_| BridgeError::Quantity)?;
-    let platform_proof: OfflinePlatformProof =
-        norito::json::from_str(&platform_proof_json).map_err(|_| BridgeError::OfflineSerialize)?;
-    let sender_certificate_id =
-        Hash::from_str(&sender_certificate_id_hex).map_err(|_| BridgeError::OfflineNonce)?;
-
-    let payload = OfflineSpendReceiptPayload {
-        tx_id,
-        from,
-        to,
-        asset,
-        amount,
-        issued_at_ms,
-        invoice_id,
-        platform_proof,
-        sender_certificate_id,
-    };
-
-    to_bytes(&payload).map_err(|_| BridgeError::OfflineSerialize)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn encode_offline_build_claim_payload(
-    claim_id_hex: String,
-    platform: String,
-    app_id: String,
-    build_number: u64,
-    issued_at_ms: u64,
-    expires_at_ms: u64,
-    lineage_scope: String,
-    nonce_hex: String,
-) -> BridgeResult<Vec<u8>> {
-    let claim_id = Hash::from_str(&claim_id_hex).map_err(|_| BridgeError::OfflineNonce)?;
-    let nonce = Hash::from_str(&nonce_hex).map_err(|_| BridgeError::OfflineNonce)?;
-    let platform = match platform.as_str() {
-        "Android" => OfflineBuildClaimPlatform::Android,
-        "Apple" => OfflineBuildClaimPlatform::Apple,
-        _ => return Err(BridgeError::OfflineSerialize),
-    };
-
-    let claim = OfflineBuildClaim {
-        claim_id,
-        platform,
-        app_id,
-        build_number,
-        issued_at_ms,
-        expires_at_ms,
-        lineage_scope,
-        nonce,
-        operator_signature: Signature::from_bytes(&[0; 64]),
-    };
-
-    claim
-        .signing_bytes()
-        .map_err(|_| BridgeError::OfflineSerialize)
-}
-
-fn aggregate_receipt_amounts(amounts: &[Numeric]) -> BridgeResult<Numeric> {
-    if amounts.is_empty() {
-        return Err(BridgeError::Quantity);
-    }
-    let expected_scale = amounts[0].scale();
-    let mut total = Numeric::zero();
-    for amount in amounts {
-        if amount.scale() != expected_scale {
-            return Err(BridgeError::Quantity);
-        }
-        total = total
-            .checked_add(amount.clone())
-            .ok_or(BridgeError::Quantity)?;
-    }
-    Ok(total)
-}
-
-fn blinding_scalar_from_seed(seed: &OfflineProofBlindingSeed) -> Scalar {
-    let mut hasher = Blake2bVar::new(64).expect("valid Blake2b length");
-    hasher.update(OFFLINE_FASTPQ_HKDF_DOMAIN);
-    hasher.update(seed.hkdf_salt.as_ref());
-    hasher.update(&seed.counter.to_be_bytes());
-    let mut output = [0u8; 64];
-    hasher
-        .finalize_variable(&mut output)
-        .expect("output size matches");
-    let scalar = Scalar::from_bytes_mod_order_wide(&output);
-    output.zeroize();
-    scalar
-}
-
-fn sum_proof_nonce(
-    bundle_id: &Hash,
-    certificate_id: &Hash,
-    receipts_root: &PoseidonDigest,
-    delta_le: &[u8; 16],
-    blind_sum: &Scalar,
-) -> Scalar {
-    let mut hasher = Blake2bVar::new(64).expect("valid Blake2b length");
-    hasher.update(OFFLINE_FASTPQ_SUM_NONCE_DOMAIN);
-    hasher.update(bundle_id.as_ref());
-    hasher.update(certificate_id.as_ref());
-    hasher.update(receipts_root.as_bytes());
-    hasher.update(delta_le);
-    hasher.update(&blind_sum.to_bytes());
-    let mut output = [0u8; 64];
-    hasher
-        .finalize_variable(&mut output)
-        .expect("output size matches");
-    let scalar = Scalar::from_bytes_mod_order_wide(&output);
-    output.zeroize();
-    scalar
-}
-
-fn sum_proof_challenge(
-    bundle_id: &Hash,
-    certificate_id: &Hash,
-    receipts_root: &PoseidonDigest,
-    c_init: &RistrettoPoint,
-    c_res: &RistrettoPoint,
-    delta_le: &[u8; 16],
-    r_point: &RistrettoPoint,
-) -> Scalar {
-    let mut hasher = Blake2bVar::new(64).expect("valid Blake2b length");
-    hasher.update(OFFLINE_FASTPQ_SUM_PROOF_DOMAIN);
-    hasher.update(bundle_id.as_ref());
-    hasher.update(certificate_id.as_ref());
-    hasher.update(receipts_root.as_bytes());
-    hasher.update(c_init.compress().as_bytes());
-    hasher.update(c_res.compress().as_bytes());
-    hasher.update(delta_le);
-    hasher.update(r_point.compress().as_bytes());
-    let mut output = [0u8; 64];
-    hasher
-        .finalize_variable(&mut output)
-        .expect("output size matches");
-    let scalar = Scalar::from_bytes_mod_order_wide(&output);
-    output.zeroize();
-    scalar
-}
-
-fn replay_chain(head: Hash, tx_ids: &[Hash]) -> Hash {
-    let mut current = head;
-    for tx_id in tx_ids {
-        let mut buf =
-            Vec::with_capacity(OFFLINE_FASTPQ_REPLAY_CHAIN_DOMAIN.len() + Hash::LENGTH * 2);
-        buf.extend_from_slice(OFFLINE_FASTPQ_REPLAY_CHAIN_DOMAIN);
-        buf.extend_from_slice(current.as_ref());
-        buf.extend_from_slice(tx_id.as_ref());
-        current = Hash::new(buf);
-    }
-    current
-}
-
-fn counter_digest(
-    bundle_id: &Hash,
-    receipts_root: &PoseidonDigest,
-    checkpoint: u64,
-    counters: &[u64],
-) -> Hash {
-    let mut buf = Vec::with_capacity(
-        OFFLINE_FASTPQ_COUNTER_PROOF_DOMAIN.len()
-            + Hash::LENGTH
-            + Hash::LENGTH
-            + 8
-            + counters.len() * 8,
-    );
-    buf.extend_from_slice(OFFLINE_FASTPQ_COUNTER_PROOF_DOMAIN);
-    buf.extend_from_slice(bundle_id.as_ref());
-    buf.extend_from_slice(receipts_root.as_bytes());
-    buf.extend_from_slice(&checkpoint.to_be_bytes());
-    for counter in counters {
-        buf.extend_from_slice(&counter.to_be_bytes());
-    }
-    Hash::new(buf)
-}
-
-fn replay_digest(
-    bundle_id: &Hash,
-    receipts_root: &PoseidonDigest,
-    head: &Hash,
-    tail: &Hash,
-    tx_ids: &[Hash],
-) -> Hash {
-    let mut buf = Vec::with_capacity(
-        OFFLINE_FASTPQ_REPLAY_PROOF_DOMAIN.len() + Hash::LENGTH * 3 + Hash::LENGTH * tx_ids.len(),
-    );
-    buf.extend_from_slice(OFFLINE_FASTPQ_REPLAY_PROOF_DOMAIN);
-    buf.extend_from_slice(bundle_id.as_ref());
-    buf.extend_from_slice(receipts_root.as_bytes());
-    buf.extend_from_slice(head.as_ref());
-    buf.extend_from_slice(tail.as_ref());
-    for tx_id in tx_ids {
-        buf.extend_from_slice(tx_id.as_ref());
-    }
-    Hash::new(buf)
-}
-
-fn generate_offline_fastpq_sum_proof(
-    request: &OfflineProofRequestSum,
-) -> BridgeResult<OfflineFastpqSumProof> {
-    if request.receipt_amounts.len() != request.blinding_seeds.len() {
-        return Err(BridgeError::OfflineSerialize);
-    }
-    let total = aggregate_receipt_amounts(&request.receipt_amounts)?;
-    if total != request.claimed_delta {
-        return Err(BridgeError::Quantity);
-    }
-    let c_init = decode_commitment_point(&request.initial_commitment.commitment)?;
-    let c_res = decode_commitment_point(&request.resulting_commitment)?;
-    let delta_scalar = numeric_to_scalar(&total)?;
-    let delta_le = numeric_to_le_bytes(&total)?;
-    let mut blind_sum = request
-        .blinding_seeds
-        .iter()
-        .map(blinding_scalar_from_seed)
-        .fold(Scalar::ZERO, |acc, scalar| acc + scalar);
-    let expected_delta =
-        RISTRETTO_BASEPOINT_POINT * delta_scalar + pedersen_generator_h() * blind_sum;
-    let commitment_delta = c_res - c_init;
-    if commitment_delta != expected_delta {
-        blind_sum.zeroize();
-        return Err(BridgeError::OfflineCommitment);
-    }
-    let nonce = sum_proof_nonce(
-        &request.header.bundle_id,
-        &request.header.certificate_id,
-        &request.header.receipts_root,
-        &delta_le,
-        &blind_sum,
-    );
-    let r_point = pedersen_generator_h() * nonce;
-    let challenge = sum_proof_challenge(
-        &request.header.bundle_id,
-        &request.header.certificate_id,
-        &request.header.receipts_root,
-        &c_init,
-        &c_res,
-        &delta_le,
-        &r_point,
-    );
-    let s_scalar = nonce + challenge * blind_sum;
-    blind_sum.zeroize();
-    Ok(OfflineFastpqSumProof {
-        version: OFFLINE_FASTPQ_PROOF_VERSION_V1,
-        receipts_root: request.header.receipts_root,
-        r_point: r_point.compress().to_bytes(),
-        s_scalar: s_scalar.to_bytes(),
-    })
-}
-
-fn generate_offline_fastpq_counter_proof(
-    request: &OfflineProofRequestCounter,
-) -> BridgeResult<OfflineFastpqCounterProof> {
-    if request.counters.is_empty() {
-        return Err(BridgeError::Quantity);
-    }
-    let mut expected = request.counter_checkpoint;
-    for counter in &request.counters {
-        expected = expected.checked_add(1).ok_or(BridgeError::Quantity)?;
-        if *counter != expected {
-            return Err(BridgeError::Quantity);
-        }
-    }
-    let digest = counter_digest(
-        &request.header.bundle_id,
-        &request.header.receipts_root,
-        request.counter_checkpoint,
-        &request.counters,
-    );
-    Ok(OfflineFastpqCounterProof {
-        version: OFFLINE_FASTPQ_PROOF_VERSION_V1,
-        receipts_root: request.header.receipts_root,
-        counter_checkpoint: request.counter_checkpoint,
-        digest,
-    })
-}
-
-fn generate_offline_fastpq_replay_proof(
-    request: &OfflineProofRequestReplay,
-) -> BridgeResult<OfflineFastpqReplayProof> {
-    if request.tx_ids.is_empty() {
-        return Err(BridgeError::Quantity);
-    }
-    let computed_tail = replay_chain(request.replay_log_head, &request.tx_ids);
-    if computed_tail != request.replay_log_tail {
-        return Err(BridgeError::OfflineSerialize);
-    }
-    let digest = replay_digest(
-        &request.header.bundle_id,
-        &request.header.receipts_root,
-        &request.replay_log_head,
-        &request.replay_log_tail,
-        &request.tx_ids,
-    );
-    Ok(OfflineFastpqReplayProof {
-        version: OFFLINE_FASTPQ_PROOF_VERSION_V1,
-        receipts_root: request.header.receipts_root,
-        replay_log_head: request.replay_log_head,
-        replay_log_tail: request.replay_log_tail,
-        digest,
-    })
-}
-
-fn offline_fastpq_proof_sum(request_json: &[u8]) -> BridgeResult<Vec<u8>> {
-    let request: OfflineProofRequestSum =
-        norito::json::from_slice(request_json).map_err(|err| {
-            if cfg!(test) {
-                eprintln!("offline sum proof JSON parse failed: {err}");
-            }
-            BridgeError::OfflineSerialize
-        })?;
-    let proof = generate_offline_fastpq_sum_proof(&request)?;
-    to_bytes(&proof).map_err(|_| BridgeError::OfflineSerialize)
-}
-
-fn offline_fastpq_proof_counter(request_json: &[u8]) -> BridgeResult<Vec<u8>> {
-    let request: OfflineProofRequestCounter =
-        norito::json::from_slice(request_json).map_err(|_| BridgeError::OfflineSerialize)?;
-    let proof = generate_offline_fastpq_counter_proof(&request)?;
-    to_bytes(&proof).map_err(|_| BridgeError::OfflineSerialize)
-}
-
-fn offline_fastpq_proof_replay(request_json: &[u8]) -> BridgeResult<Vec<u8>> {
-    let request: OfflineProofRequestReplay =
-        norito::json::from_slice(request_json).map_err(|_| BridgeError::OfflineSerialize)?;
-    let proof = generate_offline_fastpq_replay_proof(&request)?;
-    to_bytes(&proof).map_err(|_| BridgeError::OfflineSerialize)
-}
-
 fn bridge_result_to_code(result: BridgeResult<()>) -> c_int {
     match result {
         Ok(()) => 0,
@@ -1345,6 +664,303 @@ fn parse_multisig_spec_bytes(ptr: *const c_char, len: c_ulong) -> BridgeResult<M
     }
     let bytes = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
     norito::json::from_slice::<MultisigSpec>(bytes).map_err(|_| BridgeError::MultisigSpec)
+}
+
+fn parse_identifier_receipt_bytes(
+    ptr: *const c_char,
+    len: c_ulong,
+) -> BridgeResult<IdentifierResolutionReceipt> {
+    if ptr.is_null() || len == 0 {
+        return Err(BridgeError::IdentifierReceipt);
+    }
+    let bytes = unsafe { slice::from_raw_parts(ptr as *const u8, len as usize) };
+    let value =
+        norito::json::from_slice::<JsonValue>(bytes).map_err(|_| BridgeError::IdentifierReceipt)?;
+    parse_identifier_receipt_value(value)
+}
+
+fn parse_identifier_receipt_value(value: JsonValue) -> BridgeResult<IdentifierResolutionReceipt> {
+    let JsonValue::Object(object) = value else {
+        return Err(BridgeError::IdentifierReceipt);
+    };
+
+    let payload = parse_identifier_receipt_payload_value(
+        object
+            .get("payload")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let attestation = parse_identifier_receipt_attestation(
+        object
+            .get("attestation")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    Ok(IdentifierResolutionReceipt {
+        payload,
+        attestation,
+    })
+}
+
+fn parse_identifier_receipt_attestation(
+    value: &JsonValue,
+) -> BridgeResult<RamLfeReceiptAttestation> {
+    let object = value.as_object().ok_or(BridgeError::IdentifierReceipt)?;
+    let kind = object
+        .get("kind")
+        .and_then(JsonValue::as_str)
+        .ok_or(BridgeError::IdentifierReceipt)?;
+    match kind {
+        "signed" => parse_identifier_receipt_signature(object.get("signature"))
+            .map(RamLfeReceiptAttestation::Signed),
+        "proof" => {
+            let proof_backend = object
+                .get("proof_backend")
+                .and_then(JsonValue::as_str)
+                .ok_or(BridgeError::IdentifierReceipt)?;
+            let proof_b64 = object
+                .get("proof_b64")
+                .and_then(JsonValue::as_str)
+                .ok_or(BridgeError::IdentifierReceipt)?;
+            let bytes = b64gp::STANDARD
+                .decode(proof_b64.trim())
+                .map_err(|_| BridgeError::IdentifierReceipt)?;
+            Ok(RamLfeReceiptAttestation::Proof(ProofBox::new(
+                proof_backend.trim().to_owned(),
+                bytes,
+            )))
+        }
+        _ => Err(BridgeError::IdentifierReceipt),
+    }
+}
+
+fn parse_identifier_receipt_signature(value: Option<&JsonValue>) -> BridgeResult<Signature> {
+    let signature_hex = value
+        .and_then(JsonValue::as_str)
+        .ok_or(BridgeError::IdentifierReceipt)?;
+    let signature_bytes = decode_identifier_receipt_hex(signature_hex)?;
+    Ok(Signature::from_bytes(&signature_bytes))
+}
+
+fn parse_identifier_receipt_payload_value(
+    value: &JsonValue,
+) -> BridgeResult<IdentifierResolutionReceiptPayload> {
+    let object = value.as_object().ok_or(BridgeError::IdentifierReceipt)?;
+    let policy_id = parse_identifier_policy_id_value(
+        object
+            .get("policy_id")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let execution = parse_identifier_execution_payload_value(
+        object
+            .get("execution")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let opaque_id = parse_identifier_opaque_id_value(
+        object
+            .get("opaque_id")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let receipt_hash = parse_identifier_hash_value(
+        object
+            .get("receipt_hash")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let uaid =
+        parse_identifier_uaid_value(object.get("uaid").ok_or(BridgeError::IdentifierReceipt)?)?;
+    let account_id = object
+        .get("account_id")
+        .and_then(JsonValue::as_str)
+        .map(str::to_owned)
+        .ok_or(BridgeError::IdentifierReceipt)
+        .and_then(parse_account_id)?;
+
+    Ok(IdentifierResolutionReceiptPayload {
+        policy_id,
+        execution,
+        opaque_id,
+        receipt_hash,
+        uaid,
+        account_id,
+    })
+}
+
+fn parse_identifier_policy_id_value(
+    value: &JsonValue,
+) -> BridgeResult<iroha_data_model::identifier::IdentifierPolicyId> {
+    if let Some(literal) = value.as_str() {
+        return literal
+            .trim()
+            .parse()
+            .map_err(|_| BridgeError::IdentifierReceipt);
+    }
+    let object = value.as_object().ok_or(BridgeError::IdentifierReceipt)?;
+    let kind = object
+        .get("kind")
+        .and_then(JsonValue::as_str)
+        .ok_or(BridgeError::IdentifierReceipt)?;
+    let business_rule = object
+        .get("business_rule")
+        .and_then(JsonValue::as_str)
+        .ok_or(BridgeError::IdentifierReceipt)?;
+    format!("{}#{}", kind.trim(), business_rule.trim())
+        .parse()
+        .map_err(|_| BridgeError::IdentifierReceipt)
+}
+
+fn parse_identifier_program_id_value(value: &JsonValue) -> BridgeResult<RamLfeProgramId> {
+    if let Some(literal) = value.as_str() {
+        return literal
+            .trim()
+            .parse()
+            .map_err(|_| BridgeError::IdentifierReceipt);
+    }
+    let object = value.as_object().ok_or(BridgeError::IdentifierReceipt)?;
+    object
+        .get("name")
+        .and_then(JsonValue::as_str)
+        .ok_or(BridgeError::IdentifierReceipt)?
+        .trim()
+        .parse()
+        .map_err(|_| BridgeError::IdentifierReceipt)
+}
+
+fn parse_identifier_receipt_backend(value: &JsonValue) -> BridgeResult<RamLfeBackend> {
+    let backend = value
+        .as_str()
+        .ok_or(BridgeError::IdentifierReceipt)?
+        .trim()
+        .to_ascii_lowercase();
+    match backend.as_str() {
+        "hkdf-sha3-512-prf-v1" => Ok(RamLfeBackend::HkdfSha3_512PrfV1),
+        "bfv-affine-sha3-256-v1" => Ok(RamLfeBackend::BfvAffineSha3_256V1),
+        "bfv-programmed-sha3-256-v1" => Ok(RamLfeBackend::BfvProgrammedSha3_256V1),
+        _ => Err(BridgeError::IdentifierReceipt),
+    }
+}
+
+fn parse_identifier_receipt_verification_mode(
+    value: &JsonValue,
+) -> BridgeResult<RamLfeVerificationMode> {
+    let mode = if let Some(literal) = value.as_str() {
+        literal.trim().to_ascii_lowercase()
+    } else {
+        value
+            .as_object()
+            .and_then(|object| object.get("mode"))
+            .and_then(JsonValue::as_str)
+            .map(|literal| literal.trim().to_ascii_lowercase())
+            .ok_or(BridgeError::IdentifierReceipt)?
+    };
+    match mode.as_str() {
+        "signed" => Ok(RamLfeVerificationMode::Signed),
+        "proof" => Ok(RamLfeVerificationMode::Proof),
+        _ => Err(BridgeError::IdentifierReceipt),
+    }
+}
+
+fn parse_identifier_hash_str(value: &str) -> BridgeResult<Hash> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(BridgeError::IdentifierReceipt);
+    }
+    let body = if trimmed
+        .get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("hash:"))
+    {
+        norito::literal::parse("hash", trimmed).map_err(|_| BridgeError::IdentifierReceipt)?
+    } else {
+        trimmed
+    };
+    Hash::from_str(body).map_err(|_| BridgeError::IdentifierReceipt)
+}
+
+fn parse_identifier_hash_value(value: &JsonValue) -> BridgeResult<Hash> {
+    value
+        .as_str()
+        .ok_or(BridgeError::IdentifierReceipt)
+        .and_then(parse_identifier_hash_str)
+}
+
+fn parse_identifier_opaque_id_value(
+    value: &JsonValue,
+) -> BridgeResult<iroha_data_model::account::OpaqueAccountId> {
+    value
+        .as_str()
+        .ok_or(BridgeError::IdentifierReceipt)?
+        .parse()
+        .map_err(|_| BridgeError::IdentifierReceipt)
+}
+
+fn parse_identifier_uaid_value(
+    value: &JsonValue,
+) -> BridgeResult<iroha_data_model::nexus::UniversalAccountId> {
+    value
+        .as_str()
+        .ok_or(BridgeError::IdentifierReceipt)?
+        .parse()
+        .map_err(|_| BridgeError::IdentifierReceipt)
+}
+
+fn parse_identifier_execution_payload_value(
+    value: &JsonValue,
+) -> BridgeResult<RamLfeExecutionReceiptPayload> {
+    let object = value.as_object().ok_or(BridgeError::IdentifierReceipt)?;
+    let program_id = parse_identifier_program_id_value(
+        object
+            .get("program_id")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let program_digest = parse_identifier_hash_value(
+        object
+            .get("program_digest")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let backend = parse_identifier_receipt_backend(
+        object
+            .get("backend")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let verification_mode = parse_identifier_receipt_verification_mode(
+        object
+            .get("verification_mode")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let output_hash = parse_identifier_hash_value(
+        object
+            .get("output_hash")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let associated_data_hash = parse_identifier_hash_value(
+        object
+            .get("associated_data_hash")
+            .ok_or(BridgeError::IdentifierReceipt)?,
+    )?;
+    let executed_at_ms = object
+        .get("executed_at_ms")
+        .and_then(JsonValue::as_u64)
+        .ok_or(BridgeError::IdentifierReceipt)?;
+    let expires_at_ms = object.get("expires_at_ms").and_then(JsonValue::as_u64);
+
+    Ok(RamLfeExecutionReceiptPayload {
+        program_id,
+        program_digest,
+        backend,
+        verification_mode,
+        output_hash,
+        associated_data_hash,
+        executed_at_ms,
+        expires_at_ms,
+    })
+}
+
+fn decode_identifier_receipt_hex(value: &str) -> BridgeResult<Vec<u8>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(BridgeError::IdentifierReceipt);
+    }
+    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+        return Err(BridgeError::IdentifierReceipt);
+    }
+    hex::decode(trimmed).map_err(|_| BridgeError::IdentifierReceipt)
 }
 
 fn write_optional_error(out_ptr: *mut *mut c_uchar, out_len: *mut c_ulong) {
@@ -1600,10 +1216,6 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
     out_hex_len: *mut c_ulong,
     out_i105_ptr: *mut *mut c_uchar,
     out_i105_len: *mut c_ulong,
-    out_compressed_ptr: *mut *mut c_uchar,
-    out_compressed_len: *mut c_ulong,
-    out_compressed_full_ptr: *mut *mut c_uchar,
-    out_compressed_full_len: *mut c_ulong,
     out_error_json_ptr: *mut *mut c_uchar,
     out_error_json_len: *mut c_ulong,
 ) -> c_int {
@@ -1612,10 +1224,6 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
         || out_hex_len.is_null()
         || out_i105_ptr.is_null()
         || out_i105_len.is_null()
-        || out_compressed_ptr.is_null()
-        || out_compressed_len.is_null()
-        || out_compressed_full_ptr.is_null()
-        || out_compressed_full_len.is_null()
     {
         return ERR_NULL_PTR;
     }
@@ -1641,18 +1249,6 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
             return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
         }
     };
-    let compressed = match address.to_i105() {
-        Ok(value) => value,
-        Err(err) => {
-            return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
-        }
-    };
-    let compressed_full = match address.to_i105_fullwidth() {
-        Ok(value) => value,
-        Err(err) => {
-            return write_account_address_error(err, out_error_json_ptr, out_error_json_len);
-        }
-    };
 
     unsafe {
         if let Err(code) = write_bytes(out_hex_ptr, out_hex_len, canonical_hex.as_bytes()) {
@@ -1661,338 +1257,8 @@ pub unsafe extern "C" fn connect_norito_account_address_render(
         if let Err(code) = write_bytes(out_i105_ptr, out_i105_len, i105.as_bytes()) {
             return code;
         }
-        if let Err(code) = write_bytes(
-            out_compressed_ptr,
-            out_compressed_len,
-            compressed.as_bytes(),
-        ) {
-            return code;
-        }
-        if let Err(code) = write_bytes(
-            out_compressed_full_ptr,
-            out_compressed_full_len,
-            compressed_full.as_bytes(),
-        ) {
-            return code;
-        }
     }
     0
-}
-
-// ---------------- Offline allowance helpers ----------------
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_receipt_challenge(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    invoice_ptr: *const c_char,
-    invoice_len: c_ulong,
-    receiver_ptr: *const c_char,
-    receiver_len: c_ulong,
-    asset_ptr: *const c_char,
-    asset_len: c_ulong,
-    amount_ptr: *const c_char,
-    amount_len: c_ulong,
-    issued_at_ms: c_ulonglong,
-    sender_certificate_id_ptr: *const c_char,
-    sender_certificate_id_len: c_ulong,
-    nonce_ptr: *const c_char,
-    nonce_len: c_ulong,
-    out_preimage_ptr: *mut *mut c_uchar,
-    out_preimage_len: *mut c_ulong,
-    out_hash_ptr: *mut c_uchar,
-    out_hash_len: c_ulong,
-    out_client_hash_ptr: *mut c_uchar,
-    out_client_hash_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if out_preimage_ptr.is_null()
-            || out_preimage_len.is_null()
-            || out_hash_ptr.is_null()
-            || out_client_hash_ptr.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-
-        let chain_id = unsafe { read_string_bridge(chain_ptr, chain_len)? };
-        let invoice = unsafe { read_string_bridge(invoice_ptr, invoice_len)? };
-        let receiver = unsafe { read_string_bridge(receiver_ptr, receiver_len)? };
-        let asset = unsafe { read_string_bridge(asset_ptr, asset_len)? };
-        let amount = unsafe { read_string_bridge(amount_ptr, amount_len)? };
-        let sender_certificate_id =
-            unsafe { read_string_bridge(sender_certificate_id_ptr, sender_certificate_id_len)? };
-        let nonce = unsafe { read_string_bridge(nonce_ptr, nonce_len)? };
-
-        let (preimage, iroha_hash, client_hash) = compute_offline_receipt_challenge(
-            chain_id,
-            invoice,
-            receiver,
-            asset,
-            amount,
-            issued_at_ms,
-            sender_certificate_id,
-            nonce,
-        )?;
-
-        unsafe { write_bytes_bridge(out_preimage_ptr, out_preimage_len, &preimage) }?;
-        write_hash(out_hash_ptr, out_hash_len, &iroha_hash)?;
-        write_hash(out_client_hash_ptr, out_client_hash_len, &client_hash)?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_receipts_root(
-    receipts_ptr: *const c_uchar,
-    receipts_len: c_ulong,
-    out_root_ptr: *mut c_uchar,
-    out_root_len: c_ulong,
-) -> c_int {
-    let result = (|| {
-        if receipts_ptr.is_null() || out_root_ptr.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let bytes = unsafe { slice::from_raw_parts(receipts_ptr, receipts_len as usize) };
-        let receipts: Vec<OfflineSpendReceipt> =
-            norito::json::from_slice(bytes).map_err(|_| BridgeError::OfflineSerialize)?;
-        let root = compute_receipts_root(&receipts).map_err(|_| BridgeError::OfflineSerialize)?;
-        write_hash(out_root_ptr, out_root_len, root.as_bytes())?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_proof_sum(
-    request_ptr: *const c_uchar,
-    request_len: c_ulong,
-    out_proof_ptr: *mut *mut c_uchar,
-    out_proof_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        if request_ptr.is_null() || out_proof_ptr.is_null() || out_proof_len.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let bytes = unsafe { slice::from_raw_parts(request_ptr, request_len as usize) };
-        let proof = offline_fastpq_proof_sum(bytes)?;
-        unsafe { write_bytes_bridge(out_proof_ptr, out_proof_len, &proof) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_proof_counter(
-    request_ptr: *const c_uchar,
-    request_len: c_ulong,
-    out_proof_ptr: *mut *mut c_uchar,
-    out_proof_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        if request_ptr.is_null() || out_proof_ptr.is_null() || out_proof_len.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let bytes = unsafe { slice::from_raw_parts(request_ptr, request_len as usize) };
-        let proof = offline_fastpq_proof_counter(bytes)?;
-        unsafe { write_bytes_bridge(out_proof_ptr, out_proof_len, &proof) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_proof_replay(
-    request_ptr: *const c_uchar,
-    request_len: c_ulong,
-    out_proof_ptr: *mut *mut c_uchar,
-    out_proof_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        if request_ptr.is_null() || out_proof_ptr.is_null() || out_proof_len.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let bytes = unsafe { slice::from_raw_parts(request_ptr, request_len as usize) };
-        let proof = offline_fastpq_proof_replay(bytes)?;
-        unsafe { write_bytes_bridge(out_proof_ptr, out_proof_len, &proof) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_commitment_update(
-    initial_commitment_ptr: *const c_uchar,
-    initial_commitment_len: c_ulong,
-    claimed_delta_ptr: *const c_char,
-    claimed_delta_len: c_ulong,
-    initial_blinding_ptr: *const c_uchar,
-    initial_blinding_len: c_ulong,
-    resulting_blinding_ptr: *const c_uchar,
-    resulting_blinding_len: c_ulong,
-    out_commitment_ptr: *mut *mut c_uchar,
-    out_commitment_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        if initial_commitment_ptr.is_null()
-            || initial_blinding_ptr.is_null()
-            || resulting_blinding_ptr.is_null()
-            || out_commitment_ptr.is_null()
-            || out_commitment_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-
-        let claimed_delta_str =
-            unsafe { read_string_bridge(claimed_delta_ptr, claimed_delta_len)? };
-        let claimed_delta =
-            Numeric::from_str(&claimed_delta_str).map_err(|_| BridgeError::Quantity)?;
-
-        let initial_commitment = unsafe {
-            slice::from_raw_parts(initial_commitment_ptr, initial_commitment_len as usize)
-        };
-        let initial_blinding =
-            unsafe { slice::from_raw_parts(initial_blinding_ptr, initial_blinding_len as usize) };
-        let resulting_blinding = unsafe {
-            slice::from_raw_parts(resulting_blinding_ptr, resulting_blinding_len as usize)
-        };
-
-        let updated = update_offline_commitment(
-            initial_commitment,
-            &claimed_delta,
-            initial_blinding,
-            resulting_blinding,
-        )?;
-        unsafe { write_bytes_bridge(out_commitment_ptr, out_commitment_len, &updated) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-/// Derive the resulting blinding scalar for an offline spend commitment.
-///
-/// Given the current (`initial`) blinding and the receipt's certificate ID + counter,
-/// computes: `resulting_blinding = initial_blinding + blinding_scalar_from_seed(seed)`
-/// where `seed = OfflineProofBlindingSeed::derive(certificate_id, counter)`.
-///
-/// This ensures the commitment update uses a deterministic blinding delta that
-/// matches what `generate_offline_fastpq_sum_proof` will later verify.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_blinding_from_seed(
-    initial_blinding_ptr: *const c_uchar,
-    initial_blinding_len: c_ulong,
-    certificate_id_ptr: *const c_uchar,
-    certificate_id_len: c_ulong,
-    counter: u64,
-    out_blinding_ptr: *mut *mut c_uchar,
-    out_blinding_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        if initial_blinding_ptr.is_null()
-            || certificate_id_ptr.is_null()
-            || out_blinding_ptr.is_null()
-            || out_blinding_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-
-        let initial_blinding =
-            unsafe { slice::from_raw_parts(initial_blinding_ptr, initial_blinding_len as usize) };
-        let certificate_id_bytes =
-            unsafe { slice::from_raw_parts(certificate_id_ptr, certificate_id_len as usize) };
-        if certificate_id_bytes.len() != Hash::LENGTH {
-            return Err(BridgeError::OfflineNonce);
-        }
-        let mut certificate_id_array = [0u8; Hash::LENGTH];
-        certificate_id_array.copy_from_slice(certificate_id_bytes);
-        // `Hash` has an invariant: the least significant bit must be 1. Reject raw Blake2b-32
-        // digests here to avoid silently mutating caller-provided values.
-        if certificate_id_array[Hash::LENGTH - 1] & 1 == 0 {
-            return Err(BridgeError::OfflineNonce);
-        }
-        let certificate_id = Hash::prehashed(certificate_id_array);
-
-        let resulting =
-            derive_offline_blinding_from_seed(initial_blinding, certificate_id, counter)?;
-        unsafe { write_bytes_bridge(out_blinding_ptr, out_blinding_len, &resulting) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_offline_balance_proof(
-    chain_ptr: *const c_char,
-    chain_len: c_ulong,
-    initial_commitment_ptr: *const c_uchar,
-    initial_commitment_len: c_ulong,
-    resulting_commitment_ptr: *const c_uchar,
-    resulting_commitment_len: c_ulong,
-    claimed_delta_ptr: *const c_char,
-    claimed_delta_len: c_ulong,
-    resulting_value_ptr: *const c_char,
-    resulting_value_len: c_ulong,
-    initial_blinding_ptr: *const c_uchar,
-    initial_blinding_len: c_ulong,
-    resulting_blinding_ptr: *const c_uchar,
-    resulting_blinding_len: c_ulong,
-    out_proof_ptr: *mut *mut c_uchar,
-    out_proof_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| {
-        if initial_commitment_ptr.is_null()
-            || resulting_commitment_ptr.is_null()
-            || initial_blinding_ptr.is_null()
-            || resulting_blinding_ptr.is_null()
-            || out_proof_ptr.is_null()
-            || out_proof_len.is_null()
-        {
-            return Err(BridgeError::NullPtr);
-        }
-
-        let chain = unsafe { read_string_bridge(chain_ptr, chain_len)? };
-        let claimed_delta_str =
-            unsafe { read_string_bridge(claimed_delta_ptr, claimed_delta_len)? };
-        let claimed_delta =
-            Numeric::from_str(&claimed_delta_str).map_err(|_| BridgeError::Quantity)?;
-        let resulting_value_str =
-            unsafe { read_string_bridge(resulting_value_ptr, resulting_value_len)? };
-        let resulting_value =
-            Numeric::from_str(&resulting_value_str).map_err(|_| BridgeError::Quantity)?;
-
-        let initial_commitment = unsafe {
-            slice::from_raw_parts(initial_commitment_ptr, initial_commitment_len as usize)
-        };
-        let resulting_commitment = unsafe {
-            slice::from_raw_parts(resulting_commitment_ptr, resulting_commitment_len as usize)
-        };
-        let initial_blinding =
-            unsafe { slice::from_raw_parts(initial_blinding_ptr, initial_blinding_len as usize) };
-        let resulting_blinding = unsafe {
-            slice::from_raw_parts(resulting_blinding_ptr, resulting_blinding_len as usize)
-        };
-
-        let proof = generate_offline_balance_proof(
-            ChainId::from(chain),
-            &claimed_delta,
-            &resulting_value,
-            initial_commitment,
-            resulting_commitment,
-            initial_blinding,
-            resulting_blinding,
-        )?;
-        unsafe { write_bytes_bridge(out_proof_ptr, out_proof_len, &proof) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
 }
 
 unsafe fn read_distid_or_default(
@@ -2603,33 +1869,16 @@ fn decode_connect_frame(bytes: &[u8]) -> Result<proto::ConnectFrameV1, norito::c
 }
 
 fn decode_envelope(bytes: &[u8]) -> Result<proto::EnvelopeV1, norito::core::Error> {
-    let view = norito::core::from_bytes_view(bytes)?;
-    match view.decode::<proto::EnvelopeV1>() {
-        Ok(envelope) => Ok(envelope),
-        // Legacy Java fixtures encoded an older schema hash while keeping a
-        // payload shape that remains decodable by the current type.
-        Err(norito::core::Error::SchemaMismatch) => view.decode_unchecked::<proto::EnvelopeV1>(),
-        Err(err) => Err(err),
-    }
+    proto::decode_connect_envelope_framed(bytes)
 }
 
 fn encode_envelope_framed(env: &proto::EnvelopeV1) -> Result<Vec<u8>, norito::core::Error> {
-    let (payload, flags) = norito::codec::encode_with_header_flags(env);
-    norito::core::frame_bare_with_header_flags::<proto::EnvelopeV1>(&payload, flags)
+    proto::encode_connect_envelope_framed(env)
 }
 
 fn decode_signed_transaction(bytes: &[u8]) -> Result<SignedTransaction, norito::core::Error> {
-    match norito::decode_from_bytes::<SignedTransaction>(bytes) {
-        Ok(decoded) => Ok(decoded),
-        Err(norito::core::Error::InvalidMagic) => {
-            let (decoded, used) = SignedTransaction::decode_from_slice(bytes)?;
-            if used != bytes.len() {
-                return Err(norito::core::Error::LengthMismatch);
-            }
-            Ok(decoded)
-        }
-        Err(err) => Err(err),
-    }
+    SignedTransaction::decode_all_versioned(bytes)
+        .map_err(|err| norito::core::Error::Message(err.to_string()))
 }
 
 fn encode_asset_transaction<F>(
@@ -2666,9 +1915,38 @@ fn encode_asset_transaction_with_nonce<F>(
 where
     F: FnOnce() -> Executable,
 {
+    encode_asset_transaction_with_nonce_and_metadata(
+        chain_id,
+        authority,
+        creation_time_ms,
+        ttl_option,
+        nonce_option,
+        Metadata::default(),
+        private_key,
+        build_executable,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_asset_transaction_with_nonce_and_metadata<F>(
+    chain_id: ChainId,
+    authority: AccountId,
+    creation_time_ms: u64,
+    ttl_option: Option<NonZeroU64>,
+    nonce_option: Option<NonZeroU32>,
+    metadata: Metadata,
+    private_key: PrivateKey,
+    build_executable: F,
+) -> (Vec<u8>, [u8; 32])
+where
+    F: FnOnce() -> Executable,
+{
     let ttl_duration = ttl_option.map(|ttl| Duration::from_millis(ttl.get()));
     let mut builder = TransactionBuilder::new(chain_id, authority);
     builder = builder.with_executable(build_executable());
+    if !metadata.is_empty() {
+        builder = builder.with_metadata(metadata);
+    }
     if let Some(ttl) = ttl_duration {
         builder.set_ttl(ttl);
     }
@@ -2677,10 +1955,7 @@ where
     }
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
     let signed = builder.sign(&private_key);
-    let (payload, flags) = norito::codec::encode_with_header_flags(&signed);
-    let signed_bytes =
-        norito::core::frame_bare_with_header_flags::<SignedTransaction>(&payload, flags)
-            .expect("frame signed transaction");
+    let signed_bytes = signed.encode_versioned();
     let mut hash = [0u8; 32];
     hash.copy_from_slice(signed.hash().as_ref());
     (signed_bytes, hash)
@@ -4299,12 +3574,352 @@ pub unsafe extern "C" fn connect_norito_decode_ciphertext_frame(
     }
 }
 
+// ---------------- Offline Note V2 prover helpers ----------------
+
+/// Generate a recursive Halo2/IPA proof for an Offline V2 redemption.
+///
+/// The input is Norito-archive bytes of
+/// `iroha_data_model::offline::OfflineNoteRedeemV2`. The existing
+/// `recursive_proof` field is ignored, so callers may pass a stub. The output
+/// is Norito-archive bytes of `OfflineNoteRecursiveProofV2`, ready to slot back
+/// into the redemption before transaction submission.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_prove_note_v2_redeem(
+    redeem_norito_ptr: *const c_uchar,
+    redeem_norito_len: c_ulong,
+    out_recursive_proof_ptr: *mut *mut c_uchar,
+    out_recursive_proof_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if redeem_norito_ptr.is_null()
+            || out_recursive_proof_ptr.is_null()
+            || out_recursive_proof_len.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let bytes = unsafe { slice::from_raw_parts(redeem_norito_ptr, redeem_norito_len as usize) };
+        let recursive = prove_offline_note_v2_redeem_recursive(bytes)?;
+        let archive = norito::to_bytes(&recursive).map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+        unsafe { write_bytes_bridge(out_recursive_proof_ptr, out_recursive_proof_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+/// Generate a recursive Halo2/IPA proof for an Offline V2 audit bundle.
+///
+/// The input is Norito-archive bytes of
+/// `iroha_data_model::offline::OfflineNoteAuditBundleV2`. The existing
+/// `recursive_proof` field is ignored, so callers may pass a stub. The output
+/// is Norito-archive bytes of `OfflineNoteRecursiveProofV2`, ready to slot back
+/// into the audit bundle before transaction submission.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_prove_note_v2_audit(
+    audit_norito_ptr: *const c_uchar,
+    audit_norito_len: c_ulong,
+    out_recursive_proof_ptr: *mut *mut c_uchar,
+    out_recursive_proof_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if audit_norito_ptr.is_null()
+            || out_recursive_proof_ptr.is_null()
+            || out_recursive_proof_len.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let bytes = unsafe { slice::from_raw_parts(audit_norito_ptr, audit_norito_len as usize) };
+        let recursive = prove_offline_note_v2_audit_recursive(bytes)?;
+        let archive = norito::to_bytes(&recursive).map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+        unsafe { write_bytes_bridge(out_recursive_proof_ptr, out_recursive_proof_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+fn prove_offline_note_v2_redeem_recursive(
+    redeem_archive: &[u8],
+) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProofV2> {
+    use iroha_core::zk::{
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID, offline_note_v2_recursive_vk_box,
+        prove_offline_note_v2_redeem,
+    };
+    use iroha_data_model::{
+        offline::{OfflineNoteRecursiveProofV2, OfflineNoteRedeemV2},
+        proof::VerifyingKeyId,
+    };
+
+    let redemption: OfflineNoteRedeemV2 =
+        norito::decode_from_bytes(redeem_archive).map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let vk_box = offline_note_v2_recursive_vk_box().map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let proof_box = prove_offline_note_v2_redeem(
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        &vk_box,
+        &redemption,
+        None,
+    )
+    .map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let public_inputs_hash = redemption
+        .public_inputs_hash()
+        .map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+
+    Ok(OfflineNoteRecursiveProofV2 {
+        verifier_key_id: VerifyingKeyId::new(
+            vk_box.backend.clone(),
+            OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        ),
+        public_inputs_hash,
+        proof: proof_box,
+    })
+}
+
+fn prove_offline_note_v2_audit_recursive(
+    audit_archive: &[u8],
+) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProofV2> {
+    use iroha_core::zk::{
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID, offline_note_v2_recursive_vk_box,
+        prove_offline_note_v2_audit,
+    };
+    use iroha_data_model::{
+        offline::{OfflineNoteAuditBundleV2, OfflineNoteRecursiveProofV2},
+        proof::VerifyingKeyId,
+    };
+
+    let audit: OfflineNoteAuditBundleV2 =
+        norito::decode_from_bytes(audit_archive).map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let vk_box = offline_note_v2_recursive_vk_box().map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let proof_box = prove_offline_note_v2_audit(
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        &vk_box,
+        &audit,
+        None,
+    )
+    .map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+    let public_inputs_hash = audit
+        .public_inputs_hash()
+        .map_err(|_| BridgeError::OfflineNoteV2Prove)?;
+
+    Ok(OfflineNoteRecursiveProofV2 {
+        verifier_key_id: VerifyingKeyId::new(
+            vk_box.backend.clone(),
+            OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        ),
+        public_inputs_hash,
+        proof: proof_box,
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
     if !ptr_.is_null() {
         unsafe {
             free(ptr_ as *mut _);
         }
+    }
+}
+
+#[cfg(test)]
+mod offline_note_v2_prover_tests {
+    use iroha_core::zk::{
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA,
+        offline_note_v2_recursive_vk_box, verify_backend,
+    };
+    use iroha_data_model::{
+        offline::{
+            OfflineNoteAuditBundleV2, OfflineNoteAuditOutputClaimV2, OfflineNoteIssueV2,
+            OfflineNoteIssuedClaimV2, OfflineNoteKeyCertificateV2, OfflineNoteRecursiveProofV2,
+            OfflineNoteRedeemV2,
+        },
+        proof::VerifyingKeyId,
+    };
+
+    use super::*;
+
+    fn sample_signature(seed: u8) -> Signature {
+        let mut bytes = [0u8; 64];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = seed.wrapping_add(u8::try_from(index).expect("signature index fits"));
+        }
+        Signature::from_bytes(&bytes)
+    }
+
+    fn sample_account(seed: u8) -> AccountId {
+        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(keypair.public_key().clone())
+    }
+
+    fn sample_asset(account: AccountId) -> AssetId {
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "xor".parse().expect("asset definition name"),
+        );
+        AssetId::new(definition, account)
+    }
+
+    fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificateV2 {
+        let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let (_algorithm, public_key) = note_keypair.public_key().to_bytes();
+        OfflineNoteKeyCertificateV2 {
+            version: 2,
+            platform: "ios-appattest".to_owned(),
+            key_id: format!("one-use-key-{seed}"),
+            device_id: "device-1".to_owned(),
+            account_id: account.clone(),
+            public_key: public_key.to_vec(),
+            assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+            assertion_key_algorithm: "app-attest-p256".to_owned(),
+            assertion_public_key: vec![0x04; 65],
+            assertion_usage_count_limit: None,
+            one_use: true,
+            issuer_signature: sample_signature(seed.wrapping_add(1)),
+        }
+    }
+
+    fn placeholder_recursive_proof() -> OfflineNoteRecursiveProofV2 {
+        OfflineNoteRecursiveProofV2 {
+            verifier_key_id: VerifyingKeyId::new(
+                ZK_BACKEND_HALO2_IPA,
+                OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            ),
+            public_inputs_hash: Hash::new(b"placeholder-offline-note-v2-public-inputs"),
+            proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new()),
+        }
+    }
+
+    fn sample_redemption() -> OfflineNoteRedeemV2 {
+        let account = sample_account(0xA1);
+        let asset = sample_asset(account.clone());
+        OfflineNoteRedeemV2 {
+            source_note_commitment: Hash::new(b"offline-note-v2-source-note"),
+            input_nullifiers: vec![Hash::new(b"offline-note-v2-redeem-nullifier")],
+            sender_key_certificate: sample_certificate(&account, 0xB1),
+            recipient: account,
+            asset,
+            amount: Numeric::new(10, 0),
+            recursive_proof: placeholder_recursive_proof(),
+        }
+    }
+
+    fn sample_audit() -> OfflineNoteAuditBundleV2 {
+        let account = sample_account(0xC1);
+        let asset = sample_asset(account.clone());
+        let certificate = sample_certificate(&account, 0xD1);
+        let issue = OfflineNoteIssueV2 {
+            note_commitment: Hash::new(b"offline-note-v2-audit-input-note"),
+            key_certificate: certificate.clone(),
+            asset: asset.clone(),
+            amount: Numeric::new(10, 0),
+        };
+        OfflineNoteAuditBundleV2 {
+            token_id: Hash::new(b"offline-note-v2-audit-token"),
+            sender_key_certificate: certificate.clone(),
+            input_nullifiers: vec![Hash::new(b"offline-note-v2-audit-nullifier")],
+            input_claims: vec![OfflineNoteIssuedClaimV2::from_issue(&issue).expect("input claim")],
+            output_commitments: vec![Hash::new(b"offline-note-v2-audit-output-note")],
+            output_claims: vec![OfflineNoteAuditOutputClaimV2 {
+                note_commitment: Hash::new(b"offline-note-v2-audit-output-note"),
+                key_certificate: certificate,
+                asset,
+                amount: Numeric::new(10, 0),
+            }],
+            recursive_proof: placeholder_recursive_proof(),
+        }
+    }
+
+    fn decode_recursive_proof(
+        out_ptr: *mut c_uchar,
+        out_len: c_ulong,
+    ) -> OfflineNoteRecursiveProofV2 {
+        assert!(!out_ptr.is_null(), "prover output pointer must be set");
+        let out = unsafe { slice::from_raw_parts(out_ptr, out_len as usize).to_vec() };
+        connect_norito_free(out_ptr);
+        norito::decode_from_bytes(&out).expect("decode recursive proof")
+    }
+
+    fn assert_recursive_proof_verifies(
+        recursive: &OfflineNoteRecursiveProofV2,
+        expected_public_inputs_hash: Hash,
+    ) {
+        let vk_box = offline_note_v2_recursive_vk_box().expect("offline note v2 verifying key");
+        assert_eq!(
+            recursive.verifier_key_id,
+            VerifyingKeyId::new(
+                ZK_BACKEND_HALO2_IPA,
+                OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID
+            )
+        );
+        assert_eq!(recursive.public_inputs_hash, expected_public_inputs_hash);
+        assert!(
+            verify_backend(ZK_BACKEND_HALO2_IPA, &recursive.proof, Some(&vk_box)),
+            "bridge output must verify against the canonical Offline V2 verifier"
+        );
+    }
+
+    #[test]
+    fn offline_note_v2_redeem_ffi_returns_verifying_recursive_proof() {
+        let redemption = sample_redemption();
+        let archive = norito::to_bytes(&redemption).expect("encode redemption");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_offline_prove_note_v2_redeem(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, 0);
+        let recursive = decode_recursive_proof(out_ptr, out_len);
+        assert_recursive_proof_verifies(
+            &recursive,
+            redemption.public_inputs_hash().expect("public input hash"),
+        );
+    }
+
+    #[test]
+    fn offline_note_v2_audit_ffi_returns_verifying_recursive_proof() {
+        let audit = sample_audit();
+        let archive = norito::to_bytes(&audit).expect("encode audit bundle");
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_offline_prove_note_v2_audit(
+                archive.as_ptr(),
+                archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, 0);
+        let recursive = decode_recursive_proof(out_ptr, out_len);
+        assert_recursive_proof_verifies(
+            &recursive,
+            audit.public_inputs_hash().expect("public input hash"),
+        );
+    }
+
+    #[test]
+    fn offline_note_v2_prover_ffi_rejects_invalid_archive() {
+        let bad_archive = b"not a norito archive";
+        let mut out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut out_len: c_ulong = 0;
+
+        let status = unsafe {
+            connect_norito_offline_prove_note_v2_redeem(
+                bad_archive.as_ptr(),
+                bad_archive.len() as c_ulong,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+
+        assert_eq!(status, ERR_OFFLINE_NOTE_V2_PROVE);
+        assert!(out_ptr.is_null());
+        assert_eq!(out_len, 0);
     }
 }
 
@@ -4863,6 +4478,94 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_fee_sponsor(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    nonce: u32,
+    nonce_present: c_uchar,
+    asset_definition_ptr: *const c_char,
+    asset_definition_len: c_ulong,
+    quantity_ptr: *const c_char,
+    quantity_len: c_ulong,
+    destination_ptr: *const c_char,
+    destination_len: c_ulong,
+    fee_sponsor_ptr: *const c_char,
+    fee_sponsor_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let inputs = unsafe {
+            gather_asset_tx_inputs(AssetInputPointers {
+                chain_ptr,
+                chain_len,
+                authority_ptr,
+                authority_len,
+                asset_definition_ptr,
+                asset_definition_len,
+                quantity_ptr,
+                quantity_len,
+                destination_ptr,
+                destination_len,
+                ttl_ms,
+                ttl_present,
+                private_key_ptr,
+                private_key_len,
+            })?
+        };
+
+        let fee_sponsor =
+            unsafe { parse_optional_account_id_bridge(fee_sponsor_ptr, fee_sponsor_len)? };
+        let metadata = build_fee_sponsor_metadata(fee_sponsor);
+
+        let AssetTxInputs {
+            chain_id,
+            authority,
+            asset_definition,
+            destination,
+            quantity,
+            ttl,
+            private_key,
+        } = inputs;
+        let nonce = parse_nonce(nonce, nonce_present != 0)?;
+
+        let asset_id = AssetId::new(asset_definition.clone(), authority.clone());
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            nonce,
+            metadata,
+            private_key,
+            || {
+                let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
+                Executable::from([InstructionBox::from(transfer)])
+            },
+        );
+
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
     chain_ptr: *const c_char,
     chain_len: c_ulong,
@@ -4933,6 +4636,98 @@ pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_alg(
             creation_time_ms,
             ttl,
             nonce,
+            private_key,
+            || {
+                let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
+                Executable::from([InstructionBox::from(transfer)])
+            },
+        );
+
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    nonce: u32,
+    nonce_present: c_uchar,
+    asset_definition_ptr: *const c_char,
+    asset_definition_len: c_ulong,
+    quantity_ptr: *const c_char,
+    quantity_len: c_ulong,
+    destination_ptr: *const c_char,
+    destination_len: c_ulong,
+    fee_sponsor_ptr: *const c_char,
+    fee_sponsor_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    algorithm_code: u8,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let algorithm = parse_algorithm_code(algorithm_code)?;
+        let inputs = unsafe {
+            gather_asset_tx_inputs_with_parser(
+                AssetInputPointers {
+                    chain_ptr,
+                    chain_len,
+                    authority_ptr,
+                    authority_len,
+                    asset_definition_ptr,
+                    asset_definition_len,
+                    quantity_ptr,
+                    quantity_len,
+                    destination_ptr,
+                    destination_len,
+                    ttl_ms,
+                    ttl_present,
+                    private_key_ptr,
+                    private_key_len,
+                },
+                |bytes| parse_private_key_with_algorithm(bytes, algorithm),
+            )?
+        };
+        let fee_sponsor =
+            unsafe { parse_optional_account_id_bridge(fee_sponsor_ptr, fee_sponsor_len)? };
+        let metadata = build_fee_sponsor_metadata(fee_sponsor);
+
+        let AssetTxInputs {
+            chain_id,
+            authority,
+            asset_definition,
+            destination,
+            quantity,
+            ttl,
+            private_key,
+        } = inputs;
+        let nonce = parse_nonce(nonce, nonce_present != 0)?;
+
+        let asset_id = AssetId::new(asset_definition.clone(), authority.clone());
+        let (signed_bytes, hash_bytes) = encode_asset_transaction_with_nonce_and_metadata(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            nonce,
+            metadata,
             private_key,
             || {
                 let transfer = Transfer::asset_numeric(asset_id, quantity, destination);
@@ -5994,10 +5789,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
     creation_time_ms: u64,
     ttl_ms: u64,
     ttl_present: c_uchar,
-    namespace_ptr: *const c_char,
-    namespace_len: c_ulong,
-    contract_id_ptr: *const c_char,
-    contract_id_len: c_ulong,
+    contract_address_ptr: *const c_char,
+    contract_address_len: c_ulong,
     code_hash_ptr: *const c_char,
     code_hash_len: c_ulong,
     abi_hash_ptr: *const c_char,
@@ -6026,14 +5819,17 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
 
         let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let namespace = unsafe { read_string_bridge(namespace_ptr, namespace_len) }?;
-        let contract_id = unsafe { read_string_bridge(contract_id_ptr, contract_id_len) }?;
+        let contract_address_raw =
+            unsafe { read_string_bridge(contract_address_ptr, contract_address_len) }?;
         let code_hash_raw = unsafe { read_string_bridge(code_hash_ptr, code_hash_len) }?;
         let abi_hash_raw = unsafe { read_string_bridge(abi_hash_ptr, abi_hash_len) }?;
         let abi_version = unsafe { read_string_bridge(abi_version_ptr, abi_version_len) }?;
 
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
+        let contract_address = contract_address_raw
+            .parse()
+            .map_err(|_| BridgeError::Governance)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let code_hash_arr = parse_hex_32(&code_hash_raw)?;
         let abi_hash_arr = parse_hex_32(&abi_hash_raw)?;
@@ -6070,8 +5866,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let manifest_provenance = manifest.provenance.clone().ok_or(BridgeError::Governance)?;
 
         let proposal = ProposeDeployContract {
-            namespace,
-            contract_id,
+            contract_address,
             code_hash_hex,
             abi_hash_hex,
             abi_version,
@@ -6106,10 +5901,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
     creation_time_ms: u64,
     ttl_ms: u64,
     ttl_present: c_uchar,
-    namespace_ptr: *const c_char,
-    namespace_len: c_ulong,
-    contract_id_ptr: *const c_char,
-    contract_id_len: c_ulong,
+    contract_address_ptr: *const c_char,
+    contract_address_len: c_ulong,
     code_hash_ptr: *const c_char,
     code_hash_len: c_ulong,
     abi_hash_ptr: *const c_char,
@@ -6140,14 +5933,17 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let algorithm = parse_algorithm_code(algorithm_code)?;
         let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let namespace = unsafe { read_string_bridge(namespace_ptr, namespace_len) }?;
-        let contract_id = unsafe { read_string_bridge(contract_id_ptr, contract_id_len) }?;
+        let contract_address_raw =
+            unsafe { read_string_bridge(contract_address_ptr, contract_address_len) }?;
         let code_hash_raw = unsafe { read_string_bridge(code_hash_ptr, code_hash_len) }?;
         let abi_hash_raw = unsafe { read_string_bridge(abi_hash_ptr, abi_hash_len) }?;
         let abi_version = unsafe { read_string_bridge(abi_version_ptr, abi_version_len) }?;
 
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
+        let contract_address = contract_address_raw
+            .parse()
+            .map_err(|_| BridgeError::Governance)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let code_hash_arr = parse_hex_32(&code_hash_raw)?;
         let abi_hash_arr = parse_hex_32(&abi_hash_raw)?;
@@ -6184,8 +5980,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let manifest_provenance = manifest.provenance.clone().ok_or(BridgeError::Governance)?;
 
         let proposal = ProposeDeployContract {
-            namespace,
-            contract_id,
+            contract_address,
             code_hash_hex,
             abi_hash_hex,
             abi_version,
@@ -7354,73 +7149,16 @@ mod accel_tests {
         decode_signed_transaction(bytes).expect("decode signed transaction")
     }
 
-    #[test]
-    fn encode_asset_id_literal_builds_canonical_from_textual_parts() {
-        let _guard = chain_guard();
-        let (account_cstr, _) = sample_account("bank", 0);
-        let account_literal = account_cstr.to_str().expect("account literal");
-        let account_id = AccountId::parse_encoded(account_literal)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("parse account");
-        let expected_asset = AssetId::new(
-            AssetDefinitionId::new(
-                "bank".parse().expect("domain"),
-                "usd".parse().expect("asset name"),
-            ),
-            account_id,
-        );
-        let asset_definition = cstring("usd#bank");
-
-        let mut out_asset_ptr: *mut u8 = ptr::null_mut();
-        let mut out_asset_len: c_ulong = 0;
-        let status = unsafe {
-            connect_norito_encode_asset_id_literal(
-                asset_definition.as_ptr(),
-                asset_definition.as_bytes().len() as c_ulong,
-                account_cstr.as_ptr(),
-                account_cstr.as_bytes().len() as c_ulong,
-                &mut out_asset_ptr,
-                &mut out_asset_len,
-            )
-        };
-        assert_eq!(status, 0, "expected successful asset id encode");
-        assert!(
-            !out_asset_ptr.is_null(),
-            "encoder should return encoded asset literal bytes"
-        );
-
-        let output = unsafe { slice::from_raw_parts(out_asset_ptr, out_asset_len as usize) };
-        let encoded_literal = std::str::from_utf8(output).expect("utf-8 asset id literal");
-        assert_eq!(encoded_literal, expected_asset.canonical_encoded());
-        connect_norito_free(out_asset_ptr);
+    fn asset_definition_literal(domain: &str, name: &str) -> String {
+        AssetDefinitionId::new(
+            DomainId::try_new(domain, "universal").expect("domain"),
+            Name::from_str(name).expect("name"),
+        )
+        .to_string()
     }
 
-    #[test]
-    fn encode_asset_id_literal_rejects_alias_input_offline() {
-        let _guard = chain_guard();
-        let (account_cstr, _) = sample_account("bank", 1);
-        let asset_alias = cstring("usd#issuer@main");
-        let mut out_asset_ptr: *mut u8 = ptr::null_mut();
-        let mut out_asset_len: c_ulong = 0;
-        let status = unsafe {
-            connect_norito_encode_asset_id_literal(
-                asset_alias.as_ptr(),
-                asset_alias.as_bytes().len() as c_ulong,
-                account_cstr.as_ptr(),
-                account_cstr.as_bytes().len() as c_ulong,
-                &mut out_asset_ptr,
-                &mut out_asset_len,
-            )
-        };
-        assert_eq!(
-            status, ERR_ASSET_DEFINITION_PARSE,
-            "expected alias-shaped asset definitions to fail without online resolution"
-        );
-        assert!(
-            out_asset_ptr.is_null(),
-            "no output should be allocated on failure"
-        );
-        assert_eq!(out_asset_len, 0, "no output length expected on failure");
+    fn asset_definition_cstring(domain: &str, name: &str) -> CString {
+        cstring(&asset_definition_literal(domain, name))
     }
 
     #[test]
@@ -7432,11 +7170,11 @@ mod accel_tests {
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("parse account");
         let definition = AssetDefinitionId::new(
-            "bank".parse().expect("domain"),
+            DomainId::try_new("bank", "universal").expect("domain"),
             "usd".parse().expect("asset name"),
         );
         let asset = AssetId::new(definition.clone(), account_id.clone());
-        let asset_literal = cstring(&asset.canonical_encoded());
+        let asset_literal = cstring(&asset.canonical_literal());
 
         let mut out_json_ptr: *mut u8 = ptr::null_mut();
         let mut out_json_len: c_ulong = 0;
@@ -7461,7 +7199,7 @@ mod accel_tests {
         let object = parsed.as_object().expect("json object");
         assert_eq!(
             object.get("asset_id").and_then(JsonValue::as_str),
-            Some(asset.canonical_encoded().as_str())
+            Some(asset.canonical_literal().as_str())
         );
         assert_eq!(
             object
@@ -7554,6 +7292,42 @@ mod accel_tests {
         let public_bytes =
             unsafe { slice::from_raw_parts(out_public_ptr, out_public_len as usize) };
         assert_eq!(public_bytes, expected_public.as_slice());
+        unsafe {
+            free(out_private_ptr as *mut _);
+            free(out_public_ptr as *mut _);
+        }
+    }
+
+    #[test]
+    fn keypair_from_seed_mldsa_roundtrip() {
+        let _guard = chain_guard();
+        let seed = b"bridge-mldsa-seed-vector".to_vec();
+        let expected = KeyPair::from_seed(seed.clone(), Algorithm::MlDsa);
+        let (expected_public, expected_private) = expected.into_parts();
+        let (_alg, expected_private_bytes) = expected_private.to_bytes();
+        let (_alg, expected_public_bytes) = expected_public.to_bytes();
+        let mut out_private_ptr: *mut u8 = ptr::null_mut();
+        let mut out_private_len: c_ulong = 0;
+        let mut out_public_ptr: *mut u8 = ptr::null_mut();
+        let mut out_public_len: c_ulong = 0;
+        let result = unsafe {
+            connect_norito_keypair_from_seed(
+                Algorithm::MlDsa as u8,
+                seed.as_ptr(),
+                seed.len() as c_ulong,
+                &mut out_private_ptr,
+                &mut out_private_len,
+                &mut out_public_ptr,
+                &mut out_public_len,
+            )
+        };
+        assert_eq!(result, 0, "expected success");
+        let private_bytes =
+            unsafe { slice::from_raw_parts(out_private_ptr, out_private_len as usize) };
+        let public_bytes =
+            unsafe { slice::from_raw_parts(out_public_ptr, out_public_len as usize) };
+        assert_eq!(private_bytes, expected_private_bytes.as_slice());
+        assert_eq!(public_bytes, expected_public_bytes);
         unsafe {
             free(out_private_ptr as *mut _);
             free(out_public_ptr as *mut _);
@@ -7654,28 +7428,19 @@ mod accel_tests {
     }
 
     #[test]
-    fn parse_asset_definition_accepts_textual_literal() {
-        let parsed = parse_asset_definition("usd#bank".to_owned())
-            .expect("textual asset definition should parse");
-        let expected = AssetDefinitionId::new(
-            DomainId::from_str("bank").expect("domain"),
-            Name::from_str("usd").expect("name"),
-        );
-        assert_eq!(parsed, expected);
+    fn parse_asset_definition_rejects_noncanonical_textual_literal() {
+        let err = parse_asset_definition("usd#bank".to_owned())
+            .expect_err("noncanonical textual asset definition should fail");
+        assert!(matches!(err, BridgeError::AssetDefinition));
     }
 
     #[test]
-    fn parse_asset_definition_accepts_canonical_aid_literal() {
-        let canonical = AssetDefinitionId::new(
-            DomainId::from_str("wonderland").expect("domain"),
-            Name::from_str("rose").expect("name"),
-        )
-        .to_string();
+    fn parse_asset_definition_accepts_canonical_base58_literal() {
+        let canonical = asset_definition_literal("wonderland", "rose");
         let parsed = parse_asset_definition(canonical.clone())
-            .expect("canonical aid asset definition should parse");
-        let expected = canonical
-            .parse::<AssetDefinitionId>()
-            .expect("canonical aid should parse");
+            .expect("canonical base58 asset definition should parse");
+        let expected = AssetDefinitionId::parse_address_literal(&canonical)
+            .expect("canonical base58 should parse");
         assert_eq!(parsed, expected);
     }
 
@@ -7684,7 +7449,7 @@ mod accel_tests {
         let _reset = ChainDiscriminantReset::new(42);
         let chain = cstring("00000042");
         let authority = fixture_authority("wonderland");
-        let asset_definition = cstring("rose#wonderland");
+        let asset_definition = asset_definition_cstring("wonderland", "rose");
         let quantity = cstring("15.7500");
         let destination = authority.clone();
         let private_key = fixture_private_key();
@@ -7728,7 +7493,7 @@ mod accel_tests {
         let _reset = ChainDiscriminantReset::new(42);
         let chain = cstring("00000043");
         let authority = fixture_authority("wonderland");
-        let asset_definition = cstring("rose#wonderland");
+        let asset_definition = asset_definition_cstring("wonderland", "rose");
         let quantity = cstring("42.0100");
         let destination = authority.clone();
         let private_key = fixture_private_key();
@@ -7772,7 +7537,7 @@ mod accel_tests {
         let _reset = ChainDiscriminantReset::new(42);
         let chain = cstring("00000044");
         let authority = fixture_authority("wonderland");
-        let asset_definition = cstring("rose#wonderland");
+        let asset_definition = asset_definition_cstring("wonderland", "rose");
         let quantity = cstring("5.2500");
         let destination = authority.clone();
         let private_key = fixture_private_key();
@@ -7816,7 +7581,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -7862,7 +7627,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -7911,7 +7676,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -7952,7 +7717,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("10");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -7998,11 +7763,65 @@ mod accel_tests {
     }
 
     #[test]
+    fn transfer_encoder_with_fee_sponsor_sets_metadata() {
+        let _guard = chain_guard();
+        let chain = cstring("test-chain");
+        let (authority, private) = sample_account("bank", 0);
+        let asset_definition = asset_definition_cstring("bank", "usd");
+        let quantity = cstring("10");
+        let destination = sample_destination("bank", 1);
+        let fee_sponsor = sample_destination("paynet", 2);
+        let fee_sponsor_literal = fee_sponsor.to_str().expect("utf8 fee sponsor");
+        let mut out_signed_ptr: *mut u8 = ptr::null_mut();
+        let mut out_signed_len: c_ulong = 0;
+        let mut out_hash = [0u8; 32];
+        let result = unsafe {
+            connect_norito_encode_transfer_signed_transaction_with_fee_sponsor(
+                chain.as_ptr(),
+                chain.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1,
+                0,
+                0,
+                0,
+                0,
+                asset_definition.as_ptr(),
+                asset_definition.as_bytes().len() as c_ulong,
+                quantity.as_ptr(),
+                quantity.as_bytes().len() as c_ulong,
+                destination.as_ptr(),
+                destination.as_bytes().len() as c_ulong,
+                fee_sponsor.as_ptr(),
+                fee_sponsor.as_bytes().len() as c_ulong,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                &mut out_signed_ptr,
+                &mut out_signed_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        assert_eq!(result, 0, "expected success");
+        let signed = decode_signed(out_signed_ptr, out_signed_len);
+        let metadata_key = Name::from_str("fee_sponsor").expect("metadata key");
+        let metadata_value = signed
+            .payload()
+            .metadata
+            .get(&metadata_key)
+            .expect("fee sponsor metadata should be present");
+        assert_eq!(metadata_value, &Json::new(fee_sponsor_literal));
+        unsafe {
+            free(out_signed_ptr as *mut _);
+        }
+    }
+
+    #[test]
     fn mint_encoder_nonce_roundtrip() {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("5");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -8047,7 +7866,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("5");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -8093,7 +7912,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("3");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -8138,7 +7957,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("3");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -8184,7 +8003,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let inputs = [0x11_u8; 32];
         let outputs = [0x22_u8; 32];
         let proof = cstring(
@@ -8234,7 +8053,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("bank", 0);
-        let asset_definition = cstring("usd#bank");
+        let asset_definition = asset_definition_cstring("bank", "usd");
         let quantity = cstring("NaN");
         let destination = sample_destination("bank", 1);
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -8276,7 +8095,7 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("default", 0);
-        let scoped_account = cstring(&format!("{}@default", authority.to_str().unwrap()));
+        let scoped_account = cstring(authority.to_str().unwrap());
         let member_a_str = sample_destination("default", 2);
         let member_b_str = sample_destination("default", 3);
         let member_a = AccountId::parse_encoded(member_a_str.to_str().unwrap())
@@ -8423,399 +8242,6 @@ mod secp256k1_tests {
             )
         };
         assert_eq!(verify_status, 1, "signature did not verify");
-    }
-}
-
-#[cfg(test)]
-mod offline_challenge_tests {
-    use std::{ffi::CString, ptr, slice};
-
-    use iroha_crypto::KeyPair;
-    use iroha_data_model::{
-        account::AccountId,
-        asset::id::AssetDefinitionId,
-        offline::{OfflineReceiptChallengePreimage, OfflineSpendReceipt},
-    };
-    use norito::{decode_from_bytes, json};
-
-    use super::*;
-
-    fn account_literal(account: &AccountId) -> String {
-        account.to_string()
-    }
-
-    fn asset_literal(asset: &AssetId) -> String {
-        asset.canonical_encoded()
-    }
-
-    fn account_with_cstring(_domain: &str, seed: u8) -> (AccountId, CString) {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let (public_key, _) = keypair.into_parts();
-        let account = AccountId::new(public_key);
-        let literal = account_literal(&account);
-        let parsed = AccountId::parse_encoded(&literal)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("encoded account");
-        let cstring = CString::new(literal).expect("account string");
-        (parsed, cstring)
-    }
-
-    #[test]
-    fn offline_challenge_roundtrip() {
-        let _guard = super::test_support::chain_discriminant_guard();
-        let chain_id = CString::new("test-chain").expect("chain id");
-        let invoice = CString::new("inv-ffi").expect("invoice");
-        let (controller_account, controller_cstr) = account_with_cstring("bank", 21);
-        let (_, receiver_cstr) = account_with_cstring("bank", 99);
-        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "bank".parse().unwrap(),
-            "usd".parse().unwrap(),
-        );
-        let asset_id = AssetId::new(asset_definition, controller_account.clone());
-        let asset_literal = asset_literal(&asset_id);
-        let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
-        assert_eq!(reparsed_asset, asset_id);
-        let asset_cstr = CString::new(asset_literal).expect("asset identifier string");
-        let amount = CString::new("500").expect("amount");
-        let issued_at_ms: u64 = 1_700_000_000_000;
-        let sender_certificate_id = Hash::new(b"sender-certificate");
-        let sender_certificate_id_cstr =
-            CString::new(format!("{}", sender_certificate_id)).expect("sender certificate id");
-        let nonce_hash = Hash::new(b"ffi-nonce");
-        let nonce_cstr = CString::new(format!("{}", nonce_hash)).expect("nonce identifier");
-
-        let mut out_ptr: *mut u8 = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-        let mut iroha_hash = [0u8; Hash::LENGTH];
-        let mut client_hash = [0u8; 32];
-        let code = unsafe {
-            connect_norito_offline_receipt_challenge(
-                chain_id.as_ptr(),
-                chain_id.as_bytes().len() as c_ulong,
-                invoice.as_ptr(),
-                invoice.as_bytes().len() as c_ulong,
-                receiver_cstr.as_ptr(),
-                receiver_cstr.as_bytes().len() as c_ulong,
-                asset_cstr.as_ptr(),
-                asset_cstr.as_bytes().len() as c_ulong,
-                amount.as_ptr(),
-                amount.as_bytes().len() as c_ulong,
-                issued_at_ms as c_ulonglong,
-                sender_certificate_id_cstr.as_ptr(),
-                sender_certificate_id_cstr.as_bytes().len() as c_ulong,
-                nonce_cstr.as_ptr(),
-                nonce_cstr.as_bytes().len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-                iroha_hash.as_mut_ptr(),
-                iroha_hash.len() as c_ulong,
-                client_hash.as_mut_ptr(),
-                client_hash.len() as c_ulong,
-            )
-        };
-        assert_eq!(code, 0, "expected success");
-        assert!(!out_ptr.is_null());
-        let preimage = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) }.to_vec();
-        connect_norito_free(out_ptr);
-
-        let decoded: OfflineReceiptChallengePreimage =
-            decode_from_bytes(&preimage).expect("decode");
-        let receiver_account =
-            AccountId::parse_encoded(receiver_cstr.to_str().expect("receiver str"))
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .expect("account id");
-        assert_eq!(decoded.invoice_id, "inv-ffi");
-        assert_eq!(decoded.receiver, receiver_account);
-        assert_eq!(decoded.asset, asset_id);
-        assert_eq!(decoded.amount, Numeric::from_str("500").unwrap());
-        assert_eq!(decoded.issued_at_ms, issued_at_ms);
-        assert_eq!(decoded.sender_certificate_id, sender_certificate_id);
-
-        let chain_id_value = ChainId::from("test-chain");
-        let expected_hash = chain_bound_receipt_hash(&chain_id_value, &preimage);
-        assert_eq!(iroha_hash, *expected_hash.as_ref());
-        let expected_client: [u8; 32] = Sha256::digest(expected_hash.as_ref()).into();
-        assert_eq!(client_hash, expected_client);
-
-        let controller_again =
-            AccountId::parse_encoded(controller_cstr.to_str().expect("controller str"))
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .expect("account id");
-        assert_eq!(controller_again, controller_account);
-    }
-
-    #[test]
-    fn offline_receipts_root_ffi_matches_poseidon() {
-        let receipts: Vec<OfflineSpendReceipt> = Vec::new();
-        let json_bytes = json::to_vec(&receipts).expect("serialize receipts");
-        let mut out_root = [0u8; 32];
-        let code = unsafe {
-            connect_norito_offline_receipts_root(
-                json_bytes.as_ptr(),
-                json_bytes.len() as c_ulong,
-                out_root.as_mut_ptr(),
-                out_root.len() as c_ulong,
-            )
-        };
-        assert_eq!(code, 0, "expected receipts root success");
-        let expected = compute_receipts_root(&receipts).expect("root");
-        assert_eq!(out_root.as_slice(), expected.as_bytes());
-    }
-
-    #[test]
-    fn offline_blinding_from_seed_ffi_matches_derive() {
-        let initial = Scalar::from(19u64);
-        let initial_bytes = initial.to_bytes();
-        let certificate_id = Hash::new(b"offline-certificate");
-        let counter = 11u64;
-        let seed = OfflineProofBlindingSeed::derive(certificate_id, counter);
-        let expected = (initial + blinding_scalar_from_seed(&seed)).to_bytes();
-
-        let mut out_ptr: *mut u8 = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-        let code = unsafe {
-            connect_norito_offline_blinding_from_seed(
-                initial_bytes.as_ptr(),
-                initial_bytes.len() as c_ulong,
-                certificate_id.as_ref().as_ptr(),
-                Hash::LENGTH as c_ulong,
-                counter,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(code, 0, "expected success");
-        assert!(!out_ptr.is_null());
-        assert_eq!(out_len as usize, expected.len());
-        let derived = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) }.to_vec();
-        connect_norito_free(out_ptr);
-        assert_eq!(derived, expected);
-    }
-
-    #[test]
-    fn offline_blinding_from_seed_rejects_non_hash_certificate_id_bytes() {
-        let initial = Scalar::from(19u64);
-        let initial_bytes = initial.to_bytes();
-        let certificate_id = Hash::new(b"offline-certificate");
-        let mut bad_certificate_bytes = *certificate_id.as_ref();
-        bad_certificate_bytes[Hash::LENGTH - 1] &= !1;
-
-        let mut out_ptr: *mut u8 = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-        let code = unsafe {
-            connect_norito_offline_blinding_from_seed(
-                initial_bytes.as_ptr(),
-                initial_bytes.len() as c_ulong,
-                bad_certificate_bytes.as_ptr(),
-                bad_certificate_bytes.len() as c_ulong,
-                1,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(code, ERR_OFFLINE_NONCE);
-        assert!(out_ptr.is_null());
-        assert_eq!(out_len, 0);
-    }
-}
-
-#[cfg(test)]
-mod offline_fastpq_proof_tests {
-    use std::{ptr, slice};
-
-    use curve25519_dalek::traits::Identity;
-    use iroha_crypto::KeyPair;
-    use iroha_data_model::{
-        account::AccountId,
-        asset::id::AssetDefinitionId,
-        offline::{
-            OFFLINE_PROOF_REQUEST_VERSION_V1, OfflineAllowanceCommitment, OfflineProofBlindingSeed,
-            OfflineProofRequestCounter, OfflineProofRequestHeader, OfflineProofRequestReplay,
-            OfflineProofRequestSum, PoseidonDigest,
-        },
-    };
-    use iroha_primitives::numeric::Numeric;
-    use norito::json;
-
-    use super::*;
-
-    fn sample_account_id(seed: u8) -> AccountId {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let (public_key, _) = keypair.into_parts();
-        let account = AccountId::new(public_key);
-        let literal = account.to_string();
-        AccountId::parse_encoded(&literal)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("encoded account")
-    }
-
-    fn sample_header(bundle_id: Hash, certificate_id: Hash) -> OfflineProofRequestHeader {
-        OfflineProofRequestHeader {
-            version: OFFLINE_PROOF_REQUEST_VERSION_V1,
-            bundle_id,
-            certificate_id,
-            receipts_root: PoseidonDigest::zero(),
-        }
-    }
-
-    fn sample_sum_request() -> OfflineProofRequestSum {
-        let owner = sample_account_id(1);
-        let bundle_id = Hash::new(b"bundle-fastpq");
-        let certificate_id = Hash::new(b"cert-fastpq");
-        let header = sample_header(bundle_id, certificate_id);
-        let asset_definition =
-            AssetDefinitionId::new("default".parse().unwrap(), "xor".parse().unwrap());
-        let asset_id = AssetId::new(asset_definition, owner);
-        let receipt_amounts = vec![Numeric::new(10, 0), Numeric::new(15, 0)];
-        let claimed_delta = Numeric::new(25, 0);
-        let blinding_seeds: Vec<_> = [10_u64, 11_u64]
-            .iter()
-            .map(|counter| OfflineProofBlindingSeed::derive(certificate_id, *counter))
-            .collect();
-        let blind_sum = blinding_seeds
-            .iter()
-            .map(blinding_scalar_from_seed)
-            .fold(Scalar::ZERO, |acc, scalar| acc + scalar);
-        let delta_scalar = numeric_to_scalar(&claimed_delta).expect("delta scalar");
-        let c_init = RistrettoPoint::identity();
-        let expected_delta =
-            RISTRETTO_BASEPOINT_POINT * delta_scalar + pedersen_generator_h() * blind_sum;
-        let c_res = c_init + expected_delta;
-        let initial_commitment = OfflineAllowanceCommitment::new(
-            asset_id,
-            Numeric::new(100, 0),
-            c_init.compress().to_bytes().to_vec(),
-        );
-        OfflineProofRequestSum {
-            header,
-            initial_commitment,
-            resulting_commitment: c_res.compress().to_bytes().to_vec(),
-            claimed_delta,
-            receipt_amounts,
-            blinding_seeds,
-        }
-    }
-
-    fn sample_counter_request() -> OfflineProofRequestCounter {
-        let header = sample_header(Hash::new(b"bundle-fastpq"), Hash::new(b"cert-fastpq"));
-        OfflineProofRequestCounter {
-            header,
-            counter_checkpoint: 9,
-            counters: vec![10, 11],
-        }
-    }
-
-    fn sample_replay_request() -> OfflineProofRequestReplay {
-        let header = sample_header(Hash::new(b"bundle-fastpq"), Hash::new(b"cert-fastpq"));
-        let replay_log_head = Hash::new(b"replay-head");
-        let tx_ids = vec![Hash::new(b"tx-a"), Hash::new(b"tx-b")];
-        let replay_log_tail = replay_chain(replay_log_head, &tx_ids);
-        OfflineProofRequestReplay {
-            header,
-            replay_log_head,
-            replay_log_tail,
-            tx_ids,
-        }
-    }
-
-    fn call_proof_sum(json_bytes: &[u8]) -> Vec<u8> {
-        let mut out_ptr: *mut u8 = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-        let code = unsafe {
-            connect_norito_offline_proof_sum(
-                json_bytes.as_ptr(),
-                json_bytes.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(code, 0, "sum proof should succeed");
-        assert!(!out_ptr.is_null());
-        let proof = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) }.to_vec();
-        connect_norito_free(out_ptr);
-        proof
-    }
-
-    #[test]
-    fn sum_proof_rejects_mismatched_scales() {
-        let _guard = super::test_support::chain_discriminant_guard();
-        let mut request = sample_sum_request();
-        request.receipt_amounts = vec![Numeric::new(10, 1), Numeric::new(15, 0)];
-        let result = generate_offline_fastpq_sum_proof(&request);
-        assert!(matches!(result, Err(BridgeError::Quantity)));
-    }
-
-    fn call_proof_counter(json_bytes: &[u8]) -> Vec<u8> {
-        let mut out_ptr: *mut u8 = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-        let code = unsafe {
-            connect_norito_offline_proof_counter(
-                json_bytes.as_ptr(),
-                json_bytes.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(code, 0, "counter proof should succeed");
-        assert!(!out_ptr.is_null());
-        let proof = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) }.to_vec();
-        connect_norito_free(out_ptr);
-        proof
-    }
-
-    fn call_proof_replay(json_bytes: &[u8]) -> Vec<u8> {
-        let mut out_ptr: *mut u8 = ptr::null_mut();
-        let mut out_len: c_ulong = 0;
-        let code = unsafe {
-            connect_norito_offline_proof_replay(
-                json_bytes.as_ptr(),
-                json_bytes.len() as c_ulong,
-                &mut out_ptr,
-                &mut out_len,
-            )
-        };
-        assert_eq!(code, 0, "replay proof should succeed");
-        assert!(!out_ptr.is_null());
-        let proof = unsafe { slice::from_raw_parts(out_ptr, out_len as usize) }.to_vec();
-        connect_norito_free(out_ptr);
-        proof
-    }
-
-    #[test]
-    fn offline_fastpq_sum_proof_matches_generator() {
-        let _guard = super::test_support::chain_discriminant_guard();
-        let request = sample_sum_request();
-        let sum_json = json::to_vec(&request).expect("sum json");
-        let parsed: OfflineProofRequestSum = json::from_slice(&sum_json).expect("sum json parse");
-        assert_eq!(parsed, request);
-        let proof_a = call_proof_sum(&sum_json);
-        let proof_b = call_proof_sum(&sum_json);
-        assert_eq!(proof_a, proof_b);
-        let expected = generate_offline_fastpq_sum_proof(&request).expect("sum proof");
-        let expected_bytes = to_bytes(&expected).expect("sum proof bytes");
-        assert_eq!(proof_a, expected_bytes);
-    }
-
-    #[test]
-    fn offline_fastpq_counter_proof_matches_generator() {
-        let _guard = super::test_support::chain_discriminant_guard();
-        let request = sample_counter_request();
-        let counter_json = json::to_vec(&request).expect("counter json");
-        let proof = call_proof_counter(&counter_json);
-        let expected = generate_offline_fastpq_counter_proof(&request).expect("counter proof");
-        let expected_bytes = to_bytes(&expected).expect("counter proof bytes");
-        assert_eq!(proof, expected_bytes);
-    }
-
-    #[test]
-    fn offline_fastpq_replay_proof_matches_generator() {
-        let _guard = super::test_support::chain_discriminant_guard();
-        let request = sample_replay_request();
-        let replay_json = json::to_vec(&request).expect("replay json");
-        let proof = call_proof_replay(&replay_json);
-        let expected = generate_offline_fastpq_replay_proof(&request).expect("replay proof");
-        let expected_bytes = to_bytes(&expected).expect("replay proof bytes");
-        assert_eq!(proof, expected_bytes);
     }
 }
 
@@ -9019,7 +8445,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
-        let account = parse_scoped_account_id(account_str)?;
+        let account = parse_account_id(account_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key(key_slice)?;
@@ -9031,8 +8457,8 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                 let account = account.clone();
                 move || {
                     let register = MultisigRegister::with_account(
-                        account.account.clone(),
-                        account.domain.clone(),
+                        account.clone(),
+                        None::<DomainId>,
                         spec.clone(),
                     );
                     Executable::from([InstructionBox::from(register)])
@@ -9082,7 +8508,7 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
         let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
-        let account = parse_scoped_account_id(account_str)?;
+        let account = parse_account_id(account_str)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
@@ -9094,8 +8520,8 @@ pub unsafe extern "C" fn connect_norito_encode_multisig_register_signed_transact
                 let account = account.clone();
                 move || {
                     let register = MultisigRegister::with_account(
-                        account.account.clone(),
-                        account.domain.clone(),
+                        account.clone(),
+                        None::<DomainId>,
                         spec.clone(),
                     );
                     Executable::from([InstructionBox::from(register)])
@@ -9181,6 +8607,120 @@ pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(
                 let burn = Burn::asset_numeric(quantity, asset_id);
                 Executable::from([InstructionBox::from(burn)])
             },
+        );
+
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transaction(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    account_ptr: *const c_char,
+    account_len: c_ulong,
+    receipt_ptr: *const c_char,
+    receipt_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        if private_key_ptr.is_null() || account_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
+        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
+        let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
+        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let authority = parse_account_id(authority_str)?;
+        let account = parse_account_id(account_str)?;
+        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
+        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
+        let private_key = parse_private_key(key_slice)?;
+        let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;
+
+        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            private_key,
+            InstructionBox::from(ClaimIdentifier { account, receipt }),
+        );
+
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+
+    bridge_result_to_code(result)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_claim_identifier_signed_transaction_alg(
+    chain_ptr: *const c_char,
+    chain_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    account_ptr: *const c_char,
+    account_len: c_ulong,
+    receipt_ptr: *const c_char,
+    receipt_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    algorithm_code: u8,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    let result = (|| {
+        if out_signed_ptr.is_null() || out_signed_len.is_null() || out_hash_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+        if private_key_ptr.is_null() || account_ptr.is_null() {
+            return Err(BridgeError::NullPtr);
+        }
+
+        let algorithm = parse_algorithm_code(algorithm_code)?;
+        let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
+        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
+        let account_str = unsafe { read_string_bridge(account_ptr, account_len) }?;
+        let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
+        let authority = parse_account_id(authority_str)?;
+        let account = parse_account_id(account_str)?;
+        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
+        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
+        let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
+        let receipt = parse_identifier_receipt_bytes(receipt_ptr, receipt_len)?;
+
+        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
+            chain_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            private_key,
+            InstructionBox::from(ClaimIdentifier { account, receipt }),
         );
 
         write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
@@ -9304,46 +8844,13 @@ pub unsafe extern "C" fn connect_norito_decode_signed_transaction_json(
     }
 }
 
-/// Build a canonical encoded `AssetId` literal (`norito:<hex>`) from textual parts.
-///
-/// Inputs:
-/// - `asset_definition`: canonical `aid:<32-lower-hex>` or textual `name#domain`
-/// - `account_id`: canonical account id (I105 literal)
-///
-/// Output bytes are UTF-8 text for the resulting `norito:<hex>` literal.
-///
-/// # Safety
-/// All pointer arguments must be valid and non-null.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_encode_asset_id_literal(
-    asset_definition_ptr: *const c_char,
-    asset_definition_len: c_ulong,
-    account_ptr: *const c_char,
-    account_len: c_ulong,
-    out_asset_ptr: *mut *mut c_uchar,
-    out_asset_len: *mut c_ulong,
-) -> c_int {
-    let result = (|| -> BridgeResult<()> {
-        if out_asset_ptr.is_null() || out_asset_len.is_null() {
-            return Err(BridgeError::NullPtr);
-        }
-        let asset_definition =
-            unsafe { read_string_bridge(asset_definition_ptr, asset_definition_len) }?;
-        let account = unsafe { read_string_bridge(account_ptr, account_len) }?;
-        let literal = encode_asset_id_literal(asset_definition, account)?;
-        unsafe { write_bytes_bridge(out_asset_ptr, out_asset_len, literal.as_bytes()) }?;
-        Ok(())
-    })();
-
-    bridge_result_to_code(result)
-}
-
-/// Decode an encoded `AssetId` (`norito:<hex>`) into canonical readable JSON fields.
+/// Decode a canonical internal `AssetId` balance-bucket literal into readable JSON fields.
 ///
 /// Response JSON object fields:
-/// - `asset_id`: canonical encoded asset id (`norito:<hex>`)
-/// - `asset_definition_id`: canonical asset definition id (`aid:<32-lower-hex>`)
-/// - `account_id`: canonical account id (I105 literal)
+/// - `asset_id`: canonical internal asset balance-bucket literal
+///   (`<base58-asset-definition-id>#<i105-account-id>`)
+/// - `asset_definition_id`: canonical asset definition id (unprefixed Base58 address)
+/// - `account_id`: canonical I105 account id (i105 literal)
 ///
 /// # Safety
 /// All pointer arguments must be valid and non-null.
@@ -9359,12 +8866,11 @@ pub unsafe extern "C" fn connect_norito_decode_asset_id_json(
             return Err(BridgeError::NullPtr);
         }
         let asset_literal = unsafe { read_string_bridge(asset_ptr, asset_len) }?;
-        let asset =
-            AssetId::parse_encoded(&asset_literal).map_err(|_| BridgeError::OfflineAsset)?;
+        let asset = AssetId::parse_literal(&asset_literal).map_err(|_| BridgeError::AssetId)?;
         let payload = JsonValue::Object(JsonMap::from_iter([
             (
                 "asset_id".to_owned(),
-                JsonValue::String(asset.canonical_encoded()),
+                JsonValue::String(asset.canonical_literal()),
             ),
             (
                 "asset_definition_id".to_owned(),
@@ -9375,8 +8881,7 @@ pub unsafe extern "C" fn connect_norito_decode_asset_id_json(
                 JsonValue::String(asset.account().to_string()),
             ),
         ]));
-        let json_bytes =
-            norito::json::to_vec(&payload).map_err(|_| BridgeError::OfflineSerialize)?;
+        let json_bytes = norito::json::to_vec(&payload).map_err(|_| BridgeError::JsonSerialize)?;
         unsafe { write_bytes_bridge(out_json_ptr, out_json_len, &json_bytes) }?;
         Ok(())
     })();
@@ -9667,31 +9172,6 @@ fn throw_java_illegal_argument(env: &mut jni::JNIEnv<'_>, message: String) {
     target_os = "macos",
     target_os = "windows"
 ))]
-fn as_jbytes(data: &[u8]) -> Vec<i8> {
-    data.iter().map(|byte| *byte as i8).collect()
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-fn jstring_to_string(
-    env: &mut jni::JNIEnv<'_>,
-    value: jni::objects::JString<'_>,
-) -> Result<String, String> {
-    env.get_string(&value)
-        .map(|s| s.into())
-        .map_err(|err| err.to_string())
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
 fn throw_java_illegal_state(env: &mut jni::JNIEnv<'_>, message: String) {
     let _ = env.throw_new("java/lang/IllegalStateException", message);
 }
@@ -9715,6 +9195,400 @@ where
             None
         }
     }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn read_java_byte_array(
+    env: &mut jni::JNIEnv<'_>,
+    array: &jni::objects::JByteArray<'_>,
+    context: &str,
+) -> Option<Vec<u8>> {
+    let len = match env.get_array_length(array) {
+        Ok(value) => value,
+        Err(err) => {
+            throw_java_illegal_argument(
+                env,
+                format!("{context} failed to read array length: {err}"),
+            );
+            return None;
+        }
+    } as usize;
+    let mut buf = vec![0i8; len];
+    if let Err(err) = env.get_byte_array_region(array, 0, &mut buf) {
+        throw_java_illegal_state(
+            env,
+            format!("{context} failed to read array contents: {err}"),
+        );
+        return None;
+    }
+    Some(buf.into_iter().map(|byte| byte as u8).collect())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_public_key_from_private_bytes(
+    algorithm_code: jni::sys::jint,
+    private_key: &[u8],
+) -> Result<Vec<u8>, String> {
+    let algorithm = parse_algorithm_code(algorithm_code as u8)
+        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let private_key = parse_private_key_with_algorithm(private_key, algorithm)
+        .map_err(|_| "invalid private key bytes".to_string())?;
+    let key_pair = KeyPair::from_private_key(private_key)
+        .map_err(|_| "failed to derive public key".to_string())?;
+    Ok(key_pair.public_key().to_bytes().1.to_vec())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_keypair_from_seed_bytes(
+    algorithm_code: jni::sys::jint,
+    seed: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let algorithm = parse_algorithm_code(algorithm_code as u8)
+        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let key_pair = KeyPair::from_seed(seed.to_vec(), algorithm);
+    let (public_key, private_key) = key_pair.into_parts();
+    Ok((
+        private_key.to_bytes().1.to_vec(),
+        public_key.to_bytes().1.to_vec(),
+    ))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sign_detached_bytes(
+    algorithm_code: jni::sys::jint,
+    private_key: &[u8],
+    message: &[u8],
+) -> Result<Vec<u8>, String> {
+    let algorithm = parse_algorithm_code(algorithm_code as u8)
+        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let private_key = parse_private_key_with_algorithm(private_key, algorithm)
+        .map_err(|_| "invalid private key bytes".to_string())?;
+    Ok(Signature::new(&private_key, message).payload().to_vec())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_verify_detached_bytes(
+    algorithm_code: jni::sys::jint,
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<bool, String> {
+    let algorithm = parse_algorithm_code(algorithm_code as u8)
+        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let public_key = PublicKey::from_bytes(algorithm, public_key)
+        .map_err(|_| "invalid public key bytes".to_string())?;
+    let signature = Signature::from_bytes(signature);
+    match signature.verify(&public_key, message) {
+        Ok(()) => Ok(true),
+        Err(CryptoError::BadSignature) => Ok(false),
+        Err(_) => Err("signature verification failed".to_string()),
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_public_key_from_private(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let private_bytes = read_java_byte_array(env, &private_key, "privateKey")
+            .ok_or_else(|| "invalid private key bytes".to_string())?;
+        let public_bytes = java_public_key_from_private_bytes(algorithm_code, &private_bytes)?;
+        let array = env
+            .byte_array_from_slice(&public_bytes)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_keypair_from_seed(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    seed: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let seed_bytes = read_java_byte_array(env, &seed, "seed")
+            .ok_or_else(|| "invalid seed bytes".to_string())?;
+        let (private_bytes, public_bytes) =
+            java_keypair_from_seed_bytes(algorithm_code, &seed_bytes)?;
+        let private_array = env
+            .byte_array_from_slice(&private_bytes)
+            .map_err(|err| err.to_string())?;
+        let public_array = env
+            .byte_array_from_slice(&public_bytes)
+            .map_err(|err| err.to_string())?;
+        let byte_array_class = env.find_class("[B").map_err(|err| err.to_string())?;
+        let array = env
+            .new_object_array(2, byte_array_class, jni::objects::JObject::null())
+            .map_err(|err| err.to_string())?;
+        env.set_object_array_element(&array, 0, &private_array)
+            .map_err(|err| err.to_string())?;
+        env.set_object_array_element(&array, 1, &public_array)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_sign_detached(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+    message: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let private_bytes = read_java_byte_array(env, &private_key, "privateKey")
+            .ok_or_else(|| "invalid private key bytes".to_string())?;
+        let message_bytes = read_java_byte_array(env, &message, "message")
+            .ok_or_else(|| "invalid message bytes".to_string())?;
+        let signature = java_sign_detached_bytes(algorithm_code, &private_bytes, &message_bytes)?;
+        let array = env
+            .byte_array_from_slice(&signature)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_verify_detached(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    public_key: jni::objects::JByteArray<'_>,
+    message: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    let result = (|| -> Result<jni::sys::jboolean, String> {
+        let public_bytes = read_java_byte_array(env, &public_key, "publicKey")
+            .ok_or_else(|| "invalid public key bytes".to_string())?;
+        let message_bytes = read_java_byte_array(env, &message, "message")
+            .ok_or_else(|| "invalid message bytes".to_string())?;
+        let signature_bytes = read_java_byte_array(env, &signature, "signature")
+            .ok_or_else(|| "invalid signature bytes".to_string())?;
+        let valid = java_verify_detached_bytes(
+            algorithm_code,
+            &public_bytes,
+            &message_bytes,
+            &signature_bytes,
+        )?;
+        Ok(if valid { 1 } else { 0 })
+    })();
+    match result {
+        Ok(valid) => valid,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            0
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativePublicKeyFromPrivate(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_public_key_from_private(&mut env, algorithm_code, private_key)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeKeypairFromSeed(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    seed: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_keypair_from_seed(&mut env, algorithm_code, seed)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeSignDetached(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+    message: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_sign_detached(&mut env, algorithm_code, private_key, message)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeVerifyDetached(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    public_key: jni::objects::JByteArray<'_>,
+    message: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    java_native_verify_detached(&mut env, algorithm_code, public_key, message, signature)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativePublicKeyFromPrivate(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_public_key_from_private(&mut env, algorithm_code, private_key)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeKeypairFromSeed(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    seed: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_keypair_from_seed(&mut env, algorithm_code, seed)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignDetached(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+    message: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_sign_detached(&mut env, algorithm_code, private_key, message)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeVerifyDetached(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    public_key: jni::objects::JByteArray<'_>,
+    message: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    java_native_verify_detached(&mut env, algorithm_code, public_key, message, signature)
 }
 
 #[cfg(any(
@@ -9833,225 +9707,29 @@ fn convert_field_elem<L: Into<String>>(
     target_os = "macos",
     target_os = "windows"
 ))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_OfflineReceiptChallenge_nativeCompute(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    chain_id: jni::objects::JString<'_>,
-    invoice: jni::objects::JString<'_>,
-    receiver: jni::objects::JString<'_>,
-    asset: jni::objects::JString<'_>,
-    amount: jni::objects::JString<'_>,
-    issued_at_ms: jni::sys::jlong,
-    sender_certificate_id_hex: jni::objects::JString<'_>,
-    nonce: jni::objects::JString<'_>,
-    iroha_hash_out: jni::objects::JByteArray<'_>,
-    client_hash_out: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    let result = (|| -> Result<jni::sys::jbyteArray, String> {
-        let chain_str = jstring_to_string(&mut env, chain_id)?;
-        let invoice_str = jstring_to_string(&mut env, invoice)?;
-        let receiver_str = jstring_to_string(&mut env, receiver)?;
-        let asset_str = jstring_to_string(&mut env, asset)?;
-        let amount_str = jstring_to_string(&mut env, amount)?;
-        let sender_certificate_id_str = jstring_to_string(&mut env, sender_certificate_id_hex)?;
-        let nonce_str = jstring_to_string(&mut env, nonce)?;
-
-        if env
-            .get_array_length(&iroha_hash_out)
-            .map_err(|err| err.to_string())?
-            < Hash::LENGTH as i32
-        {
-            return Err(format!(
-                "irohaHashOut must be at least {} bytes",
-                Hash::LENGTH
-            ));
-        }
-        if env
-            .get_array_length(&client_hash_out)
-            .map_err(|err| err.to_string())?
-            < 32
-        {
-            return Err("clientHashOut must be at least 32 bytes".into());
-        }
-
-        let (preimage, iroha_hash, client_hash) = compute_offline_receipt_challenge(
-            chain_str,
-            invoice_str,
-            receiver_str,
-            asset_str,
-            amount_str,
-            issued_at_ms as u64,
-            sender_certificate_id_str,
-            nonce_str,
-        )
-        .map_err(|err| format!("offline challenge error {}", err.code()))?;
-
-        let preimage_array = env
-            .byte_array_from_slice(&preimage)
-            .map_err(|err| err.to_string())?;
-        let iroha_jbytes = as_jbytes(&iroha_hash);
-        env.set_byte_array_region(iroha_hash_out, 0, &iroha_jbytes)
-            .map_err(|err| err.to_string())?;
-        let client_jbytes = as_jbytes(&client_hash);
-        env.set_byte_array_region(client_hash_out, 0, &client_jbytes)
-            .map_err(|err| err.to_string())?;
-        Ok(preimage_array.into_raw())
-    })();
-
-    match result {
-        Ok(array) => array,
-        Err(message) => {
-            throw_java_illegal_argument(&mut env, message);
-            std::ptr::null_mut()
-        }
+fn convert_field_elems<L: Into<String>>(
+    env: &mut jni::JNIEnv<'_>,
+    array: &jni::objects::JLongArray<'_>,
+    context: L,
+) -> Option<Vec<[u64; 4]>> {
+    let context = context.into();
+    let buf = read_long_array(env, array, &context)?;
+    if buf.len() % 4 != 0 {
+        throw_java_illegal_argument(
+            env,
+            format!("{context} expects a flattened array with a length multiple of 4"),
+        );
+        return None;
     }
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_OfflineSpendReceiptPayloadEncoder_nativeEncode(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    tx_id_hex: jni::objects::JString<'_>,
-    from_account: jni::objects::JString<'_>,
-    to_account: jni::objects::JString<'_>,
-    asset_id: jni::objects::JString<'_>,
-    amount: jni::objects::JString<'_>,
-    issued_at_ms: jni::sys::jlong,
-    invoice_id: jni::objects::JString<'_>,
-    platform_proof_json: jni::objects::JString<'_>,
-    sender_certificate_id_hex: jni::objects::JString<'_>,
-) -> jni::sys::jbyteArray {
-    let result = (|| -> Result<jni::sys::jbyteArray, String> {
-        let tx_id_str = jstring_to_string(&mut env, tx_id_hex)?;
-        let from_str = jstring_to_string(&mut env, from_account)?;
-        let to_str = jstring_to_string(&mut env, to_account)?;
-        let asset_str = jstring_to_string(&mut env, asset_id)?;
-        let amount_str = jstring_to_string(&mut env, amount)?;
-        let invoice_str = jstring_to_string(&mut env, invoice_id)?;
-        let proof_json = jstring_to_string(&mut env, platform_proof_json)?;
-        let certificate_id_hex = jstring_to_string(&mut env, sender_certificate_id_hex)?;
-
-        let bytes = encode_offline_spend_receipt_payload(
-            tx_id_str,
-            from_str,
-            to_str,
-            asset_str,
-            amount_str,
-            issued_at_ms as u64,
-            invoice_str,
-            proof_json,
-            certificate_id_hex,
-        )
-        .map_err(|e| format!("encode error: {}", e.code()))?;
-
-        let array = env
-            .byte_array_from_slice(&bytes)
-            .map_err(|e| e.to_string())?;
-        Ok(array.into_raw())
-    })();
-
-    match result {
-        Ok(array) => array,
-        Err(msg) => {
-            throw_java_illegal_argument(&mut env, msg);
-            std::ptr::null_mut()
+    let mut elems = Vec::with_capacity(buf.len() / 4);
+    for chunk in buf.chunks_exact(4) {
+        let mut limbs = [0u64; 4];
+        for (dst, src) in limbs.iter_mut().zip(chunk.iter()) {
+            *dst = *src as u64;
         }
+        elems.push(limbs);
     }
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_address_AssetIdLiteral_nativeEncodeFromParts(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    asset_definition: jni::objects::JString<'_>,
-    account_id: jni::objects::JString<'_>,
-) -> jni::sys::jstring {
-    let result = (|| -> Result<jni::sys::jstring, String> {
-        let definition = jstring_to_string(&mut env, asset_definition)?;
-        let account = jstring_to_string(&mut env, account_id)?;
-        let literal = encode_asset_id_literal(definition, account)
-            .map_err(|err| format!("encode asset id error: {}", err.code()))?;
-        let output = env.new_string(literal).map_err(|err| err.to_string())?;
-        Ok(output.into_raw())
-    })();
-
-    match result {
-        Ok(encoded) => encoded,
-        Err(message) => {
-            throw_java_illegal_argument(&mut env, message);
-            std::ptr::null_mut()
-        }
-    }
-}
-
-#[cfg(any(
-    target_os = "android",
-    target_os = "linux",
-    target_os = "macos",
-    target_os = "windows"
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_OfflineBuildClaimPayloadEncoder_nativeEncode(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    claim_id_hex: jni::objects::JString<'_>,
-    platform: jni::objects::JString<'_>,
-    app_id: jni::objects::JString<'_>,
-    build_number: jni::sys::jlong,
-    issued_at_ms: jni::sys::jlong,
-    expires_at_ms: jni::sys::jlong,
-    lineage_scope: jni::objects::JString<'_>,
-    nonce_hex: jni::objects::JString<'_>,
-) -> jni::sys::jbyteArray {
-    let result = (|| -> Result<jni::sys::jbyteArray, String> {
-        let claim_id = jstring_to_string(&mut env, claim_id_hex)?;
-        let platform_str = jstring_to_string(&mut env, platform)?;
-        let app = jstring_to_string(&mut env, app_id)?;
-        let scope = jstring_to_string(&mut env, lineage_scope)?;
-        let nonce = jstring_to_string(&mut env, nonce_hex)?;
-
-        let bytes = encode_offline_build_claim_payload(
-            claim_id,
-            platform_str,
-            app,
-            build_number as u64,
-            issued_at_ms as u64,
-            expires_at_ms as u64,
-            scope,
-            nonce,
-        )
-        .map_err(|e| format!("encode error: {}", e.code()))?;
-
-        let array = env
-            .byte_array_from_slice(&bytes)
-            .map_err(|e| e.to_string())?;
-        Ok(array.into_raw())
-    })();
-
-    match result {
-        Ok(array) => array,
-        Err(msg) => {
-            throw_java_illegal_argument(&mut env, msg);
-            std::ptr::null_mut()
-        }
-    }
+    Some(elems)
 }
 
 #[cfg(any(
@@ -10385,365 +10063,69 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAcceler
     }
 }
 
-#[cfg(test)]
-mod offline_receipt_challenge_tests {
-    use super::*;
-    use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        account::AccountId,
-        asset::{AssetDefinitionId, AssetId},
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254AddBatch(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    lhs: jni::objects::JLongArray<'_>,
+    rhs: jni::objects::JLongArray<'_>,
+    out: jni::objects::JLongArray<'_>,
+) -> jni::sys::jboolean {
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
+
+    let lhs = match convert_field_elems(&mut env, &lhs, "bn254AddBatch lhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
     };
-
-    fn sample_account_id() -> AccountId {
-        let keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
-        AccountId::new(keypair.public_key().clone())
-    }
-
-    fn sample_asset_id(account: &AccountId) -> AssetId {
-        let definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
-            "xor".parse().unwrap(),
+    let rhs = match convert_field_elems(&mut env, &rhs, "bn254AddBatch rhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if lhs.len() != rhs.len() {
+        throw_java_illegal_argument(
+            &mut env,
+            "bn254AddBatch expects matching batch lengths".into(),
         );
-        AssetId::new(definition, account.clone())
+        return JNI_FALSE;
     }
-
-    fn account_literal(account: &AccountId) -> String {
-        account.to_string()
-    }
-
-    fn asset_literal(asset: &AssetId) -> String {
-        asset.canonical_encoded()
-    }
-
-    #[test]
-    fn receipt_challenge_rejects_empty_chain_id() {
-        let _guard = super::test_support::chain_discriminant_guard();
-        let receiver = sample_account_id();
-        let asset = sample_asset_id(&receiver);
-        let asset_literal = asset_literal(&asset);
-        let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
-        assert_eq!(reparsed_asset, asset);
-        let sender_certificate_id = Hash::new(b"receipt-certificate").to_string();
-        let nonce = Hash::new(b"receipt-nonce").to_string();
-        let result = compute_offline_receipt_challenge(
-            "".to_string(),
-            "inv-1".to_string(),
-            account_literal(&receiver),
-            asset_literal,
-            "1".to_string(),
-            0,
-            sender_certificate_id,
-            nonce,
-        );
-        assert!(matches!(result, Err(BridgeError::ChainId)));
-    }
-
-    #[test]
-    fn receipt_challenge_accepts_scaled_amount() {
-        let _guard = super::test_support::chain_discriminant_guard();
-        let receiver = sample_account_id();
-        let asset = sample_asset_id(&receiver);
-        let asset_literal = asset_literal(&asset);
-        let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
-        assert_eq!(reparsed_asset, asset);
-        let sender_certificate_id = Hash::new(b"receipt-certificate").to_string();
-        let nonce = Hash::new(b"receipt-nonce").to_string();
-        let result = compute_offline_receipt_challenge(
-            "test-chain".to_string(),
-            "inv-1".to_string(),
-            account_literal(&receiver),
-            asset_literal,
-            "1.5".to_string(),
-            0,
-            sender_certificate_id,
-            nonce,
-        );
-        assert!(result.is_ok(), "expected ok, got {result:?}");
-    }
-}
-
-#[cfg(test)]
-mod offline_balance_proof_tests {
-    use curve25519_dalek::{scalar::Scalar, traits::VartimeMultiscalarMul};
-    use iroha_primitives::numeric::Numeric;
-
-    use super::*;
-
-    fn scalar_bytes(scalar: Scalar) -> [u8; 32] {
-        scalar.to_bytes()
-    }
-
-    fn pedersen_commit(value: &Numeric, blinding: Scalar) -> RistrettoPoint {
-        let scalar = numeric_to_scalar(value).expect("numeric to scalar");
-        RISTRETTO_BASEPOINT_POINT * scalar + pedersen_generator_h() * blinding
-    }
-
-    fn verify_proof(
-        chain_id: &ChainId,
-        claimed_delta: &Numeric,
-        c_init: &RistrettoPoint,
-        c_res: &RistrettoPoint,
-        proof: &[u8],
-    ) -> bool {
-        if proof.len() != OFFLINE_BALANCE_PROOF_BYTES {
-            return false;
-        }
-        if proof[0] != OFFLINE_BALANCE_PROOF_VERSION {
-            return false;
-        }
-        let delta_proof = &proof[1..1 + OFFLINE_DELTA_PROOF_BYTES];
-        let range_proof = &proof[1 + OFFLINE_DELTA_PROOF_BYTES..];
-        let r_point = match decode_commitment_point(&delta_proof[0..32]) {
-            Ok(point) => point,
-            Err(_) => return false,
-        };
-        let s_g = match decode_scalar_bytes(&delta_proof[32..64]) {
-            Ok(scalar) => scalar,
-            Err(_) => return false,
-        };
-        let s_h = match decode_scalar_bytes(&delta_proof[64..96]) {
-            Ok(scalar) => scalar,
-            Err(_) => return false,
-        };
-        let delta_bytes = match numeric_to_le_bytes(claimed_delta) {
-            Ok(bytes) => bytes,
-            Err(_) => return false,
-        };
-        let context = transcript_context(chain_id);
-        let u = c_res - c_init;
-        let challenge = transcript_challenge(c_init, c_res, &delta_bytes, &context, &u, &r_point);
-        let lhs = RistrettoPoint::vartime_multiscalar_mul(
-            [s_g, s_h],
-            [RISTRETTO_BASEPOINT_POINT, *pedersen_generator_h()],
-        );
-        let rhs = r_point + u * challenge;
-        lhs == rhs && verify_range_proof(chain_id, c_res, range_proof)
-    }
-
-    fn verify_range_proof(chain_id: &ChainId, c_res: &RistrettoPoint, range_proof: &[u8]) -> bool {
-        if range_proof.len() != OFFLINE_RANGE_PROOF_BYTES {
-            return false;
-        }
-        let context = transcript_context(chain_id);
-        let mut commitments = Vec::with_capacity(OFFLINE_RANGE_PROOF_BITS);
-        for bit_index in 0..OFFLINE_RANGE_PROOF_BITS {
-            let offset = bit_index * OFFLINE_RANGE_PROOF_PER_BIT_BYTES;
-            let commitment = match decode_commitment_point(&range_proof[offset..offset + 32]) {
-                Ok(point) => point,
-                Err(_) => return false,
-            };
-            let a0 = match decode_commitment_point(&range_proof[offset + 32..offset + 64]) {
-                Ok(point) => point,
-                Err(_) => return false,
-            };
-            let a1 = match decode_commitment_point(&range_proof[offset + 64..offset + 96]) {
-                Ok(point) => point,
-                Err(_) => return false,
-            };
-            let e0 = match decode_scalar_bytes(&range_proof[offset + 96..offset + 128]) {
-                Ok(scalar) => scalar,
-                Err(_) => return false,
-            };
-            let s0 = match decode_scalar_bytes(&range_proof[offset + 128..offset + 160]) {
-                Ok(scalar) => scalar,
-                Err(_) => return false,
-            };
-            let s1 = match decode_scalar_bytes(&range_proof[offset + 160..offset + 192]) {
-                Ok(scalar) => scalar,
-                Err(_) => return false,
-            };
-            let challenge = range_proof_challenge(&context, bit_index as u8, &commitment, &a0, &a1);
-            let e1 = challenge - e0;
-            let lhs0 = RistrettoPoint::vartime_multiscalar_mul(
-                [s0, -e0],
-                [*pedersen_generator_h(), commitment],
+    let out_len = match i32::try_from(lhs.len().saturating_mul(4)) {
+        Ok(value) => value,
+        Err(_) => {
+            throw_java_illegal_argument(
+                &mut env,
+                "bn254AddBatch output exceeds Java array limits".into(),
             );
-            if lhs0 != a0 {
-                return false;
-            }
-            let commitment_minus_g = commitment - RISTRETTO_BASEPOINT_POINT;
-            let lhs1 = RistrettoPoint::vartime_multiscalar_mul(
-                [s1, -e1],
-                [*pedersen_generator_h(), commitment_minus_g],
-            );
-            if lhs1 != a1 {
-                return false;
-            }
-            commitments.push(commitment);
+            return JNI_FALSE;
         }
-        let scalars: Vec<Scalar> = (0..OFFLINE_RANGE_PROOF_BITS)
-            .map(|index| Scalar::from(1u64 << index))
+    };
+    if !ensure_min_array_length(&mut env, &out, out_len, "bn254AddBatch") {
+        return JNI_FALSE;
+    }
+    let result = match catch_unwind_to_java(&mut env, "bn254_add_batch_cuda", || {
+        ivm::bn254_add_batch_cuda(&lhs, &rhs)
+    }) {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if let Some(fields) = result {
+        let values: Vec<i64> = fields
+            .into_iter()
+            .flat_map(|field| field.into_iter().map(|limb| limb as i64))
             .collect();
-        let sum = RistrettoPoint::vartime_multiscalar_mul(scalars, commitments.iter());
-        sum == *c_res
-    }
-
-    #[test]
-    fn commitment_update_and_proof_roundtrip() {
-        let chain_id = ChainId::from("iroha-sdk-tests");
-        let initial_amount = Numeric::new(50, 2);
-        let delta = Numeric::new(7, 2);
-        let updated_amount = initial_amount
-            .clone()
-            .checked_add(delta.clone())
-            .expect("sum");
-        let blind_init = Scalar::from(5u64);
-        let blind_res = Scalar::from(11u64);
-
-        let c_init = pedersen_commit(&initial_amount, blind_init);
-        let c_res_expected = pedersen_commit(&updated_amount, blind_res);
-        let init_bytes = c_init.compress().as_bytes().to_vec();
-        let blind_init_bytes = scalar_bytes(blind_init).to_vec();
-        let blind_res_bytes = scalar_bytes(blind_res).to_vec();
-
-        let updated_bytes =
-            update_offline_commitment(&init_bytes, &delta, &blind_init_bytes, &blind_res_bytes)
-                .expect("commitment update");
-        assert_eq!(&updated_bytes[..], c_res_expected.compress().as_bytes());
-
-        let proof = generate_offline_balance_proof(
-            chain_id.clone(),
-            &delta,
-            &updated_amount,
-            &init_bytes,
-            &updated_bytes,
-            &blind_init_bytes,
-            &blind_res_bytes,
-        )
-        .expect("balance proof");
-
-        assert!(
-            verify_proof(&chain_id, &delta, &c_init, &c_res_expected, &proof),
-            "proof must verify"
-        );
-    }
-
-    #[test]
-    fn commitment_update_accepts_scaled_delta() {
-        let initial_amount = Numeric::new(50, 1);
-        let delta = Numeric::new(5, 1);
-        let updated_amount = Numeric::new(55, 1);
-        let blind_init = Scalar::from(5u64);
-        let blind_res = Scalar::from(11u64);
-        let c_init = pedersen_commit(&initial_amount, blind_init);
-        let c_res_expected = pedersen_commit(&updated_amount, blind_res);
-        let init_bytes = c_init.compress().as_bytes().to_vec();
-        let blind_init_bytes = scalar_bytes(blind_init).to_vec();
-        let blind_res_bytes = scalar_bytes(blind_res).to_vec();
-
-        let updated =
-            update_offline_commitment(&init_bytes, &delta, &blind_init_bytes, &blind_res_bytes)
-                .expect("commitment update");
-        assert_eq!(&updated[..], c_res_expected.compress().as_bytes());
-    }
-
-    /// Simulates iOS offline payment flow:
-    /// 1. topUp creates C(initial_amount, blind) via updateCommitment(zeros, amount, zeros, blind)
-    /// 2. Spend delta: updateCommitment(c_init, delta, blind_init, blind_res)
-    /// 3. generateProof must accept resultingValue = initial_amount + delta
-    #[test]
-    fn topup_then_spend_roundtrip() {
-        let chain_id = ChainId::from("sora");
-        let topup_amount = Numeric::new(4500, 2); // "45.00"
-        let spend_delta = Numeric::new(500, 2); // "5.00"
-
-        // Step 1: topUp — compute initial commitment C(45.00, blind_topup)
-        let zero_commitment = [0u8; 32];
-        let zero_blinding = [0u8; 32];
-        let blind_topup = Scalar::from(42u64);
-        let blind_topup_bytes = scalar_bytes(blind_topup).to_vec();
-
-        let c_init_bytes = update_offline_commitment(
-            &zero_commitment,
-            &topup_amount,
-            &zero_blinding,
-            &blind_topup_bytes,
-        )
-        .expect("initial commitment");
-
-        // Verify: c_init should be C(45.00, blind_topup)
-        let c_init_expected = pedersen_commit(&topup_amount, blind_topup);
-        assert_eq!(
-            &c_init_bytes[..],
-            c_init_expected.compress().as_bytes(),
-            "initial commitment must equal C(topup_amount, blind_topup)"
-        );
-
-        // Step 2: spend 5.00 — resultingValue = topup_amount + spend_delta
-        let resulting_amount = topup_amount
-            .clone()
-            .checked_add(spend_delta.clone())
-            .expect("sum");
-        let blind_spend = Scalar::from(99u64);
-        let blind_spend_bytes = scalar_bytes(blind_spend).to_vec();
-
-        let proof = generate_offline_balance_proof(
-            chain_id.clone(),
-            &spend_delta,
-            &resulting_amount,
-            &c_init_bytes,
-            &update_offline_commitment(
-                &c_init_bytes,
-                &spend_delta,
-                &blind_topup_bytes,
-                &blind_spend_bytes,
-            )
-            .expect("updated commitment"),
-            &blind_topup_bytes,
-            &blind_spend_bytes,
-        )
-        .expect("balance proof for spend");
-
-        // Verify proof
-        let c_init = decode_commitment_point(&c_init_bytes).unwrap();
-        let c_res = pedersen_commit(&resulting_amount, blind_spend);
-        assert!(
-            verify_proof(&chain_id, &spend_delta, &c_init, &c_res, &proof),
-            "spend proof must verify"
-        );
-    }
-
-    #[test]
-    fn proof_rejects_scale_mismatch() {
-        let chain_id = ChainId::from("iroha-sdk-tests");
-        let initial_amount = Numeric::new(50, 0);
-        let delta = Numeric::new(7, 0);
-        let resulting_value = Numeric::new(575, 1);
-        let blind_init = Scalar::from(5u64);
-        let blind_res = Scalar::from(11u64);
-
-        let c_init = pedersen_commit(&initial_amount, blind_init);
-        let c_res_expected = pedersen_commit(&Numeric::new(57, 0), blind_res);
-        let init_bytes = c_init.compress().as_bytes().to_vec();
-        let updated_bytes = c_res_expected.compress().as_bytes().to_vec();
-        let blind_init_bytes = scalar_bytes(blind_init).to_vec();
-        let blind_res_bytes = scalar_bytes(blind_res).to_vec();
-
-        let proof = generate_offline_balance_proof(
-            chain_id,
-            &delta,
-            &resulting_value,
-            &init_bytes,
-            &updated_bytes,
-            &blind_init_bytes,
-            &blind_res_bytes,
-        );
-        assert!(matches!(proof, Err(BridgeError::Quantity)));
-    }
-
-    #[test]
-    fn derive_offline_blinding_from_seed_matches_expected_sum() {
-        let initial = Scalar::from(19u64);
-        let certificate_id = Hash::new(b"offline-certificate");
-        let counter = 11u64;
-        let seed = OfflineProofBlindingSeed::derive(certificate_id, counter);
-        let expected = (initial + blinding_scalar_from_seed(&seed)).to_bytes();
-
-        let derived =
-            derive_offline_blinding_from_seed(&initial.to_bytes(), certificate_id, counter)
-                .expect("derive resulting blinding");
-
-        assert_eq!(derived, expected);
+        if write_long_array(&mut env, &out, &values, "bn254AddBatch") {
+            JNI_TRUE
+        } else {
+            JNI_FALSE
+        }
+    } else {
+        JNI_FALSE
     }
 }
 
@@ -10755,52 +10137,61 @@ mod offline_balance_proof_tests {
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_OfflineBalanceProof_nativeUpdateCommitment(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254SubBatch(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    initial_commitment: jni::objects::JByteArray<'_>,
-    claimed_delta: jni::objects::JString<'_>,
-    initial_blinding: jni::objects::JByteArray<'_>,
-    resulting_blinding: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    let result = (|| -> Result<jni::sys::jbyteArray, String> {
-        let initial_commitment_vec = env
-            .convert_byte_array(initial_commitment)
-            .map_err(|err| err.to_string())?;
-        let initial_blinding_vec = env
-            .convert_byte_array(initial_blinding)
-            .map_err(|err| err.to_string())?;
-        let resulting_blinding_vec = env
-            .convert_byte_array(resulting_blinding)
-            .map_err(|err| err.to_string())?;
-        if initial_commitment_vec.len() != 32 {
-            return Err("initialCommitment must be 32 bytes".into());
-        }
-        if initial_blinding_vec.len() != 32 || resulting_blinding_vec.len() != 32 {
-            return Err("blinding scalars must be 32 bytes".into());
-        }
-        let delta_str = jstring_to_string(&mut env, claimed_delta)?;
-        let claimed_delta =
-            Numeric::from_str(&delta_str).map_err(|_| "invalid delta value".to_owned())?;
-        let updated = update_offline_commitment(
-            &initial_commitment_vec,
-            &claimed_delta,
-            &initial_blinding_vec,
-            &resulting_blinding_vec,
-        )
-        .map_err(|err| format!("offline commitment error {}", err.code()))?;
-        let array = env
-            .byte_array_from_slice(&updated)
-            .map_err(|err| err.to_string())?;
-        Ok(array.into_raw())
-    })();
+    lhs: jni::objects::JLongArray<'_>,
+    rhs: jni::objects::JLongArray<'_>,
+    out: jni::objects::JLongArray<'_>,
+) -> jni::sys::jboolean {
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
 
-    match result {
-        Ok(array) => array,
-        Err(message) => {
-            throw_java_illegal_argument(&mut env, message);
-            std::ptr::null_mut()
+    let lhs = match convert_field_elems(&mut env, &lhs, "bn254SubBatch lhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    let rhs = match convert_field_elems(&mut env, &rhs, "bn254SubBatch rhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if lhs.len() != rhs.len() {
+        throw_java_illegal_argument(
+            &mut env,
+            "bn254SubBatch expects matching batch lengths".into(),
+        );
+        return JNI_FALSE;
+    }
+    let out_len = match i32::try_from(lhs.len().saturating_mul(4)) {
+        Ok(value) => value,
+        Err(_) => {
+            throw_java_illegal_argument(
+                &mut env,
+                "bn254SubBatch output exceeds Java array limits".into(),
+            );
+            return JNI_FALSE;
         }
+    };
+    if !ensure_min_array_length(&mut env, &out, out_len, "bn254SubBatch") {
+        return JNI_FALSE;
+    }
+    let result = match catch_unwind_to_java(&mut env, "bn254_sub_batch_cuda", || {
+        ivm::bn254_sub_batch_cuda(&lhs, &rhs)
+    }) {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if let Some(fields) = result {
+        let values: Vec<i64> = fields
+            .into_iter()
+            .flat_map(|field| field.into_iter().map(|limb| limb as i64))
+            .collect();
+        if write_long_array(&mut env, &out, &values, "bn254SubBatch") {
+            JNI_TRUE
+        } else {
+            JNI_FALSE
+        }
+    } else {
+        JNI_FALSE
     }
 }
 
@@ -10812,65 +10203,61 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_Offline
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_OfflineBalanceProof_nativeGenerate(
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_gpu_CudaAccelerators_nativeBn254MulBatch(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
-    chain_id: jni::objects::JString<'_>,
-    initial_commitment: jni::objects::JByteArray<'_>,
-    resulting_commitment: jni::objects::JByteArray<'_>,
-    claimed_delta: jni::objects::JString<'_>,
-    resulting_value: jni::objects::JString<'_>,
-    initial_blinding: jni::objects::JByteArray<'_>,
-    resulting_blinding: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    let result = (|| -> Result<jni::sys::jbyteArray, String> {
-        let chain_str = jstring_to_string(&mut env, chain_id)?;
-        let delta_str = jstring_to_string(&mut env, claimed_delta)?;
-        let resulting_value_str = jstring_to_string(&mut env, resulting_value)?;
-        let initial_commitment_vec = env
-            .convert_byte_array(initial_commitment)
-            .map_err(|err| err.to_string())?;
-        let resulting_commitment_vec = env
-            .convert_byte_array(resulting_commitment)
-            .map_err(|err| err.to_string())?;
-        let initial_blinding_vec = env
-            .convert_byte_array(initial_blinding)
-            .map_err(|err| err.to_string())?;
-        let resulting_blinding_vec = env
-            .convert_byte_array(resulting_blinding)
-            .map_err(|err| err.to_string())?;
-        if initial_commitment_vec.len() != 32 || resulting_commitment_vec.len() != 32 {
-            return Err("commitments must be 32 bytes".into());
-        }
-        if initial_blinding_vec.len() != 32 || resulting_blinding_vec.len() != 32 {
-            return Err("blinding scalars must be 32 bytes".into());
-        }
-        let claimed_delta =
-            Numeric::from_str(&delta_str).map_err(|_| "invalid delta value".to_owned())?;
-        let resulting_value = Numeric::from_str(&resulting_value_str)
-            .map_err(|_| "invalid resulting value".to_owned())?;
-        let proof = generate_offline_balance_proof(
-            ChainId::from(chain_str),
-            &claimed_delta,
-            &resulting_value,
-            &initial_commitment_vec,
-            &resulting_commitment_vec,
-            &initial_blinding_vec,
-            &resulting_blinding_vec,
-        )
-        .map_err(|err| format!("offline proof error {}", err.code()))?;
-        let array = env
-            .byte_array_from_slice(&proof)
-            .map_err(|err| err.to_string())?;
-        Ok(array.into_raw())
-    })();
+    lhs: jni::objects::JLongArray<'_>,
+    rhs: jni::objects::JLongArray<'_>,
+    out: jni::objects::JLongArray<'_>,
+) -> jni::sys::jboolean {
+    use jni::sys::{JNI_FALSE, JNI_TRUE};
 
-    match result {
-        Ok(array) => array,
-        Err(message) => {
-            throw_java_illegal_argument(&mut env, message);
-            std::ptr::null_mut()
+    let lhs = match convert_field_elems(&mut env, &lhs, "bn254MulBatch lhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    let rhs = match convert_field_elems(&mut env, &rhs, "bn254MulBatch rhs") {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if lhs.len() != rhs.len() {
+        throw_java_illegal_argument(
+            &mut env,
+            "bn254MulBatch expects matching batch lengths".into(),
+        );
+        return JNI_FALSE;
+    }
+    let out_len = match i32::try_from(lhs.len().saturating_mul(4)) {
+        Ok(value) => value,
+        Err(_) => {
+            throw_java_illegal_argument(
+                &mut env,
+                "bn254MulBatch output exceeds Java array limits".into(),
+            );
+            return JNI_FALSE;
         }
+    };
+    if !ensure_min_array_length(&mut env, &out, out_len, "bn254MulBatch") {
+        return JNI_FALSE;
+    }
+    let result = match catch_unwind_to_java(&mut env, "bn254_mul_batch_cuda", || {
+        ivm::bn254_mul_batch_cuda(&lhs, &rhs)
+    }) {
+        Some(value) => value,
+        None => return JNI_FALSE,
+    };
+    if let Some(fields) = result {
+        let values: Vec<i64> = fields
+            .into_iter()
+            .flat_map(|field| field.into_iter().map(|limb| limb as i64))
+            .collect();
+        if write_long_array(&mut env, &out, &values, "bn254MulBatch") {
+            JNI_TRUE
+        } else {
+            JNI_FALSE
+        }
+    } else {
+        JNI_FALSE
     }
 }
 
@@ -11751,6 +11138,7 @@ mod tests {
     use std::{ffi::CString, mem::MaybeUninit};
 
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::isi::rwa::RwaInstructionBox;
 
     use super::*;
 
@@ -11824,6 +11212,226 @@ mod tests {
         (signature, public_key)
     }
 
+    fn sample_identifier_receipt_payload() -> IdentifierResolutionReceiptPayload {
+        let signatory = KeyPair::random().public_key().clone();
+        IdentifierResolutionReceiptPayload {
+            policy_id: "email#retail".parse().expect("valid policy id"),
+            execution: iroha_data_model::ram_lfe::RamLfeExecutionReceiptPayload {
+                program_id: "identifier_lookup_retail"
+                    .parse()
+                    .expect("valid program id"),
+                program_digest: Hash::new(b"program"),
+                backend: iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1,
+                verification_mode: iroha_crypto::RamLfeVerificationMode::Signed,
+                output_hash: Hash::new(b"output"),
+                associated_data_hash: Hash::new(b"associated-data"),
+                executed_at_ms: 7,
+                expires_at_ms: Some(107),
+            },
+            opaque_id: iroha_data_model::account::OpaqueAccountId::from_hash(Hash::new(b"opaque")),
+            receipt_hash: Hash::new(b"receipt"),
+            uaid: iroha_data_model::nexus::UniversalAccountId::from_hash(Hash::new(b"uaid")),
+            account_id: AccountId::new(signatory),
+        }
+    }
+
+    fn sample_identifier_signature_hex() -> String {
+        "ab".repeat(64)
+    }
+
+    fn hex_hash(hash: Hash) -> String {
+        hex::encode(&hash.as_ref()[..])
+    }
+
+    fn sample_rwa_id_literal() -> String {
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal"
+            .to_owned()
+    }
+
+    #[test]
+    fn parse_identifier_receipt_accepts_canonical_payload_attestation() {
+        let payload = sample_identifier_receipt_payload();
+        let receipt = parse_identifier_receipt_value(json_object([
+            (
+                "payload",
+                json_object([
+                    ("policy_id", JsonValue::from("email#retail")),
+                    (
+                        "execution",
+                        json_object([
+                            ("program_id", JsonValue::from("identifier_lookup_retail")),
+                            (
+                                "program_digest",
+                                JsonValue::from(hex_hash(payload.execution.program_digest)),
+                            ),
+                            ("backend", JsonValue::from("bfv-programmed-sha3-256-v1")),
+                            ("verification_mode", JsonValue::from("signed")),
+                            (
+                                "output_hash",
+                                JsonValue::from(hex_hash(payload.execution.output_hash)),
+                            ),
+                            (
+                                "associated_data_hash",
+                                JsonValue::from(hex_hash(payload.execution.associated_data_hash)),
+                            ),
+                            (
+                                "executed_at_ms",
+                                JsonValue::from(payload.execution.executed_at_ms),
+                            ),
+                            (
+                                "expires_at_ms",
+                                JsonValue::from(
+                                    payload.execution.expires_at_ms.expect("sample expiry"),
+                                ),
+                            ),
+                        ]),
+                    ),
+                    ("opaque_id", JsonValue::from(payload.opaque_id.to_string())),
+                    (
+                        "receipt_hash",
+                        JsonValue::from(hex_hash(payload.receipt_hash)),
+                    ),
+                    ("uaid", JsonValue::from(payload.uaid.to_string())),
+                    (
+                        "account_id",
+                        JsonValue::from(payload.account_id.to_string()),
+                    ),
+                ]),
+            ),
+            (
+                "attestation",
+                json_object([
+                    ("kind", JsonValue::from("signed")),
+                    (
+                        "signature",
+                        JsonValue::from(sample_identifier_signature_hex()),
+                    ),
+                ]),
+            ),
+        ]))
+        .expect("parse structured torii receipt");
+
+        assert_eq!(receipt.payload, payload);
+        let RamLfeReceiptAttestation::Signed(signature) = receipt.attestation else {
+            panic!("receipt attestation must be signed");
+        };
+        assert_eq!(
+            hex::encode(signature.payload()),
+            sample_identifier_signature_hex()
+        );
+    }
+
+    #[test]
+    fn parse_identifier_receipt_rejects_legacy_payload_hex() {
+        let err = parse_identifier_receipt_value(json_object([
+            (
+                "signature",
+                JsonValue::from(sample_identifier_signature_hex()),
+            ),
+            ("signature_payload_hex", JsonValue::from("01020304A0")),
+        ]))
+        .expect_err("opaque payload hex is not canonical receipt input");
+        assert!(matches!(err, BridgeError::IdentifierReceipt));
+    }
+
+    #[test]
+    fn parse_identifier_receipt_rejects_legacy_signature_payload() {
+        let err = parse_identifier_receipt_value(json_object([
+            (
+                "signature",
+                JsonValue::from(sample_identifier_signature_hex()),
+            ),
+            (
+                "signature_payload",
+                json_object([("policy_id", JsonValue::from("email#retail"))]),
+            ),
+        ]))
+        .expect_err("missing execution payload must fail closed");
+        assert!(matches!(err, BridgeError::IdentifierReceipt));
+    }
+
+    #[test]
+    fn print_sample_claim_identifier_wire_payload_hex() {
+        use iroha_crypto::Signature;
+        use iroha_data_model::identifier::IdentifierResolutionReceipt;
+        use iroha_data_model::isi::{Instruction, InstructionBox, identifier::ClaimIdentifier};
+
+        let payload = sample_identifier_receipt_payload();
+        let receipt = IdentifierResolutionReceipt {
+            payload: payload.clone(),
+            attestation: RamLfeReceiptAttestation::Signed(
+                Signature::from_hex(sample_identifier_signature_hex())
+                    .expect("valid signature hex"),
+            ),
+        };
+        let instruction = ClaimIdentifier {
+            account: payload.account_id.clone(),
+            receipt,
+        };
+        let bare = Instruction::dyn_encode(&instruction);
+        let boxed = InstructionBox::from(instruction);
+        let framed = norito::core::to_bytes(&boxed).expect("serialize instruction");
+        let (wire_name, framed_payload) =
+            norito::decode_from_bytes::<(String, Vec<u8>)>(&framed).expect("decode wire tuple");
+
+        println!("RUST_CLAIM_WIRE_NAME={wire_name}");
+        println!("RUST_CLAIM_BARE_HEX={}", hex::encode_upper(&bare));
+        println!(
+            "RUST_CLAIM_FRAMED_HEX={}",
+            hex::encode_upper(framed_payload)
+        );
+    }
+
+    #[test]
+    fn rwa_metadata_target_parses_kind_four() {
+        let literal = sample_rwa_id_literal();
+        let target = parse_metadata_target(4, literal.clone()).expect("parse rwa target");
+        match target {
+            MetadataTarget::Rwa(id) => assert_eq!(id.to_string(), literal),
+            _ => panic!("expected rwa metadata target"),
+        }
+    }
+
+    #[test]
+    fn rwa_metadata_target_builds_set_key_value_in_rwa_instruction_box() {
+        let literal = sample_rwa_id_literal();
+        let target = parse_metadata_target(4, literal.clone()).expect("parse rwa target");
+        let key: Name = "serial".parse().expect("valid name");
+        let instruction =
+            build_set_metadata_instruction(target, key.clone(), Json::from("vault-01"));
+        let rwa = instruction
+            .as_any()
+            .downcast_ref::<RwaInstructionBox>()
+            .expect("rwa instruction box");
+        match rwa {
+            RwaInstructionBox::SetKeyValue(inner) => {
+                assert_eq!(inner.object.to_string(), literal);
+                assert_eq!(inner.key, key);
+                assert_eq!(inner.value, Json::from("vault-01"));
+            }
+            other => panic!("expected SetKeyValue variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rwa_metadata_target_builds_remove_key_value_in_rwa_instruction_box() {
+        let literal = sample_rwa_id_literal();
+        let target = parse_metadata_target(4, literal.clone()).expect("parse rwa target");
+        let key: Name = "serial".parse().expect("valid name");
+        let instruction = build_remove_metadata_instruction(target, key.clone());
+        let rwa = instruction
+            .as_any()
+            .downcast_ref::<RwaInstructionBox>()
+            .expect("rwa instruction box");
+        match rwa {
+            RwaInstructionBox::RemoveKeyValue(inner) => {
+                assert_eq!(inner.object.to_string(), literal);
+                assert_eq!(inner.key, key);
+            }
+            other => panic!("expected RemoveKeyValue variant, got {other:?}"),
+        }
+    }
+
     #[test]
     fn zk_ballot_public_inputs_canonicalizes_hex() {
         let mut map = JsonMap::new();
@@ -11850,7 +11458,7 @@ mod tests {
 
     #[test]
     fn zk_ballot_public_inputs_rejects_noncanonical_owner() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
         let keypair = KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519);
         let account = AccountId::new(keypair.public_key().clone());
         let address_hex = account.to_canonical_hex().expect("canonical hex");
@@ -11868,7 +11476,7 @@ mod tests {
         let mut map = JsonMap::new();
         map.insert(
             "owner".to_owned(),
-            JsonValue::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+            JsonValue::from("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
         );
         let mut value = JsonValue::Object(map);
         assert!(normalize_zk_ballot_public_inputs(&mut value).is_err());
@@ -11893,7 +11501,7 @@ mod tests {
         let mut map = JsonMap::new();
         map.insert(
             "owner".to_owned(),
-            JsonValue::from("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
+            JsonValue::from("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
         );
         map.insert("amount".to_owned(), JsonValue::from("100"));
         map.insert("duration_blocks".to_owned(), JsonValue::from(64u64));
@@ -11924,6 +11532,18 @@ mod tests {
             public.len()
         );
         assert_eq!(signature.len(), 64);
+    }
+
+    #[test]
+    fn ffi_sign_verify_mldsa() {
+        let keypair = KeyPair::from_seed(b"ffi-mldsa-signing".to_vec(), Algorithm::MlDsa);
+        let (_public_key, private_key) = keypair.into_parts();
+        let (_alg, private_bytes) = private_key.to_bytes();
+        let message = b"ffi-mldsa-signing";
+        let (signature, public) =
+            sign_and_verify_roundtrip(Algorithm::MlDsa, &private_bytes, message);
+        assert!(!public.is_empty(), "ML-DSA public key must not be empty");
+        assert!(!signature.is_empty(), "ML-DSA signature must not be empty");
     }
 
     #[test]
@@ -11997,12 +11617,21 @@ mod tests {
                 retryable: false,
             }),
         };
-        let env_bytes = norito::core::to_bytes(&env).expect("encode envelope");
-        let view = norito::core::from_bytes_view(&env_bytes).expect("envelope view");
-        assert_eq!(view.flags(), proto::CONNECT_LAYOUT_FLAGS);
+        let env_bytes = encode_envelope_framed(&env).expect("encode envelope");
         let decoded_env = decode_envelope(&env_bytes).expect("decode envelope");
         assert_eq!(decoded_env.seq, env.seq);
         assert_eq!(decoded_env.payload, env.payload);
+        let direct_frame = connect_sdk::seal_envelope(
+            &key,
+            &session_id,
+            proto::Dir::AppToWallet,
+            env.seq,
+            env.payload.clone(),
+        );
+        let direct_frame_bytes = encode_connect_frame(&direct_frame).expect("encode sealed frame");
+        let decoded_direct_frame =
+            decode_connect_frame(&direct_frame_bytes).expect("decode sealed frame");
+        assert_eq!(decoded_direct_frame, direct_frame);
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
         let mut out_len: c_ulong = 0;
         let status = unsafe {
@@ -12040,49 +11669,6 @@ mod tests {
         let decoded = decode_envelope(&decrypted).expect("decode envelope");
         assert_eq!(decoded.seq, env.seq);
         assert_eq!(decoded.payload, env.payload);
-    }
-
-    #[test]
-    fn decode_envelope_accepts_legacy_schema_hash_fixture() {
-        let hex = concat!(
-            "4e52543000000b36414bbbba14690b36414bbbba1469008002000000000000e8ae6adadc072f3e0008",
-            "0000000000000002000000000000006802000000000000030000005c0200000000000004000000000000",
-            "00000000004802000000000000400000000000000001000000000000000001000000000000000101000000",
-            "00000000020100000000000000030100000000000000040100000000000000050100000000000000060100",
-            "0000000000000701000000000000000801000000000000000901000000000000000a01000000000000000b",
-            "01000000000000000c01000000000000000d01000000000000000e01000000000000000f01000000000000",
-            "00100100000000000000110100000000000000120100000000000000130100000000000000140100000000",
-            "00000015010000000000000016010000000000000017010000000000000018010000000000000019010000",
-            "00000000001a01000000000000001b01000000000000001c01000000000000001d01000000000000001e01",
-            "000000000000001f0100000000000000200100000000000000210100000000000000220100000000000000",
-            "23010000000000000024010000000000000025010000000000000026010000000000000027010000000000",
-            "00002801000000000000002901000000000000002a01000000000000002b01000000000000002c01000000",
-            "000000002d01000000000000002e01000000000000002f0100000000000000300100000000000000310100",
-            "00000000000032010000000000000033010000000000000034010000000000000035010000000000000036",
-            "01000000000000003701000000000000003801000000000000003901000000000000003a01000000000000",
-            "003b01000000000000003c01000000000000003d01000000000000003e01000000000000003f"
-        );
-        let bytes = hex::decode(hex).expect("fixture hex");
-
-        let view = norito::core::from_bytes_view(&bytes).expect("framed envelope view");
-        assert!(
-            matches!(
-                view.decode::<proto::EnvelopeV1>(),
-                Err(norito::core::Error::SchemaMismatch)
-            ),
-            "fixture should exercise schema fallback path"
-        );
-
-        let decoded = decode_envelope(&bytes).expect("decode legacy schema fixture");
-        match decoded.payload {
-            proto::ConnectPayloadV1::SignResultOk { signature } => {
-                assert_eq!(decoded.seq, 2);
-                assert_eq!(signature.bytes().len(), 64);
-                assert_eq!(signature.bytes()[0], 0);
-                assert_eq!(signature.bytes()[63], 63);
-            }
-            other => panic!("unexpected payload variant: {other:?}"),
-        }
     }
 
     #[test]
@@ -12137,10 +11723,6 @@ mod tests {
         let mut hex_len: c_ulong = 0;
         let mut i105_ptr: *mut c_uchar = ptr::null_mut();
         let mut i105_len: c_ulong = 0;
-        let mut compressed_ptr: *mut c_uchar = ptr::null_mut();
-        let mut compressed_len: c_ulong = 0;
-        let mut compressed_full_ptr: *mut c_uchar = ptr::null_mut();
-        let mut compressed_full_len: c_ulong = 0;
         let mut render_err_ptr: *mut c_uchar = ptr::null_mut();
         let mut render_err_len: c_ulong = 0;
 
@@ -12153,10 +11735,6 @@ mod tests {
                 &mut hex_len,
                 &mut i105_ptr,
                 &mut i105_len,
-                &mut compressed_ptr,
-                &mut compressed_len,
-                &mut compressed_full_ptr,
-                &mut compressed_full_len,
                 &mut render_err_ptr,
                 &mut render_err_len,
             )
@@ -12168,8 +11746,6 @@ mod tests {
 
         connect_norito_free(hex_ptr);
         connect_norito_free(i105_ptr);
-        connect_norito_free(compressed_ptr);
-        connect_norito_free(compressed_full_ptr);
 
         let canonical_literal =
             CString::new(address.canonical_hex().expect("canonical hex")).expect("cstring");
@@ -12204,6 +11780,48 @@ mod tests {
             Some("ERR_UNSUPPORTED_ADDRESS_FORMAT")
         );
         connect_norito_free(canonical_err_ptr);
+
+        let mut invalid_chars = i105.chars().collect::<Vec<_>>();
+        let last = invalid_chars.len().saturating_sub(1);
+        invalid_chars[last] = '0';
+        let invalid_i105 = invalid_chars.into_iter().collect::<String>();
+        let invalid_literal = CString::new(invalid_i105).expect("cstring");
+        let mut invalid_err_ptr: *mut c_uchar = ptr::null_mut();
+        let mut invalid_err_len: c_ulong = 0;
+        let mut invalid_out_ptr: *mut c_uchar = ptr::null_mut();
+        let mut invalid_out_len: c_ulong = 0;
+        let invalid_rc = unsafe {
+            connect_norito_account_address_parse(
+                invalid_literal.as_ptr(),
+                invalid_literal.as_bytes().len() as c_ulong,
+                42,
+                1,
+                &mut invalid_out_ptr,
+                &mut invalid_out_len,
+                &mut prefix,
+                &mut invalid_err_ptr,
+                &mut invalid_err_len,
+            )
+        };
+        assert_eq!(invalid_rc, ERR_ACCOUNT_ADDRESS);
+        assert!(invalid_out_ptr.is_null());
+        let invalid_err_value: JsonValue = unsafe {
+            let bytes = slice::from_raw_parts(invalid_err_ptr, invalid_err_len as usize);
+            norito::json::from_slice(bytes).expect("json")
+        };
+        assert_eq!(
+            invalid_err_value.get("code").and_then(JsonValue::as_str),
+            Some("ERR_INVALID_I105_CHAR")
+        );
+        assert_eq!(
+            invalid_err_value
+                .get("fields")
+                .and_then(JsonValue::as_object)
+                .and_then(|fields| fields.get("char"))
+                .and_then(JsonValue::as_str),
+            Some("0")
+        );
+        connect_norito_free(invalid_err_ptr);
 
         let invalid = CString::new("").expect("empty literal");
         let mut err_out_ptr: *mut c_uchar = ptr::null_mut();
@@ -12342,20 +11960,19 @@ mod tests {
 
 #[cfg(test)]
 mod signed_transaction_fixture_tests {
-    use std::{fs, path::PathBuf, time::Duration};
+    use std::time::Duration;
 
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         ChainId,
         account::{AccountId, address},
-        transaction::{TransactionBuilder, signed::TransactionSignature},
+        transaction::TransactionBuilder,
     };
-    use norito::{core::read_len_dyn_slice, json::Value};
+    use iroha_version::codec::EncodeVersioned as _;
 
     use super::decode_signed_transaction;
 
-    // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (I105 discriminant) used by fixtures.
+    // Matches account::address::DEFAULT_CHAIN_DISCRIMINANT (i105 discriminant).
     const FIXTURE_CHAIN_DISCRIMINANT: u16 = 0x02F1;
 
     struct ChainDiscriminantReset {
@@ -12381,41 +11998,7 @@ mod signed_transaction_fixture_tests {
     }
 
     #[test]
-    fn signed_transaction_fixtures_decode() {
-        let _guard = ChainDiscriminantReset::new(FIXTURE_CHAIN_DISCRIMINANT);
-        let manifest = load_manifest();
-        let names = [
-            "register_asset_definition",
-            "mint_asset",
-            "grant_revoke_role_permission",
-            "set_parameter_next_mode",
-        ];
-        for name in names {
-            let bytes = signed_bytes_for(&manifest, name)
-                .unwrap_or_else(|err| panic!("missing {name} signed payload: {err}"));
-            let _ = decode_signed_transaction(&bytes);
-        }
-    }
-
-    #[test]
-    fn signed_transaction_norito_rpc_fixtures_decode() {
-        let _guard = ChainDiscriminantReset::new(FIXTURE_CHAIN_DISCRIMINANT);
-        let manifest = load_manifest_at(manifest_path_norito_rpc());
-        let names = [
-            "register_asset_definition",
-            "mint_asset",
-            "grant_revoke_role_permission",
-            "set_parameter_next_mode",
-        ];
-        for name in names {
-            let bytes = signed_bytes_for(&manifest, name)
-                .unwrap_or_else(|err| panic!("missing {name} signed payload: {err}"));
-            let _ = decode_signed_transaction(&bytes);
-        }
-    }
-
-    #[test]
-    fn signed_transaction_fixtures_decode_with_header() {
+    fn signed_transaction_decoder_accepts_only_versioned_bytes() {
         let _guard = ChainDiscriminantReset::new(FIXTURE_CHAIN_DISCRIMINANT);
         let keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
@@ -12423,143 +12006,42 @@ mod signed_transaction_fixture_tests {
         let mut builder = TransactionBuilder::new(chain_id, authority);
         builder.set_creation_time(Duration::from_millis(1));
         let tx = builder.sign(keypair.private_key());
+        let versioned = tx.encode_versioned();
+        decode_signed_transaction(&versioned).expect("decode versioned signed tx");
         let bytes = norito::codec::encode_adaptive(&tx);
-        decode_signed_transaction(&bytes).expect("decode bare signed tx");
+        assert!(decode_signed_transaction(&bytes).is_err());
         let framed = norito::to_bytes(&tx).expect("encode framed signed tx");
-        decode_signed_transaction(&framed).expect("decode framed signed tx");
+        assert!(decode_signed_transaction(&framed).is_err());
     }
 
     #[test]
-    fn signed_transaction_fixtures_reencode_match() {
+    fn signed_transaction_versioned_reencode_match() {
         let _guard = ChainDiscriminantReset::new(FIXTURE_CHAIN_DISCRIMINANT);
-        let manifest = load_manifest();
-        let names = [
-            "register_asset_definition",
-            "mint_asset",
-            "grant_revoke_role_permission",
-            "set_parameter_next_mode",
-        ];
-        for name in names {
-            let bytes = signed_bytes_for(&manifest, name)
-                .unwrap_or_else(|err| panic!("missing {name} signed payload: {err}"));
-            let Ok(signed) = decode_signed_transaction(&bytes) else {
-                continue;
-            };
-            let reencoded_bytes = norito::codec::encode_adaptive(&signed);
-            assert_eq!(
-                reencoded_bytes, bytes,
-                "re-encoded signed transaction differs for {name}"
-            );
-        }
+        let keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain_id: ChainId = "00000004".parse().expect("valid chain id");
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(1));
+        let tx = builder.sign(keypair.private_key());
+        let bytes = tx.encode_versioned();
+        let signed = decode_signed_transaction(&bytes).expect("decode versioned signed tx");
+        assert_eq!(signed.encode_versioned(), bytes);
     }
 
     #[test]
-    fn signed_transaction_fixture_signature_prefix_matches_payload() {
+    fn generated_signed_transaction_versioned_bytes_prefix_bare_payload() {
         let _guard = ChainDiscriminantReset::new(FIXTURE_CHAIN_DISCRIMINANT);
-        let manifest = load_manifest();
-        let signed_bytes =
-            signed_bytes_for(&manifest, "mint_asset").expect("mint_asset fixture present");
-        let payload_bytes =
-            payload_bytes_for(&manifest, "mint_asset").expect("mint_asset payload present");
-        let payload_offset = signed_bytes
-            .windows(payload_bytes.len())
-            .position(|window| window == payload_bytes)
-            .expect("payload bytes must appear in signed bytes");
+        let keypair = KeyPair::from_seed(vec![0xA5; 32], Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain_id: ChainId = "00000004".parse().expect("valid chain id");
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(1));
+        let tx = builder.sign(keypair.private_key());
+        let versioned = tx.encode_versioned();
+        let bare = norito::codec::encode_adaptive(&tx);
 
-        let (sig_len, sig_hdr) =
-            read_len_dyn_slice(&signed_bytes).expect("signature length header");
-        let sig_start = sig_hdr;
-        let sig_end = sig_start
-            .checked_add(sig_len)
-            .expect("signature length overflow");
-        let sig_slice = signed_bytes
-            .get(sig_start..sig_end)
-            .expect("signature slice within payload");
-        let (_, used) = norito::core::decode_field_canonical::<TransactionSignature>(sig_slice)
-            .expect("decode signature slice");
-        assert_eq!(
-            used, sig_len,
-            "signature decode length must match prefix length"
-        );
-
-        let payload_len_offset = sig_end;
-        let (payload_len, payload_hdr) = read_len_dyn_slice(
-            signed_bytes
-                .get(payload_len_offset..)
-                .expect("payload len header slice"),
-        )
-        .expect("payload length header");
-        let payload_start = payload_len_offset + payload_hdr;
-        assert_eq!(
-            payload_start, payload_offset,
-            "payload must start after signature + payload length header"
-        );
-        assert_eq!(
-            payload_len,
-            payload_bytes.len(),
-            "payload length header must match fixture payload length"
-        );
-    }
-
-    fn load_manifest() -> Value {
-        load_manifest_at(manifest_path())
-    }
-
-    fn load_manifest_at(path: PathBuf) -> Value {
-        let bytes = fs::read(&path)
-            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
-        norito::json::from_slice(&bytes)
-            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", path.display()))
-    }
-
-    fn manifest_path() -> PathBuf {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        root.join("../../IrohaSwift/Fixtures/transaction_fixtures.manifest.json")
-    }
-
-    fn manifest_path_norito_rpc() -> PathBuf {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        root.join("../../fixtures/norito_rpc/transaction_fixtures.manifest.json")
-    }
-
-    fn signed_bytes_for(manifest: &Value, name: &str) -> Result<Vec<u8>, String> {
-        let fixtures = manifest
-            .get("fixtures")
-            .and_then(Value::as_array)
-            .ok_or_else(|| "manifest missing fixtures array".to_string())?;
-        for fixture in fixtures {
-            let fixture_name = fixture.get("name").and_then(Value::as_str);
-            if fixture_name == Some(name) {
-                let signed = fixture
-                    .get("signed_base64")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| "missing signed_base64".to_string())?;
-                return BASE64
-                    .decode(signed)
-                    .map_err(|err| format!("base64 decode failed: {err}"));
-            }
-        }
-        Err(format!("fixture {name} not found"))
-    }
-
-    fn payload_bytes_for(manifest: &Value, name: &str) -> Result<Vec<u8>, String> {
-        let fixtures = manifest
-            .get("fixtures")
-            .and_then(Value::as_array)
-            .ok_or_else(|| "manifest missing fixtures array".to_string())?;
-        for fixture in fixtures {
-            let fixture_name = fixture.get("name").and_then(Value::as_str);
-            if fixture_name == Some(name) {
-                let payload = fixture
-                    .get("payload_base64")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| "missing payload_base64".to_string())?;
-                return BASE64
-                    .decode(payload)
-                    .map_err(|err| format!("base64 decode failed: {err}"));
-            }
-        }
-        Err(format!("fixture {name} not found"))
+        assert_eq!(versioned.first().copied(), Some(1));
+        assert_eq!(&versioned[1..], bare.as_slice());
     }
 }
 
@@ -12696,7 +12178,7 @@ mod da_proof_summary_tests {
             metadata,
             issued_at_unix: 123,
         };
-        let manifest_bytes = to_bytes(&manifest).expect("manifest encode");
+        let manifest_bytes = norito::to_bytes(&manifest).expect("manifest encode");
         (manifest_bytes, payload)
     }
 }
@@ -12832,147 +12314,5 @@ mod sorafs_tests {
         if !out_report_ptr.is_null() {
             connect_norito_free(out_report_ptr);
         }
-    }
-
-    fn test_account_id(seed: u8) -> AccountId {
-        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        let (public_key, _) = keypair.into_parts();
-        AccountId::new(public_key)
-    }
-
-    #[test]
-    fn encode_offline_spend_receipt_payload_matches_native() {
-        use base64::Engine as _;
-        use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-        use iroha_data_model::offline::{
-            AppleAppAttestProof, OfflineAllowanceCommitment, OfflinePlatformProof,
-            OfflineSpendReceipt, OfflineWalletCertificate, OfflineWalletPolicy,
-        };
-        use iroha_data_model::{Metadata, asset::id::AssetId};
-        use iroha_primitives::numeric::Numeric;
-
-        let sender = test_account_id(1);
-        let receiver = test_account_id(2);
-        let asset_def = iroha_data_model::asset::id::AssetDefinitionId::new(
-            "default".parse().unwrap(),
-            "xor".parse().unwrap(),
-        );
-        let asset = AssetId::new(asset_def, sender.clone());
-        let challenge_hash = Hash::new(vec![0x33; 32]);
-
-        let certificate = OfflineWalletCertificate {
-            controller: sender.clone(),
-            operator: sender.clone(),
-            allowance: OfflineAllowanceCommitment {
-                asset: asset.clone(),
-                amount: Numeric::from(500_u32),
-                commitment: vec![0x42; 32],
-            },
-            spend_public_key: PublicKey::from_hex(
-                Algorithm::Ed25519,
-                "1509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
-            )
-            .expect("public key"),
-            attestation_report: vec![0x01, 0x02, 0x03],
-            issued_at_ms: 1_700_000_000_000,
-            expires_at_ms: 1_800_000_000_000,
-            policy: OfflineWalletPolicy {
-                max_balance: Numeric::from(1_000_u32),
-                max_tx_value: Numeric::from(200_u32),
-                expires_at_ms: 1_800_000_000_000,
-            },
-            operator_signature: Signature::from_bytes(&[0xAB; 64]),
-            metadata: Metadata::default(),
-            verdict_id: None,
-            attestation_nonce: None,
-            refresh_at_ms: None,
-        };
-
-        let platform_proof = OfflinePlatformProof::AppleAppAttest(AppleAppAttestProof {
-            key_id: BASE64_STANDARD.encode(b"TEST_KEY"),
-            counter: 42,
-            assertion: vec![0xCA, 0xFE],
-            challenge_hash,
-        });
-
-        let tx_id = Hash::new(vec![0x22; 32]);
-
-        let receipt = OfflineSpendReceipt {
-            tx_id,
-            from: sender.clone(),
-            to: receiver.clone(),
-            asset: asset.clone(),
-            amount: Numeric::from(75_u32),
-            issued_at_ms: 1_700_000_500_000,
-            invoice_id: "INV-42".into(),
-            platform_proof: platform_proof.clone(),
-            platform_snapshot: None,
-            sender_certificate_id: certificate.certificate_id(),
-            sender_signature: Signature::from_bytes(&[0xCD; 64]),
-            build_claim: None,
-        };
-
-        let native_bytes = receipt.signing_bytes().expect("native signing bytes");
-
-        let platform_proof_json =
-            norito::json::to_json(&platform_proof).expect("platform proof json");
-        let certificate_id_hex = hex::encode(certificate.certificate_id().as_ref());
-        let asset_literal = asset.canonical_encoded();
-        let reparsed_asset = AssetId::parse_encoded(&asset_literal).expect("asset literal parse");
-        assert_eq!(reparsed_asset, asset);
-
-        let jni_bytes = encode_offline_spend_receipt_payload(
-            hex::encode(tx_id.as_ref()),
-            sender.to_string(),
-            receiver.to_string(),
-            asset_literal,
-            "75".to_string(),
-            1_700_000_500_000,
-            "INV-42".to_string(),
-            platform_proof_json,
-            certificate_id_hex,
-        )
-        .expect("JNI encoding");
-
-        assert_eq!(
-            native_bytes, jni_bytes,
-            "JNI encoding must match native signing_bytes"
-        );
-    }
-
-    #[test]
-    fn encode_offline_build_claim_payload_matches_native() {
-        use iroha_data_model::offline::{OfflineBuildClaim, OfflineBuildClaimPlatform};
-
-        let claim = OfflineBuildClaim {
-            claim_id: Hash::new(b"test-claim-id"),
-            platform: OfflineBuildClaimPlatform::Android,
-            app_id: "jp.co.soramitsu.cbdc.pkr".to_owned(),
-            build_number: 42,
-            issued_at_ms: 1_700_000_000_000,
-            expires_at_ms: 1_700_086_400_000,
-            lineage_scope: "test-scope".to_owned(),
-            nonce: Hash::new(b"test-nonce"),
-            operator_signature: Signature::from_bytes(&[0; 64]),
-        };
-
-        let native_bytes = claim.signing_bytes().expect("signing bytes");
-
-        let jni_bytes = encode_offline_build_claim_payload(
-            hex::encode(claim.claim_id.as_ref()),
-            "Android".to_owned(),
-            claim.app_id.clone(),
-            claim.build_number,
-            claim.issued_at_ms,
-            claim.expires_at_ms,
-            claim.lineage_scope.clone(),
-            hex::encode(claim.nonce.as_ref()),
-        )
-        .expect("jni encode");
-
-        assert_eq!(
-            jni_bytes, native_bytes,
-            "JNI encoding must match native signing_bytes()"
-        );
     }
 }

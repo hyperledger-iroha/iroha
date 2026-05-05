@@ -13,9 +13,11 @@ use iroha_core::{
         FoldDecommitV1, MerklePath, STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1,
         StarkCommitmentsV1, StarkCompositionTermV1, StarkCompositionValueV1, StarkFriParamsV1,
         StarkFriVerifyingKeyV1, StarkProofV1, StarkVerifierLimits, StarkVerifyEnvelopeV1,
+        prove_stark_fri_air_envelope_bytes, prove_stark_fri_composition_envelope_bytes,
         verify_stark_fri_envelope, verify_stark_fri_envelope_with_limits,
     },
 };
+use iroha_data_model::domain::DomainId;
 use sha2::{Digest, Sha256};
 
 const MOD_P: u128 = (1u128 << 64) - (1u128 << 32) + 1;
@@ -28,6 +30,48 @@ fn field_add(a: u64, b: u64) -> u64 {
 fn field_mul(a: u64, b: u64) -> u64 {
     let prod = (a as u128) * (b as u128);
     (prod % MOD_P) as u64
+}
+
+fn field_sub(a: u64, b: u64) -> u64 {
+    if a >= b {
+        a - b
+    } else {
+        ((a as u128 + MOD_P) - b as u128) as u64
+    }
+}
+
+fn field_pow(mut base: u64, mut exponent: u128) -> u64 {
+    let mut acc = 1u64;
+    while exponent > 0 {
+        if exponent & 1 == 1 {
+            acc = field_mul(acc, base);
+        }
+        base = field_mul(base, base);
+        exponent >>= 1;
+    }
+    acc
+}
+
+fn field_inv(value: u64) -> Option<u64> {
+    (value != 0).then(|| field_pow(value, MOD_P - 2))
+}
+
+fn field_two_inv() -> u64 {
+    ((MOD_P + 1) / 2) as u64
+}
+
+fn domain_x_for_pair(layer_domain: usize, pair_index: usize) -> u64 {
+    assert!(layer_domain >= 2 && layer_domain.is_power_of_two());
+    assert!(pair_index < layer_domain / 2);
+    let root = field_pow(7, (MOD_P - 1) / layer_domain as u128);
+    field_pow(root, pair_index as u128)
+}
+
+fn fri_fold_pair_for_test(y0: u64, y1: u64, beta: u64, x: u64) -> u64 {
+    let even = field_mul(field_add(y0, y1), field_two_inv());
+    let inv_2x = field_inv(field_mul(2, x)).expect("non-zero domain element");
+    let odd = field_mul(field_sub(y0, y1), inv_2x);
+    field_add(even, field_mul(beta, odd))
 }
 
 fn leaf_hash_u64(v: u64) -> [u8; 32] {
@@ -287,7 +331,9 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
 
     // Layer 1 with r0
     let layer1: Vec<u64> = (0..n / 2)
-        .map(|j| field_add(evals[2 * j], field_mul(r0, evals[2 * j + 1])))
+        .map(|j| {
+            fri_fold_pair_for_test(evals[2 * j], evals[2 * j + 1], r0, domain_x_for_pair(n, j))
+        })
         .collect();
     let leaves1: Vec<[u8; 32]> = layer1.iter().map(|&v| leaf_hash_u64(v)).collect();
     let (root1, levels1) = merkle_root_from_leaves(leaves1.clone());
@@ -298,7 +344,14 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
     // Derive r2 from label+params+root2 (will be used for next fold)
     // Layer 2 with r1
     let layer2: Vec<u64> = (0..n / 4)
-        .map(|j| field_add(layer1[2 * j], field_mul(r1, layer1[2 * j + 1])))
+        .map(|j| {
+            fri_fold_pair_for_test(
+                layer1[2 * j],
+                layer1[2 * j + 1],
+                r1,
+                domain_x_for_pair(n / 2, j),
+            )
+        })
         .collect();
     let leaves2: Vec<[u8; 32]> = layer2.iter().map(|&v| leaf_hash_u64(v)).collect();
     let (root2, levels2) = merkle_root_from_leaves(leaves2.clone());
@@ -307,7 +360,14 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
 
     // Layer 3 with r2 (final layer size = 1); only j=0 valid
     let layer3: Vec<u64> = (0..n / 8)
-        .map(|j| field_add(layer2[2 * j], field_mul(r2, layer2[2 * j + 1])))
+        .map(|j| {
+            fri_fold_pair_for_test(
+                layer2[2 * j],
+                layer2[2 * j + 1],
+                r2,
+                domain_x_for_pair(n / 4, j),
+            )
+        })
         .collect();
     let leaves3: Vec<[u8; 32]> = layer3.iter().map(|&v| leaf_hash_u64(v)).collect();
     let (root3, levels3) = merkle_root_from_leaves(leaves3.clone());
@@ -397,6 +457,7 @@ fn build_sample_envelope_with_domain_tag(domain_tag: String) -> StarkVerifyEnvel
             },
             queries,
             comp_values,
+            air: None,
         },
         transcript_label: "TEST-STARK".to_string(),
     }
@@ -444,7 +505,9 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
     let r0 = challenge_poseidon_u64("stark:fri:r:k", &build_transcript(&root0));
 
     let layer1: Vec<u64> = (0..n / 2)
-        .map(|j| field_add(evals[2 * j], field_mul(r0, evals[2 * j + 1])))
+        .map(|j| {
+            fri_fold_pair_for_test(evals[2 * j], evals[2 * j + 1], r0, domain_x_for_pair(n, j))
+        })
         .collect();
     let leaves1: Vec<[u8; 32]> = layer1.iter().map(|&v| leaf_hash_poseidon_u64(v)).collect();
     let (root1, levels1) = merkle_root_from_leaves_poseidon(leaves1.clone());
@@ -452,7 +515,14 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
     let r1 = challenge_poseidon_u64("stark:fri:r:k", &build_transcript(&root1));
 
     let layer2: Vec<u64> = (0..n / 4)
-        .map(|j| field_add(layer1[2 * j], field_mul(r1, layer1[2 * j + 1])))
+        .map(|j| {
+            fri_fold_pair_for_test(
+                layer1[2 * j],
+                layer1[2 * j + 1],
+                r1,
+                domain_x_for_pair(n / 2, j),
+            )
+        })
         .collect();
     let leaves2: Vec<[u8; 32]> = layer2.iter().map(|&v| leaf_hash_poseidon_u64(v)).collect();
     let (root2, levels2) = merkle_root_from_leaves_poseidon(leaves2.clone());
@@ -460,7 +530,14 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
     let r2 = challenge_poseidon_u64("stark:fri:r:k", &build_transcript(&root2));
 
     let layer3: Vec<u64> = (0..n / 8)
-        .map(|j| field_add(layer2[2 * j], field_mul(r2, layer2[2 * j + 1])))
+        .map(|j| {
+            fri_fold_pair_for_test(
+                layer2[2 * j],
+                layer2[2 * j + 1],
+                r2,
+                domain_x_for_pair(n / 4, j),
+            )
+        })
         .collect();
     let leaves3: Vec<[u8; 32]> = layer3.iter().map(|&v| leaf_hash_poseidon_u64(v)).collect();
     let (root3, levels3) = merkle_root_from_leaves_poseidon(leaves3.clone());
@@ -549,6 +626,7 @@ fn build_sample_envelope_poseidon2_with_domain_tag(domain_tag: String) -> StarkV
             },
             queries,
             comp_values,
+            air: None,
         },
         transcript_label: "TEST-STARK".to_string(),
     }
@@ -558,8 +636,70 @@ fn build_sample_envelope() -> StarkVerifyEnvelopeV1 {
     build_sample_envelope_with_domain_tag("fastpq:v1:fri".to_string())
 }
 
-fn build_sample_envelope_poseidon2() -> StarkVerifyEnvelopeV1 {
-    build_sample_envelope_poseidon2_with_domain_tag("fastpq:v1:fri".to_string())
+fn sample_air_params(domain_tag: String, hash_fn: u8) -> StarkFriParamsV1 {
+    StarkFriParamsV1 {
+        version: 1,
+        n_log2: 3,
+        blowup_log2: 3,
+        fold_arity: 2,
+        queries: 1,
+        merkle_arity: 2,
+        hash_fn,
+        domain_tag,
+    }
+}
+
+fn build_sample_air_envelope_with_domain_tag(
+    domain_tag: String,
+    hash_fn: u8,
+) -> StarkVerifyEnvelopeV1 {
+    let backend = if hash_fn == STARK_HASH_POSEIDON2_V1 {
+        "stark/fri/poseidon2-goldilocks"
+    } else {
+        "stark/fri/sha256-goldilocks"
+    };
+    let bytes = prove_stark_fri_air_envelope_bytes(
+        sample_air_params(domain_tag, hash_fn),
+        "TEST-STARK".to_string(),
+        format!("{backend}:test"),
+        [0x42; 32],
+    )
+    .expect("build sample AIR envelope");
+    norito::decode_from_bytes(&bytes).expect("decode sample AIR envelope")
+}
+
+fn build_sample_air_envelope_poseidon2() -> StarkVerifyEnvelopeV1 {
+    build_sample_air_envelope_with_domain_tag("fastpq:v1:fri".to_string(), STARK_HASH_POSEIDON2_V1)
+}
+
+fn build_sample_air_composition_envelope_with_domain_tag(
+    domain_tag: String,
+) -> StarkVerifyEnvelopeV1 {
+    let aux_terms = vec![
+        StarkCompositionTermV1 {
+            wire_index: 0,
+            value: 11,
+            coeff: 3,
+        },
+        StarkCompositionTermV1 {
+            wire_index: 1,
+            value: 17,
+            coeff: 5,
+        },
+    ];
+    let bytes = prove_stark_fri_composition_envelope_bytes(
+        sample_air_params(domain_tag, STARK_HASH_SHA256_V1),
+        "TEST-STARK".to_string(),
+        7,
+        2,
+        aux_terms,
+    )
+    .expect("build sample AIR composition envelope");
+    norito::decode_from_bytes(&bytes).expect("decode sample AIR composition envelope")
+}
+
+fn build_sample_air_composition_envelope() -> StarkVerifyEnvelopeV1 {
+    build_sample_air_composition_envelope_with_domain_tag("fastpq:v1:fri".to_string())
 }
 
 fn build_stark_open_verify_envelope_bytes_for_columns(
@@ -646,7 +786,7 @@ fn sample_stark_vk_box(
 
 #[test]
 fn stark_single_fold_roundtrip_ok_and_fail() {
-    let env = build_sample_envelope();
+    let env = build_sample_air_composition_envelope();
 
     let bytes = norito::to_bytes(&env).expect("encode");
     let native_ok = iroha_core::zk_stark::verify_stark_fri_envelope(&bytes);
@@ -738,8 +878,18 @@ fn stark_single_fold_roundtrip_ok_and_fail() {
 }
 
 #[test]
+fn stark_low_level_envelope_requires_air_section() {
+    let env = build_sample_envelope();
+    let bytes = norito::to_bytes(&env).expect("encode");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "native STARK verifier must reject V1 envelopes without AIR openings"
+    );
+}
+
+#[test]
 fn stark_poseidon2_roundtrip_ok() {
-    let env = build_sample_envelope_poseidon2();
+    let env = build_sample_air_envelope_poseidon2();
     let bytes = norito::to_bytes(&env).expect("encode");
     assert!(
         verify_stark_fri_envelope(&bytes),
@@ -749,75 +899,10 @@ fn stark_poseidon2_roundtrip_ok() {
 
 #[test]
 fn stark_rejects_mismatched_merkle_indices() {
-    // Minimal two-point domain with a single fold. Use identical leaf values so the Merkle roots
-    // remain valid even when the proof swaps indices; the verifier must still reject due to the
-    // index mismatch itself.
-    let transcript_label = "INDEX-MISMATCH";
-
-    let a = 7u64;
-    let leaves0 = vec![leaf_hash_u64(a), leaf_hash_u64(a)];
-    let (root0, levels0) = merkle_root_from_leaves(leaves0);
-
-    let params = StarkFriParamsV1 {
-        version: 1,
-        n_log2: 1,
-        blowup_log2: 1,
-        fold_arity: 2,
-        queries: 1,
-        merkle_arity: 2,
-        hash_fn: STARK_HASH_SHA256_V1,
-        domain_tag: "fastpq:v1:fri".to_string(),
-    };
-
-    let build_transcript = |root: &[u8; 32]| {
-        let mut tb = Vec::new();
-        tb.extend_from_slice(transcript_label.as_bytes());
-        tb.extend_from_slice(&params.version.to_le_bytes());
-        tb.extend_from_slice(&[
-            params.n_log2,
-            params.blowup_log2,
-            params.fold_arity,
-            params.merkle_arity,
-            params.hash_fn,
-        ]);
-        tb.extend_from_slice(&params.queries.to_le_bytes());
-        tb.extend_from_slice(&(params.domain_tag.len() as u32).to_le_bytes());
-        tb.extend_from_slice(params.domain_tag.as_bytes());
-        tb.extend_from_slice(root);
-        tb
-    };
-
-    let r0 = challenge_u64("stark:fri:r:k", &build_transcript(&root0));
-    let z = field_add(a, field_mul(r0, a));
-
-    let leaves1 = vec![leaf_hash_u64(z)];
-    let (root1, levels1) = merkle_root_from_leaves(leaves1);
-
-    // Intentionally swap the indices for y0 and y1; without index binding this could pass.
-    let chain = vec![FoldDecommitV1 {
-        j: 0,
-        y0: a,
-        y1: a,
-        path_y0: path_for(1, &levels0),
-        path_y1: path_for(0, &levels0),
-        z,
-        path_z: path_for(0, &levels1),
-    }];
-
-    let env = StarkVerifyEnvelopeV1 {
-        params,
-        proof: StarkProofV1 {
-            version: 1,
-            commits: StarkCommitmentsV1 {
-                version: 1,
-                roots: vec![root0, root1],
-                comp_root: None,
-            },
-            queries: vec![chain],
-            comp_values: None,
-        },
-        transcript_label: transcript_label.to_string(),
-    };
+    let mut env =
+        build_sample_air_envelope_with_domain_tag("index-test".to_string(), STARK_HASH_SHA256_V1);
+    let first = &mut env.proof.queries[0][0];
+    core::mem::swap(&mut first.path_y0, &mut first.path_y1);
     let bytes = norito::to_bytes(&env).expect("encode");
     assert!(
         !verify_stark_fri_envelope(&bytes),
@@ -826,14 +911,90 @@ fn stark_rejects_mismatched_merkle_indices() {
 }
 
 #[test]
-fn stark_open_verify_envelope_binds_domain_tag_to_metadata() {
+fn stark_rejects_unbound_air_composition_root() {
+    let mut env = build_sample_air_composition_envelope();
+    env.proof
+        .air
+        .as_mut()
+        .expect("AIR section")
+        .composition_root[0] ^= 0x01;
+    let bytes = norito::to_bytes(&env).expect("encode");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "AIR composition root must match FRI layer zero"
+    );
+}
+
+#[test]
+fn stark_rejects_tampered_air_trace_root() {
+    let mut env = build_sample_air_composition_envelope();
+    env.proof.air.as_mut().expect("AIR section").trace_root[0] ^= 0x01;
+    let bytes = norito::to_bytes(&env).expect("encode");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "AIR trace root must authenticate sampled trace rows"
+    );
+}
+
+#[test]
+fn stark_rejects_tampered_air_public_digest() {
+    let mut env = build_sample_air_composition_envelope();
+    env.proof.air.as_mut().expect("AIR section").public_digest[0] ^= 0x01;
+    let bytes = norito::to_bytes(&env).expect("encode");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "AIR public digest must remain bound to sampled rows and composition openings"
+    );
+}
+
+#[test]
+fn stark_rejects_air_trace_width_mismatch() {
+    let mut env = build_sample_air_composition_envelope();
+    let air = env.proof.air.as_mut().expect("AIR section");
+    air.trace_width = air.trace_width.saturating_add(1);
+    let bytes = norito::to_bytes(&env).expect("encode");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "AIR trace width must match the V1 AIR layout"
+    );
+}
+
+#[test]
+fn stark_rejects_air_opening_count_mismatch() {
+    let mut env = build_sample_air_composition_envelope();
+    let air = env.proof.air.as_mut().expect("AIR section");
+    assert_eq!(air.openings.len(), env.proof.queries.len());
+    air.openings.clear();
+    let bytes = norito::to_bytes(&env).expect("encode");
+    assert!(
+        !verify_stark_fri_envelope(&bytes),
+        "AIR opening count must match verifier query count"
+    );
+}
+
+#[test]
+fn stark_air_width_limit_is_enforced() {
+    let env = build_sample_air_composition_envelope();
+    let bytes = norito::to_bytes(&env).expect("encode");
+    let trace_width = env.proof.air.as_ref().expect("AIR section").trace_width as usize;
+    assert!(trace_width > 1, "sample AIR trace must have width");
+    let mut limits = StarkVerifierLimits::default();
+    limits.max_air_width = trace_width - 1;
+    assert!(
+        !verify_stark_fri_envelope_with_limits(&bytes, &limits),
+        "AIR trace width must respect verifier limits"
+    );
+}
+
+#[test]
+fn stark_open_verify_envelope_rejects_synthetic_air_proof() {
     use iroha_data_model::{
         proof::ProofBox,
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
 
     let backend = "stark/fri/sha256-goldilocks";
-    let circuit_id = "ivm-execution";
+    let circuit_id = "ivm-execution-v1";
 
     let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_SHA256_V1);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
@@ -873,8 +1034,8 @@ fn stark_open_verify_envelope_binds_domain_tag_to_metadata() {
         norito::to_bytes(&env).expect("encode OpenVerifyEnvelope"),
     );
     assert!(
-        verify_backend(backend, &proof, Some(&vk_box)),
-        "wrapped STARK OpenVerifyEnvelope should verify"
+        !verify_backend(backend, &proof, Some(&vk_box)),
+        "wrapped STARK OpenVerifyEnvelope must fail closed when the AIR section is missing"
     );
 
     // Changing circuit_id without updating the inner envelope's `domain_tag` must fail.
@@ -891,14 +1052,14 @@ fn stark_open_verify_envelope_binds_domain_tag_to_metadata() {
 }
 
 #[test]
-fn stark_open_verify_envelope_poseidon2_variant_verifies() {
+fn stark_open_verify_envelope_poseidon2_variant_rejects_synthetic_air_proof() {
     use iroha_data_model::{
         proof::ProofBox,
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
 
     let backend = "stark/fri/poseidon2-goldilocks";
-    let circuit_id = "ivm-execution";
+    let circuit_id = "ivm-execution-v1";
 
     let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_POSEIDON2_V1);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
@@ -935,8 +1096,8 @@ fn stark_open_verify_envelope_poseidon2_variant_verifies() {
         norito::to_bytes(&env).expect("encode OpenVerifyEnvelope"),
     );
     assert!(
-        verify_backend(backend, &proof, Some(&vk_box)),
-        "wrapped STARK OpenVerifyEnvelope should verify (poseidon2 variant)"
+        !verify_backend(backend, &proof, Some(&vk_box)),
+        "wrapped STARK OpenVerifyEnvelope must fail closed when the AIR section is missing"
     );
 }
 
@@ -977,7 +1138,7 @@ fn expected_ivm_exec_public_inputs(
 }
 
 #[test]
-fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
+fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     use std::str::FromStr;
     use std::sync::Arc;
 
@@ -999,7 +1160,7 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
     use iroha_primitives::json::Json;
 
     let backend = "stark/fri/sha256-goldilocks";
-    let circuit_id = "ivm-execution";
+    let circuit_id = "ivm-execution-v1";
 
     // Minimal ZK-mode IVM program: metadata + `HALT`.
     let meta = ivm::ProgramMetadata {
@@ -1013,9 +1174,10 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
 
     let kp = KeyPair::random();
     let authority = AccountId::new(kp.public_key().clone());
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&authority);
-    let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+    let account = Account::new(authority.clone()).build(&authority);
 
     let world = iroha_core::state::World::with([domain], [account], []);
 
@@ -1073,7 +1235,7 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
     )
     .expect("derive proved payload");
 
-    // Compute the ivm-execution public inputs and package them as STARK wrapper columns.
+    // Compute the ivm-execution-v1 public inputs and package them as STARK wrapper columns.
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let summary = ivm_cache
         .summarize_program(proved.bytecode.as_ref())
@@ -1136,22 +1298,25 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
         .with_attachments(attachments)
         .sign(kp.private_key());
 
-    let overlay_built =
+    let err =
         iroha_core::pipeline::overlay::build_overlay_for_transaction(&tx_proved, &state.view())
-            .expect("proved execution overlay must be accepted");
-    let built: Vec<_> = overlay_built.instructions().cloned().collect();
-    assert_eq!(built.as_slice(), proved.overlay.as_ref());
+            .expect_err("synthetic STARK proved execution must be rejected");
+    let err_text = format!("{err:?}");
+    assert!(
+        err_text.contains("proof rejected"),
+        "unexpected proved execution rejection: {err:?}"
+    );
 }
 
 #[test]
-fn stark_governance_submit_and_finalize_accept_valid_proofs() {
+fn stark_governance_submit_rejects_synthetic_air_proof() {
     use core::num::NonZeroU64;
 
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
         smartcontracts::Execute,
-        state::{State, World, WorldReadOnly},
+        state::{State, World},
     };
     use iroha_data_model::{
         Registrable,
@@ -1161,18 +1326,17 @@ fn stark_governance_submit_and_finalize_accept_valid_proofs() {
         domain::Domain,
         isi::{
             Grant, verifying_keys,
-            zk::{CreateElection, FinalizeElection, SubmitBallot},
+            zk::{CreateElection, SubmitBallot},
         },
         permission::Permission,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId, VerifyingKeyRecord},
         zk::BackendTag,
     };
     use iroha_executor_data_model::permission::governance::{
-        CanEnactGovernance, CanManageParliament, CanSubmitGovernanceBallot,
+        CanManageParliament, CanSubmitGovernanceBallot,
     };
     use iroha_primitives::json::Json;
     use iroha_test_samples::ALICE_ID;
-    use mv::storage::StorageReadOnly;
 
     let backend = "stark/fri/sha256-goldilocks";
     let ballot_circuit_id = "stark/fri/sha256-goldilocks:vote-ballot";
@@ -1182,9 +1346,10 @@ fn stark_governance_submit_and_finalize_accept_valid_proofs() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let account: Account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [account], Vec::new());
     let mut state = State::new_for_testing(world, kura, query);
     state.zk.stark.enabled = true;
@@ -1219,11 +1384,6 @@ fn stark_governance_submit_and_finalize_accept_valid_proofs() {
     Grant::account_permission(perm_ballot, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant CanSubmitGovernanceBallot");
-    let perm_enact: Permission = CanEnactGovernance.into();
-    Grant::account_permission(perm_enact, ALICE_ID.clone())
-        .execute(&ALICE_ID, &mut stx)
-        .expect("grant CanEnactGovernance");
-
     let ballot_vk_id = VerifyingKeyId::new(backend, "vote_ballot");
     let ballot_vk_box = sample_stark_vk_box(backend, ballot_circuit_id, STARK_HASH_SHA256_V1);
     let ballot_vk_hash = iroha_core::zk::hash_vk(&ballot_vk_box);
@@ -1300,48 +1460,19 @@ fn stark_governance_submit_and_finalize_accept_valid_proofs() {
     );
     let nullifier =
         derive_ballot_nullifier_for_test(nullifier_domain, &state.chain_id, &election_id, &commit);
-    SubmitBallot {
+    let err = SubmitBallot {
         election_id: election_id.clone(),
         ciphertext: commit.to_vec(),
         ballot_proof: ballot_attachment,
         nullifier,
     }
     .execute(&ALICE_ID, &mut stx)
-    .expect("submit ballot");
-
-    let tally = vec![7_u64, 2_u64];
-    let tally_columns = tally
-        .iter()
-        .map(|&value| vec![limb_as_instance_bytes(value)])
-        .collect::<Vec<_>>();
-    let tally_proof_bytes = build_stark_open_verify_envelope_bytes_for_columns(
-        backend,
-        tally_circuit_id,
-        tally_vk_hash,
-        &tally_schema,
-        tally_columns,
+    .expect_err("synthetic STARK ballot must be rejected");
+    let err_text = format!("{err:?}");
+    assert!(
+        err_text.contains("invalid ballot proof"),
+        "unexpected ballot rejection: {err:?}"
     );
-    let tally_attachment = ProofAttachment::new_ref(
-        backend.to_string(),
-        ProofBox::new(backend.to_string(), tally_proof_bytes),
-        tally_vk_id,
-    );
-    FinalizeElection {
-        election_id: election_id.clone(),
-        tally: tally.clone(),
-        tally_proof: tally_attachment,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect("finalize election");
-
-    let election = stx
-        .world
-        .elections()
-        .get(&election_id)
-        .cloned()
-        .expect("election exists");
-    assert!(election.finalized, "election must be finalized");
-    assert_eq!(election.tally, tally);
 }
 
 #[test]
@@ -1374,9 +1505,10 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let account: Account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let mut state = State::new_for_testing(
         iroha_core::state::World::with([domain], [account], Vec::new()),
         kura,
@@ -1495,9 +1627,10 @@ fn create_election_rejects_stark_tally_vk_with_wrong_vote_circuit_role() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let account: Account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let mut state = State::new_for_testing(
         iroha_core::state::World::with([domain], [account], Vec::new()),
         kura,
@@ -1588,7 +1721,7 @@ fn create_election_rejects_stark_tally_vk_with_wrong_vote_circuit_role() {
 
 #[test]
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn governance_accepts_valid_halo2_and_stark_ballots_in_same_state() {
+fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     use core::num::NonZeroU64;
 
     use iroha_core::{
@@ -1621,9 +1754,10 @@ fn governance_accepts_valid_halo2_and_stark_ballots_in_same_state() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let account: Account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [account], Vec::new());
     let mut state = State::new_for_testing(world, kura, query);
     state.zk.stark.enabled = true;
@@ -1735,7 +1869,7 @@ fn governance_accepts_valid_halo2_and_stark_ballots_in_same_state() {
     .execute(&ALICE_ID, &mut stx)
     .expect("submit halo2 ballot");
 
-    // Register a STARK VK/circuit pair and submit a valid STARK ballot.
+    // Register a STARK VK/circuit pair and reject a synthetic STARK ballot.
     let stark_backend = "stark/fri/sha256-goldilocks";
     let stark_ballot_circuit_id = "stark/fri/sha256-goldilocks:vote-ballot";
     let stark_tally_circuit_id = "stark/fri/sha256-goldilocks:vote-tally";
@@ -1820,14 +1954,19 @@ fn governance_accepts_valid_halo2_and_stark_ballots_in_same_state() {
         &stark_election_id,
         &stark_commit,
     );
-    SubmitBallot {
+    let err = SubmitBallot {
         election_id: stark_election_id.clone(),
         ciphertext: stark_commit.to_vec(),
         ballot_proof: stark_ballot_attachment,
         nullifier: stark_nullifier,
     }
     .execute(&ALICE_ID, &mut stx)
-    .expect("submit stark ballot");
+    .expect_err("synthetic STARK ballot must be rejected");
+    let err_text = format!("{err:?}");
+    assert!(
+        err_text.contains("invalid ballot proof"),
+        "unexpected stark ballot rejection: {err:?}"
+    );
 
     let halo2_election = stx
         .world
@@ -1848,14 +1987,14 @@ fn governance_accepts_valid_halo2_and_stark_ballots_in_same_state() {
         .expect("stark election exists");
     assert_eq!(
         stark_election.ciphertexts.len(),
-        1,
-        "stark ballot must be accepted"
+        0,
+        "synthetic stark ballot must be rejected"
     );
 }
 
 #[test]
 fn stark_envelope_respects_limits() {
-    let env = build_sample_envelope();
+    let env = build_sample_air_composition_envelope();
     let bytes = norito::to_bytes(&env).expect("encode");
     assert!(
         verify_stark_fri_envelope(&bytes),
@@ -1884,9 +2023,8 @@ fn stark_envelope_respects_limits() {
 
 #[test]
 fn stark_single_fold_envelope_golden_vector() {
-    let env = build_sample_envelope();
+    let env = build_sample_air_composition_envelope();
     let bytes = norito::to_bytes(&env).expect("encode");
     let hex = hex::encode(bytes);
-    println!("{hex}");
-    expect!["4e5254300000a8d457cce6a10e02a8d457cce6a10e02002a1b0000000000008ed112274a40b4aa005e00000000000000020000000000000001000100000000000000030100000000000000030100000000000000020200000000000000010001000000000000000201000000000000000115000000000000000d000000000000006661737470713a76313a667269a21a00000000000002000000000000000100eb0500000000000002000000000000000100a804000000000000040000000000000020010000000000000100000000000000820100000000000000e901000000000000008a0100000000000000900100000000000000750100000000000000460100000000000000ce0100000000000000810100000000000000e201000000000000001e0100000000000000f20100000000000000330100000000000000920100000000000000f10100000000000000d20100000000000000d50100000000000000d701000000000000003901000000000000004e0100000000000000310100000000000000090100000000000000dc0100000000000000d10100000000000000110100000000000000af0100000000000000220100000000000000640100000000000000ae0100000000000000270100000000000000b20100000000000000330100000000000000fb200100000000000001000000000000008601000000000000002e0100000000000000d901000000000000001e0100000000000000e801000000000000009b0100000000000000840100000000000000550100000000000000d501000000000000004a01000000000000000601000000000000001801000000000000004201000000000000003d0100000000000000fa01000000000000008e01000000000000005d01000000000000008d01000000000000001b0100000000000000220100000000000000ae0100000000000000dd0100000000000000630100000000000000f00100000000000000840100000000000000e80100000000000000d70100000000000000d40100000000000000a60100000000000000460100000000000000fe01000000000000004a20010000000000000100000000000000f701000000000000006901000000000000009001000000000000004b0100000000000000260100000000000000a701000000000000000501000000000000009d01000000000000001b01000000000000003a01000000000000001901000000000000009201000000000000003a0100000000000000b601000000000000000c0100000000000000fc0100000000000000290100000000000000920100000000000000b60100000000000000b30100000000000000940100000000000000da01000000000000003501000000000000009c01000000000000000b01000000000000000d0100000000000000750100000000000000250100000000000000170100000000000000bc010000000000000045010000000000000048200100000000000001000000000000003c0100000000000000210100000000000000850100000000000000080100000000000000300100000000000000210100000000000000df0100000000000000f901000000000000002e01000000000000005301000000000000006f01000000000000009a0100000000000000710100000000000000ef0100000000000000500100000000000000f30100000000000000ec0100000000000000350100000000000000530100000000000000bb01000000000000006901000000000000000301000000000000003501000000000000008501000000000000003101000000000000009c01000000000000002301000000000000002301000000000000007901000000000000001f0100000000000000fa0100000000000000bd290100000000000001200100000000000001000000000000006a01000000000000002e0100000000000000020100000000000000200100000000000000b40100000000000000a401000000000000006f01000000000000000b01000000000000009301000000000000008d0100000000000000b60100000000000000e401000000000000005e0100000000000000d70100000000000000170100000000000000250100000000000000820100000000000000a10100000000000000170100000000000000560100000000000000c70100000000000000c10100000000000000210100000000000000660100000000000000c101000000000000007d0100000000000000850100000000000000d701000000000000009c01000000000000004e0100000000000000bb01000000000000001aac1300000000000001000000000000009c130000000000000300000000000000f70900000000000004000000000000000100000008000000000000000b0000000000000008000000000000000e000000000000009903000000000000090000000000000001000000000000000280030000000000000300000000000000200100000000000001000000000000009b0100000000000000150100000000000000a40100000000000000b20100000000000000cd01000000000000005401000000000000002401000000000000003f01000000000000007b01000000000000001a01000000000000008f01000000000000006501000000000000005801000000000000008f01000000000000004701000000000000009201000000000000006e0100000000000000270100000000000000a601000000000000002a0100000000000000e90100000000000000bb0100000000000000ad0100000000000000ff0100000000000000c001000000000000001101000000000000006e01000000000000006101000000000000001001000000000000000e01000000000000000f010000000000000086200100000000000001000000000000008c0100000000000000f301000000000000005201000000000000001301000000000000009301000000000000004f01000000000000001501000000000000007f0100000000000000900100000000000000580100000000000000be0100000000000000a80100000000000000cd0100000000000000800100000000000000c301000000000000008201000000000000001f0100000000000000cb0100000000000000650100000000000000cc01000000000000001101000000000000007f0100000000000000550100000000000000e00100000000000000d501000000000000004e01000000000000000b01000000000000002a0100000000000000900100000000000000b10100000000000000bf01000000000000001620010000000000000100000000000000ed01000000000000000d0100000000000000350100000000000000e201000000000000004b01000000000000005a0100000000000000c901000000000000009f0100000000000000980100000000000000430100000000000000bf0100000000000000590100000000000000b101000000000000006901000000000000003401000000000000007b0100000000000000890100000000000000be01000000000000007601000000000000000d01000000000000003d0100000000000000f80100000000000000a20100000000000000300100000000000000d601000000000000008501000000000000000c0100000000000000570100000000000000a0010000000000000024010000000000000034010000000000000049990300000000000009000000000000000100000000000000038003000000000000030000000000000020010000000000000100000000000000fb01000000000000003701000000000000003b0100000000000000e60100000000000000890100000000000000560100000000000000ce0100000000000000300100000000000000ba0100000000000000aa01000000000000007f0100000000000000730100000000000000480100000000000000030100000000000000a80100000000000000500100000000000000d80100000000000000b601000000000000009b0100000000000000da0100000000000000fe0100000000000000910100000000000000850100000000000000e501000000000000003a0100000000000000390100000000000000360100000000000000820100000000000000d90100000000000000ce01000000000000000b0100000000000000ba200100000000000001000000000000008c0100000000000000f301000000000000005201000000000000001301000000000000009301000000000000004f01000000000000001501000000000000007f0100000000000000900100000000000000580100000000000000be0100000000000000a80100000000000000cd0100000000000000800100000000000000c301000000000000008201000000000000001f0100000000000000cb0100000000000000650100000000000000cc01000000000000001101000000000000007f0100000000000000550100000000000000e00100000000000000d501000000000000004e01000000000000000b01000000000000002a0100000000000000900100000000000000b10100000000000000bf01000000000000001620010000000000000100000000000000ed01000000000000000d0100000000000000350100000000000000e201000000000000004b01000000000000005a0100000000000000c901000000000000009f0100000000000000980100000000000000430100000000000000bf0100000000000000590100000000000000b101000000000000006901000000000000003401000000000000007b0100000000000000890100000000000000be01000000000000007601000000000000000d01000000000000003d0100000000000000f80100000000000000a20100000000000000300100000000000000d601000000000000008501000000000000000c0100000000000000570100000000000000a0010000000000000024010000000000000034010000000000000049080000000000000032994bbe082aafce710200000000000009000000000000000100000000000000015802000000000000020000000000000020010000000000000100000000000000790100000000000000a901000000000000003a0100000000000000990100000000000000b70100000000000000a70100000000000000510100000000000000e00100000000000000390100000000000000f10100000000000000780100000000000000cf01000000000000000401000000000000002501000000000000004901000000000000005c0100000000000000020100000000000000fa01000000000000006a01000000000000000d0100000000000000940100000000000000d60100000000000000d10100000000000000b501000000000000002b01000000000000003f0100000000000000790100000000000000660100000000000000830100000000000000e7010000000000000022010000000000000096200100000000000001000000000000006a01000000000000000b0100000000000000040100000000000000e601000000000000002d0100000000000000120100000000000000840100000000000000450100000000000000df0100000000000000e801000000000000002501000000000000007e0100000000000000c80100000000000000d401000000000000004e0100000000000000260100000000000000540100000000000000000100000000000000a401000000000000004a0100000000000000780100000000000000c60100000000000000410100000000000000470100000000000000aa01000000000000000b0100000000000000650100000000000000c90100000000000000b301000000000000007a01000000000000007a0100000000000000ea7f060000000000000400000000000000000000000800000000000000aea006ffdfced1e3080000000000000032994bbe082aafce710200000000000009000000000000000100000000000000005802000000000000020000000000000020010000000000000100000000000000280100000000000000840100000000000000270100000000000000ae0100000000000000d401000000000000005e0100000000000000970100000000000000cc0100000000000000150100000000000000450100000000000000d401000000000000004601000000000000008a01000000000000002d0100000000000000440100000000000000ab01000000000000004301000000000000007301000000000000009301000000000000007c0100000000000000ca0100000000000000e80100000000000000d20100000000000000b601000000000000008101000000000000008501000000000000008e01000000000000005a01000000000000001501000000000000009401000000000000007701000000000000008e200100000000000001000000000000006a01000000000000000b0100000000000000040100000000000000e601000000000000002d0100000000000000120100000000000000840100000000000000450100000000000000df0100000000000000e801000000000000002501000000000000007e0100000000000000c80100000000000000d401000000000000004e0100000000000000260100000000000000540100000000000000000100000000000000a401000000000000004a0100000000000000780100000000000000c60100000000000000410100000000000000470100000000000000aa01000000000000000b0100000000000000650100000000000000c90100000000000000b301000000000000007a01000000000000007a0100000000000000ea710200000000000009000000000000000100000000000000015802000000000000020000000000000020010000000000000100000000000000790100000000000000a901000000000000003a0100000000000000990100000000000000b70100000000000000a70100000000000000510100000000000000e00100000000000000390100000000000000f10100000000000000780100000000000000cf01000000000000000401000000000000002501000000000000004901000000000000005c0100000000000000020100000000000000fa01000000000000006a01000000000000000d0100000000000000940100000000000000d60100000000000000d10100000000000000b501000000000000002b01000000000000003f0100000000000000790100000000000000660100000000000000830100000000000000e7010000000000000022010000000000000096200100000000000001000000000000006a01000000000000000b0100000000000000040100000000000000e601000000000000002d0100000000000000120100000000000000840100000000000000450100000000000000df0100000000000000e801000000000000002501000000000000007e0100000000000000c80100000000000000d401000000000000004e0100000000000000260100000000000000540100000000000000000100000000000000a401000000000000004a0100000000000000780100000000000000c60100000000000000410100000000000000470100000000000000aa01000000000000000b0100000000000000650100000000000000c90100000000000000b301000000000000007a01000000000000007a0100000000000000ea08000000000000001a05340bd4fdf4d0490100000000000009000000000000000100000000000000003001000000000000010000000000000020010000000000000100000000000000760100000000000000e20100000000000000440100000000000000570100000000000000c90100000000000000330100000000000000390100000000000000c301000000000000007e0100000000000000480100000000000000fe0100000000000000820100000000000000c60100000000000000700100000000000000220100000000000000580100000000000000f101000000000000005401000000000000006e0100000000000000af01000000000000005f0100000000000000770100000000000000440100000000000000620100000000000000b601000000000000002201000000000000009d0100000000000000f001000000000000000b0100000000000000420100000000000000a201000000000000002c060300000000000004000000000000000000000008000000000000001a05340bd4fdf4d0080000000000000034c5d317bfe29b1a490100000000000009000000000000000100000000000000003001000000000000010000000000000020010000000000000100000000000000760100000000000000e20100000000000000440100000000000000570100000000000000c90100000000000000330100000000000000390100000000000000c301000000000000007e0100000000000000480100000000000000fe0100000000000000820100000000000000c60100000000000000700100000000000000220100000000000000580100000000000000f101000000000000005401000000000000006e0100000000000000af01000000000000005f0100000000000000770100000000000000440100000000000000620100000000000000b601000000000000002201000000000000009d0100000000000000f001000000000000000b0100000000000000420100000000000000a201000000000000002c490100000000000009000000000000000100000000000000013001000000000000010000000000000020010000000000000100000000000000540100000000000000100100000000000000be0100000000000000ee01000000000000009801000000000000005f01000000000000008a01000000000000009b0100000000000000b501000000000000005a0100000000000000720100000000000000c901000000000000003a0100000000000000460100000000000000b60100000000000000760100000000000000f90100000000000000f901000000000000001701000000000000005801000000000000007801000000000000009b0100000000000000e00100000000000000c10100000000000000490100000000000000980100000000000000340100000000000000f601000000000000007301000000000000001601000000000000000c01000000000000006b080000000000000066e4102520642cde20000000000000000800000000000000000000000000000008000000000000000000000000000000e90000000000000001e0000000000000000100000000000000d000000000000000080000000000000021b2e0e27b2f43b40800000000000000070000000000000008000000000000000200000000000000700000000000000002000000000000002c0000000000000004000000000000000000000008000000000000001a05340bd4fdf4d0080000000000000003000000000000002c00000000000000040000000000000001000000080000000000000034c5d317bfe29b1a080000000000000005000000000000002000000000000000080000000000000000000000000000000800000000000000000000000000000012000000000000000a00000000000000544553542d535441524b"].assert_eq(&hex);
+    expect!["4e5254300000a8d457cce6a10e02a8d457cce6a10e0200a10a0000000000009d6fc6edf58f5ba2021f020100010301030102020100010201010e0d6661737470713a76313a667269f314020100d4020201008c02040000000000000040013c010501780128015b017d01af014501b301bf013f016c017e016e01fd01a2014f01de01b3017201630172012901c30195017a018a01340179019d01a301184001eb017e018001810159015f019201a901da012f01430103011d014901c60169014801cc01bb01a301c301a40199013b013501c70139017e01a301660156013e4001eb0119017a0185013901ac01b60199019701fa017201e9015d0186019101c5019601500190016e010801880118012e01f101ed01af015c018401520146013d4001ae019e017e01bf01bd01f701260148010d01df017c0113011601f1019401b8016701c70144019901ae0141011f017f015e0146013601b1018001f8013b0102420140015d014c0112016f01fc018b01cb0105014a01240177011b015901d0010c01d7015101f6016e016801e7017a0125011701580172014a017b01b701ff019f0144840a0100000000000000fa090300000000000000ea040400000000080000000000000000080000000000000000d70109010000000000000000cb0103000000000000004001ae019e017e01bf01bd01f701260148010d01df017c0113011601f1019401b8016701c70144019901ae0141011f017f015e0146013601b1018001f8013b01024001eb0119017a0185013901ac01b60199019701fa017201e9015d0186019101c5019601500190016e010801880118012e01f101ed01af015c018401520146013d4001eb017e018001810159015f019201a901da012f01430103011d014901c60169014801cc01bb01a301c301a40199013b013501c70139017e01a301660156013ed70109010000000000000001cb0103000000000000004001ae019e017e01bf01bd01f701260148010d01df017c0113011601f1019401b8016701c70144019901ae0141011f017f015e0146013601b1018001f8013b01024001eb0119017a0185013901ac01b60199019701fa017201e9015d0186019101c5019601500190016e010801880118012e01f101ed01af015c018401520146013d4001eb017e018001810159015f019201a901da012f01430103011d014901c60169014801cc01bb01a301c301a40199013b013501c70139017e01a301660156013e0800000000000000009601090100000000000000008a0102000000000000004001ae019e017e01bf01bd01f701260148010d01df017c0113011601f1019401b8016701c70144019901ae0141011f017f015e0146013601b1018001f8013b01024001eb0119017a0185013901ac01b60199019701fa017201e9015d0186019101c5019601500190016e010801880118012e01f101ed01af015c018401520146013da50304000000000800000000000000000800000000000000009601090100000000000000008a0102000000000000004001ae019e017e01bf01bd01f701260148010d01df017c0113011601f1019401b8016701c70144019901ae0141011f017f015e0146013601b1018001f8013b01024001eb0119017a0185013901ac01b60199019701fa017201e9015d0186019101c5019601500190016e010801880118012e01f101ed01af015c018401520146013d9601090100000000000000018a0102000000000000004001ae019e017e01bf01bd01f701260148010d01df017c0113011601f1019401b8016701c70144019901ae0141011f017f015e0146013601b1018001f8013b01024001eb0119017a0185013901ac01b60199019701fa017201e9015d0186019101c5019601500190016e010801880118012e01f101ed01af015c018401520146013d08000000000000000054090100000000000000004901000000000000004001ae019e017e01bf01bd01f701260148010d01df017c0113011601f1019401b8016701c70144019901ae0141011f017f015e0146013601b1018001f8013b0102dd01040000000008000000000000000008000000000000000054090100000000000000004901000000000000004001ae019e017e01bf01bd01f701260148010d01df017c0113011601f1019401b8016701c70144019901ae0141011f017f015e0146013601b1018001f8013b010254090100000000000000014901000000000000004001ae019e017e01bf01bd01f701260148010d01df017c0113011601f1019401b8016701c70144019901ae0141011f017f015e0146013601b1018001f8013b010208000000000000000012080000000000000000080000000000000000720170010000000000000067087d00000000000000080700000000000000080200000000000000380200000000000000170400000000080b00000000000000080300000000000000170401000000081100000000000000080500000000000000120800000000000000000800000000000000009f07019c070201000f0e636f6d706f736974696f6e2d763120c8fdd241c9e2ea9761a6aa6300a15507f7e9cc36bb877728217ebfedf6571f442072629918b773e586de7035b7e57850f3e4aa4785db2eb712edbce53285982922203c0578285b7daf45b3bf3f6c7e6efda24fdeb372637229c3957a8a34799da318020600a1060100000000000000970604010000003e060000000000000008010000000000000008c8fdd241c9e2ea970861a6aa6300a1550708f7e9cc36bb87772808217ebfedf6571f440806000000000000003e060000000000000008020000000000000008c8fdd241c9e2ea970861a6aa6300a1550708f7e9cc36bb87772808217ebfedf6571f44080600000000000000d70109010000000000000001cb0103000000000000004001c00131013d01550174019201ce01ba01de01b601d401f901d8011a013401fd0118013b013301ae016701bf01f101d301590106013601b6010601ff0195015e400178018d01df017a01060183014b0125018a01d8015001ed011b01ee0139013c010501d7016501f401e1014e013b011d01cd014301e3018a013401630144010840015e01240177016b019e01270178015801aa010e010901220186014f01bf01b4013101be015801ef016401a2018f01cd018f0134011a017c018701f301b10168d70109010000000000000002cb010300000000000000400124018201d0017f01a5013001a201b9014a0101013e011c017001b801a40179016f016901180128012d013801d7012b0178016a01f4018701b901b0019a01074001fc0188012701cf01e701cd01350112015d01c1019f019001d2015301ac01b1010401da0144014c01ab010b0151012b01cf0182018e01af01f501de0156016d40015e01240177016b019e01270178015801aa010e010901220186014f01bf01b4013101be015801ef016401a2018f01cd018f0134011a017c018701f301b10168080000000000000000d70109010000000000000001cb0103000000000000004001ae019e017e01bf01bd01f701260148010d01df017c0113011601f1019401b8016701c70144019901ae0141011f017f015e0146013601b1018001f8013b01024001eb0119017a0185013901ac01b60199019701fa017201e9015d0186019101c5019601500190016e010801880118012e01f101ed01af015c018401520146013d4001eb017e018001810159015f019201a901da012f01430103011d014901c60169014801cc01bb01a301c301a40199013b013501c70139017e01a301660156013e0b0a544553542d535441524b"].assert_eq(&hex);
 }

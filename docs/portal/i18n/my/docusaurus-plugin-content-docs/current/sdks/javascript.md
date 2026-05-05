@@ -66,15 +66,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -162,84 +162,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## အော့ဖ်လိုင်းထောက်ပံ့ကြေးများနှင့် စီရင်ချက်မက်တာဒေတာ
+## Offline V2 readiness
 
-အော့ဖ်လိုင်း ထောက်ပံ့ကြေး တုံ့ပြန်မှုများသည် ကြွယ်ဝသော လယ်ဂျာ မက်တာဒေတာကို ရှေ့တွင် ထုတ်ဖော်သည် —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`၊
-`attestation_nonce_hex` နှင့် `remaining_amount` ကို ကုန်ကြမ်းနှင့်အတူ ပြန်ပေးသည်
-မှတ်တမ်းတင်ထားသောကြောင့် ဒက်ရှ်ဘုတ်များသည် မြှုပ်သွင်းထားသော Norito payloads ကို ကုဒ်ကုဒ်လုပ်ရန် မလိုအပ်ပါ။ အသစ်
-နှစ်သစ်အတွက် ကူညီသူများ (`deadline_kind`၊ `deadline_state`၊ `deadline_ms`၊
-`deadline_ms_remaining`) နောက်သက်တမ်းကုန်ဆုံးမည့် နောက်ဆုံးရက်ကို မီးမောင်းထိုးပြပါ (ပြန်လည်စတင်ခြင်း → မူဝါဒ
-→ လက်မှတ်) ထို့ကြောင့် UI တံဆိပ်များသည် ထောက်ပံ့ကြေးရရှိသည့်အခါတိုင်း အော်ပရေတာများအား သတိပေးနိုင်သည်။
-<24 နာရီ ကျန်သေးတယ်။ SDK
-`/v1/offline/allowances` မှ ဖော်ထုတ်ထားသော REST စစ်ထုတ်မှုများကို မှန်ကြည့်သည်-
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`၊
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` ရယ်၊
-`requireVerdict` / `onlyMissingVerdict` ဘူလီယံ။ မမှန်ကန်သော ပေါင်းစပ်မှုများ (အတွက်
-ဥပမာ `onlyMissingVerdict` + `verdictIdHex`) သည် Torii မတိုင်မီ ပြည်တွင်း၌ ငြင်းပယ်ခံရသည်
-ဟုခေါ်သည်။
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## အော့ဖ်လိုင်းငွေဖြည့်ခြင်း (ပြဿနာ + မှတ်ပုံတင်ခြင်း)
-
-လက်မှတ်ကိုချက်ချင်းထုတ်ချင်တဲ့အခါ ငွေဖြည့်အကူတွေကို သုံးပါ။
-လယ်ဂျာတွင် စာရင်းသွင်းပါ။ SDK သည် ထုတ်ပေးပြီး မှတ်ပုံတင်ထားသော လက်မှတ်ကို စစ်ဆေးသည်။
-မပြန်မီ ID များသည် တူညီပြီး တုံ့ပြန်မှုတွင် payload နှစ်ခုလုံး ပါဝင်ပါသည်။ ရှိတယ်။
-သီးသန့်ငွေဖြည့်ပေးသည့် အဆုံးမှတ်မရှိပါ။ အကူအညီပေးသူက ပြဿနာကို ဆွဲကြိုးချ + ဖုန်းခေါ်ဆိုမှုများကို စာရင်းသွင်းပါ။ အကယ်လို့
-သင့်တွင် လက်မှတ်ရေးထိုးထားသော လက်မှတ်တစ်ခုရှိပြီး၊ `registerOfflineAllowance` (သို့မဟုတ်) ခေါ်ဆိုပါ။
-`renewOfflineAllowance`) တိုက်ရိုက်။
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii မေးမြန်းချက်များနှင့် တိုက်ရိုက်ကြည့်ရှုခြင်း (WebSockets)
 
 Query helpers သည် အခြေအနေ၊ Prometheus မက်ထရစ်များ၊ တယ်လီမီတာ လျှပ်တစ်ပြက်ရိုက်ချက်များနှင့် ဖြစ်ရပ်ကို ဖော်ထုတ်ပြသသည်
@@ -274,7 +221,7 @@ Explorer telemetry သည် `/v1/explorer/metrics` နှင့် အတွက
 `/v1/explorer/accounts/{account_id}/qr` သည် အဆုံးမှတ်များဖြစ်သောကြောင့် ဒက်ရှ်ဘုတ်များသည် ၎င်းကို ပြန်လည်ဖွင့်နိုင်သည်။
 ပေါ်တယ်ကို စွမ်းအားပေးသော လျှပ်တစ်ပြက်ပုံများ။ `getExplorerMetrics()` သည် ပုံမှန်ဖြစ်စေသည်။
 လမ်းကြောင်းကိုပိတ်ထားသောအခါ payload နှင့် `null` ကိုပြန်ပေးသည်။ ၎င်းကိုတွဲပါ။
-`getExplorerAccountQr()` I105 (ဦးစားပေး)/sora (ဒုတိယအကောင်းဆုံး) စာလုံးများ နှင့် inline လိုအပ်သည့်အခါတိုင်း
+`getExplorerAccountQr()` i105 (ဦးစားပေး)/sora (ဒုတိယအကောင်းဆုံး) စာလုံးများ နှင့် inline လိုအပ်သည့်အခါတိုင်း
 မျှဝေခလုတ်များအတွက် SVG
 
 ```ts
@@ -289,7 +236,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -297,8 +244,8 @@ console.log(
 );
 ```
 
-`I105` ကို ဖြတ်သွားခြင်းသည် Explorer ၏ ပုံသေချုံ့ထားသော ပုံဖြစ်သည်။
-ရွေးချယ်သူများ; နှစ်သက်သော I105 အထွက်အတွက် အစားထိုးခြင်း သို့မဟုတ် `i105_qr` တောင်းဆိုခြင်း
+`i105` ကို ဖြတ်သွားခြင်းသည် Explorer ၏ ပုံသေချုံ့ထားသော ပုံဖြစ်သည်။
+ရွေးချယ်သူများ; နှစ်သက်သော i105 အထွက်အတွက် အစားထိုးခြင်း သို့မဟုတ် `i105_qr` တောင်းဆိုခြင်း
 QR-safe ဗားရှင်းကို သင်လိုအပ်သောအခါ။ compressed literal သည် ဒုတိယအကောင်းဆုံးဖြစ်သည်။
 UX အတွက် Sora-သီးသန့် ရွေးချယ်မှု။ ကူညီသူသည် ကျမ်းဂန်အမှတ်အသားကို အမြဲတမ်း ပြန်ပေးသည်၊
 ရွေးချယ်ထားသော ပကတိနှင့် မက်တာဒေတာ (ကွန်ရက်ရှေ့ဆက်၊ QR ဗားရှင်း/မော်ဂျူးများ၊ အမှား
@@ -517,7 +464,7 @@ Space Directory APIs များသည် Universal Account ID (UAID) lifecycle
   Canonical အကောင့် ID များဖြင့် ပိုင်ဆိုင်မှုပိုင်ဆိုင်မှုများကို အုပ်စုဖွဲ့ခြင်း၊ စစ်ထုတ်ရန် `assetId` ကို ကျော်ဖြတ်ပါ။
   အစုစုသည် တစ်ခုတည်းသော ပိုင်ဆိုင်မှု သာဓကသို့ ဆင်းသက်သည်။
 - `getUaidBindings(uaid)` သည် dataspace ↔ အကောင့်တိုင်းကို ရေတွက်သည်။
-  စည်းနှောင်ခြင်း (`I105` သည် `i105` စာလုံးများကို ပြန်ပေးသည်)။
+  စည်းနှောင်ခြင်း (`i105` သည် `i105` စာလုံးများကို ပြန်ပေးသည်)။
 - `getUaidManifests(uaid, { dataspaceId })` သည် လုပ်ဆောင်နိုင်စွမ်းတစ်ခုစီကို ထင်ရှားစွာပြသည်၊
   ဘဝသံသရာအခြေအနေနှင့် စာရင်းစစ်များအတွက် ချည်နှောင်ထားသော အကောင့်များ။အော်ပရေတာ အထောက်အထားထုပ်များ အတွက်၊ ထုတ်ဝေခြင်း/ပြန်လည်ရုပ်သိမ်းခြင်း စီးဆင်းမှုများကို ထင်ရှားစေပြီး SDK ပြောင်းရွှေ့ခြင်း။
 လမ်းညွှန်ချက်၊ Universal အကောင့်လမ်းညွှန် (`docs/source/universal_accounts_guide.md`) ကို လိုက်နာပါ
@@ -560,7 +507,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -570,7 +517,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

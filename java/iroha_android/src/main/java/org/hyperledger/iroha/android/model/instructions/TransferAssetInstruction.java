@@ -116,7 +116,8 @@ public final class TransferAssetInstruction implements InstructionTemplate {
 
     public Builder setDestinationAccountId(final String destinationAccountId) {
       this.destinationAccountId =
-          Objects.requireNonNull(destinationAccountId, "destinationAccountId");
+          org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
+              destinationAccountId, "destinationAccountId");
       return this;
     }
 

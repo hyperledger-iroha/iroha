@@ -1,4 +1,4 @@
-use std::{fmt, io::Cursor, str::FromStr};
+use std::{fmt, str::FromStr};
 
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_schema::IntoSchema;
@@ -179,6 +179,7 @@ impl DaCommitmentRecord {
 /// Bundle embedded into `SignedBlockWire` and hashed inside `BlockHeader`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(decode_from_slice)]
 pub struct DaCommitmentBundle {
     /// Bundle layout version.
     pub version: u16,
@@ -249,16 +250,6 @@ impl DaCommitmentBundle {
 impl Default for DaCommitmentBundle {
     fn default() -> Self {
         Self::new(Vec::new())
-    }
-}
-
-impl<'a> ncore::DecodeFromSlice<'a> for DaCommitmentBundle {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        let _guard = ncore::PayloadCtxGuard::enter(bytes);
-        let mut cursor = Cursor::new(bytes);
-        let decoded: DaCommitmentBundle = Decode::decode(&mut cursor)?;
-        let used = usize::try_from(cursor.position()).map_err(|_| ncore::Error::LengthMismatch)?;
-        Ok((decoded, used))
     }
 }
 
@@ -409,7 +400,10 @@ mod tests {
     use std::str::FromStr;
 
     use iroha_crypto::Hash;
-    use norito::codec::{DecodeAll, encode_adaptive};
+    use norito::{
+        codec::{DecodeAll, encode_adaptive},
+        core::DecodeFromSlice,
+    };
 
     use super::*;
 
@@ -445,6 +439,18 @@ mod tests {
         let decoded = DaCommitmentBundle::decode_all(&mut bytes.as_slice()).expect("decode");
         assert_eq!(bundle, decoded);
         assert!(!bundle.is_empty());
+    }
+
+    #[test]
+    fn bundle_decode_from_slice_rejects_trailing_bytes() {
+        let bundle = DaCommitmentBundle::new(vec![sample_record()]);
+        let mut bytes = encode_adaptive(&bundle);
+        bytes.push(0);
+
+        let err = DaCommitmentBundle::decode_from_slice(&bytes)
+            .expect_err("DA commitment bundle slice decoder must reject trailing bytes");
+
+        assert!(matches!(err, norito::core::Error::LengthMismatch));
     }
 
     #[test]

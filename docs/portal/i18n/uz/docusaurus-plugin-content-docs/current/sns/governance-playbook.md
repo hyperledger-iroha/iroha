@@ -73,7 +73,7 @@ asboblar paneli va eskalatsiya yo'llari.
 | Nizom + KPI qo'shimchalari | `docs/source/sns/governance_addenda/` | Versiya tomonidan boshqariladigan imzolangan nizomlar, KPI shartnomalari va CLI ovozlari bilan havola qilingan boshqaruv qarorlari. |
 | Ro'yxatga olish sxemasi | [`registry-schema.md`](./registry-schema.md) | Kanonik Norito tuzilmalari (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Registrator shartnomasi | [`registrar-api.md`](./registrar-api.md) | REST/gRPC yuklamalari, `sns_registrar_status_total` ko'rsatkichlari va boshqaruv hooki kutilmalari. |
-| Manzil UX qo'llanma | [`address-display-guidelines.md`](./address-display-guidelines.md) | Hamyonlar/tadqiqotchilar tomonidan aks ettirilgan kanonik I105 (afzal) + siqilgan (`sora`, ikkinchi eng yaxshi) renderlar. |
+| Manzil UX qo'llanma | [`address-display-guidelines.md`](./address-display-guidelines.md) | Hamyonlar/tadqiqotchilar tomonidan aks ettirilgan kanonik i105 (afzal) + siqilgan (`sora`, ikkinchi eng yaxshi) renderlar. |
 | SoraDNS / GAR hujjatlari | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Deterministik xost hosilasi, shaffoflik tayler ish jarayoni va ogohlantirish qoidalari. |
 | Normativ eslatmalar | `docs/source/sns/regulatory/` | Yurisdiksiyaga oid qabul eslatmalari (masalan, EI DSA), boshqaruvchining roziligi, shablon ilovalari. |
 | Burg'ulash jurnali | `ops/drill-log.md` | Fazadan chiqishdan oldin zarur bo'lgan tartibsizlik va IR mashqlarini yozib olish. |
@@ -116,7 +116,7 @@ Shunday qilib, auditorlar 24 soat ichida qaror izlarini qayta qurishlari mumkin.
    tarqatuvchi yangi GAR/zonasi holatini tasdiqlash uchun hal qiluvchi shaffoflik tailer
    (§4.5 ga qarang).
 6. **Mijoz haqida ma’lumot:** Mijozlarga qarashli daftarni yangilash (hamyon/tadqiqotchi)
-   [`address-display-guidelines.md`](./address-display-guidelines.md) da umumiy moslamalar orqali, I105 va
+   [`address-display-guidelines.md`](./address-display-guidelines.md) da umumiy moslamalar orqali, i105 va
    siqilgan renderlar nusxa ko'chirish/QR ko'rsatmalariga mos keladi.
 
 ### 4.3 Yangilash, hisob-kitob va g'aznachilikni solishtirish- **Yangilash ish jarayoni:** Ro‘yxatga oluvchilar 30 kunlik imtiyoz + 60 kunlik to‘lovni amalga oshiradilar
@@ -145,11 +145,11 @@ Shunday qilib, auditorlar 24 soat ichida qaror izlarini qayta qurishlari mumkin.
 | Bosqich | Egasi | Harakat va dalillar | SLA |
 |-------|-------|-------------------|-----|
 | Yumshoq muzlatish so'rovi | Styuard / qo'llab-quvvatlash | `SNS-DF-<id>` chiptasini toʻlov dalillari, nizo boʻyicha maʼlumotnoma va taʼsirlangan selektor(lar). | Qabul qilingandan ≤4 soat. |
-| Qo'riqchi chiptasi | Himoya kengashi | `sns governance freeze --selector <I105> --reason <text> --until <ts>` imzolangan `GuardianFreezeTicketV1` ishlab chiqaradi. JSON chiptasini `artifacts/sns/guardian/<id>.json` ostida saqlang. | ≤30min ACK, ≤2s bajarish. |
+| Qo'riqchi chiptasi | Himoya kengashi | `sns governance freeze --selector <i105> --reason <text> --until <ts>` imzolangan `GuardianFreezeTicketV1` ishlab chiqaradi. JSON chiptasini `artifacts/sns/guardian/<id>.json` ostida saqlang. | ≤30min ACK, ≤2s bajarish. |
 | Kengash ratifikatsiyasi | Boshqaruv kengashi | Muzlatishlarni ma'qullang yoki rad eting, vasiylik chiptasiga hujjat qarori havolasi va nizolar to'g'risidagi nizomlar dayjesti. | Kengashning navbatdagi sessiyasi yoki asenkron ovoz berish. |
 | Arbitraj paneli | Muvofiqlik + boshqaruvchi | `sns governance dispute ballot` orqali yuborilgan xeshlangan byulletenlar bilan 7 nafar hakamlar hay'atini chaqiring (har bir yo'l xaritasi bo'yicha). Voqea paketiga anonim ovoz kvitansiyalarini biriktiring. | Hukm obligatsiya depozitidan keyin ≤7 kun. |
 | Apellyatsiya | Qo'riqchi + kengash | Apellyatsiya rishtalarini ikki baravar oshiradi va hakamlar hay'ati jarayonini takrorlaydi; rekord Norito manifest `DisputeAppealV1` va havola asosiy chipta. | ≤10 kun. |
-| Muzdan tushirish va tuzatish | Registrator + hal qiluvchi operatsiyalar | `sns governance unfreeze --selector <I105> --ticket <id>` ni ishga tushiring, registrator holatini yangilang va GAR/resolver farqlarini tarqating. | Hukm chiqarilgandan so'ng darhol. |
+| Muzdan tushirish va tuzatish | Registrator + hal qiluvchi operatsiyalar | `sns governance unfreeze --selector <i105> --ticket <id>` ni ishga tushiring, registrator holatini yangilang va GAR/resolver farqlarini tarqating. | Hukm chiqarilgandan so'ng darhol. |
 
 Favqulodda vaziyatlar qoidalari (qo‘riqchi tomonidan qo‘zg‘atilgan muzlashlar ≤72 soat) bir xil oqim bo‘ylab amal qiladi, lekin
 retroaktiv kengash ko'rib chiqish va ostida shaffoflik eslatma talab

@@ -103,14 +103,13 @@ fn generate_two_ids() -> (AccountId, AccountId) {
 }
 
 fn create_mouse(mouse_id: AccountId) -> Register<Account> {
-    let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
-    Register::account(Account::new(mouse_id.to_account_id(wonderland)))
+    Register::account(Account::new(mouse_id.clone()))
 }
 
 fn asset_definition_id_for(context: &str) -> AssetDefinitionId {
     let name = format!("camomile_{context}");
     AssetDefinitionId::new(
-        "wonderland".parse().expect("domain id should be valid"),
+        DomainId::try_new("wonderland", "universal").expect("domain id should be valid"),
         name.parse().expect("asset name should be valid"),
     )
 }

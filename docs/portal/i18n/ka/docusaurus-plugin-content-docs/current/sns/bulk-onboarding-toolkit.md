@@ -47,7 +47,7 @@ Torii ან CLI. დამხმარე ამოწმებს ყველ
 | `suffix_id` | დიახ | რიცხვითი სუფიქსის იდენტიფიკატორი (ათწილადი ან `0x` თექვსმეტობითი). |
 | `owner` | დიახ | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | დიახ | მთელი რიცხვი `1..=255`. |
-| `payment_asset_id` | დიახ | ანგარიშსწორების აქტივი (მაგალითად `xor#sora`). |
+| `payment_asset_id` | დიახ | ანგარიშსწორების აქტივი (მაგალითად `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | დიახ | ხელმოუწერელი მთელი რიცხვები, რომლებიც წარმოადგენენ აქტივის მშობლიურ ერთეულებს. |
 | `settlement_tx` | დიახ | JSON მნიშვნელობა ან პირდაპირი სტრიქონი, რომელიც აღწერს გადახდის ტრანზაქციას ან ჰეშს. |
 | `payment_payer` | დიახ | ანგარიშის ID, რომელიც აძლევდა უფლებას გადახდას. |
@@ -86,18 +86,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -143,10 +143,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- დამხმარე გასცემს ერთ `POST /v1/sns/registrations` მოთხოვნას და წყვეტს
+- დამხმარე გასცემს ერთ `POST /v1/sns/names` მოთხოვნას და წყვეტს
   პირველი HTTP შეცდომა. პასუხები დართულია ჟურნალის ბილიკზე, როგორც NDJSON
   ჩანაწერები.
-- `--poll-status` ხელახლა სვამს შეკითხვას `/v1/sns/registrations/{selector}` ყოველი შემდეგ
+- `--poll-status` ხელახლა სვამს შეკითხვას `/v1/sns/names/{namespace}/{literal}` ყოველი შემდეგ
   წარდგენა (`--poll-attempts`-მდე, ნაგულისხმევი 5) დასადასტურებლად, რომ ჩანაწერი არის
   ხილული. მიუთითეთ `--suffix-map` (JSON of `suffix_id` to `"suffix"` მნიშვნელობები) ასე
   ხელსაწყოს შეუძლია გამოიტანოს `{label}.{suffix}` ლიტერალები გამოკითხვისთვის.
@@ -233,7 +233,7 @@ Workflows უბრალოდ დაარქივებს გამოშ�
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -256,7 +256,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   მითითებები წყდება CSV მდებარეობის მიმართ. არაობიექტური მეტამონაცემები
   წარმოქმნის ვალიდაციის შეცდომას.
 - **კონტროლერები:** ცარიელი უჯრედები პატივია `--default-controllers`. მიაწოდეთ მკაფიო
-  კონტროლერების სიები (მაგალითად `i105...;i105...`) არამფლობელზე დელეგირებისას
+  კონტროლერების სიები (მაგალითად `<i105-account-id>;<i105-account-id>`) არამფლობელზე დელეგირებისას
   მსახიობები.
 
 წარუმატებლობა მოხსენებულია კონტექსტური მწკრივის ნომრებით (მაგალითად

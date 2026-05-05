@@ -58,6 +58,14 @@ fn minimal_ivm_program_with_syscall(abi_version: u8, syscall: u8) -> Vec<u8> {
     out
 }
 
+fn unlisted_syscall_number() -> u8 {
+    (0u8..=u8::MAX)
+        .find(|number| {
+            !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, u32::from(*number))
+        })
+        .expect("ABI v1 should leave at least one u8 syscall number unmapped")
+}
+
 fn metadata_with_gas_limit(limit: u64) -> Metadata {
     let mut md = Metadata::default();
     let key = iroha_data_model::name::Name::from_str("gas_limit").expect("gas_limit key");
@@ -80,11 +88,10 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
 
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account =
-        Account::new(account_id.clone().to_account_id(domain_id.clone())).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -169,11 +176,10 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
 
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account =
-        Account::new(account_id.clone().to_account_id(domain_id.clone())).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -249,11 +255,10 @@ fn ivm_manifest_without_abi_hash_allows_admission() {
 
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account =
-        Account::new(account_id.clone().to_account_id(domain_id.clone())).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -326,11 +331,10 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
 
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account =
-        Account::new(account_id.clone().to_account_id(domain_id.clone())).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
@@ -400,15 +404,15 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
 
     let kp = KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(pubkey);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
-    let account =
-        Account::new(account_id.clone().to_account_id(domain_id.clone())).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query_handle);
 
-    let prog = minimal_ivm_program_with_syscall(1, 0xAB);
+    let unknown_syscall = unlisted_syscall_number();
+    let prog = minimal_ivm_program_with_syscall(1, unknown_syscall);
     let parsed = ProgramMetadata::parse(&prog).expect("valid header");
     let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
     let abi_hash = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
@@ -456,8 +460,9 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
     match result {
         Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
+            let expected = format!("unknown syscall number 0x{unknown_syscall:02x}");
             assert!(
-                msg.contains("unknown syscall number 0xab"),
+                msg.contains(&expected),
                 "unknown syscall must be rejected during admission, got {msg}"
             );
         }

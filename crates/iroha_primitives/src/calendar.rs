@@ -316,10 +316,94 @@ mod tests {
     }
 
     #[test]
+    fn end_of_day_anchor_time_is_valid_and_exact() {
+        let ts = unix_ms(2024, 5, 10, 23, 59, 59, 998);
+        let anchor_time = u32::try_from(MS_PER_DAY - 1).expect("day ms fits u32");
+
+        let anchor = monthly_anchor_after(ts, 10, anchor_time).expect("anchor");
+
+        assert_eq!(anchor, unix_ms(2024, 5, 10, 23, 59, 59, 999));
+    }
+
+    #[test]
+    fn invalid_anchor_day_is_rejected_for_public_helpers() {
+        let ts = unix_ms(2024, 1, 15, 0, 0, 0, 0);
+
+        assert_eq!(
+            monthly_anchor_at_or_before(ts, 0, 0),
+            Err(CalendarError::InvalidAnchorDay)
+        );
+        assert_eq!(
+            monthly_anchor_after(ts, 32, 0),
+            Err(CalendarError::InvalidAnchorDay)
+        );
+        assert_eq!(
+            monthly_billing_period(ts, 0, 0, BillingPeriod::Next),
+            Err(CalendarError::InvalidAnchorDay)
+        );
+    }
+
+    #[test]
     fn invalid_anchor_time_is_rejected() {
         let ts = unix_ms(2024, 1, 1, 0, 0, 0, 0);
         let invalid = u32::try_from(MS_PER_DAY).expect("MS_PER_DAY fits u32");
         let err = monthly_anchor_at_or_before(ts, 1, invalid);
         assert_eq!(err, Err(CalendarError::InvalidAnchorTime));
+    }
+
+    #[test]
+    fn previous_period_at_unix_epoch_reports_overflow() {
+        let err = monthly_billing_period(0, 1, 0, BillingPeriod::Previous)
+            .expect_err("previous period before unix epoch should overflow");
+
+        assert_eq!(err, CalendarError::Overflow);
+    }
+
+    #[test]
+    fn month_helpers_cross_year_and_reject_invalid_months() {
+        assert_eq!(prev_month(2024, 1), Ok((2023, 12)));
+        assert_eq!(prev_month(2024, 12), Ok((2024, 11)));
+        assert_eq!(next_month(2024, 12), Ok((2025, 1)));
+        assert_eq!(next_month(2024, 1), Ok((2024, 2)));
+        assert_eq!(prev_month(2024, 0), Err(CalendarError::InvalidMonth));
+        assert_eq!(next_month(2024, 13), Err(CalendarError::InvalidMonth));
+    }
+
+    #[test]
+    fn days_in_month_applies_leap_century_rules() {
+        assert_eq!(days_in_month(2024, 2), Ok(29));
+        assert_eq!(days_in_month(2000, 2), Ok(29));
+        assert_eq!(days_in_month(1900, 2), Ok(28));
+        assert_eq!(days_in_month(2023, 4), Ok(30));
+        assert_eq!(days_in_month(2023, 12), Ok(31));
+        assert_eq!(days_in_month(2023, 0), Err(CalendarError::InvalidMonth));
+    }
+
+    #[test]
+    fn civil_date_conversion_roundtrips_known_dates() {
+        for (year, month, day) in [
+            (1970, 1, 1),
+            (1999, 12, 31),
+            (2000, 2, 29),
+            (2024, 3, 1),
+            (2400, 2, 29),
+        ] {
+            let days = days_from_civil(year, month, day).expect("valid date");
+            assert_eq!(civil_from_days(days), Ok((year, month, day)));
+        }
+    }
+
+    #[test]
+    fn days_from_civil_rejects_invalid_month_and_day() {
+        assert_eq!(
+            days_from_civil(2024, 0, 1),
+            Err(CalendarError::InvalidMonth)
+        );
+        assert_eq!(
+            days_from_civil(2024, 13, 1),
+            Err(CalendarError::InvalidMonth)
+        );
+        assert_eq!(days_from_civil(2024, 2, 0), Err(CalendarError::InvalidDay));
+        assert_eq!(days_from_civil(2023, 2, 29), Err(CalendarError::InvalidDay));
     }
 }

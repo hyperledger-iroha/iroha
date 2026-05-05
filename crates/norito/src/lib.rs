@@ -25,10 +25,11 @@
 //!   authoritative layout selection (unknown bits are rejected). Bare,
 //!   headerless decoders (`codec::Decode`) are internal-only for hashing/bench
 //!   scenarios and use the fixed v1 default flags.
-//! - Packed-seq/packed-struct and compact-length layouts are opt-in via header
-//!   flags; v1 defaults to `flags = 0x00`. `COMPACT_LEN` governs per-value
-//!   length prefixes; sequence length headers and packed-seq offsets are fixed
-//!   `u64` in v1, and reserved layout bits are rejected when decoding headers.
+//! - Packed-seq and packed-struct remain opt-in via header flags. The v1
+//!   default header layout advertises `COMPACT_LEN` (`flags = 0x02`) for
+//!   per-value length prefixes; sequence length headers and packed-seq offsets
+//!   stay fixed `u64` in v1, and reserved layout bits are rejected when
+//!   decoding headers.
 
 //!
 //! Helpers
@@ -67,7 +68,7 @@ pub use core::{
         Heuristics as HeuristicsConfig, get as get_heuristics,
         select_layout_flags_for_size_with as select_layout_flags_with,
     },
-    to_bytes, to_bytes_auto, to_compressed_bytes,
+    to_bytes, to_bytes_auto, to_bytes_in, to_compressed_bytes,
 };
 
 pub use codec::disable_packed_struct_layout;
@@ -310,6 +311,9 @@ pub mod codec {
 
         /// Return the encoded length for `self` without allocating a buffer.
         fn encoded_len(&self) -> usize {
+            if let Some(len) = self.encoded_len_exact() {
+                return len;
+            }
             let mut sink = std::io::sink();
             encode_adaptive_into(self, &mut sink).expect("encoding should not fail")
         }
@@ -531,6 +535,7 @@ pub mod codec {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         static HINT_CALLS: AtomicUsize = AtomicUsize::new(0);
+        static EXACT_CALLS: AtomicUsize = AtomicUsize::new(0);
 
         #[derive(Clone, Copy)]
         struct Hinted(u8);
@@ -551,6 +556,20 @@ pub mod codec {
             }
         }
 
+        struct ExactLenOnly(u8);
+
+        impl NoritoSerialize for ExactLenOnly {
+            fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), crate::Error> {
+                writer.write_all(&[self.0])?;
+                Ok(())
+            }
+
+            fn encoded_len_exact(&self) -> Option<usize> {
+                EXACT_CALLS.fetch_add(1, Ordering::Relaxed);
+                Some(1)
+            }
+        }
+
         #[test]
         fn encode_to_matches_encode() {
             let value = vec![1u8, 2, 3, 4, 5];
@@ -565,6 +584,14 @@ pub mod codec {
             let value = (42u32, vec![7u8, 8, 9]);
             let bytes = value.encode();
             assert_eq!(value.encoded_len(), bytes.len());
+        }
+
+        #[test]
+        fn encoded_len_uses_exact_len_when_available() {
+            EXACT_CALLS.store(0, Ordering::Relaxed);
+            let value = ExactLenOnly(7);
+            assert_eq!(value.encoded_len(), 1);
+            assert_eq!(EXACT_CALLS.load(Ordering::Relaxed), 1);
         }
 
         #[test]
@@ -675,6 +702,24 @@ pub mod codec {
         }
 
         decode_from_aligned::<T>(aligned_slice, flags, logical_len)
+    }
+
+    /// Bare decode from an exact slice using a type-provided slice decoder.
+    ///
+    /// Unlike [`Decode::decode`], this avoids copying when the caller already
+    /// has the full payload in memory. The type's [`core::DecodeFromSlice`]
+    /// implementation must prove that all bytes are consumed.
+    pub fn decode_exact_from_slice<T>(bytes: &[u8]) -> Result<T, Error>
+    where
+        T: for<'de> NoritoDeserialize<'de> + for<'de> core::DecodeFromSlice<'de>,
+    {
+        core::reset_decode_state();
+        let _reset = DecodeResetGuard;
+        let (value, used) = core::decode_field_canonical_from_slice::<T>(bytes)?;
+        if used != bytes.len() {
+            return Err(Error::LengthMismatch);
+        }
+        Ok(value)
     }
 
     struct DecodeResetGuard;
@@ -2018,6 +2063,29 @@ pub mod json {
         }
     }
 
+    #[inline]
+    fn write_f64_json(x: f64, out: &mut String) {
+        if !x.is_finite() {
+            out.push_str("null");
+            return;
+        }
+        let mut buffer = ryu::Buffer::new();
+        let formatted = buffer.format_finite(x);
+        if let Some(exp_index) = formatted.as_bytes().iter().position(|byte| *byte == b'e') {
+            out.push_str(&formatted[..=exp_index]);
+            match formatted.as_bytes().get(exp_index + 1) {
+                Some(b'+') | Some(b'-') => out.push_str(&formatted[exp_index + 1..]),
+                Some(_) => {
+                    out.push('+');
+                    out.push_str(&formatted[exp_index + 1..]);
+                }
+                None => {}
+            }
+        } else {
+            out.push_str(formatted);
+        }
+    }
+
     // Native variants for Value
     fn write_value_to_string(v: &Value, out: &mut String, pretty: bool, depth: usize) {
         use native::Value as V;
@@ -2027,19 +2095,7 @@ pub mod json {
             V::Number(n) => match n {
                 native::Number::I64(x) => out.push_str(&x.to_string()),
                 native::Number::U64(x) => out.push_str(&x.to_string()),
-                native::Number::F64(x) => {
-                    const F64_SAFE_INT: f64 = 9_007_199_254_740_992.0; // 2^53
-                    if !x.is_finite() {
-                        out.push_str("null");
-                    } else {
-                        use core::fmt::Write as _;
-                        if x.fract() == 0.0 && x.abs() <= F64_SAFE_INT {
-                            let _ = write!(out, "{x:.1}");
-                        } else {
-                            let _ = write!(out, "{x}");
-                        }
-                    }
-                }
+                native::Number::F64(x) => write_f64_json(*x, out),
             },
             V::String(s) => write_json_string(s, out),
             V::Array(a) => {
@@ -2089,15 +2145,13 @@ pub mod json {
             }
         }
     }
-    pub fn to_string(value: &Value) -> Result<String, Error> {
-        let mut s = String::new();
-        write_value_to_string(value, &mut s, false, 0);
-        Ok(s)
+    /// serde-style API: serialize any `JsonSerialize` payload to a compact string.
+    pub fn to_string<T: JsonSerialize + ?Sized>(value: &T) -> Result<String, Error> {
+        to_json(value)
     }
-    pub fn to_string_pretty(value: &Value) -> Result<String, Error> {
-        let mut s = String::new();
-        write_value_to_string(value, &mut s, true, 0);
-        Ok(s)
+    /// serde-style API: serialize any `JsonSerialize` payload to a pretty string.
+    pub fn to_string_pretty<T: JsonSerialize + ?Sized>(value: &T) -> Result<String, Error> {
+        to_json_pretty(value)
     }
     pub fn to_vec<T: JsonSerialize + ?Sized>(value: &T) -> Result<Vec<u8>, Error> {
         Ok(to_json(value)?.into_bytes())
@@ -2470,6 +2524,28 @@ pub mod json {
         }
 
         #[test]
+        fn string_writer_emits_utf8_for_astral_scalars() {
+            let mut rendered = String::new();
+            write_json_string("emoji 😀", &mut rendered);
+            assert_eq!(rendered, "\"emoji 😀\"");
+        }
+
+        #[test]
+        fn string_writer_emits_utf8_for_line_separators() {
+            let sample = format!("left{}\u{2029}right", '\u{2028}');
+            let mut rendered = String::new();
+            write_json_string(&sample, &mut rendered);
+            assert_eq!(rendered, format!("\"{sample}\""));
+        }
+
+        #[test]
+        fn string_writer_uses_lowercase_hex_for_control_escapes() {
+            let mut rendered = String::new();
+            write_json_string("a\u{000b}b", &mut rendered);
+            assert_eq!(rendered, "\"a\\u000bb\"");
+        }
+
+        #[test]
         fn unescape_json_string_preserves_utf8_bytes() {
             let raw = format!("price: {}\\nend", '\u{00A2}');
             let out = unescape_json_string(&raw).expect("unescape");
@@ -2587,17 +2663,6 @@ pub mod json {
     }
 
     /// Serialize a JSON string with proper escaping into `out`.
-    #[inline]
-    fn push_u16_escape(out: &mut String, code: u16) {
-        const HEX: &[u8; 16] = b"0123456789ABCDEF";
-        out.push('\\');
-        out.push('u');
-        out.push(HEX[((code >> 12) & 0xF) as usize] as char);
-        out.push(HEX[((code >> 8) & 0xF) as usize] as char);
-        out.push(HEX[((code >> 4) & 0xF) as usize] as char);
-        out.push(HEX[(code & 0xF) as usize] as char);
-    }
-
     fn write_json_string_charwise(s: &str, out: &mut String) {
         out.reserve(s.len() + 2);
         out.push('"');
@@ -2610,20 +2675,11 @@ pub mod json {
                 '\t' => out.push_str("\\t"),
                 '\u{08}' => out.push_str("\\b"),
                 '\u{0C}' => out.push_str("\\f"),
-                '\u{2028}' => out.push_str("\\u2028"),
-                '\u{2029}' => out.push_str("\\u2029"),
                 c if (c as u32) < 0x20 => {
                     out.push_str("\\u00");
-                    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                    const HEX: &[u8; 16] = b"0123456789abcdef";
                     out.push(HEX[((c as u32 >> 4) & 0xF) as usize] as char);
                     out.push(HEX[(c as u32 & 0xF) as usize] as char);
-                }
-                c if (c as u32) >= 0x10000 => {
-                    let code = (c as u32) - 0x1_0000;
-                    let hi = 0xD800u16 + ((code >> 10) as u16);
-                    let lo = 0xDC00u16 + ((code & 0x3FF) as u16);
-                    push_u16_escape(out, hi);
-                    push_u16_escape(out, lo);
                 }
                 _ => out.push(ch),
             }
@@ -2632,10 +2688,7 @@ pub mod json {
     }
 
     pub fn write_json_string(s: &str, out: &mut String) {
-        if !s.is_ascii()
-            || s.chars()
-                .any(|c| (c as u32) >= 0x10000 || c == '\u{2028}' || c == '\u{2029}')
-        {
+        if !s.is_ascii() {
             write_json_string_charwise(s, out);
             return;
         }
@@ -2695,7 +2748,7 @@ pub mod json {
                             b'\t' => out.push_str("\\t"),
                             c if c < 0x20 => {
                                 out.push_str("\\u00");
-                                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                                const HEX: &[u8; 16] = b"0123456789abcdef";
                                 out.push(HEX[(c >> 4) as usize] as char);
                                 out.push(HEX[(c & 0x0F) as usize] as char);
                             }
@@ -2756,7 +2809,7 @@ pub mod json {
                             b'\t' => out.push_str("\\t"),
                             c if c < 0x20 => {
                                 out.push_str("\\u00");
-                                const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                                const HEX: &[u8; 16] = b"0123456789abcdef";
                                 out.push(HEX[(c >> 4) as usize] as char);
                                 out.push(HEX[(c & 0x0F) as usize] as char);
                             }
@@ -2823,7 +2876,7 @@ pub mod json {
                                 b'\t' => out.push_str("\\t"),
                                 c if c < 0x20 => {
                                     out.push_str("\\u00");
-                                    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                                    const HEX: &[u8; 16] = b"0123456789abcdef";
                                     out.push(HEX[(c >> 4) as usize] as char);
                                     out.push(HEX[(c & 0x0F) as usize] as char);
                                 }
@@ -2883,7 +2936,7 @@ pub mod json {
                     0x0C => out.push_str("\\f"),
                     c if c < 0x20 => {
                         out.push_str("\\u00");
-                        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                        const HEX: &[u8; 16] = b"0123456789abcdef";
                         out.push(HEX[(c >> 4) as usize] as char);
                         out.push(HEX[(c & 0x0F) as usize] as char);
                     }
@@ -3192,7 +3245,15 @@ pub mod json {
                     out.push_str(&input[start..i]);
                 }
                 b'{' | b'[' => {
-                    out.push(bytes[i] as char);
+                    let open = bytes[i];
+                    let close = if open == b'{' { b'}' } else { b']' };
+                    if bytes.get(i + 1) == Some(&close) {
+                        out.push(open as char);
+                        out.push(close as char);
+                        i += 2;
+                        continue;
+                    }
+                    out.push(open as char);
                     indent += 1;
                     out.push('\n');
                     for _ in 0..indent {
@@ -4834,6 +4895,90 @@ pub mod json {
         pub offsets: Vec<u32>,
     }
 
+    #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
+    type Stage1HelperFn = unsafe extern "C" fn(
+        in_ptr: *const u8,
+        len: usize,
+        out_offsets: *mut u32,
+        out_capacity: usize,
+        out_len: *mut usize,
+    ) -> i32;
+
+    #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
+    fn try_build_struct_index_with_helper(
+        input: &str,
+        func: Stage1HelperFn,
+    ) -> Option<StructIndex> {
+        let bytes = input.as_bytes();
+        let mut offsets: Vec<u32> = Vec::with_capacity(bytes.len());
+        let mut out_len: usize = 0;
+        let rc = unsafe {
+            func(
+                bytes.as_ptr(),
+                bytes.len(),
+                offsets.as_mut_ptr(),
+                offsets.capacity(),
+                &mut out_len,
+            )
+        };
+        if rc != 0 || out_len > offsets.capacity() {
+            return None;
+        }
+        unsafe {
+            offsets.set_len(out_len);
+        }
+        Some(StructIndex { offsets })
+    }
+
+    #[inline]
+    fn accel_tape_is_sane(input: &str, acc: &StructIndex) -> bool {
+        let bytes = input.as_bytes();
+        let mut prev: Option<usize> = None;
+        for &off in &acc.offsets {
+            let off = off as usize;
+            if off >= bytes.len() {
+                return false;
+            }
+            if let Some(prev) = prev
+                && off <= prev
+            {
+                return false;
+            }
+            match bytes[off] {
+                b'"' | b'{' | b'}' | b'[' | b']' | b':' | b',' => {}
+                _ => return false,
+            }
+            prev = Some(off);
+        }
+        true
+    }
+
+    #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
+    fn stage1_helper_self_test<F>(mut build: F) -> bool
+    where
+        F: FnMut(&str) -> Option<StructIndex>,
+    {
+        const CASES: &[&str] = &[
+            "{\"a\":1}",
+            "{\"nested\":[{\"quote\":\"a\\\\\\\"b\"},2,3],\"tail\":true}",
+            "[{\"k\":\"v\"}, {\"esc\":\"\\\\\\\\\"}, [1,2,{\"z\":0}]]",
+        ];
+
+        for input in CASES {
+            let Some(acc) = build(input) else {
+                return false;
+            };
+            if !accel_tape_is_sane(input, &acc) {
+                return false;
+            }
+            if acc.offsets != build_struct_index_scalar(input).offsets {
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Build a structural index for `input`.
     ///
     /// Attempts a SIMD (NEON) path on AArch64 when enabled via the `simd-accel`
@@ -4859,6 +5004,15 @@ pub mod json {
                 eprintln!("norito/json: stage1-validate enabled (debug), validating accelerated tapes against scalar for inputs ≤256KiB");
             }
         });
+        if !accel_tape_is_sane(input, &acc) {
+            if crate::debug_trace_enabled() {
+                eprintln!(
+                    "norito/json: stage1 {} returned malformed offsets; falling back to scalar",
+                    tag
+                );
+            }
+            return build_struct_index_scalar(input);
+        }
         const VALIDATE_MAX_BYTES: usize = 256 * 1024;
         if input.len() <= VALIDATE_MAX_BYTES {
             let scalar = build_struct_index_scalar(input);
@@ -4879,8 +5033,305 @@ pub mod json {
     #[cfg(not(all(debug_assertions, feature = "stage1-validate")))]
     #[inline]
     #[allow(dead_code)]
-    fn validate_accel(_tag: &str, _input: &str, acc: StructIndex) -> StructIndex {
-        acc
+    fn validate_accel(tag: &str, input: &str, acc: StructIndex) -> StructIndex {
+        if accel_tape_is_sane(input, &acc) {
+            return acc;
+        }
+        if crate::debug_trace_enabled() {
+            eprintln!(
+                "norito/json: stage1 {} returned malformed offsets; falling back to scalar",
+                tag
+            );
+        }
+        build_struct_index_scalar(input)
+    }
+
+    #[cfg(test)]
+    mod accel_tape_validation_tests {
+        use std::{ptr, slice};
+
+        use super::{
+            StructIndex, build_struct_index_scalar, extend_struct_index_scalar,
+            stage1_helper_self_test, try_build_struct_index_with_helper, validate_accel,
+        };
+
+        #[test]
+        fn validate_accel_rejects_out_of_bounds_offsets() {
+            let input = "{\"a\":1}";
+            let got = validate_accel("test", input, StructIndex { offsets: vec![999] });
+            assert_eq!(got.offsets, build_struct_index_scalar(input).offsets);
+        }
+
+        #[test]
+        fn validate_accel_rejects_non_structural_offsets() {
+            let input = "{\"a\":1}";
+            let got = validate_accel("test", input, StructIndex { offsets: vec![2] });
+            assert_eq!(got.offsets, build_struct_index_scalar(input).offsets);
+        }
+
+        unsafe extern "C" fn stage1_helper_match(
+            in_ptr: *const u8,
+            len: usize,
+            out_offsets: *mut u32,
+            out_capacity: usize,
+            out_len: *mut usize,
+        ) -> i32 {
+            let input =
+                unsafe { std::str::from_utf8_unchecked(slice::from_raw_parts(in_ptr, len)) };
+            let tape = build_struct_index_scalar(input);
+            unsafe {
+                *out_len = tape.offsets.len();
+            }
+            if tape.offsets.len() > out_capacity {
+                return 2;
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(tape.offsets.as_ptr(), out_offsets, tape.offsets.len());
+            }
+            0
+        }
+
+        unsafe extern "C" fn stage1_helper_mismatch(
+            in_ptr: *const u8,
+            len: usize,
+            out_offsets: *mut u32,
+            out_capacity: usize,
+            out_len: *mut usize,
+        ) -> i32 {
+            let input =
+                unsafe { std::str::from_utf8_unchecked(slice::from_raw_parts(in_ptr, len)) };
+            let mut tape = build_struct_index_scalar(input);
+            if let Some(first) = tape.offsets.first_mut() {
+                *first = first.saturating_add(1);
+            }
+            unsafe {
+                *out_len = tape.offsets.len();
+            }
+            if tape.offsets.len() > out_capacity {
+                return 2;
+            }
+            unsafe {
+                ptr::copy_nonoverlapping(tape.offsets.as_ptr(), out_offsets, tape.offsets.len());
+            }
+            0
+        }
+
+        unsafe extern "C" fn stage1_helper_error(
+            _in_ptr: *const u8,
+            _len: usize,
+            _out_offsets: *mut u32,
+            _out_capacity: usize,
+            _out_len: *mut usize,
+        ) -> i32 {
+            7
+        }
+
+        unsafe extern "C" fn stage1_helper_invalid_len(
+            _in_ptr: *const u8,
+            _len: usize,
+            _out_offsets: *mut u32,
+            out_capacity: usize,
+            out_len: *mut usize,
+        ) -> i32 {
+            unsafe {
+                *out_len = out_capacity.saturating_add(1);
+            }
+            0
+        }
+
+        #[test]
+        fn stage1_helper_self_test_accepts_matching_offsets() {
+            assert!(stage1_helper_self_test(|input| {
+                try_build_struct_index_with_helper(input, stage1_helper_match)
+            }));
+        }
+
+        #[test]
+        fn stage1_helper_self_test_rejects_mismatched_offsets() {
+            assert!(!stage1_helper_self_test(|input| {
+                try_build_struct_index_with_helper(input, stage1_helper_mismatch)
+            }));
+        }
+
+        #[test]
+        fn stage1_helper_self_test_rejects_helper_errors() {
+            assert!(!stage1_helper_self_test(|input| {
+                try_build_struct_index_with_helper(input, stage1_helper_error)
+            }));
+        }
+
+        #[test]
+        fn helper_builder_rejects_invalid_reported_length() {
+            let input = "{\"a\":1}";
+            assert!(try_build_struct_index_with_helper(input, stage1_helper_invalid_len).is_none());
+        }
+
+        #[cfg(feature = "cuda-stage1")]
+        #[test]
+        fn cuda_stage1_backend_matches_scalar_when_required_or_available() {
+            let mut input = String::from("{\"rows\":[");
+            for idx in 0..2048 {
+                if idx != 0 {
+                    input.push(',');
+                }
+                input.push_str("{\"id\":");
+                input.push_str(&idx.to_string());
+                input.push_str(",\"name\":\"row\\\\\\\"");
+                input.push_str(&(idx % 17).to_string());
+                input.push_str("\",\"values\":[1,2,3]}");
+            }
+            input.push_str("]}");
+
+            let got = super::cuda::build_struct_index_cuda(&input);
+            let Some(got) = got else {
+                if std::env::var_os("JSONSTAGE1_CUDA_REQUIRE").is_some() {
+                    panic!(
+                        "JSONSTAGE1_CUDA_REQUIRE requires Norito to load the CUDA Stage-1 helper"
+                    );
+                }
+                eprintln!("jsonstage1_cuda unavailable; skipping Norito CUDA Stage-1 assertion");
+                return;
+            };
+            assert_eq!(got.offsets, build_struct_index_scalar(&input).offsets);
+        }
+
+        #[test]
+        fn scalar_resume_matches_full_scan_across_mid_string_split() {
+            let input = r#"{"s":"abc\\\"def\\\\ghi"}"#;
+            let split = input.find("\\\"").expect("escape in input") + 1;
+            let mut resumed = Vec::new();
+            let (in_string, carry_bs_run_len) =
+                extend_struct_index_scalar(&input.as_bytes()[..split], 0, &mut resumed, false, 0);
+            let (tail_in_string, tail_carry_bs_run_len) = extend_struct_index_scalar(
+                &input.as_bytes()[split..],
+                split,
+                &mut resumed,
+                in_string,
+                carry_bs_run_len,
+            );
+            let full = build_struct_index_scalar(input);
+            assert_eq!(resumed, full.offsets);
+            assert!(!tail_in_string);
+            assert_eq!(tail_carry_bs_run_len, 0);
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        #[test]
+        fn avx2_tail_resume_matches_scalar_at_string_boundary() {
+            if !std::arch::is_x86_feature_detected!("avx2") {
+                return;
+            }
+            let doc = {
+                let doc = r#"{"s":"abcdefghijklmnopqrstuvwxyz"}"#;
+                let target_sub = r#""}"#;
+                let width = 32;
+                let bytes = doc.as_bytes();
+                let sub = target_sub.as_bytes();
+                let pos = bytes
+                    .windows(sub.len())
+                    .position(|w| w == sub)
+                    .expect("substring present");
+                let cur = pos % width;
+                let pad = (width - cur) % width;
+                let mut padded = String::with_capacity(pad + doc.len());
+                for _ in 0..pad {
+                    padded.push(' ');
+                }
+                padded.push_str(doc);
+                padded
+            };
+            let scalar = build_struct_index_scalar(&doc);
+            let avx2 = unsafe { super::build_struct_index_avx2(&doc) }.expect("avx2 stage1");
+            assert_eq!(scalar.offsets, avx2.offsets, "doc: {doc}");
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        #[test]
+        fn avx2_tail_resume_matches_scalar_with_backslash_carry() {
+            if !std::arch::is_x86_feature_detected!("avx2") {
+                return;
+            }
+            let doc = {
+                let doc = r#"{"s":"abcdefghijklmnopqrstuvwx\\\\"}"#;
+                let target_sub = r#"\\\\"}"#;
+                let lane = 29;
+                let width = 32;
+                let bytes = doc.as_bytes();
+                let sub = target_sub.as_bytes();
+                let pos = bytes
+                    .windows(sub.len())
+                    .position(|w| w == sub)
+                    .expect("substring present");
+                let cur = pos % width;
+                let want = lane % width;
+                let pad = (width + want - cur) % width;
+                let mut padded = String::with_capacity(pad + doc.len());
+                for _ in 0..pad {
+                    padded.push(' ');
+                }
+                padded.push_str(doc);
+                padded
+            };
+            let scalar = build_struct_index_scalar(&doc);
+            let avx2 = unsafe { super::build_struct_index_avx2(&doc) }.expect("avx2 stage1");
+            assert_eq!(scalar.offsets, avx2.offsets, "doc: {doc}");
+        }
+
+        #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+        #[test]
+        fn neon_tail_resume_matches_scalar_at_string_boundary() {
+            let doc = {
+                let doc = r#"{"s":"abcdefghijklmnop"}"#;
+                let target_sub = r#""}"#;
+                let width = 16;
+                let bytes = doc.as_bytes();
+                let sub = target_sub.as_bytes();
+                let pos = bytes
+                    .windows(sub.len())
+                    .position(|w| w == sub)
+                    .expect("substring present");
+                let cur = pos % width;
+                let pad = (width - cur) % width;
+                let mut padded = String::with_capacity(pad + doc.len());
+                for _ in 0..pad {
+                    padded.push(' ');
+                }
+                padded.push_str(doc);
+                padded
+            };
+            let scalar = build_struct_index_scalar(&doc);
+            let neon = unsafe { super::build_struct_index_neon(&doc) }.expect("neon stage1");
+            assert_eq!(scalar.offsets, neon.offsets, "doc: {doc}");
+        }
+
+        #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
+        #[test]
+        fn neon_tail_resume_matches_scalar_with_backslash_carry() {
+            let doc = {
+                let doc = r#"{"s":"abcdefghijklm\\\\"}"#;
+                let target_sub = r#"\\\\"}"#;
+                let lane = 13;
+                let width = 16;
+                let bytes = doc.as_bytes();
+                let sub = target_sub.as_bytes();
+                let pos = bytes
+                    .windows(sub.len())
+                    .position(|w| w == sub)
+                    .expect("substring present");
+                let cur = pos % width;
+                let want = lane % width;
+                let pad = (width + want - cur) % width;
+                let mut padded = String::with_capacity(pad + doc.len());
+                for _ in 0..pad {
+                    padded.push(' ');
+                }
+                padded.push_str(doc);
+                padded
+            };
+            let scalar = build_struct_index_scalar(&doc);
+            let neon = unsafe { super::build_struct_index_neon(&doc) }.expect("neon stage1");
+            assert_eq!(scalar.offsets, neon.offsets, "doc: {doc}");
+        }
     }
 
     pub fn build_struct_index(input: &str) -> StructIndex {
@@ -5219,48 +5670,62 @@ pub mod json {
         StructIndex { offsets: out }
     }
 
+    // Continue the scalar structural scan from an arbitrary byte boundary while
+    // preserving quote state and a trailing run of backslashes from the prior chunk.
+    fn extend_struct_index_scalar(
+        input: &[u8],
+        base: usize,
+        offsets: &mut Vec<u32>,
+        mut in_string: bool,
+        mut carry_bs_run_len: usize,
+    ) -> (bool, usize) {
+        if !in_string {
+            carry_bs_run_len = 0;
+        }
+        for (idx, &byte) in input.iter().enumerate() {
+            let off = (base + idx) as u32;
+            if in_string {
+                match byte {
+                    b'\\' => {
+                        carry_bs_run_len += 1;
+                    }
+                    b'"' => {
+                        if (carry_bs_run_len & 1) == 0 {
+                            in_string = false;
+                            offsets.push(off);
+                        }
+                        carry_bs_run_len = 0;
+                    }
+                    _ => {
+                        carry_bs_run_len = 0;
+                    }
+                }
+                continue;
+            }
+
+            match byte {
+                b'"' => {
+                    in_string = true;
+                    offsets.push(off);
+                }
+                b'{' | b'}' | b'[' | b']' | b':' | b',' => offsets.push(off),
+                _ => {}
+            }
+        }
+        if !in_string {
+            carry_bs_run_len = 0;
+        }
+        (in_string, carry_bs_run_len)
+    }
+
     /// Reference scalar builder used for correctness and as a fallback.
     ///
     /// The fast paths (`build_struct_index_neon` / `build_struct_index_avx2`) already
     /// implement the nibble-LUT SIMD classification. This scalar implementation
     /// remains the canonical, portable baseline.
     fn build_struct_index_scalar(input: &str) -> StructIndex {
-        let b = input.as_bytes();
         let mut offsets = Vec::new();
-        let mut i = 0usize;
-        let mut in_str = false;
-        while i < b.len() {
-            let c = b[i];
-            if in_str {
-                if c == b'\\' {
-                    i = i.saturating_add(2);
-                    continue;
-                }
-                if c == b'"' {
-                    in_str = false;
-                    offsets.push(i as u32);
-                    i += 1;
-                    continue;
-                }
-                i += 1;
-                continue;
-            } else {
-                match c {
-                    b'"' => {
-                        in_str = true;
-                        offsets.push(i as u32);
-                        i += 1;
-                    }
-                    b'{' | b'}' | b'[' | b']' | b':' | b',' => {
-                        offsets.push(i as u32);
-                        i += 1;
-                    }
-                    _ => {
-                        i += 1;
-                    }
-                }
-            }
-        }
+        let _ = extend_struct_index_scalar(input.as_bytes(), 0, &mut offsets, false, 0);
         StructIndex { offsets }
     }
 
@@ -5383,8 +5848,13 @@ pub mod json {
             }
 
             if i < bytes.len() {
-                let rem = build_struct_index_scalar(&input[i..]);
-                offsets.extend(rem.offsets.into_iter().map(|off| off + i as u32));
+                let _ = extend_struct_index_scalar(
+                    &bytes[i..],
+                    i,
+                    &mut offsets,
+                    in_string,
+                    carry_bs_run_len,
+                );
             }
             Some(StructIndex { offsets })
         }
@@ -5502,8 +5972,13 @@ pub mod json {
             }
 
             if i < bytes.len() {
-                let rem = build_struct_index_scalar(&input[i..]);
-                offsets.extend(rem.offsets.into_iter().map(|off| off + i as u32));
+                let _ = extend_struct_index_scalar(
+                    &bytes[i..],
+                    i,
+                    &mut offsets,
+                    in_string,
+                    carry_bs_run_len,
+                );
             }
             Some(StructIndex { offsets })
         }
@@ -5539,18 +6014,9 @@ pub mod json {
         }
 
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        type BuildTapeFn = unsafe extern "C" fn(
-            in_ptr: *const u8,
-            len: usize,
-            out_offsets: *mut u32,
-            out_capacity: usize,
-            out_len: *mut usize,
-        ) -> i32;
-
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         struct MetalLib {
             _handle: *mut c_void,
-            func: BuildTapeFn,
+            func: super::Stage1HelperFn,
         }
 
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -5610,7 +6076,13 @@ pub mod json {
                     let _ = dlclose(lib);
                     return None;
                 }
-                let func: BuildTapeFn = std::mem::transmute(sym);
+                let func: super::Stage1HelperFn = std::mem::transmute(sym);
+                if !super::stage1_helper_self_test(|input| {
+                    super::try_build_struct_index_with_helper(input, func)
+                }) {
+                    let _ = dlclose(lib);
+                    return None;
+                }
                 Some(MetalLib { _handle: lib, func })
             }
         }
@@ -5627,44 +6099,7 @@ pub mod json {
                 }
                 let lib = guard.as_ref()?;
 
-                let bytes = input.as_bytes();
-                let mut offsets: Vec<u32> = Vec::with_capacity(bytes.len());
-                let mut out_len: usize = 0;
-                let rc = (lib.func)(
-                    bytes.as_ptr(),
-                    bytes.len(),
-                    offsets.as_mut_ptr(),
-                    offsets.capacity(),
-                    &mut out_len,
-                );
-                if rc != 0 {
-                    return None;
-                }
-                if out_len > offsets.capacity() {
-                    return None;
-                }
-                offsets.set_len(out_len);
-                debug_assert!(
-                    {
-                        let mut ok = true;
-                        let mut prev = 0usize;
-                        for (i, off) in offsets.iter().enumerate() {
-                            let o = *off as usize;
-                            if o >= bytes.len() {
-                                ok = false;
-                                break;
-                            }
-                            if i > 0 && o < prev {
-                                ok = false;
-                                break;
-                            }
-                            prev = o;
-                        }
-                        ok
-                    },
-                    "Metal Stage-1 returned invalid structural offsets"
-                );
-                Some(StructIndex { offsets })
+                super::try_build_struct_index_with_helper(input, lib.func)
             }
             #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
             {
@@ -5692,17 +6127,9 @@ pub mod json {
 
         const RTLD_LAZY: c_int = 1;
 
-        type BuildTapeFn = unsafe extern "C" fn(
-            in_ptr: *const u8,
-            len: usize,
-            out_offsets: *mut u32,
-            out_capacity: usize,
-            out_len: *mut usize,
-        ) -> i32;
-
         struct CudaLib {
             _handle: *mut c_void,
-            func: BuildTapeFn,
+            func: super::Stage1HelperFn,
         }
 
         unsafe impl Send for CudaLib {}
@@ -5751,7 +6178,13 @@ pub mod json {
                 let _ = unsafe { dlclose(h) };
                 return None;
             }
-            let func: BuildTapeFn = unsafe { std::mem::transmute(sym) };
+            let func: super::Stage1HelperFn = unsafe { std::mem::transmute(sym) };
+            if !super::stage1_helper_self_test(|input| {
+                super::try_build_struct_index_with_helper(input, func)
+            }) {
+                let _ = unsafe { dlclose(h) };
+                return None;
+            }
             Some(CudaLib { _handle: h, func })
         }
 
@@ -5788,7 +6221,13 @@ pub mod json {
                 let _ = unsafe { dlclose(h) };
                 return None;
             }
-            let func: BuildTapeFn = unsafe { std::mem::transmute(sym) };
+            let func: super::Stage1HelperFn = unsafe { std::mem::transmute(sym) };
+            if !super::stage1_helper_self_test(|input| {
+                super::try_build_struct_index_with_helper(input, func)
+            }) {
+                let _ = unsafe { dlclose(h) };
+                return None;
+            }
             Some(CudaLib { _handle: h, func })
         }
 
@@ -5839,7 +6278,13 @@ pub mod json {
                     let _ = FreeLibrary(h);
                     continue;
                 }
-                let func: BuildTapeFn = unsafe { std::mem::transmute(sym) };
+                let func: super::Stage1HelperFn = unsafe { std::mem::transmute(sym) };
+                if !super::stage1_helper_self_test(|input| {
+                    super::try_build_struct_index_with_helper(input, func)
+                }) {
+                    let _ = FreeLibrary(h);
+                    continue;
+                }
                 return Some(CudaLib { _handle: h, func });
             }
             None
@@ -5859,44 +6304,7 @@ pub mod json {
                 }
                 let lib = guard.as_ref()?;
 
-                let bytes = input.as_bytes();
-                let mut offsets: Vec<u32> = Vec::with_capacity(bytes.len());
-                let mut out_len: usize = 0;
-                let rc = (lib.func)(
-                    bytes.as_ptr(),
-                    bytes.len(),
-                    offsets.as_mut_ptr(),
-                    offsets.capacity(),
-                    &mut out_len,
-                );
-                if rc != 0 {
-                    return None;
-                }
-                if out_len > offsets.capacity() {
-                    return None;
-                }
-                offsets.set_len(out_len);
-                debug_assert!(
-                    {
-                        let mut ok = true;
-                        let mut prev = 0usize;
-                        for (i, off) in offsets.iter().enumerate() {
-                            let o = *off as usize;
-                            if o >= bytes.len() {
-                                ok = false;
-                                break;
-                            }
-                            if i > 0 && o < prev {
-                                ok = false;
-                                break;
-                            }
-                            prev = o;
-                        }
-                        ok
-                    },
-                    "CUDA Stage-1 returned invalid structural offsets"
-                );
-                Some(StructIndex { offsets })
+                super::try_build_struct_index_with_helper(input, lib.func)
             }
         }
     }
@@ -7923,12 +8331,7 @@ pub mod json {
     // Minimal writer for f64 used by derives. Non-finite values are encoded as null.
     impl FastJsonWrite for f64 {
         fn write_json(&self, out: &mut String) {
-            if self.is_finite() {
-                use core::fmt::Write as _;
-                let _ = write!(out, "{}", *self);
-            } else {
-                out.push_str("null");
-            }
+            write_f64_json(*self, out);
         }
     }
 
@@ -8754,11 +9157,17 @@ pub fn serialize_into<W: Write, T: NoritoSerialize>(
     value: &T,
     compression: Compression,
 ) -> Result<(), Error> {
-    let bytes = match compression {
-        Compression::None => to_bytes(value)?,
-        Compression::Zstd => to_compressed_bytes(value, Some(CompressionConfig::default()))?,
-    };
-    writer.write_all(&bytes)?;
+    match compression {
+        Compression::None => {
+            let mut bytes = Vec::new();
+            core::to_bytes_in(value, &mut bytes)?;
+            writer.write_all(&bytes)?;
+        }
+        Compression::Zstd => {
+            let bytes = to_compressed_bytes(value, Some(CompressionConfig::default()))?;
+            writer.write_all(&bytes)?;
+        }
+    }
     Ok(())
 }
 

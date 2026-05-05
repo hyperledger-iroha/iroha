@@ -10,8 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    account::AccountId,
-    nexus::{AssetPermissionManifest, DataSpaceId, UniversalAccountId},
+    account::{AccountId, rekey::AccountAliasDomain},
+    domain::DomainId,
+    error::ParseError,
+    nexus::{AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, UniversalAccountId},
 };
 use iroha_schema::IntoSchema;
 use mv::storage::StorageReadOnly;
@@ -22,6 +24,13 @@ use crate::state::WorldReadOnly;
 /// Lane identity extraction failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaneIdentityMetadataError {
+    /// A UAID exists but is not active in the routed dataspace.
+    MissingDataspaceBinding {
+        /// Account UAID.
+        uaid: UniversalAccountId,
+        /// Routed dataspace.
+        dataspace: DataSpaceId,
+    },
     /// A UAID record exists for the target dataspace but its manifest is inactive.
     InactiveManifest {
         /// Account UAID.
@@ -33,11 +42,13 @@ pub enum LaneIdentityMetadataError {
 
 /// Extract lane identity metadata (UAID + capability tags) for transaction admission.
 ///
-/// The lookup is global by account UAID:
+/// The lookup is scoped by account UAID and routed dataspace:
 /// - if no account or no UAID exists, returns `(None, [])`
-/// - if the UAID has an active manifest for the target dataspace, returns tags from manifest notes
-/// - if the UAID has no manifest for the target dataspace, returns `(Some(uaid), [])`
+/// - if the UAID is not bound to the routed dataspace, returns
+///   [`LaneIdentityMetadataError::MissingDataspaceBinding`]
 /// - if the target manifest exists but is inactive, returns [`LaneIdentityMetadataError`]
+/// - if the UAID has an active manifest for the target dataspace, returns tags from manifest notes
+/// - if the UAID has a binding but no target manifest, returns `(Some(uaid), [])`
 pub fn extract_lane_identity_metadata(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -51,16 +62,31 @@ pub fn extract_lane_identity_metadata(
         return Ok((None, Vec::new()));
     };
 
-    if let Some(manifest_set) = world.space_directory_manifests().get(&uaid)
-        && let Some(record) = manifest_set.get(&dataspace_id)
+    let manifest_record = world
+        .space_directory_manifests()
+        .get(&uaid)
+        .and_then(|manifest_set| manifest_set.get(&dataspace_id).cloned());
+    if let Some(record) = &manifest_record
+        && !record.is_active()
     {
-        if !record.is_active() {
-            return Err(LaneIdentityMetadataError::InactiveManifest {
-                uaid,
-                dataspace: dataspace_id,
-            });
-        }
+        return Err(LaneIdentityMetadataError::InactiveManifest {
+            uaid,
+            dataspace: dataspace_id,
+        });
+    }
 
+    let is_bound = world
+        .uaid_dataspaces()
+        .get(&uaid)
+        .is_some_and(|bindings| bindings.is_bound_to(dataspace_id, authority));
+    if !is_bound {
+        return Err(LaneIdentityMetadataError::MissingDataspaceBinding {
+            uaid,
+            dataspace: dataspace_id,
+        });
+    }
+
+    if let Some(record) = manifest_record {
         let mut tags = BTreeSet::new();
         for entry in &record.manifest.entries {
             if let Some(note) = &entry.notes {
@@ -74,6 +100,24 @@ pub fn extract_lane_identity_metadata(
     }
 
     Ok((Some(uaid), Vec::new()))
+}
+
+/// Resolve every dataspace-qualified account domain bound to an authority.
+///
+/// Lane-compliance policies operate on domain selectors, while production
+/// accounts are canonical domainless subjects with one or more alias labels.
+/// This helper maps those labels back to their concrete `DomainId` values.
+pub fn extract_authority_domains(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+) -> Result<Vec<DomainId>, ParseError> {
+    let mut domains = BTreeSet::new();
+    for alias in world.bound_account_aliases(authority) {
+        if let Some(domain_id) = alias.domain_id(world.dataspace_catalog())? {
+            domains.insert(domain_id);
+        }
+    }
+    Ok(domains.into_iter().collect())
 }
 
 /// Deterministic mapping from a UAID to the dataspaces/accounts where it is active.
@@ -161,6 +205,130 @@ impl UaidDataspaceBindings {
         self.entries
             .retain(|dataspace, _accounts| allowed.contains(dataspace));
         self.entries.len() != before
+    }
+}
+
+/// Deterministic mapping from a canonical account id to the dataspaces and domains where it is
+/// visible for routed read queries.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct AccountScopeDirectoryEntry {
+    entries: BTreeMap<DataSpaceId, BTreeSet<AccountAliasDomain>>,
+}
+
+impl AccountScopeDirectoryEntry {
+    /// Returns `true` when the account has no routed dataspace scope.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Iterate account scope entries (`dataspace_id`, `domains`).
+    pub fn iter(&self) -> impl Iterator<Item = (&DataSpaceId, &BTreeSet<AccountAliasDomain>)> {
+        self.entries.iter()
+    }
+
+    /// Ensure the account is visible in `dataspace`.
+    pub fn ensure_dataspace(&mut self, dataspace: DataSpaceId) {
+        self.entries.entry(dataspace).or_default();
+    }
+
+    /// Bind `domain_id` under `dataspace`.
+    pub fn bind_domain(&mut self, dataspace: DataSpaceId, domain: AccountAliasDomain) {
+        self.entries.entry(dataspace).or_default().insert(domain);
+    }
+
+    /// Resolve the stored dataspace -> alias-domain scope into fully-qualified [`DomainId`]s.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] if the current dataspace catalog cannot qualify a stored
+    /// dataspace/domain scope pair.
+    pub fn hierarchy(
+        &self,
+        dataspace_catalog: &DataSpaceCatalog,
+    ) -> Result<BTreeMap<DataSpaceId, BTreeSet<DomainId>>, ParseError> {
+        let mut hierarchy = BTreeMap::new();
+        for (dataspace, domains) in &self.entries {
+            let resolved = hierarchy.entry(*dataspace).or_insert_with(BTreeSet::new);
+            for domain in domains {
+                let dataspace_alias = dataspace_catalog
+                    .by_id(*dataspace)
+                    .ok_or_else(|| ParseError::new("dataspace catalog entry is missing"))?
+                    .alias
+                    .clone();
+                resolved.insert(DomainId::try_new(domain.name(), &dataspace_alias)?);
+            }
+        }
+        Ok(hierarchy)
+    }
+
+    /// Retain only dataspaces included in `allowed`.
+    ///
+    /// Returns `true` when at least one dataspace entry was removed.
+    pub fn retain_dataspaces(&mut self, allowed: &BTreeSet<DataSpaceId>) -> bool {
+        let before = self.entries.len();
+        self.entries
+            .retain(|dataspace, _domains| allowed.contains(dataspace));
+        self.entries.len() != before
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonSerialize for UaidDataspaceBindings {
+    fn json_serialize(&self, out: &mut String) {
+        use base64::Engine as _;
+
+        let bytes = norito::to_bytes(self)
+            .expect("UaidDataspaceBindings Norito serialization must succeed");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        norito::json::JsonSerialize::json_serialize(&encoded, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for UaidDataspaceBindings {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        use base64::Engine as _;
+
+        let encoded = parser.parse_string()?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded.as_str())
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+        let archived = norito::from_bytes::<UaidDataspaceBindings>(&bytes)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+        norito::core::NoritoDeserialize::try_deserialize(archived)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonSerialize for AccountScopeDirectoryEntry {
+    fn json_serialize(&self, out: &mut String) {
+        use base64::Engine as _;
+
+        let bytes = norito::to_bytes(self)
+            .expect("AccountScopeDirectoryEntry Norito serialization must succeed");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        norito::json::JsonSerialize::json_serialize(&encoded, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for AccountScopeDirectoryEntry {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        use base64::Engine as _;
+
+        let encoded = parser.parse_string()?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded.as_str())
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+        let archived = norito::from_bytes::<AccountScopeDirectoryEntry>(&bytes)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+        norito::core::NoritoDeserialize::try_deserialize(archived)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
 
@@ -300,6 +468,7 @@ mod tests {
     use iroha_data_model::nexus::ManifestVersion;
     use iroha_data_model::{account::Account, domain::Domain, prelude::*};
     use iroha_test_samples::gen_account_in;
+    use norito::json;
 
     use super::*;
     use crate::state::World;
@@ -359,6 +528,30 @@ mod tests {
         assert!(!bindings.is_bound_to(DataSpaceId::new(8), &account_id));
     }
 
+    #[test]
+    fn bindings_json_roundtrip() {
+        let mut bindings = UaidDataspaceBindings::default();
+        let (account_id, _) = gen_account_in("wonderland");
+        bindings.bind_account(DataSpaceId::new(9), account_id);
+
+        let encoded = json::to_json(&bindings).expect("bindings should serialize to JSON");
+        let decoded: UaidDataspaceBindings =
+            json::from_str(&encoded).expect("bindings should deserialize from JSON");
+        assert_eq!(decoded, bindings);
+    }
+
+    #[test]
+    fn account_scope_entry_json_roundtrip() {
+        let mut entry = AccountScopeDirectoryEntry::default();
+        entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
+        entry.ensure_dataspace(DataSpaceId::new(12));
+
+        let encoded = json::to_json(&entry).expect("scope entry should serialize to JSON");
+        let decoded: AccountScopeDirectoryEntry =
+            json::from_str(&encoded).expect("scope entry should deserialize from JSON");
+        assert_eq!(decoded, entry);
+    }
+
     fn world_with_uaid(
         uaid: UniversalAccountId,
         dataspace: DataSpaceId,
@@ -366,9 +559,10 @@ mod tests {
         manifest_active: bool,
     ) -> (World, AccountId) {
         let (authority, _) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("static domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("static domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id))
+        let account = Account::new(authority.clone())
             .with_uaid(Some(uaid))
             .build(&authority);
         let mut world = World::with([domain], [account], []);
@@ -391,24 +585,28 @@ mod tests {
             let mut set = SpaceDirectoryManifestSet::default();
             set.upsert(record);
             world.space_directory_manifests.insert(uaid, set);
+            if manifest_active {
+                let mut bindings = UaidDataspaceBindings::default();
+                bindings.bind_account(dataspace, authority.clone());
+                world.uaid_dataspaces.insert(uaid, bindings);
+            }
         }
 
         (world, authority)
     }
 
     #[test]
-    fn lane_identity_metadata_allows_missing_target_manifest() {
+    fn lane_identity_metadata_rejects_missing_dataspace_binding() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::lane-helper-missing"));
         let dataspace = DataSpaceId::new(17);
         let (world, authority) = world_with_uaid(uaid, dataspace, false, true);
         let world_view = world.view();
 
-        let (observed, tags) = extract_lane_identity_metadata(&world_view, &authority, dataspace)
-            .expect("missing target manifest should be accepted");
-        assert_eq!(observed, Some(uaid));
-        assert!(
-            tags.is_empty(),
-            "missing manifest yields no capability tags"
+        let err = extract_lane_identity_metadata(&world_view, &authority, dataspace)
+            .expect_err("UAID routing must require a dataspace binding");
+        assert_eq!(
+            err,
+            LaneIdentityMetadataError::MissingDataspaceBinding { uaid, dataspace }
         );
     }
 

@@ -18,6 +18,7 @@ import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.telemetry.TelemetryOptions;
 import org.hyperledger.iroha.android.telemetry.TelemetrySink;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.client.transport.UrlConnectionTransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
@@ -123,7 +124,7 @@ public final class HttpClientTransportPendingQueueTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", nonce))
-            .setAuthority("queue@wonderland")
+            .setAuthority(TestAccountIds.ed25519Authority(0x24))
             .setCreationTimeMs(1_700_000_000_000L + nonce)
             .setInstructionBytes(marker.getBytes(StandardCharsets.UTF_8))
             .setTimeToLiveMs(5_000L)

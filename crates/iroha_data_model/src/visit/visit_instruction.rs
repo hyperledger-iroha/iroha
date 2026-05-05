@@ -5,11 +5,36 @@ use iroha_primitives::numeric::Numeric;
 use super::Visit;
 use crate::{
     isi::{
-        ActivateIdentifierPolicy, ClaimIdentifier, Instruction, Log, RegisterIdentifierPolicy,
+        ActivateIdentifierPolicy, ClaimIdentifier, Log, RegisterIdentifierPolicy,
         RegisterPeerWithPop, RevokeIdentifier,
-        nexus::SetLaneRelayEmergencyValidators,
+        nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
+        soracloud::{
+            AcknowledgeSoracloudAgentMessage, AdmitSoracloudPrivateCompileProfile,
+            AdvanceSoracloudRollout, AdvertiseSoracloudInrouHost, AdvertiseSoracloudModelHost,
+            AllowSoracloudAgentAutonomyArtifact, AllowSoracloudUploadedModel,
+            AppendSoracloudUploadedModelChunk, ApproveSoracloudAgentWalletSpend,
+            CheckpointSoracloudTrainingJob, ClearSoracloudInrouReplicaRuntimeState,
+            DeleteSoracloudServiceConfig, DeleteSoracloudServiceSecret,
+            DeploySoracloudAgentApartment, DeploySoracloudService, EnqueueSoracloudAgentMessage,
+            FinalizeSoracloudUploadedModelBundle, HeartbeatSoracloudModelHost,
+            JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease, MutateSoracloudState,
+            PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
+            RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
+            RecordSoracloudMailboxMessage, RecordSoracloudPrivateInferenceCheckpoint,
+            RecordSoracloudRuntimeReceipt, RegisterSoracloudModelArtifact,
+            RegisterSoracloudModelWeight, RegisterSoracloudUploadedModelBundle,
+            RenewSoracloudAgentLease, RenewSoracloudHfSharedLease,
+            ReportSoracloudServiceLeaseUsage, RequestSoracloudAgentWalletSpend,
+            RestartSoracloudAgentApartment, RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy,
+            RollbackSoracloudModelWeight, RollbackSoracloudService, RunSoracloudAgentAutonomy,
+            RunSoracloudFheJob, SetSoracloudInrouReplicaRuntimeState, SetSoracloudRuntimeState,
+            SetSoracloudServiceConfig, SetSoracloudServiceSecret, StartSoracloudPrivateInference,
+            StartSoracloudTrainingJob, UpgradeSoracloudService, WithdrawSoracloudInrouHost,
+            WithdrawSoracloudModelHost,
+        },
         staking::{
-            ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
+            ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
+            RegisterPublicLaneValidator,
         },
     },
     prelude::*,
@@ -17,10 +42,58 @@ use crate::{
 
 /// Dispatch a boxed instruction to the corresponding visitor hook.
 pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) {
+    if !(visit_core_instruction(visitor, isi)
+        || visit_staking_and_identifier_instruction(visitor, isi)
+        || visit_soracloud_service_instruction(visitor, isi)
+        || visit_soracloud_agent_instruction(visitor, isi)
+        || visit_soracloud_training_instruction(visitor, isi))
+    {
+        unreachable!("Unknown instruction type");
+    }
+}
+
+fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBox) -> bool {
     if let Some(v) = isi.as_any().downcast_ref::<SetParameter>() {
         visitor.visit_set_parameter(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ExecuteTrigger>() {
         visitor.visit_execute_trigger(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::account_alias_lease::AcquireAccountAliasLease>()
+    {
+        visitor.visit_acquire_account_alias_lease(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::account_alias_lease::RenewAccountAliasLease>()
+    {
+        visitor.visit_renew_account_alias_lease(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::sns::RegisterSnsName>()
+    {
+        visitor.visit_register_sns_name(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<crate::isi::sns::RenewSnsName>() {
+        visitor.visit_renew_sns_name(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::sns::TransferSnsName>()
+    {
+        visitor.visit_transfer_sns_name(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::sns::UpdateSnsNameControllers>()
+    {
+        visitor.visit_update_sns_name_controllers(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::sns::FreezeSnsName>()
+    {
+        visitor.visit_freeze_sns_name(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::sns::UnfreezeSnsName>()
+    {
+        visitor.visit_unfreeze_sns_name(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<Log>() {
         visitor.visit_log(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<BurnBox>() {
@@ -59,8 +132,25 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         visitor.visit_send_to_twitter(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<CancelTwitterEscrow>() {
         visitor.visit_cancel_twitter_escrow(v);
-    } else if let Some(v) = isi.as_any().downcast_ref::<RegisterPublicLaneValidator>() {
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::rwa::RwaInstructionBox>()
+    {
+        visitor.visit_rwa_instruction_box(v);
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_staking_and_identifier_instruction<V: Visit + ?Sized>(
+    visitor: &mut V,
+    isi: &InstructionBox,
+) -> bool {
+    if let Some(v) = isi.as_any().downcast_ref::<RegisterPublicLaneValidator>() {
         visitor.visit_register_public_lane_validator(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RebindPublicLaneValidatorPeer>() {
+        visitor.visit_rebind_public_lane_validator_peer(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ActivatePublicLaneValidator>() {
         visitor.visit_activate_public_lane_validator(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ExitPublicLaneValidator>() {
@@ -70,6 +160,8 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
         .downcast_ref::<SetLaneRelayEmergencyValidators>()
     {
         visitor.visit_set_lane_relay_emergency_validators(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RegisterVerifiedLaneRelay>() {
+        visitor.visit_register_verified_lane_relay(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RegisterIdentifierPolicy>() {
         visitor.visit_register_identifier_policy(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<ActivateIdentifierPolicy>() {
@@ -79,8 +171,198 @@ pub fn visit_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionBo
     } else if let Some(v) = isi.as_any().downcast_ref::<RevokeIdentifier>() {
         visitor.visit_revoke_identifier(v);
     } else {
-        unreachable!("Unknown instruction type");
+        return false;
     }
+    true
+}
+
+fn visit_soracloud_service_instruction<V: Visit + ?Sized>(
+    visitor: &mut V,
+    isi: &InstructionBox,
+) -> bool {
+    if let Some(v) = isi.as_any().downcast_ref::<DeploySoracloudService>() {
+        visitor.visit_deploy_soracloud_service(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<UpgradeSoracloudService>() {
+        visitor.visit_upgrade_soracloud_service(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RollbackSoracloudService>() {
+        visitor.visit_rollback_soracloud_service(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<SetSoracloudServiceConfig>() {
+        visitor.visit_set_soracloud_service_config(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<DeleteSoracloudServiceConfig>() {
+        visitor.visit_delete_soracloud_service_config(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<SetSoracloudServiceSecret>() {
+        visitor.visit_set_soracloud_service_secret(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<DeleteSoracloudServiceSecret>() {
+        visitor.visit_delete_soracloud_service_secret(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<MutateSoracloudState>() {
+        visitor.visit_mutate_soracloud_state(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RunSoracloudFheJob>() {
+        visitor.visit_run_soracloud_fhe_job(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<RecordSoracloudDecryptionRequest>()
+    {
+        visitor.visit_record_soracloud_decryption_request(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<JoinSoracloudHfSharedLease>() {
+        visitor.visit_join_soracloud_hf_shared_lease(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<LeaveSoracloudHfSharedLease>() {
+        visitor.visit_leave_soracloud_hf_shared_lease(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RenewSoracloudHfSharedLease>() {
+        visitor.visit_renew_soracloud_hf_shared_lease(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<AdvertiseSoracloudModelHost>() {
+        visitor.visit_advertise_soracloud_model_host(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<HeartbeatSoracloudModelHost>() {
+        visitor.visit_heartbeat_soracloud_model_host(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<WithdrawSoracloudModelHost>() {
+        visitor.visit_withdraw_soracloud_model_host(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<AdvertiseSoracloudInrouHost>() {
+        visitor.visit_advertise_soracloud_inrou_host(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<WithdrawSoracloudInrouHost>() {
+        visitor.visit_withdraw_soracloud_inrou_host(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<ReconcileSoracloudInrouPlacements>()
+    {
+        visitor.visit_reconcile_soracloud_inrou_placements(v);
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_soracloud_agent_instruction<V: Visit + ?Sized>(
+    visitor: &mut V,
+    isi: &InstructionBox,
+) -> bool {
+    if let Some(v) = isi.as_any().downcast_ref::<DeploySoracloudAgentApartment>() {
+        visitor.visit_deploy_soracloud_agent_apartment(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RenewSoracloudAgentLease>() {
+        visitor.visit_renew_soracloud_agent_lease(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<RestartSoracloudAgentApartment>()
+    {
+        visitor.visit_restart_soracloud_agent_apartment(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RevokeSoracloudAgentPolicy>() {
+        visitor.visit_revoke_soracloud_agent_policy(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<RequestSoracloudAgentWalletSpend>()
+    {
+        visitor.visit_request_soracloud_agent_wallet_spend(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<ApproveSoracloudAgentWalletSpend>()
+    {
+        visitor.visit_approve_soracloud_agent_wallet_spend(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<EnqueueSoracloudAgentMessage>() {
+        visitor.visit_enqueue_soracloud_agent_message(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<AcknowledgeSoracloudAgentMessage>()
+    {
+        visitor.visit_acknowledge_soracloud_agent_message(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<AllowSoracloudAgentAutonomyArtifact>()
+    {
+        visitor.visit_allow_soracloud_agent_autonomy_artifact(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RunSoracloudAgentAutonomy>() {
+        visitor.visit_run_soracloud_agent_autonomy(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<RecordSoracloudAgentAutonomyExecution>()
+    {
+        visitor.visit_record_soracloud_agent_autonomy_execution(v);
+    } else {
+        return false;
+    }
+    true
+}
+
+fn visit_soracloud_training_instruction<V: Visit + ?Sized>(
+    visitor: &mut V,
+    isi: &InstructionBox,
+) -> bool {
+    if let Some(v) = isi.as_any().downcast_ref::<StartSoracloudTrainingJob>() {
+        visitor.visit_start_soracloud_training_job(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<CheckpointSoracloudTrainingJob>()
+    {
+        visitor.visit_checkpoint_soracloud_training_job(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RetrySoracloudTrainingJob>() {
+        visitor.visit_retry_soracloud_training_job(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<RegisterSoracloudModelArtifact>()
+    {
+        visitor.visit_register_soracloud_model_artifact(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RegisterSoracloudModelWeight>() {
+        visitor.visit_register_soracloud_model_weight(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<PromoteSoracloudModelWeight>() {
+        visitor.visit_promote_soracloud_model_weight(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RollbackSoracloudModelWeight>() {
+        visitor.visit_rollback_soracloud_model_weight(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<RegisterSoracloudUploadedModelBundle>()
+    {
+        visitor.visit_register_soracloud_uploaded_model_bundle(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<AppendSoracloudUploadedModelChunk>()
+    {
+        visitor.visit_append_soracloud_uploaded_model_chunk(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<FinalizeSoracloudUploadedModelBundle>()
+    {
+        visitor.visit_finalize_soracloud_uploaded_model_bundle(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<AdmitSoracloudPrivateCompileProfile>()
+    {
+        visitor.visit_admit_soracloud_private_compile_profile(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<AllowSoracloudUploadedModel>() {
+        visitor.visit_allow_soracloud_uploaded_model(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<StartSoracloudPrivateInference>()
+    {
+        visitor.visit_start_soracloud_private_inference(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<RecordSoracloudPrivateInferenceCheckpoint>()
+    {
+        visitor.visit_record_soracloud_private_inference_checkpoint(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<AdvanceSoracloudRollout>() {
+        visitor.visit_advance_soracloud_rollout(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<SetSoracloudRuntimeState>() {
+        visitor.visit_set_soracloud_runtime_state(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<SetSoracloudInrouReplicaRuntimeState>()
+    {
+        visitor.visit_set_soracloud_inrou_replica_runtime_state(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<ClearSoracloudInrouReplicaRuntimeState>()
+    {
+        visitor.visit_clear_soracloud_inrou_replica_runtime_state(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<ReportSoracloudServiceLeaseUsage>()
+    {
+        visitor.visit_report_soracloud_service_lease_usage(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RecordSoracloudMailboxMessage>() {
+        visitor.visit_record_soracloud_mailbox_message(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<RecordSoracloudRuntimeReceipt>() {
+        visitor.visit_record_soracloud_runtime_receipt(v);
+    } else {
+        return false;
+    }
+    true
 }
 
 /// Dispatch register variants like peers, domains, and triggers.
@@ -159,6 +441,13 @@ pub fn visit_remove_key_value<V: Visit + ?Sized>(visitor: &mut V, isi: &RemoveKe
     }
 }
 
+/// Dispatch grouped RWA instructions.
+pub fn visit_rwa_instruction_box<V: Visit + ?Sized>(
+    _visitor: &mut V,
+    _isi: &crate::isi::rwa::RwaInstructionBox,
+) {
+}
+
 /// Dispatch grant variants to the appropriate hook.
 pub fn visit_grant<V: Visit + ?Sized>(visitor: &mut V, isi: &GrantBox) {
     match isi {
@@ -223,6 +512,14 @@ macro_rules! instruction_visitors {
             visit_upgrade(&Upgrade),
             visit_set_parameter(&SetParameter),
             visit_execute_trigger(&ExecuteTrigger),
+            visit_acquire_account_alias_lease(&$crate::isi::account_alias_lease::AcquireAccountAliasLease),
+            visit_renew_account_alias_lease(&$crate::isi::account_alias_lease::RenewAccountAliasLease),
+            visit_register_sns_name(&$crate::isi::sns::RegisterSnsName),
+            visit_renew_sns_name(&$crate::isi::sns::RenewSnsName),
+            visit_transfer_sns_name(&$crate::isi::sns::TransferSnsName),
+            visit_update_sns_name_controllers(&$crate::isi::sns::UpdateSnsNameControllers),
+            visit_freeze_sns_name(&$crate::isi::sns::FreezeSnsName),
+            visit_unfreeze_sns_name(&$crate::isi::sns::UnfreezeSnsName),
             visit_log(&Log),
             visit_custom_instruction(&CustomInstruction),
             visit_publish_pedersen_params(&PublishPedersenParams),
@@ -233,13 +530,66 @@ macro_rules! instruction_visitors {
             visit_send_to_twitter(&SendToTwitter),
             visit_cancel_twitter_escrow(&CancelTwitterEscrow),
             visit_register_public_lane_validator(&RegisterPublicLaneValidator),
+            visit_rebind_public_lane_validator_peer(&RebindPublicLaneValidatorPeer),
             visit_activate_public_lane_validator(&ActivatePublicLaneValidator),
             visit_exit_public_lane_validator(&ExitPublicLaneValidator),
             visit_set_lane_relay_emergency_validators(&SetLaneRelayEmergencyValidators),
+            visit_register_verified_lane_relay(&RegisterVerifiedLaneRelay),
             visit_register_identifier_policy(&RegisterIdentifierPolicy),
             visit_activate_identifier_policy(&ActivateIdentifierPolicy),
             visit_claim_identifier(&ClaimIdentifier),
             visit_revoke_identifier(&RevokeIdentifier),
+            visit_deploy_soracloud_service(&DeploySoracloudService),
+            visit_upgrade_soracloud_service(&UpgradeSoracloudService),
+            visit_rollback_soracloud_service(&RollbackSoracloudService),
+            visit_set_soracloud_service_config(&SetSoracloudServiceConfig),
+            visit_delete_soracloud_service_config(&DeleteSoracloudServiceConfig),
+            visit_set_soracloud_service_secret(&SetSoracloudServiceSecret),
+            visit_delete_soracloud_service_secret(&DeleteSoracloudServiceSecret),
+            visit_mutate_soracloud_state(&MutateSoracloudState),
+            visit_run_soracloud_fhe_job(&RunSoracloudFheJob),
+            visit_record_soracloud_decryption_request(&RecordSoracloudDecryptionRequest),
+            visit_join_soracloud_hf_shared_lease(&JoinSoracloudHfSharedLease),
+            visit_leave_soracloud_hf_shared_lease(&LeaveSoracloudHfSharedLease),
+            visit_renew_soracloud_hf_shared_lease(&RenewSoracloudHfSharedLease),
+            visit_advertise_soracloud_model_host(&AdvertiseSoracloudModelHost),
+            visit_heartbeat_soracloud_model_host(&HeartbeatSoracloudModelHost),
+            visit_withdraw_soracloud_model_host(&WithdrawSoracloudModelHost),
+            visit_advertise_soracloud_inrou_host(&AdvertiseSoracloudInrouHost),
+            visit_withdraw_soracloud_inrou_host(&WithdrawSoracloudInrouHost),
+            visit_reconcile_soracloud_inrou_placements(&ReconcileSoracloudInrouPlacements),
+            visit_deploy_soracloud_agent_apartment(&DeploySoracloudAgentApartment),
+            visit_renew_soracloud_agent_lease(&RenewSoracloudAgentLease),
+            visit_restart_soracloud_agent_apartment(&RestartSoracloudAgentApartment),
+            visit_revoke_soracloud_agent_policy(&RevokeSoracloudAgentPolicy),
+            visit_request_soracloud_agent_wallet_spend(&RequestSoracloudAgentWalletSpend),
+            visit_approve_soracloud_agent_wallet_spend(&ApproveSoracloudAgentWalletSpend),
+            visit_enqueue_soracloud_agent_message(&EnqueueSoracloudAgentMessage),
+            visit_acknowledge_soracloud_agent_message(&AcknowledgeSoracloudAgentMessage),
+            visit_allow_soracloud_agent_autonomy_artifact(&AllowSoracloudAgentAutonomyArtifact),
+            visit_run_soracloud_agent_autonomy(&RunSoracloudAgentAutonomy),
+            visit_record_soracloud_agent_autonomy_execution(&RecordSoracloudAgentAutonomyExecution),
+            visit_start_soracloud_training_job(&StartSoracloudTrainingJob),
+            visit_checkpoint_soracloud_training_job(&CheckpointSoracloudTrainingJob),
+            visit_retry_soracloud_training_job(&RetrySoracloudTrainingJob),
+            visit_register_soracloud_model_artifact(&RegisterSoracloudModelArtifact),
+            visit_register_soracloud_model_weight(&RegisterSoracloudModelWeight),
+            visit_promote_soracloud_model_weight(&PromoteSoracloudModelWeight),
+            visit_rollback_soracloud_model_weight(&RollbackSoracloudModelWeight),
+            visit_register_soracloud_uploaded_model_bundle(&RegisterSoracloudUploadedModelBundle),
+            visit_append_soracloud_uploaded_model_chunk(&AppendSoracloudUploadedModelChunk),
+            visit_finalize_soracloud_uploaded_model_bundle(&FinalizeSoracloudUploadedModelBundle),
+            visit_admit_soracloud_private_compile_profile(&AdmitSoracloudPrivateCompileProfile),
+            visit_allow_soracloud_uploaded_model(&AllowSoracloudUploadedModel),
+            visit_start_soracloud_private_inference(&StartSoracloudPrivateInference),
+            visit_record_soracloud_private_inference_checkpoint(&RecordSoracloudPrivateInferenceCheckpoint),
+            visit_advance_soracloud_rollout(&AdvanceSoracloudRollout),
+            visit_set_soracloud_runtime_state(&SetSoracloudRuntimeState),
+            visit_set_soracloud_inrou_replica_runtime_state(&SetSoracloudInrouReplicaRuntimeState),
+            visit_clear_soracloud_inrou_replica_runtime_state(&ClearSoracloudInrouReplicaRuntimeState),
+            visit_report_soracloud_service_lease_usage(&ReportSoracloudServiceLeaseUsage),
+            visit_record_soracloud_mailbox_message(&RecordSoracloudMailboxMessage),
+            visit_record_soracloud_runtime_receipt(&RecordSoracloudRuntimeReceipt),
         }
     };
 }
@@ -292,12 +642,13 @@ mod tests {
             }
         }
 
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
         let validator = AccountId::new(key_pair.public_key().clone());
         let instruction = RegisterPublicLaneValidator::new(
             LaneId::SINGLE,
             validator.clone(),
+            PeerId::from(validator.signatory().clone()),
             validator,
             Numeric::from(1u64),
             Metadata::default(),
@@ -305,6 +656,37 @@ mod tests {
         let isi = InstructionBox::from(instruction);
 
         let mut visitor = RegisterVisitor { called: false };
+        visit_instruction(&mut visitor, &isi);
+        assert!(visitor.called);
+    }
+
+    #[test]
+    fn visit_rebind_public_lane_validator_peer_dispatches() {
+        struct RebindVisitor {
+            called: bool,
+        }
+
+        impl Visit for RebindVisitor {
+            fn visit_rebind_public_lane_validator_peer(
+                &mut self,
+                _: &RebindPublicLaneValidatorPeer,
+            ) {
+                self.called = true;
+            }
+        }
+
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let validator_key = KeyPair::from_seed(vec![0x12; 32], Algorithm::Ed25519);
+        let peer_key = KeyPair::from_seed(vec![0x13; 32], Algorithm::Ed25519);
+        let validator = AccountId::new(validator_key.public_key().clone());
+        let peer_id = PeerId::from(peer_key.public_key().clone());
+        let isi = InstructionBox::from(RebindPublicLaneValidatorPeer::new(
+            LaneId::SINGLE,
+            validator,
+            peer_id,
+        ));
+
+        let mut visitor = RebindVisitor { called: false };
         visit_instruction(&mut visitor, &isi);
         assert!(visitor.called);
     }

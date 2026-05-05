@@ -4,8 +4,17 @@ use std::{
 };
 
 use indexmap::{IndexMap, IndexSet};
+use iroha_data_model::events::data::prelude::{
+    AccountEventFilter, AccountEventSet, AssetDefinitionEventFilter, AssetDefinitionEventSet,
+    AssetEventFilter, AssetEventSet, ConfigurationEventFilter, ConfigurationEventSet,
+    DomainEventFilter, DomainEventSet, ExecutorEventFilter, ExecutorEventSet, NftEventFilter,
+    NftEventSet, PeerEventFilter, PeerEventSet, RoleEventFilter, RoleEventSet, RwaEventFilter,
+    RwaEventSet, TriggerEventFilter, TriggerEventSet,
+};
 use iroha_data_model::{
     account::AccountId,
+    asset::{AssetDefinitionId, AssetId},
+    domain::DomainId,
     events::{
         EventFilterBox,
         data::DataEventFilter,
@@ -17,18 +26,58 @@ use iroha_data_model::{
         time::{ExecutionTime, Schedule, TimeEventFilter},
     },
     metadata::Metadata,
+    nft::NftId,
+    peer::PeerId,
     prelude::Name,
+    role::RoleId,
+    rwa::RwaId,
     trigger::{TriggerId, action::Repeats},
 };
 use iroha_primitives::json::Json;
 use norito::json::{self, native::Number as JsonNumber};
 
 use super::ast::*;
+use crate::builtins::Builtin;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct FunctionEffects {
+    host_side_effects: bool,
+    emits_instructions: bool,
+    mutates_durable_state: bool,
+}
+
+impl FunctionEffects {
+    fn merge_from(&mut self, other: Self) -> bool {
+        let merged = Self {
+            host_side_effects: self.host_side_effects || other.host_side_effects,
+            emits_instructions: self.emits_instructions || other.emits_instructions,
+            mutates_durable_state: self.mutates_durable_state || other.mutates_durable_state,
+        };
+        let changed = *self != merged;
+        *self = merged;
+        changed
+    }
+
+    fn requires_permission(self) -> bool {
+        self.host_side_effects || self.emits_instructions
+    }
+
+    fn forbids_view(self) -> bool {
+        self.host_side_effects || self.emits_instructions || self.mutates_durable_state
+    }
+}
 
 #[derive(Clone, Default)]
 struct FunctionSummary {
-    direct_sensitive: bool,
+    direct_effects: FunctionEffects,
     calls: IndexSet<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedParam {
+    pub name: String,
+    pub ty: Type,
+    pub is_state: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -125,21 +174,40 @@ pub struct SemanticError {
 #[derive(Debug, PartialEq)]
 pub struct TypedProgram {
     pub items: Vec<TypedItem>,
+    pub states: Vec<TypedStateDecl>,
     pub triggers: Vec<TypedTrigger>,
     pub contract_meta: Option<ContractMeta>,
     pub kotoba_entries: Vec<KotobaEntry>,
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct TypedStateDecl {
+    pub name: String,
+    pub ty: Type,
+}
+
 thread_local! {
     static STRUCT_ENV: RefCell<HashMap<String, Vec<(String, Type)>>> = RefCell::new(HashMap::new());
     static STATE_ENV: RefCell<IndexMap<String, Type>> = RefCell::new(IndexMap::new());
+    static CONST_ENV: RefCell<IndexMap<String, TypedExpr>> = RefCell::new(IndexMap::new());
     static FUNCTION_RETURNS: RefCell<HashMap<String, Type>> = RefCell::new(HashMap::new());
+    static FUNCTION_MODIFIERS: RefCell<HashMap<String, FunctionModifiers>> = RefCell::new(HashMap::new());
+    static FUNCTION_PARAMS: RefCell<HashMap<String, Vec<TypedParam>>> = RefCell::new(HashMap::new());
     static FUNCTION_SUMMARY: RefCell<HashMap<String, FunctionSummary>> = RefCell::new(HashMap::new());
+    static CURRENT_FUNCTION_MODIFIERS: RefCell<Option<FunctionModifiers>> = const { RefCell::new(None) };
+    static CURRENT_STATE_PARAM_NAMES: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
 const SENSITIVE_SYSCALLS: &[&str] = &[
     "set_account_detail",
     "transfer_asset",
+    "escrow_open_offer",
+    "escrow_accept",
+    "escrow_mark_payment_sent",
+    "escrow_release",
+    "escrow_cancel",
+    "escrow_open_dispute",
+    "escrow_resolve_dispute",
     "transfer_v1_batch_begin",
     "transfer_v1_batch_end",
     "mint_asset",
@@ -170,14 +238,31 @@ const SENSITIVE_SYSCALLS: &[&str] = &[
     "revoke_role",
 ];
 
+const INSTRUCTION_EMITTING_BUILTINS: &[&str] = &[
+    "sc_execute_submit_ballot",
+    "sc_execute_unshield",
+    "execute_instruction",
+    "call_contract",
+];
+
+const HOST_SIDE_EFFECT_BUILTINS: &[&str] = &["subscription_bill", "subscription_record_usage"];
+
 pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     // Collect struct definitions up front and publish to thread-local env for this analysis pass.
     let mut structs: HashMap<String, Vec<(String, Type)>> = HashMap::new();
     let mut state_decls: Vec<(String, TypeExpr)> = Vec::new();
+    let mut const_decls: Vec<ConstDecl> = Vec::new();
     let mut fn_returns: HashMap<String, Type> = HashMap::new();
     let mut fn_modifiers: HashMap<String, FunctionModifiers> = HashMap::new();
     let mut kotoba_entries: Vec<KotobaEntry> = Vec::new();
     FUNCTION_SUMMARY.with(|map| map.borrow_mut().clear());
+    CONST_ENV.with(|env| env.borrow_mut().clear());
+    FUNCTION_MODIFIERS.with(|env| env.borrow_mut().clear());
+    FUNCTION_PARAMS.with(|env| env.borrow_mut().clear());
+    CURRENT_FUNCTION_MODIFIERS.with(|mods| {
+        mods.borrow_mut().take();
+    });
+    CURRENT_STATE_PARAM_NAMES.with(|env| env.borrow_mut().clear());
     for item in &program.items {
         match item {
             Item::Struct(def) => {
@@ -189,6 +274,9 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
             }
             Item::State(st) => {
                 state_decls.push((st.name.clone(), st.ty.clone()));
+            }
+            Item::Const(decl) => {
+                const_decls.push(decl.clone());
             }
             Item::Function(f) => {
                 let ret = if let Some(ret_ty) = &f.ret_ty {
@@ -206,6 +294,15 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
         }
     }
     STRUCT_ENV.with(|env| env.replace(structs));
+    let mut resolved_consts: IndexMap<String, TypedExpr> = IndexMap::new();
+    for decl in const_decls {
+        let mut value = analyze_const_expr(&decl.value, &resolved_consts)?;
+        if let Some(expected) = parse_declared_type(&decl.ty)? {
+            ensure_assignable_and_coerce(&expected, &mut value)?;
+        }
+        resolved_consts.insert(decl.name, value);
+    }
+    CONST_ENV.with(|env| env.replace(resolved_consts));
     let mut state: IndexMap<String, Type> = IndexMap::new();
     for (name, ty_expr) in state_decls {
         let ty = convert_type_expr(&ty_expr)?;
@@ -218,8 +315,28 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
         .collect();
     STATE_ENV.with(|env| env.replace(resolved_state));
     FUNCTION_RETURNS.with(|env| env.replace(fn_returns));
+    FUNCTION_MODIFIERS.with(|env| env.replace(fn_modifiers.clone()));
+    let mut fn_params: HashMap<String, Vec<TypedParam>> = HashMap::new();
+    for item in &program.items {
+        let Item::Function(f) = item else { continue };
+        let mut params = Vec::with_capacity(f.params.len());
+        for param in &f.params {
+            params.push(parse_declared_param_type(param, &f.modifiers)?);
+        }
+        fn_params.insert(f.name.clone(), params);
+    }
+    FUNCTION_PARAMS.with(|env| env.replace(fn_params));
 
     let mut items = Vec::new();
+    let states = STATE_ENV.with(|env| {
+        env.borrow()
+            .iter()
+            .map(|(name, ty)| TypedStateDecl {
+                name: name.clone(),
+                ty: ty.clone(),
+            })
+            .collect::<Vec<_>>()
+    });
     let mut triggers = Vec::new();
     let mut trigger_names: HashSet<String> = HashSet::new();
     for item in &program.items {
@@ -233,13 +350,14 @@ pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
                 }
                 triggers.push(analyze_trigger(trigger, &fn_modifiers)?);
             }
-            Item::Struct(_) | Item::State(_) | Item::Kotoba(_) => {}
+            Item::Struct(_) | Item::Const(_) | Item::State(_) | Item::Kotoba(_) => {}
         }
     }
     enforce_permission_requirements(&items)?;
     let kotoba_entries = normalize_kotoba_entries(kotoba_entries)?;
     Ok(TypedProgram {
         items,
+        states,
         triggers,
         contract_meta: program.contract_meta.clone(),
         kotoba_entries,
@@ -340,6 +458,688 @@ fn type_name(ty: &Type) -> String {
     }
 }
 
+pub fn render_type_name(ty: &Type) -> String {
+    type_name(ty)
+}
+
+fn trigger_data_family_name(family: TriggerDataFamily) -> &'static str {
+    match family {
+        TriggerDataFamily::Peer => "peer",
+        TriggerDataFamily::Domain => "domain",
+        TriggerDataFamily::Account => "account",
+        TriggerDataFamily::Asset => "asset",
+        TriggerDataFamily::AssetDefinition => "asset_definition",
+        TriggerDataFamily::Nft => "nft",
+        TriggerDataFamily::Rwa => "rwa",
+        TriggerDataFamily::Trigger => "trigger",
+        TriggerDataFamily::Role => "role",
+        TriggerDataFamily::Configuration => "configuration",
+        TriggerDataFamily::Executor => "executor",
+    }
+}
+
+fn named_data_event_kind(event: &TriggerDataEventKind) -> Option<&str> {
+    match event {
+        TriggerDataEventKind::Any => None,
+        TriggerDataEventKind::Named(kind) => Some(kind.as_str()),
+    }
+}
+
+fn duplicate_data_matcher_error(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    key: &str,
+) -> SemanticError {
+    SemanticError {
+        message: format!(
+            "trigger `{trigger_name}` has duplicate `{key}` matcher in `{}` data filter",
+            trigger_data_family_name(family)
+        ),
+    }
+}
+
+fn invalid_data_matcher_literal<E>(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    key: &str,
+    raw: &str,
+    err: E,
+) -> SemanticError
+where
+    E: std::fmt::Display,
+{
+    SemanticError {
+        message: format!(
+            "trigger `{trigger_name}` has invalid `{key}` matcher literal `{raw}` in `{}` data filter: {err}",
+            trigger_data_family_name(family)
+        ),
+    }
+}
+
+fn unsupported_data_matcher_error(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    key: &str,
+) -> SemanticError {
+    SemanticError {
+        message: format!(
+            "trigger `{trigger_name}` does not support `{key}` matcher in `{}` data filter",
+            trigger_data_family_name(family)
+        ),
+    }
+}
+
+fn unsupported_data_event_kind_error(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    kind: &str,
+) -> SemanticError {
+    SemanticError {
+        message: format!(
+            "trigger `{trigger_name}` does not support `{kind}` event kind for `{}` data filter",
+            trigger_data_family_name(family)
+        ),
+    }
+}
+
+fn parse_peer_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<PeerId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "peer", raw, err))
+}
+
+fn parse_domain_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<DomainId, SemanticError> {
+    DomainId::parse_fully_qualified(raw)
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "domain", raw, err))
+}
+
+fn parse_account_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<AccountId, SemanticError> {
+    AccountId::parse_encoded(raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "account", raw, err))
+}
+
+fn parse_asset_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<AssetId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "asset", raw, err))
+}
+
+fn parse_asset_definition_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<AssetDefinitionId, SemanticError> {
+    raw.parse().map_err(|err| {
+        invalid_data_matcher_literal(trigger_name, family, "asset_definition", raw, err)
+    })
+}
+
+fn parse_nft_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<NftId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "nft", raw, err))
+}
+
+fn parse_rwa_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<RwaId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "rwa", raw, err))
+}
+
+fn parse_trigger_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<TriggerId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "trigger", raw, err))
+}
+
+fn parse_role_matcher(
+    trigger_name: &str,
+    family: TriggerDataFamily,
+    raw: &str,
+) -> Result<RoleId, SemanticError> {
+    raw.parse()
+        .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "role", raw, err))
+}
+
+fn lower_structured_data_filter(
+    trigger_name: &str,
+    filter: &TriggerStructuredDataFilter,
+) -> Result<DataEventFilter, SemanticError> {
+    match filter.family {
+        TriggerDataFamily::Peer => {
+            let mut peer =
+                PeerEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => PeerEventSet::all(),
+                    Some("added") => PeerEventSet::Added,
+                    Some("removed") => PeerEventSet::Removed,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_peer = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "peer" => {
+                        if seen_peer {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "peer",
+                            ));
+                        }
+                        peer = peer.for_peer(parse_peer_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_peer = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Peer(peer))
+        }
+        TriggerDataFamily::Domain => {
+            let mut domain =
+                DomainEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => DomainEventSet::all(),
+                    Some("created") => DomainEventSet::Created,
+                    Some("deleted") => DomainEventSet::Deleted,
+                    Some("asset_definition") => DomainEventSet::AnyAssetDefinition,
+                    Some("nft") => DomainEventSet::AnyNft,
+                    Some("account") => DomainEventSet::AnyAccount,
+                    Some("account_linked") => DomainEventSet::AccountLinked,
+                    Some("account_unlinked") => DomainEventSet::AccountUnlinked,
+                    Some("metadata_inserted") => DomainEventSet::MetadataInserted,
+                    Some("metadata_removed") => DomainEventSet::MetadataRemoved,
+                    Some("owner_changed") => DomainEventSet::OwnerChanged,
+                    Some("kaigi_roster_summary") => DomainEventSet::KaigiRosterSummary,
+                    Some("kaigi_relay_registered") => DomainEventSet::KaigiRelayRegistered,
+                    Some("kaigi_relay_manifest_updated") => {
+                        DomainEventSet::KaigiRelayManifestUpdated
+                    }
+                    Some("kaigi_usage_summary") => DomainEventSet::KaigiUsageSummary,
+                    Some("kaigi_relay_health_updated") => DomainEventSet::KaigiRelayHealthUpdated,
+                    Some("streaming_ticket_ready") => DomainEventSet::StreamingTicketReady,
+                    Some("streaming_ticket_revoked") => DomainEventSet::StreamingTicketRevoked,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_domain = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "domain" => {
+                        if seen_domain {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "domain",
+                            ));
+                        }
+                        domain = domain.for_domain(parse_domain_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_domain = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Domain(domain))
+        }
+        TriggerDataFamily::Account => {
+            let mut account =
+                AccountEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => AccountEventSet::all(),
+                    Some("created") => AccountEventSet::Created,
+                    Some("deleted") => AccountEventSet::Deleted,
+                    Some("asset") => AccountEventSet::AnyAsset,
+                    Some("permission_added") => AccountEventSet::PermissionAdded,
+                    Some("permission_removed") => AccountEventSet::PermissionRemoved,
+                    Some("role_granted") => AccountEventSet::RoleGranted,
+                    Some("role_revoked") => AccountEventSet::RoleRevoked,
+                    Some("metadata_inserted") => AccountEventSet::MetadataInserted,
+                    Some("metadata_removed") => AccountEventSet::MetadataRemoved,
+                    Some("repo") => AccountEventSet::AnyRepo,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_account = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "account" => {
+                        if seen_account {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "account",
+                            ));
+                        }
+                        account = account.for_account(parse_account_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_account = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Account(account))
+        }
+        TriggerDataFamily::Asset => {
+            let mut asset =
+                AssetEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => AssetEventSet::all(),
+                    Some("created") => AssetEventSet::Created,
+                    Some("deleted") => AssetEventSet::Deleted,
+                    Some("added") => AssetEventSet::Added,
+                    Some("removed") => AssetEventSet::Removed,
+                    Some("metadata_inserted") => AssetEventSet::MetadataInserted,
+                    Some("metadata_removed") => AssetEventSet::MetadataRemoved,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_asset = false;
+            let mut seen_asset_definition = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "asset" => {
+                        if seen_asset {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "asset",
+                            ));
+                        }
+                        asset = asset.for_asset(parse_asset_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_asset = true;
+                    }
+                    "asset_definition" => {
+                        if seen_asset_definition {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "asset_definition",
+                            ));
+                        }
+                        asset = asset.for_asset_definition(parse_asset_definition_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_asset_definition = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Asset(asset))
+        }
+        TriggerDataFamily::AssetDefinition => {
+            let mut asset_definition = AssetDefinitionEventFilter::new().for_events(
+                match named_data_event_kind(&filter.event) {
+                    None => AssetDefinitionEventSet::all(),
+                    Some("created") => AssetDefinitionEventSet::Created,
+                    Some("deleted") => AssetDefinitionEventSet::Deleted,
+                    Some("metadata_inserted") => AssetDefinitionEventSet::MetadataInserted,
+                    Some("metadata_removed") => AssetDefinitionEventSet::MetadataRemoved,
+                    Some("mintability_changed") => AssetDefinitionEventSet::MintabilityChanged,
+                    Some("mintability_changed_detailed") => {
+                        AssetDefinitionEventSet::MintabilityChangedDetailed
+                    }
+                    Some("total_quantity_changed") => AssetDefinitionEventSet::TotalQuantityChanged,
+                    Some("owner_changed") => AssetDefinitionEventSet::OwnerChanged,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                },
+            );
+            let mut seen_asset_definition = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "asset_definition" => {
+                        if seen_asset_definition {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "asset_definition",
+                            ));
+                        }
+                        asset_definition =
+                            asset_definition.for_asset_definition(parse_asset_definition_matcher(
+                                trigger_name,
+                                filter.family,
+                                &matcher.value,
+                            )?);
+                        seen_asset_definition = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::AssetDefinition(asset_definition))
+        }
+        TriggerDataFamily::Nft => {
+            let mut nft =
+                NftEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => NftEventSet::all(),
+                    Some("created") => NftEventSet::Created,
+                    Some("deleted") => NftEventSet::Deleted,
+                    Some("metadata_inserted") => NftEventSet::MetadataInserted,
+                    Some("metadata_removed") => NftEventSet::MetadataRemoved,
+                    Some("owner_changed") => NftEventSet::OwnerChanged,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_nft = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "nft" => {
+                        if seen_nft {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "nft",
+                            ));
+                        }
+                        nft = nft.for_nft(parse_nft_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_nft = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Nft(nft))
+        }
+        TriggerDataFamily::Rwa => {
+            let mut rwa =
+                RwaEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => RwaEventSet::all(),
+                    Some("created") => RwaEventSet::Created,
+                    Some("metadata_inserted") => RwaEventSet::MetadataInserted,
+                    Some("metadata_removed") => RwaEventSet::MetadataRemoved,
+                    Some("owner_changed") => RwaEventSet::OwnerChanged,
+                    Some("split") => RwaEventSet::Split,
+                    Some("merged") => RwaEventSet::Merged,
+                    Some("redeemed") => RwaEventSet::Redeemed,
+                    Some("frozen") => RwaEventSet::Frozen,
+                    Some("unfrozen") => RwaEventSet::Unfrozen,
+                    Some("held") => RwaEventSet::Held,
+                    Some("released") => RwaEventSet::Released,
+                    Some("force_transferred") => RwaEventSet::ForceTransferred,
+                    Some("controls_changed") => RwaEventSet::ControlsChanged,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_rwa = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "rwa" => {
+                        if seen_rwa {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "rwa",
+                            ));
+                        }
+                        rwa = rwa.for_rwa(parse_rwa_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_rwa = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Rwa(rwa))
+        }
+        TriggerDataFamily::Trigger => {
+            let mut trigger =
+                TriggerEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => TriggerEventSet::all(),
+                    Some("created") => TriggerEventSet::Created,
+                    Some("deleted") => TriggerEventSet::Deleted,
+                    Some("extended") => TriggerEventSet::Extended,
+                    Some("shortened") => TriggerEventSet::Shortened,
+                    Some("metadata_inserted") => TriggerEventSet::MetadataInserted,
+                    Some("metadata_removed") => TriggerEventSet::MetadataRemoved,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_trigger = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "trigger" => {
+                        if seen_trigger {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "trigger",
+                            ));
+                        }
+                        trigger = trigger.for_trigger(parse_trigger_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_trigger = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Trigger(trigger))
+        }
+        TriggerDataFamily::Role => {
+            let mut role =
+                RoleEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => RoleEventSet::all(),
+                    Some("created") => RoleEventSet::Created,
+                    Some("deleted") => RoleEventSet::Deleted,
+                    Some("permission_added") => RoleEventSet::PermissionAdded,
+                    Some("permission_removed") => RoleEventSet::PermissionRemoved,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            let mut seen_role = false;
+            for matcher in &filter.matchers {
+                match matcher.key.as_str() {
+                    "role" => {
+                        if seen_role {
+                            return Err(duplicate_data_matcher_error(
+                                trigger_name,
+                                filter.family,
+                                "role",
+                            ));
+                        }
+                        role = role.for_role(parse_role_matcher(
+                            trigger_name,
+                            filter.family,
+                            &matcher.value,
+                        )?);
+                        seen_role = true;
+                    }
+                    key => {
+                        return Err(unsupported_data_matcher_error(
+                            trigger_name,
+                            filter.family,
+                            key,
+                        ));
+                    }
+                }
+            }
+            Ok(DataEventFilter::Role(role))
+        }
+        TriggerDataFamily::Configuration => {
+            let configuration = ConfigurationEventFilter::new().for_events(
+                match named_data_event_kind(&filter.event) {
+                    None => ConfigurationEventSet::all(),
+                    Some("changed") => ConfigurationEventSet::Changed,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                },
+            );
+            if let Some(matcher) = filter.matchers.first() {
+                return Err(unsupported_data_matcher_error(
+                    trigger_name,
+                    filter.family,
+                    &matcher.key,
+                ));
+            }
+            Ok(DataEventFilter::Configuration(configuration))
+        }
+        TriggerDataFamily::Executor => {
+            let executor =
+                ExecutorEventFilter::new().for_events(match named_data_event_kind(&filter.event) {
+                    None => ExecutorEventSet::all(),
+                    Some("upgraded") => ExecutorEventSet::Upgraded,
+                    Some(kind) => {
+                        return Err(unsupported_data_event_kind_error(
+                            trigger_name,
+                            filter.family,
+                            kind,
+                        ));
+                    }
+                });
+            if let Some(matcher) = filter.matchers.first() {
+                return Err(unsupported_data_matcher_error(
+                    trigger_name,
+                    filter.family,
+                    &matcher.key,
+                ));
+            }
+            Ok(DataEventFilter::Executor(executor))
+        }
+    }
+}
+
 fn analyze_trigger(
     trigger: &TriggerDecl,
     fn_modifiers: &HashMap<String, FunctionModifiers>,
@@ -361,6 +1161,14 @@ fn analyze_trigger(
         return Err(SemanticError {
             message: format!(
                 "trigger `{}` must call public entrypoint `{entry}`",
+                trigger.name
+            ),
+        });
+    }
+    if modifiers.kind == FunctionKind::View {
+        return Err(SemanticError {
+            message: format!(
+                "trigger `{}` cannot target read-only view entrypoint `{entry}`",
                 trigger.name
             ),
         });
@@ -403,6 +1211,9 @@ fn analyze_trigger(
         TriggerFilter::Data(data) => {
             let filter = match data {
                 TriggerDataFilter::Any => DataEventFilter::Any,
+                TriggerDataFilter::Structured(filter) => {
+                    lower_structured_data_filter(&trigger.name, filter)?
+                }
             };
             EventFilterBox::Data(filter)
         }
@@ -648,6 +1459,10 @@ fn is_supported_durable_value_type(ty: &Type) -> bool {
         ty if is_numeric_type(&ty) => true,
         Type::Bool | Type::Json | Type::Blob | Type::Bytes => true,
         other if is_pointer_type(&other) => true,
+        Type::Struct { fields, .. } => fields
+            .iter()
+            .all(|(_, field_ty)| is_supported_durable_value_type(field_ty)),
+        Type::Tuple(items) => items.iter().all(is_supported_durable_value_type),
         _ => false,
     }
 }
@@ -881,8 +1696,45 @@ fn bind_tuple_fields_rec(
 }
 
 fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
+    if func.modifiers.is_test {
+        if !func.params.is_empty() {
+            return Err(SemanticError {
+                message: format!("test function `{}` must not declare parameters", func.name),
+            });
+        }
+        if func.ret_ty.is_some() {
+            return Err(SemanticError {
+                message: format!(
+                    "test function `{}` must not declare a return type",
+                    func.name
+                ),
+            });
+        }
+        if func.modifiers.visibility != FunctionVisibility::Internal
+            || !matches!(
+                func.modifiers.kind,
+                FunctionKind::Free | FunctionKind::Contract
+            )
+        {
+            return Err(SemanticError {
+                message: format!(
+                    "test function `{}` must be declared as a local `fn`",
+                    func.name
+                ),
+            });
+        }
+        if func.modifiers.permission.is_some() {
+            return Err(SemanticError {
+                message: format!(
+                    "test function `{}` cannot declare a permission modifier",
+                    func.name
+                ),
+            });
+        }
+    }
     let mut vars = HashMap::new();
     let mut param_names = Vec::new();
+    let mut param_types = Vec::new();
     // Seed variable environment with contract-level state declarations so
     // functions can reference `state` names directly.
     STATE_ENV.with(|env| {
@@ -890,14 +1742,30 @@ fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
             vars.insert(name.clone(), ty.clone());
         }
     });
+    let mut state_param_names = HashSet::new();
     for param in &func.params {
         ensure_not_state_shadow(&param.name)?;
-        let ty = parse_declared_param_type(&param.ty, &param.name)?;
-        vars.insert(param.name.clone(), ty);
+        let typed_param = parse_declared_param_type(param, &func.modifiers)?;
+        vars.insert(param.name.clone(), typed_param.ty.clone());
+        if typed_param.is_state {
+            state_param_names.insert(param.name.clone());
+        }
         param_names.push(param.name.clone());
+        param_types.push(typed_param);
     }
     let expected_ret = parse_declared_type(&func.ret_ty)?;
-    let body = analyze_block(&func.body, &mut vars, expected_ret.as_ref(), 0)?;
+    let previous_modifiers =
+        CURRENT_FUNCTION_MODIFIERS.with(|mods| mods.borrow_mut().replace(func.modifiers.clone()));
+    let previous_state_params = CURRENT_STATE_PARAM_NAMES
+        .with(|env| std::mem::replace(&mut *env.borrow_mut(), state_param_names.clone()));
+    let body_result = analyze_block(&func.body, &mut vars, expected_ret.as_ref(), 0);
+    CURRENT_FUNCTION_MODIFIERS.with(|mods| {
+        *mods.borrow_mut() = previous_modifiers;
+    });
+    CURRENT_STATE_PARAM_NAMES.with(|env| {
+        *env.borrow_mut() = previous_state_params;
+    });
+    let body = body_result?;
     // Enforce declared return coverage and shape
     if let Some(t) = &expected_ret {
         if *t != Type::Unit && !block_returns_all_paths(&func.body) {
@@ -914,7 +1782,11 @@ fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
         }
     }
     let summary = FunctionSummary {
-        direct_sensitive: block_contains_sensitive_syscall(&body),
+        direct_effects: FunctionEffects {
+            host_side_effects: block_contains_host_side_effects(&body),
+            emits_instructions: block_contains_instruction_emission(&body),
+            mutates_durable_state: block_mutates_durable_state(&body),
+        },
         calls: collect_called_functions(&body),
     };
     FUNCTION_SUMMARY.with(|map| {
@@ -923,9 +1795,317 @@ fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
     Ok(TypedFunction {
         name: func.name.clone(),
         params: param_names,
+        param_types,
         body,
         ret_ty: expected_ret,
         modifiers: func.modifiers.clone(),
+        location: func.location,
+    })
+}
+
+fn reject_public_payload_helper(name: &str) -> Result<(), SemanticError> {
+    let forbidden = CURRENT_FUNCTION_MODIFIERS.with(|mods| {
+        mods.borrow().as_ref().is_some_and(|modifiers| {
+            modifiers.visibility == FunctionVisibility::Public
+                || modifiers.kind == FunctionKind::View
+        })
+    });
+    if forbidden {
+        return Err(SemanticError {
+            message: format!(
+                "public and view entrypoints cannot use `{name}` here; declare typed parameters instead"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn current_function_is_test() -> bool {
+    CURRENT_FUNCTION_MODIFIERS.with(|mods| {
+        mods.borrow()
+            .as_ref()
+            .is_some_and(|modifiers| modifiers.is_test)
+    })
+}
+
+fn function_is_runtime_entrypoint(modifiers: &FunctionModifiers) -> bool {
+    modifiers.visibility == FunctionVisibility::Public
+        || matches!(
+            modifiers.kind,
+            FunctionKind::View | FunctionKind::Hajimari | FunctionKind::Kaizen
+        )
+}
+
+fn invoke_entrypoint_literal(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::String(raw) => Some(raw.clone()),
+        Expr::Call { name, args } if normalize_namespaced(name) == "name" && args.len() == 1 => {
+            match &args[0] {
+                Expr::String(raw) => Some(raw.clone()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+fn typed_string_literal(value: String) -> TypedExpr {
+    TypedExpr {
+        expr: ExprKind::String(value),
+        ty: Type::String,
+    }
+}
+
+fn analyze_invoke_entrypoint_call(
+    args: &[Expr],
+    vars: &mut HashMap<String, Type>,
+) -> Result<TypedExpr, SemanticError> {
+    if !current_function_is_test() {
+        return Err(SemanticError {
+            message: "`invoke_entrypoint` is only available inside #[test] Kotodama functions"
+                .into(),
+        });
+    }
+    if args.len() != 2 {
+        return Err(SemanticError {
+            message: "invoke_entrypoint expects (string|Name literal, Json)".into(),
+        });
+    }
+
+    let target_name = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        message:
+            "invoke_entrypoint requires a literal entrypoint name such as \"run\" or name(\"run\")"
+                .into(),
+    })?;
+    let payload = analyze_expr(&args[1], vars)?;
+    if payload.ty != Type::Json {
+        return Err(SemanticError {
+            message: "invoke_entrypoint expects a Json payload as its second argument".into(),
+        });
+    }
+
+    let Some(modifiers) = FUNCTION_MODIFIERS.with(|env| env.borrow().get(&target_name).cloned())
+    else {
+        return Err(SemanticError {
+            message: format!("invoke_entrypoint targets unknown function `{target_name}`"),
+        });
+    };
+    if !function_is_runtime_entrypoint(&modifiers) {
+        return Err(SemanticError {
+            message: format!(
+                "invoke_entrypoint may only target public/view/hajimari/kaizen entrypoints, got `{target_name}`"
+            ),
+        });
+    }
+
+    let ret_ty = FUNCTION_RETURNS
+        .with(|env| env.borrow().get(&target_name).cloned())
+        .unwrap_or(Type::Unit);
+
+    Ok(TypedExpr {
+        expr: ExprKind::Call {
+            name: format!("__invoke_entrypoint__{target_name}"),
+            args: vec![payload],
+        },
+        ty: ret_ty,
+    })
+}
+
+fn runtime_entrypoint_return_type(target_name: &str) -> Result<Type, SemanticError> {
+    let Some(modifiers) = FUNCTION_MODIFIERS.with(|env| env.borrow().get(target_name).cloned())
+    else {
+        return Err(SemanticError {
+            message: format!("unknown runtime entrypoint `{target_name}`"),
+        });
+    };
+    if !function_is_runtime_entrypoint(&modifiers) {
+        return Err(SemanticError {
+            message: format!(
+                "runtime test helpers may only target public/view/hajimari/kaizen entrypoints, got `{target_name}`"
+            ),
+        });
+    }
+    Ok(FUNCTION_RETURNS
+        .with(|env| env.borrow().get(target_name).cloned())
+        .unwrap_or(Type::Unit))
+}
+
+fn analyze_invoke_entrypoint_as_call(
+    args: &[Expr],
+    vars: &mut HashMap<String, Type>,
+) -> Result<TypedExpr, SemanticError> {
+    if !current_function_is_test() {
+        return Err(SemanticError {
+            message: "`invoke_entrypoint_as` is only available inside #[test] Kotodama functions"
+                .into(),
+        });
+    }
+    if args.len() != 3 {
+        return Err(SemanticError {
+            message: "invoke_entrypoint_as expects (string|Name literal actor, string|Name literal entrypoint, Json)".into(),
+        });
+    }
+    let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        message: "invoke_entrypoint_as requires a literal actor alias such as \"issuer\" or name(\"issuer\")".into(),
+    })?;
+    let target_name = invoke_entrypoint_literal(&args[1]).ok_or_else(|| SemanticError {
+        message: "invoke_entrypoint_as requires a literal entrypoint name such as \"run\" or name(\"run\")".into(),
+    })?;
+    let payload = analyze_expr(&args[2], vars)?;
+    if payload.ty != Type::Json {
+        return Err(SemanticError {
+            message: "invoke_entrypoint_as expects a Json payload as its third argument".into(),
+        });
+    }
+    let ret_ty = runtime_entrypoint_return_type(&target_name)?;
+    if matches!(ret_ty, Type::Tuple(_)) {
+        return Err(SemanticError {
+            message: format!(
+                "invoke_entrypoint_as does not yet support tuple-returning entrypoints (`{target_name}`)"
+            ),
+        });
+    }
+
+    Ok(TypedExpr {
+        expr: ExprKind::Call {
+            name: "invoke_entrypoint_as".to_string(),
+            args: vec![
+                typed_string_literal(actor),
+                typed_string_literal(target_name),
+                payload,
+            ],
+        },
+        ty: ret_ty,
+    })
+}
+
+fn analyze_expect_reject_as_call(
+    args: &[Expr],
+    vars: &mut HashMap<String, Type>,
+) -> Result<TypedExpr, SemanticError> {
+    if !current_function_is_test() {
+        return Err(SemanticError {
+            message: "`expect_reject_as` is only available inside #[test] Kotodama functions"
+                .into(),
+        });
+    }
+    if args.len() != 3 {
+        return Err(SemanticError {
+            message: "expect_reject_as expects (string|Name literal actor, string|Name literal entrypoint, Json)".into(),
+        });
+    }
+    let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        message:
+            "expect_reject_as requires a literal actor alias such as \"issuer\" or name(\"issuer\")"
+                .into(),
+    })?;
+    let target_name = invoke_entrypoint_literal(&args[1]).ok_or_else(|| SemanticError {
+        message:
+            "expect_reject_as requires a literal entrypoint name such as \"run\" or name(\"run\")"
+                .into(),
+    })?;
+    let payload = analyze_expr(&args[2], vars)?;
+    if payload.ty != Type::Json {
+        return Err(SemanticError {
+            message: "expect_reject_as expects a Json payload as its third argument".into(),
+        });
+    }
+    let _ = runtime_entrypoint_return_type(&target_name)?;
+
+    Ok(TypedExpr {
+        expr: ExprKind::Call {
+            name: "expect_reject_as".to_string(),
+            args: vec![
+                typed_string_literal(actor),
+                typed_string_literal(target_name),
+                payload,
+            ],
+        },
+        ty: Type::Unit,
+    })
+}
+
+fn analyze_actor_account_call(args: &[Expr]) -> Result<TypedExpr, SemanticError> {
+    if !current_function_is_test() {
+        return Err(SemanticError {
+            message: "`actor_account` is only available inside #[test] Kotodama functions".into(),
+        });
+    }
+    if args.len() != 1 {
+        return Err(SemanticError {
+            message: "actor_account expects (string|Name literal actor)".into(),
+        });
+    }
+    let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        message:
+            "actor_account requires a literal actor alias such as \"issuer\" or name(\"issuer\")"
+                .into(),
+    })?;
+    Ok(TypedExpr {
+        expr: ExprKind::Call {
+            name: "actor_account".to_string(),
+            args: vec![typed_string_literal(actor)],
+        },
+        ty: Type::AccountId,
+    })
+}
+
+fn analyze_actor_public_key_call(args: &[Expr]) -> Result<TypedExpr, SemanticError> {
+    if !current_function_is_test() {
+        return Err(SemanticError {
+            message: "`actor_public_key` is only available inside #[test] Kotodama functions"
+                .into(),
+        });
+    }
+    if args.len() != 1 {
+        return Err(SemanticError {
+            message: "actor_public_key expects (string|Name literal actor)".into(),
+        });
+    }
+    let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        message:
+            "actor_public_key requires a literal actor alias such as \"issuer\" or name(\"issuer\")"
+                .into(),
+    })?;
+    Ok(TypedExpr {
+        expr: ExprKind::Call {
+            name: "actor_public_key".to_string(),
+            args: vec![typed_string_literal(actor)],
+        },
+        ty: Type::Bytes,
+    })
+}
+
+fn analyze_actor_sign_call(
+    args: &[Expr],
+    vars: &mut HashMap<String, Type>,
+) -> Result<TypedExpr, SemanticError> {
+    if !current_function_is_test() {
+        return Err(SemanticError {
+            message: "`actor_sign` is only available inside #[test] Kotodama functions".into(),
+        });
+    }
+    if args.len() != 2 {
+        return Err(SemanticError {
+            message: "actor_sign expects (string|Name literal actor, Blob|bytes)".into(),
+        });
+    }
+    let actor = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
+        message: "actor_sign requires a literal actor alias such as \"issuer\" or name(\"issuer\")"
+            .into(),
+    })?;
+    let message = analyze_expr(&args[1], vars)?;
+    if !is_blob_like(&message.ty) {
+        return Err(SemanticError {
+            message: "actor_sign expects the message as Blob|bytes".into(),
+        });
+    }
+    Ok(TypedExpr {
+        expr: ExprKind::Call {
+            name: "actor_sign".to_string(),
+            args: vec![typed_string_literal(actor), message],
+        },
+        ty: Type::Bytes,
     })
 }
 
@@ -1097,9 +2277,7 @@ fn analyze_statement(
             let expected = vars.get(name).cloned().ok_or_else(|| SemanticError {
                 message: format!("undefined variable {name}"),
             })?;
-            if is_state_identifier(name)
-                && matches!(resolve_struct_type(&expected), Type::Map(_, _))
-            {
+            if is_state_binding(name) && matches!(resolve_struct_type(&expected), Type::Map(_, _)) {
                 return Err(SemanticError {
                     message:
                         "E_STATE_MAP_ALIAS: state maps cannot be reassigned; use map indexing."
@@ -1200,7 +2378,7 @@ fn analyze_statement(
                     let expected = vars.get(name).cloned().ok_or_else(|| SemanticError {
                         message: format!("undefined variable {name}"),
                     })?;
-                    if is_state_identifier(name)
+                    if is_state_binding(name)
                         && matches!(resolve_struct_type(&expected), Type::Map(_, _))
                     {
                         return Err(SemanticError {
@@ -1786,6 +2964,422 @@ fn analyze_statement(
     }
 }
 
+fn analyze_surface_builtin_call(
+    builtin: Builtin,
+    mut arg_typed: Vec<TypedExpr>,
+) -> Result<TypedExpr, SemanticError> {
+    match builtin {
+        Builtin::GetOrDefault => {
+            if arg_typed.len() != 3 {
+                return Err(SemanticError {
+                    message: "get_or_default expects (Map<K,V>, K, V)".into(),
+                });
+            }
+            let (key_ty, value_ty) = match &arg_typed[0].ty {
+                Type::Map(k, v) => (k.as_ref().clone(), v.as_ref().clone()),
+                other => {
+                    return Err(SemanticError {
+                        message: format!(
+                            "get_or_default expects Map<K,V> as first arg, got {}",
+                            type_name(other)
+                        ),
+                    });
+                }
+            };
+            ensure_assignable_and_coerce(&key_ty, &mut arg_typed[1])?;
+            ensure_assignable_and_coerce(&value_ty, &mut arg_typed[2])?;
+            ensure_in_memory_map_word_types(&arg_typed[0])?;
+            let value_ty = match resolve_struct_type(&arg_typed[0].ty) {
+                Type::Map(_, v) => *v,
+                _ => Type::Int,
+            };
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: resolve_struct_type(&value_ty),
+            })
+        }
+        Builtin::Contains => {
+            if arg_typed.len() != 2 {
+                return Err(SemanticError {
+                    message: "contains expects (Map<K,V>, K)".into(),
+                });
+            }
+            match &arg_typed[0].ty {
+                Type::Map(k, _v) => {
+                    ensure_assignable_and_coerce(&k.clone(), &mut arg_typed[1])?;
+                    ensure_in_memory_map_word_types(&arg_typed[0])?;
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: builtin.name().to_string(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bool,
+                    })
+                }
+                other => Err(SemanticError {
+                    message: format!(
+                        "contains expects Map<K,V> as first arg, got {}",
+                        type_name(other)
+                    ),
+                }),
+            }
+        }
+        Builtin::GetOr => {
+            let original_len = arg_typed.len();
+            if original_len != 2 && original_len != 3 {
+                return Err(SemanticError {
+                    message: "get_or expects (Map<K,V>, K[, V])".into(),
+                });
+            }
+            let mut call_args = arg_typed;
+            let map_ty = resolve_struct_type(&call_args[0].ty);
+            let (map_key_ty, map_value_ty) = match map_ty {
+                Type::Map(k, v) => (*k, *v),
+                other => {
+                    return Err(SemanticError {
+                        message: format!(
+                            "get_or expects Map<K,V> as first arg, got {}",
+                            type_name(&other)
+                        ),
+                    });
+                }
+            };
+            let resolved_key_ty = resolve_struct_type(&map_key_ty);
+            let resolved_value_ty = resolve_struct_type(&map_value_ty);
+            ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
+            ensure_in_memory_map_word_types(&call_args[0])?;
+
+            if original_len == 2 {
+                match resolve_struct_type(&resolved_value_ty) {
+                    Type::Int => {
+                        call_args.push(TypedExpr {
+                            expr: ExprKind::Number(0),
+                            ty: Type::Int,
+                        });
+                    }
+                    other => {
+                        if is_pointer_type(&other) {
+                            return Err(SemanticError {
+                                message: format!(
+                                    "get_or requires an explicit default for pointer-valued maps (value type {})",
+                                    type_name(&other)
+                                ),
+                            });
+                        }
+                        return Err(SemanticError {
+                            message: format!(
+                                "get_or auto-default is only available for Map<*,int>; provide an explicit default for value type {}",
+                                type_name(&other)
+                            ),
+                        });
+                    }
+                }
+            } else {
+                ensure_assignable_and_coerce(&resolved_value_ty, &mut call_args[2])?;
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: call_args,
+                },
+                ty: resolved_value_ty,
+            })
+        }
+        Builtin::Ensure => {
+            let in_view = CURRENT_FUNCTION_MODIFIERS.with(|mods| {
+                mods.borrow()
+                    .as_ref()
+                    .is_some_and(|modifiers| modifiers.kind == FunctionKind::View)
+            });
+            if in_view {
+                return Err(SemanticError {
+                    message: "view entrypoints cannot use mutating map helper `ensure`; use `get_or` instead".into(),
+                });
+            }
+            let original_len = arg_typed.len();
+            if original_len != 2 && original_len != 3 {
+                return Err(SemanticError {
+                    message: "ensure expects (Map<K,V>, K[, V])".into(),
+                });
+            }
+            let mut call_args = arg_typed;
+            let map_ty = resolve_struct_type(&call_args[0].ty);
+            let (map_key_ty, map_value_ty) = match map_ty {
+                Type::Map(k, v) => (*k, *v),
+                other => {
+                    return Err(SemanticError {
+                        message: format!(
+                            "ensure expects Map<K,V> as first arg, got {}",
+                            type_name(&other)
+                        ),
+                    });
+                }
+            };
+            let resolved_key_ty = resolve_struct_type(&map_key_ty);
+            let resolved_value_ty = resolve_struct_type(&map_value_ty);
+            ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
+            ensure_in_memory_map_word_types(&call_args[0])?;
+
+            if original_len == 2 {
+                match resolve_struct_type(&resolved_value_ty) {
+                    Type::Int => {
+                        call_args.push(TypedExpr {
+                            expr: ExprKind::Number(0),
+                            ty: Type::Int,
+                        });
+                    }
+                    other => {
+                        if is_pointer_type(&other) {
+                            return Err(SemanticError {
+                                message: format!(
+                                    "ensure requires an explicit default for pointer-valued maps (value type {})",
+                                    type_name(&other)
+                                ),
+                            });
+                        }
+                        return Err(SemanticError {
+                            message: format!(
+                                "ensure auto-default is only available for Map<*,int>; provide an explicit default for value type {}",
+                                type_name(&other)
+                            ),
+                        });
+                    }
+                }
+            } else {
+                ensure_assignable_and_coerce(&resolved_value_ty, &mut call_args[2])?;
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: call_args,
+                },
+                ty: resolved_value_ty,
+            })
+        }
+        Builtin::KeysTake2 | Builtin::ValuesTake2 => {
+            let name = builtin.name();
+            if arg_typed.len() != 3 {
+                return Err(SemanticError {
+                    message: format!("{name} expects (Map<int,int>, int start, int which)"),
+                });
+            }
+            match &arg_typed[0].ty {
+                Type::Map(k, v)
+                    if matches!(resolve_struct_type(k), Type::Int)
+                        && matches!(resolve_struct_type(v), Type::Int) => {}
+                other => {
+                    return Err(SemanticError {
+                        message: format!(
+                            "{name} expects Map<int,int> as first arg, got {}",
+                            type_name(other)
+                        ),
+                    });
+                }
+            }
+            if !matches!(resolve_struct_type(&arg_typed[1].ty), Type::Int)
+                || !matches!(resolve_struct_type(&arg_typed[2].ty), Type::Int)
+            {
+                return Err(SemanticError {
+                    message: format!("{name} expects (Map<int,int>, int, int)"),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::KeysValuesTake2 => {
+            if arg_typed.len() != 3 {
+                return Err(SemanticError {
+                    message: "keys_values_take2 expects (Map<int,int>, int, int)".into(),
+                });
+            }
+            match &arg_typed[0].ty {
+                Type::Map(k, v)
+                    if matches!(resolve_struct_type(k), Type::Int)
+                        && matches!(resolve_struct_type(v), Type::Int) => {}
+                other => {
+                    return Err(SemanticError {
+                        message: format!(
+                            "keys_values_take2 expects Map<int,int> as first arg, got {}",
+                            type_name(other)
+                        ),
+                    });
+                }
+            }
+            if !matches!(resolve_struct_type(&arg_typed[1].ty), Type::Int)
+                || !matches!(resolve_struct_type(&arg_typed[2].ty), Type::Int)
+            {
+                return Err(SemanticError {
+                    message: "keys_values_take2 expects (Map<int,int>, int, int)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Tuple(vec![Type::Int, Type::Int]),
+            })
+        }
+        Builtin::StateGet => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "state_get expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::StateSet => {
+            if arg_typed.len() != 2
+                || !(arg_typed[0].ty == Type::Name && is_blob_like(&arg_typed[1].ty))
+            {
+                return Err(SemanticError {
+                    message: "state_set expects (Name, Blob|bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::StateDel => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "state_del expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::Path => {
+            if arg_typed.len() != 2 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "path expects (Name, int|Blob|bytes)".into(),
+                });
+            }
+            if !(is_int_like(&arg_typed[1].ty) || is_blob_like(&arg_typed[1].ty)) {
+                return Err(SemanticError {
+                    message: "path expects (Name, int|Blob|bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Name,
+            })
+        }
+        Builtin::JsonObject => {
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: "json_object expects no arguments".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::JsonSetInt => {
+            if arg_typed.len() != 3
+                || arg_typed[0].ty != Type::Json
+                || arg_typed[1].ty != Type::Name
+                || !is_int_like(&arg_typed[2].ty)
+            {
+                return Err(SemanticError {
+                    message: "json_set_int expects (Json, Name, int)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::JsonSetAccountId => {
+            if arg_typed.len() != 3
+                || arg_typed[0].ty != Type::Json
+                || arg_typed[1].ty != Type::Name
+                || arg_typed[2].ty != Type::AccountId
+            {
+                return Err(SemanticError {
+                    message: "json_set_account_id expects (Json, Name, AccountId)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::GetInt
+        | Builtin::GetNumeric
+        | Builtin::GetJson
+        | Builtin::GetName
+        | Builtin::GetAccountId
+        | Builtin::GetAssetDefinitionId
+        | Builtin::GetNftId
+        | Builtin::GetBlobHex => {
+            reject_public_payload_helper(builtin.name())?;
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::Json
+                || arg_typed[1].ty != Type::Name
+            {
+                return Err(SemanticError {
+                    message: format!("{} expects (Json, Name)", builtin.name()),
+                });
+            }
+            let ty = match builtin {
+                Builtin::GetInt => Type::Int,
+                Builtin::GetNumeric => Type::Amount,
+                Builtin::GetJson => Type::Json,
+                Builtin::GetName => Type::Name,
+                Builtin::GetAccountId => Type::AccountId,
+                Builtin::GetAssetDefinitionId => Type::AssetDefinitionId,
+                Builtin::GetNftId => Type::NftId,
+                Builtin::GetBlobHex => Type::Bytes,
+                _ => unreachable!(),
+            };
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty,
+            })
+        }
+    }
+}
+
 fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedExpr, SemanticError> {
     match expr {
         Expr::Conditional {
@@ -1861,12 +3455,17 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
             ty: Type::Bytes,
         }),
         Expr::Ident(name) => {
-            let ty = vars.get(name).cloned().ok_or_else(|| SemanticError {
+            if let Some(ty) = vars.get(name).cloned() {
+                return Ok(TypedExpr {
+                    expr: ExprKind::Ident(name.clone()),
+                    ty,
+                });
+            }
+            if let Some(value) = CONST_ENV.with(|env| env.borrow().get(name).cloned()) {
+                return Ok(value);
+            }
+            Err(SemanticError {
                 message: format!("undefined variable {name}"),
-            })?;
-            Ok(TypedExpr {
-                expr: ExprKind::Ident(name.clone()),
-                ty,
             })
         }
         Expr::Unary { op, expr: inner } => {
@@ -2212,6 +3811,83 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             ty: Type::Unit,
                         })
                     }
+                    "escrow_open_offer" => {
+                        if !(arg_typed.len() == 3 || arg_typed.len() == 4)
+                            || !(arg_typed[0].ty == Type::Name
+                                && arg_typed[1].ty == Type::AssetDefinitionId
+                                && is_int_like(&arg_typed[2].ty))
+                            || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
+                        {
+                            return Err(SemanticError {
+                                message:
+                                    "escrow_open_offer expects (Name, AssetDefinitionId, numeric[, Blob|bytes evidence_hashes])"
+                                        .into(),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
+                    "escrow_accept"
+                    | "escrow_mark_payment_sent"
+                    | "escrow_release"
+                    | "escrow_cancel" => {
+                        if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                            return Err(SemanticError {
+                                message: format!("{callee} expects (Name)"),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
+                    "escrow_open_dispute" => {
+                        if !(arg_typed.len() == 1 || arg_typed.len() == 2)
+                            || arg_typed[0].ty != Type::Name
+                            || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
+                        {
+                            return Err(SemanticError {
+                                message:
+                                    "escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])"
+                                        .into(),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
+                    "escrow_resolve_dispute" => {
+                        if !(arg_typed.len() == 3 || arg_typed.len() == 4)
+                            || !(arg_typed[0].ty == Type::Name
+                                && is_int_like(&arg_typed[1].ty)
+                                && is_int_like(&arg_typed[2].ty))
+                            || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
+                        {
+                            return Err(SemanticError {
+                                message: "escrow_resolve_dispute expects (Name, numeric, numeric[, Blob|bytes evidence_hashes])"
+                                    .into(),
+                            });
+                        }
+                        Ok(TypedExpr {
+                            expr: ExprKind::Call {
+                                name: callee,
+                                args: arg_typed,
+                            },
+                            ty: Type::Unit,
+                        })
+                    }
                     "transfer_v1_batch_begin" | "transfer_v1_batch_end" => {
                         if !arg_typed.is_empty() {
                             return Err(SemanticError {
@@ -2261,6 +3937,25 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 };
             }
 
+            if name == "invoke_entrypoint" {
+                return analyze_invoke_entrypoint_call(args, vars);
+            }
+            if name == "invoke_entrypoint_as" {
+                return analyze_invoke_entrypoint_as_call(args, vars);
+            }
+            if name == "expect_reject_as" {
+                return analyze_expect_reject_as_call(args, vars);
+            }
+            if name == "actor_account" {
+                return analyze_actor_account_call(args);
+            }
+            if name == "actor_public_key" {
+                return analyze_actor_public_key_call(args);
+            }
+            if name == "actor_sign" {
+                return analyze_actor_sign_call(args, vars);
+            }
+
             // Struct constructor call: `StructName(arg1, arg2, ...)`
             if let Some(fields) = STRUCT_ENV.with(|env| env.borrow().get(&name).cloned()) {
                 let mut arg_typed = Vec::new();
@@ -2293,6 +3988,9 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
             let mut arg_typed = Vec::new();
             for a in args {
                 arg_typed.push(analyze_expr(a, vars)?);
+            }
+            if let Some(builtin) = Builtin::from_name(&name) {
+                return analyze_surface_builtin_call(builtin, arg_typed);
             }
             match name.as_str() {
                 // get_or_default(Map<int,int>, int, int) -> int (utility)
@@ -2328,33 +4026,6 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: resolve_struct_type(&value_ty),
                     })
                 }
-                // has(Map<K,V>, K) -> bool (alias to contains)
-                "has" => {
-                    if arg_typed.len() != 2 {
-                        return Err(SemanticError {
-                            message: "has expects (Map<K,V>, K)".into(),
-                        });
-                    }
-                    match &arg_typed[0].ty {
-                        Type::Map(k, _v) => {
-                            ensure_assignable_and_coerce(&k.clone(), &mut arg_typed[1])?;
-                            ensure_in_memory_map_word_types(&arg_typed[0])?;
-                            Ok(TypedExpr {
-                                expr: ExprKind::Call {
-                                    name: name.clone(),
-                                    args: arg_typed,
-                                },
-                                ty: Type::Bool,
-                            })
-                        }
-                        other => Err(SemanticError {
-                            message: format!(
-                                "has expects Map<K,V> as first arg, got {}",
-                                type_name(other)
-                            ),
-                        }),
-                    }
-                }
                 // Map contains helper: contains(Map<K,V>, K) -> bool
                 "contains" => {
                     if arg_typed.len() != 2 {
@@ -2382,14 +4053,13 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         }),
                     }
                 }
-                // get_or_insert_default(Map<int,int>, int) -> int
-                // Deterministic lowering: durable path uses STATE_GET/SET with Norito-encoded 0 when missing;
-                // ephemeral path compares and inserts 0 on mismatch.
-                "get_or_insert_default" => {
+                // get_or(Map<int,int>, int) -> int
+                // Deterministic lowering returns the existing value or the supplied default without mutating the map.
+                "get_or" => {
                     let original_len = arg_typed.len();
                     if original_len != 2 && original_len != 3 {
                         return Err(SemanticError {
-                            message: "get_or_insert_default expects (Map<K,V>, K[, V])".into(),
+                            message: "get_or expects (Map<K,V>, K[, V])".into(),
                         });
                     }
                     let mut call_args = arg_typed;
@@ -2399,7 +4069,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         other => {
                             return Err(SemanticError {
                                 message: format!(
-                                    "get_or_insert_default expects Map<K,V> as first arg, got {}",
+                                    "get_or expects Map<K,V> as first arg, got {}",
                                     type_name(&other)
                                 ),
                             });
@@ -2422,14 +4092,14 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                                 if is_pointer_type(&other) {
                                     return Err(SemanticError {
                                         message: format!(
-                                            "get_or_insert_default requires an explicit default for pointer-valued maps (value type {})",
+                                            "get_or requires an explicit default for pointer-valued maps (value type {})",
                                             type_name(&other)
                                         ),
                                     });
                                 }
                                 return Err(SemanticError {
                                     message: format!(
-                                        "get_or_insert_default auto-default is only available for Map<*,int>; provide an explicit default for value type {}",
+                                        "get_or auto-default is only available for Map<*,int>; provide an explicit default for value type {}",
                                         type_name(&other)
                                     ),
                                 });
@@ -2441,6 +4111,80 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
                             name: name.clone(),
+                            args: call_args,
+                        },
+                        ty: resolved_value_ty,
+                    })
+                }
+                // ensure(Map<int,int>, int) -> int
+                // Deterministic lowering: durable path uses STATE_GET/SET with Norito-encoded 0 when missing;
+                // ephemeral path compares and inserts 0 on mismatch.
+                "ensure" => {
+                    let in_view = CURRENT_FUNCTION_MODIFIERS.with(|mods| {
+                        mods.borrow()
+                            .as_ref()
+                            .is_some_and(|modifiers| modifiers.kind == FunctionKind::View)
+                    });
+                    if in_view {
+                        return Err(SemanticError {
+                            message: "view entrypoints cannot use mutating map helper `ensure`; use `get_or` instead".into(),
+                        });
+                    }
+                    let original_len = arg_typed.len();
+                    if original_len != 2 && original_len != 3 {
+                        return Err(SemanticError {
+                            message: "ensure expects (Map<K,V>, K[, V])".into(),
+                        });
+                    }
+                    let mut call_args = arg_typed;
+                    let map_ty = resolve_struct_type(&call_args[0].ty);
+                    let (map_key_ty, map_value_ty) = match map_ty {
+                        Type::Map(k, v) => (*k, *v),
+                        other => {
+                            return Err(SemanticError {
+                                message: format!(
+                                    "ensure expects Map<K,V> as first arg, got {}",
+                                    type_name(&other)
+                                ),
+                            });
+                        }
+                    };
+                    let resolved_key_ty = resolve_struct_type(&map_key_ty);
+                    let resolved_value_ty = resolve_struct_type(&map_value_ty);
+                    ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
+                    ensure_in_memory_map_word_types(&call_args[0])?;
+
+                    if original_len == 2 {
+                        match resolve_struct_type(&resolved_value_ty) {
+                            Type::Int => {
+                                call_args.push(TypedExpr {
+                                    expr: ExprKind::Number(0),
+                                    ty: Type::Int,
+                                });
+                            }
+                            other => {
+                                if is_pointer_type(&other) {
+                                    return Err(SemanticError {
+                                        message: format!(
+                                            "ensure requires an explicit default for pointer-valued maps (value type {})",
+                                            type_name(&other)
+                                        ),
+                                    });
+                                }
+                                return Err(SemanticError {
+                                    message: format!(
+                                        "ensure auto-default is only available for Map<*,int>; provide an explicit default for value type {}",
+                                        type_name(&other)
+                                    ),
+                                });
+                            }
+                        }
+                    } else {
+                        ensure_assignable_and_coerce(&resolved_value_ty, &mut call_args[2])?;
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: "ensure".to_string(),
                             args: call_args,
                         },
                         ty: resolved_value_ty,
@@ -2564,33 +4308,20 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Unit,
                     })
                 }
-                "path_map_key" => {
-                    if arg_typed.len() != 2
-                        || !(arg_typed[0].ty == Type::Name && is_int_like(&arg_typed[1].ty))
-                    {
+                "path" => {
+                    if arg_typed.len() != 2 || arg_typed[0].ty != Type::Name {
                         return Err(SemanticError {
-                            message: "path_map_key expects (Name, int)".into(),
+                            message: "path expects (Name, int|Blob|bytes)".into(),
+                        });
+                    }
+                    if !(is_int_like(&arg_typed[1].ty) || is_blob_like(&arg_typed[1].ty)) {
+                        return Err(SemanticError {
+                            message: "path expects (Name, int|Blob|bytes)".into(),
                         });
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: name.clone(),
-                            args: arg_typed,
-                        },
-                        ty: Type::Name,
-                    })
-                }
-                "path_map_key_norito" => {
-                    if arg_typed.len() != 2
-                        || !(arg_typed[0].ty == Type::Name && is_blob_like(&arg_typed[1].ty))
-                    {
-                        return Err(SemanticError {
-                            message: "path_map_key_norito expects (Name, Blob|bytes)".into(),
-                        });
-                    }
-                    Ok(TypedExpr {
-                        expr: ExprKind::Call {
-                            name: name.clone(),
+                            name: "path".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::Name,
@@ -2745,8 +4476,58 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::AccountId,
                     })
                 }
+                "current_time_ms" => {
+                    if !arg_typed.is_empty() {
+                        return Err(SemanticError {
+                            message: "current_time_ms expects no arguments".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: vec![],
+                        },
+                        ty: Type::Int,
+                    })
+                }
+                "resolve_account_alias" => {
+                    if arg_typed.len() != 1
+                        || !(arg_typed[0].ty == Type::String || is_blob_like(&arg_typed[0].ty))
+                    {
+                        return Err(SemanticError {
+                            message: "resolve_account_alias expects (String|Blob)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::AccountId,
+                    })
+                }
+                "call_contract" => {
+                    if arg_typed.len() != 3
+                        || !(arg_typed[0].ty == Type::String || is_blob_like(&arg_typed[0].ty))
+                        || !(arg_typed[1].ty == Type::String || is_blob_like(&arg_typed[1].ty))
+                        || arg_typed[2].ty != Type::Json
+                    {
+                        return Err(SemanticError {
+                            message: "call_contract expects (String|Blob, String|Blob, Json)"
+                                .into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bytes,
+                    })
+                }
                 // Current trigger event payload as Json (data/by-call triggers).
                 "trigger_event" => {
+                    reject_public_payload_helper(name.as_str())?;
                     if !arg_typed.is_empty() {
                         return Err(SemanticError {
                             message: "trigger_event expects no arguments".into(),
@@ -3171,103 +4952,145 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Int,
                     })
                 }
-                "json_get_int" => {
+                "get_int" => {
+                    reject_public_payload_helper("get_int")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
                     {
                         return Err(SemanticError {
-                            message: "json_get_int expects (Json, Name)".into(),
+                            message: "get_int expects (Json, Name)".into(),
                         });
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: name.clone(),
+                            name: "get_int".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::Int,
                     })
                 }
-                "json_get_json" => {
+                "get_numeric" => {
+                    reject_public_payload_helper("get_numeric")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
                     {
                         return Err(SemanticError {
-                            message: "json_get_json expects (Json, Name)".into(),
+                            message: "get_numeric expects (Json, Name)".into(),
                         });
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: name.clone(),
+                            name: "get_numeric".to_string(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Amount,
+                    })
+                }
+                "get_json" => {
+                    reject_public_payload_helper("get_json")?;
+                    if arg_typed.len() != 2
+                        || arg_typed[0].ty != Type::Json
+                        || arg_typed[1].ty != Type::Name
+                    {
+                        return Err(SemanticError {
+                            message: "get_json expects (Json, Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: "get_json".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::Json,
                     })
                 }
-                "json_get_name" => {
+                "get_name" => {
+                    reject_public_payload_helper("get_name")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
                     {
                         return Err(SemanticError {
-                            message: "json_get_name expects (Json, Name)".into(),
+                            message: "get_name expects (Json, Name)".into(),
                         });
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: name.clone(),
+                            name: "get_name".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::Name,
                     })
                 }
-                "json_get_account_id" => {
+                "get_account_id" => {
+                    reject_public_payload_helper("get_account_id")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
                     {
                         return Err(SemanticError {
-                            message: "json_get_account_id expects (Json, Name)".into(),
+                            message: "get_account_id expects (Json, Name)".into(),
                         });
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: name.clone(),
+                            name: "get_account_id".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::AccountId,
                     })
                 }
-                "json_get_nft_id" => {
+                "get_asset_definition_id" => {
+                    reject_public_payload_helper("get_asset_definition_id")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
                     {
                         return Err(SemanticError {
-                            message: "json_get_nft_id expects (Json, Name)".into(),
+                            message: "get_asset_definition_id expects (Json, Name)".into(),
                         });
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: name.clone(),
+                            name: "get_asset_definition_id".to_string(),
+                            args: arg_typed,
+                        },
+                        ty: Type::AssetDefinitionId,
+                    })
+                }
+                "get_nft_id" => {
+                    reject_public_payload_helper("get_nft_id")?;
+                    if arg_typed.len() != 2
+                        || arg_typed[0].ty != Type::Json
+                        || arg_typed[1].ty != Type::Name
+                    {
+                        return Err(SemanticError {
+                            message: "get_nft_id expects (Json, Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: "get_nft_id".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::NftId,
                     })
                 }
-                "json_get_blob_hex" => {
+                "get_blob_hex" => {
+                    reject_public_payload_helper("get_blob_hex")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
                     {
                         return Err(SemanticError {
-                            message: "json_get_blob_hex expects (Json, Name)".into(),
+                            message: "get_blob_hex expects (Json, Name)".into(),
                         });
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: name.clone(),
+                            name: "get_blob_hex".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::Bytes,
@@ -3685,6 +5508,82 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Unit,
                     })
                 }
+                "escrow_open_offer" => {
+                    if !(arg_typed.len() == 3 || arg_typed.len() == 4)
+                        || !(arg_typed[0].ty == Type::Name
+                            && arg_typed[1].ty == Type::AssetDefinitionId
+                            && is_int_like(&arg_typed[2].ty))
+                        || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
+                    {
+                        return Err(SemanticError {
+                            message: "escrow_open_offer expects (Name, AssetDefinitionId, numeric[, Blob|bytes evidence_hashes])"
+                                .into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
+                "escrow_accept"
+                | "escrow_mark_payment_sent"
+                | "escrow_release"
+                | "escrow_cancel" => {
+                    if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                        return Err(SemanticError {
+                            message: format!("{name} expects (Name)"),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
+                "escrow_open_dispute" => {
+                    if !(arg_typed.len() == 1 || arg_typed.len() == 2)
+                        || arg_typed[0].ty != Type::Name
+                        || (arg_typed.len() == 2 && !is_blob_like(&arg_typed[1].ty))
+                    {
+                        return Err(SemanticError {
+                            message:
+                                "escrow_open_dispute expects (Name[, Blob|bytes evidence_hashes])"
+                                    .into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
+                "escrow_resolve_dispute" => {
+                    if !(arg_typed.len() == 3 || arg_typed.len() == 4)
+                        || !(arg_typed[0].ty == Type::Name
+                            && is_int_like(&arg_typed[1].ty)
+                            && is_int_like(&arg_typed[2].ty))
+                        || (arg_typed.len() == 4 && !is_blob_like(&arg_typed[3].ty))
+                    {
+                        return Err(SemanticError {
+                            message: "escrow_resolve_dispute expects (Name, numeric, numeric[, Blob|bytes evidence_hashes])"
+                                .into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Unit,
+                    })
+                }
                 "transfer_v1_batch_begin" | "transfer_v1_batch_end" => {
                     if !arg_typed.is_empty() {
                         return Err(SemanticError {
@@ -3776,13 +5675,14 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 "register_asset" => {
                     if arg_typed.len() != 4
-                        || arg_typed[0].ty != Type::String
+                        || arg_typed[0].ty != Type::AssetDefinitionId
                         || arg_typed[1].ty != Type::String
                         || !is_int_like(&arg_typed[2].ty)
                         || !is_int_like(&arg_typed[3].ty)
                     {
                         return Err(SemanticError {
-                            message: "register_asset expects string, string, int, int".into(),
+                            message: "register_asset expects (AssetDefinitionId, string, int, int)"
+                                .into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -3795,15 +5695,16 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 "create_new_asset" => {
                     if arg_typed.len() != 5
-                        || arg_typed[0].ty != Type::String
+                        || arg_typed[0].ty != Type::AssetDefinitionId
                         || arg_typed[1].ty != Type::String
                         || !is_int_like(&arg_typed[2].ty)
-                        || !is_int_like(&arg_typed[3].ty)
+                        || arg_typed[3].ty != Type::AccountId
                         || !is_int_like(&arg_typed[4].ty)
                     {
                         return Err(SemanticError {
-                            message: "create_new_asset expects string, string, int, int, int"
-                                .into(),
+                            message:
+                                "create_new_asset expects (AssetDefinitionId, string, int, AccountId, int)"
+                                    .into(),
                         });
                     }
                     Ok(TypedExpr {
@@ -4066,10 +5967,43 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     })
                 }
                 _ => {
-                    if is_user_defined_function(&name) && arg_typed.iter().any(is_state_map_expr) {
+                    if let Some(signature) =
+                        FUNCTION_PARAMS.with(|env| env.borrow().get(&name).cloned())
+                    {
+                        if signature.len() != arg_typed.len() {
+                            return Err(SemanticError {
+                                message: format!(
+                                    "function `{name}` expects {} arguments, got {}",
+                                    signature.len(),
+                                    arg_typed.len()
+                                ),
+                            });
+                        }
+                        for (arg, param) in arg_typed.iter_mut().zip(signature.iter()) {
+                            if param.is_state {
+                                if !is_state_handle_expr(arg) {
+                                    return Err(SemanticError {
+                                        message: format!(
+                                            "state parameter `{}` requires a durable state handle argument",
+                                            param.name
+                                        ),
+                                    });
+                                }
+                            } else if is_state_map_expr(arg) {
+                                return Err(SemanticError {
+                                    message:
+                                        "E_STATE_MAP_ALIAS: state maps cannot be passed to user-defined functions unless the parameter is declared with `state`."
+                                            .into(),
+                                });
+                            }
+                            ensure_assignable_and_coerce(&param.ty, arg)?;
+                        }
+                    } else if is_user_defined_function(&name)
+                        && arg_typed.iter().any(is_state_map_expr)
+                    {
                         return Err(SemanticError {
                             message:
-                                "E_STATE_MAP_ALIAS: state maps cannot be passed to user-defined functions; use the state identifier directly."
+                                "E_STATE_MAP_ALIAS: state maps cannot be passed to user-defined functions unless the parameter is declared with `state`."
                                     .into(),
                         });
                     }
@@ -4094,11 +6028,108 @@ fn parse_declared_type(ty: &Option<TypeExpr>) -> Result<Option<Type>, SemanticEr
     convert_type_expr(t).map(Some)
 }
 
-fn parse_declared_param_type(ty: &Option<TypeExpr>, _name: &str) -> Result<Type, SemanticError> {
-    if let Some(t) = ty {
-        convert_type_expr(t)
+fn analyze_const_expr(
+    expr: &Expr,
+    consts: &IndexMap<String, TypedExpr>,
+) -> Result<TypedExpr, SemanticError> {
+    match expr {
+        Expr::Number(n) => Ok(TypedExpr {
+            expr: ExprKind::Number(*n),
+            ty: Type::Int,
+        }),
+        Expr::Decimal(raw) => Ok(TypedExpr {
+            expr: ExprKind::Decimal(raw.clone()),
+            ty: Type::FixedU128,
+        }),
+        Expr::Bool(value) => Ok(TypedExpr {
+            expr: ExprKind::Bool(*value),
+            ty: Type::Bool,
+        }),
+        Expr::String(value) => Ok(TypedExpr {
+            expr: ExprKind::String(value.clone()),
+            ty: Type::String,
+        }),
+        Expr::Bytes(value) => Ok(TypedExpr {
+            expr: ExprKind::Bytes(value.clone()),
+            ty: Type::Bytes,
+        }),
+        Expr::Ident(name) => consts.get(name).cloned().ok_or_else(|| SemanticError {
+            message: format!(
+                "const `{name}` is undefined or not yet declared; constants must be declared before use"
+            ),
+        }),
+        Expr::Unary {
+            op: UnaryOp::Neg,
+            expr: inner,
+        } => {
+            let inner = analyze_const_expr(inner, consts)?;
+            match inner.expr {
+                ExprKind::Number(value) => Ok(TypedExpr {
+                    expr: ExprKind::Number(-value),
+                    ty: Type::Int,
+                }),
+                _ => Err(SemanticError {
+                    message: "const unary '-' expects an integer literal or integer const".into(),
+                }),
+            }
+        }
+        _ => Err(SemanticError {
+            message:
+                "const initializers must be literal values or previously declared constants".into(),
+        }),
+    }
+}
+
+fn parse_declared_param_type(
+    param: &Param,
+    modifiers: &FunctionModifiers,
+) -> Result<TypedParam, SemanticError> {
+    let ty = if let Some(t) = &param.ty {
+        convert_type_expr(t)?
     } else {
-        Ok(Type::Int)
+        Type::Int
+    };
+    if param.is_state {
+        if modifiers.visibility != FunctionVisibility::Internal
+            || matches!(
+                modifiers.kind,
+                FunctionKind::View | FunctionKind::Hajimari | FunctionKind::Kaizen
+            )
+        {
+            return Err(SemanticError {
+                message: format!(
+                    "state parameter `{}` is only supported on internal helper functions",
+                    param.name
+                ),
+            });
+        }
+        if !is_supported_state_param_type(&ty) {
+            return Err(SemanticError {
+                message: format!(
+                    "state parameter `{}` currently supports durable scalar roots and Map<K, V> handles; aggregate state handles are not supported yet",
+                    param.name
+                ),
+            });
+        }
+    }
+    Ok(TypedParam {
+        name: param.name.clone(),
+        ty,
+        is_state: param.is_state,
+    })
+}
+
+fn is_supported_state_param_type(ty: &Type) -> bool {
+    match resolve_struct_type(ty) {
+        Type::Map(_, _)
+        | Type::Int
+        | Type::Bool
+        | Type::Json
+        | Type::Blob
+        | Type::Bytes
+        | Type::String => true,
+        ty if is_wide_numeric_type(&ty) || is_pointer_type(&ty) => true,
+        _ => false,
     }
 }
 
@@ -4249,7 +6280,7 @@ fn fresh_internal_name(vars: &HashMap<String, Type>, base: &str) -> String {
         } else {
             format!("__koto_{base}_{idx}")
         };
-        if !vars.contains_key(&name) && !is_state_identifier(&name) {
+        if !vars.contains_key(&name) && !is_state_binding(&name) {
             return name;
         }
         idx = idx.saturating_add(1);
@@ -4275,18 +6306,34 @@ fn bind_internal_temp(
 }
 
 pub(crate) fn resolve_struct_type(ty: &Type) -> Type {
-    if let Type::Opaque(name) = ty {
-        STRUCT_ENV.with(|env| {
+    match ty {
+        Type::Opaque(name) => STRUCT_ENV.with(|env| {
             env.borrow()
                 .get(name)
                 .map(|fields| Type::Struct {
                     name: name.clone(),
-                    fields: fields.clone(),
+                    fields: fields
+                        .iter()
+                        .map(|(field_name, field_ty)| {
+                            (field_name.clone(), resolve_struct_type(field_ty))
+                        })
+                        .collect(),
                 })
                 .unwrap_or_else(|| ty.clone())
-        })
-    } else {
-        ty.clone()
+        }),
+        Type::Map(key, value) => Type::Map(
+            Box::new(resolve_struct_type(key)),
+            Box::new(resolve_struct_type(value)),
+        ),
+        Type::Tuple(items) => Type::Tuple(items.iter().map(resolve_struct_type).collect()),
+        Type::Struct { name, fields } => Type::Struct {
+            name: name.clone(),
+            fields: fields
+                .iter()
+                .map(|(field_name, field_ty)| (field_name.clone(), resolve_struct_type(field_ty)))
+                .collect(),
+        },
+        _ => ty.clone(),
     }
 }
 
@@ -4297,15 +6344,6 @@ fn normalize_namespaced(name: &str) -> String {
     }
     if name == "std::map::new" || name == "std::Map::new" {
         return String::from("Map::new");
-    }
-    if name == "std::map::contains" {
-        return String::from("contains");
-    }
-    if name == "std::map::has" {
-        return String::from("has");
-    }
-    if name == "std::map::get_or_insert_default" {
-        return String::from("get_or_insert_default");
     }
     if name == "std::map::keys_take2" {
         return String::from("keys_take2");
@@ -4439,9 +6477,11 @@ pub struct TypedTrigger {
 pub struct TypedFunction {
     pub name: String,
     pub params: Vec<String>,
+    pub param_types: Vec<TypedParam>,
     pub body: TypedBlock,
     pub ret_ty: Option<Type>,
     pub modifiers: FunctionModifiers,
+    pub location: super::ast::SourceLocation,
 }
 
 /// Snapshot the state environment (name -> type) collected during the latest
@@ -4535,15 +6575,34 @@ fn block_mutates_map(block: &TypedBlock, map_name: &str) -> bool {
     block.statements.iter().any(|s| stmt_mutates(s, map_name))
 }
 
-fn block_contains_sensitive_syscall(block: &TypedBlock) -> bool {
+fn block_contains_host_side_effects(block: &TypedBlock) -> bool {
     block
         .statements
         .iter()
-        .any(statement_contains_sensitive_syscall)
+        .any(statement_contains_host_side_effects)
+}
+
+fn block_contains_instruction_emission(block: &TypedBlock) -> bool {
+    block
+        .statements
+        .iter()
+        .any(statement_contains_instruction_emission)
+}
+
+fn block_mutates_durable_state(block: &TypedBlock) -> bool {
+    block.statements.iter().any(statement_mutates_durable_state)
 }
 
 fn is_state_identifier(name: &str) -> bool {
     STATE_ENV.with(|env| env.borrow().contains_key(name))
+}
+
+fn is_state_param_name(name: &str) -> bool {
+    CURRENT_STATE_PARAM_NAMES.with(|env| env.borrow().contains(name))
+}
+
+fn is_state_binding(name: &str) -> bool {
+    is_state_identifier(name) || is_state_param_name(name)
 }
 
 fn canonical_state_hint(name: &str) -> String {
@@ -4552,13 +6611,13 @@ fn canonical_state_hint(name: &str) -> String {
 }
 
 fn mark_state_read(name: &str, reads: &mut IndexSet<String>) {
-    if is_state_identifier(name) {
+    if is_state_binding(name) {
         reads.insert(canonical_state_hint(name));
     }
 }
 
 fn mark_state_write(name: &str, writes: &mut IndexSet<String>) {
-    if is_state_identifier(name) {
+    if is_state_binding(name) {
         writes.insert(canonical_state_hint(name));
     }
 }
@@ -4805,7 +6864,7 @@ fn ensure_state_map_iter_supported(map_expr: &TypedExpr) -> Result<(), SemanticE
 }
 
 fn ensure_not_state_shadow(name: &str) -> Result<(), SemanticError> {
-    if is_state_identifier(name) {
+    if is_state_binding(name) {
         return Err(SemanticError {
             message: format!("E_STATE_SHADOWED: `{name}` shadows a state declaration"),
         });
@@ -4817,17 +6876,29 @@ fn is_state_map_expr(expr: &TypedExpr) -> bool {
     matches!(resolve_struct_type(&expr.ty), Type::Map(_, _)) && typed_map_expr_is_state(expr)
 }
 
-fn typed_map_expr_is_state(expr: &TypedExpr) -> bool {
+pub fn typed_state_handle_name(expr: &TypedExpr) -> Option<String> {
     match &expr.expr {
-        ExprKind::Ident(name) => is_state_identifier(name),
-        ExprKind::Member { object, .. } => typed_map_expr_is_state(object),
-        _ => false,
+        ExprKind::Ident(name) => is_state_binding(name).then(|| name.clone()),
+        ExprKind::Member { object, field } => {
+            let base = typed_state_handle_name(object)?;
+            let idx = field.parse::<usize>().ok()?;
+            Some(format!("{base}#{idx}"))
+        }
+        _ => None,
     }
+}
+
+fn is_state_handle_expr(expr: &TypedExpr) -> bool {
+    typed_state_handle_name(expr).is_some()
+}
+
+fn typed_map_expr_is_state(expr: &TypedExpr) -> bool {
+    typed_state_handle_name(expr).is_some()
 }
 
 fn map_expr_is_state(expr: &Expr) -> bool {
     match expr {
-        Expr::Ident(name) => is_state_identifier(name),
+        Expr::Ident(name) => is_state_binding(name),
         Expr::Member { object, .. } => map_expr_is_state(object),
         _ => false,
     }
@@ -4837,33 +6908,98 @@ fn is_user_defined_function(name: &str) -> bool {
     FUNCTION_RETURNS.with(|env| env.borrow().contains_key(name))
 }
 
-fn enforce_permission_requirements(items: &[TypedItem]) -> Result<(), SemanticError> {
-    let summaries = FUNCTION_SUMMARY.with(|map| map.borrow().clone());
-    let mut requires_permission: HashMap<String, bool> = HashMap::new();
+fn compute_transitive_effects(
+    summaries: &HashMap<String, FunctionSummary>,
+) -> HashMap<String, FunctionEffects> {
+    let mut effects = summaries
+        .iter()
+        .map(|(name, summary)| (name.clone(), summary.direct_effects))
+        .collect::<HashMap<_, _>>();
     let mut changed = true;
     while changed {
         changed = false;
-        for (name, summary) in summaries.iter() {
-            let mut required = summary.direct_sensitive;
-            if !required {
-                required = summary
-                    .calls
-                    .iter()
-                    .any(|callee| *requires_permission.get(callee).unwrap_or(&false));
+        for (name, summary) in summaries {
+            let mut aggregate = summary.direct_effects;
+            for callee in &summary.calls {
+                if let Some(callee_effects) = effects.get(callee).copied() {
+                    aggregate.merge_from(callee_effects);
+                }
             }
-            if requires_permission.get(name).copied().unwrap_or(false) != required {
-                requires_permission.insert(name.clone(), required);
-                changed = true;
-            }
+            let slot = effects.entry(name.clone()).or_default();
+            changed |= slot.merge_from(aggregate);
         }
     }
+    effects
+}
+
+fn describe_view_violation(effect: FunctionEffects) -> &'static str {
+    if effect.mutates_durable_state {
+        "durable state mutation"
+    } else if effect.emits_instructions {
+        "instruction emission"
+    } else {
+        "host side effects"
+    }
+}
+
+fn find_first_view_violation(
+    root: &str,
+    summaries: &HashMap<String, FunctionSummary>,
+    effects: &HashMap<String, FunctionEffects>,
+) -> Option<(String, &'static str)> {
+    let mut visited = HashSet::new();
+    let mut stack = vec![root.to_owned()];
+    while let Some(name) = stack.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        let summary = summaries.get(&name)?;
+        if summary.direct_effects.forbids_view() {
+            return Some((name, describe_view_violation(summary.direct_effects)));
+        }
+        let mut callees = summary
+            .calls
+            .iter()
+            .filter(|callee| {
+                effects
+                    .get(*callee)
+                    .copied()
+                    .is_some_and(FunctionEffects::forbids_view)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        callees.reverse();
+        stack.extend(callees);
+    }
+    None
+}
+
+fn enforce_permission_requirements(items: &[TypedItem]) -> Result<(), SemanticError> {
+    let summaries = FUNCTION_SUMMARY.with(|map| map.borrow().clone());
+    let effects = compute_transitive_effects(&summaries);
     for func in items.iter().map(|item| match item {
         TypedItem::Function(func) => func,
     }) {
-        let needs_permission = requires_permission
+        if func.modifiers.kind == FunctionKind::View
+            && let Some((offender, effect_kind)) =
+                find_first_view_violation(&func.name, &summaries, &effects)
+        {
+            let message = if offender == func.name {
+                format!("view function `{}` cannot perform {effect_kind}", func.name)
+            } else {
+                format!(
+                    "view function `{}` cannot call `{offender}` because `{offender}` performs {effect_kind}",
+                    func.name
+                )
+            };
+            return Err(SemanticError { message });
+        }
+
+        let needs_permission = effects
             .get(&func.name)
             .copied()
-            .unwrap_or(false);
+            .unwrap_or_default()
+            .requires_permission();
         if needs_permission
             && func.modifiers.visibility == FunctionVisibility::Public
             && func.modifiers.permission.is_none()
@@ -4879,26 +7015,30 @@ fn enforce_permission_requirements(items: &[TypedItem]) -> Result<(), SemanticEr
     Ok(())
 }
 
-fn statement_contains_sensitive_syscall(stmt: &TypedStatement) -> bool {
+fn statement_contains_host_side_effects(stmt: &TypedStatement) -> bool {
     match stmt {
         TypedStatement::Expr(expr)
         | TypedStatement::Return(Some(expr))
-        | TypedStatement::Let { value: expr, .. }
-        | TypedStatement::MapSet { value: expr, .. } => expr_contains_sensitive_syscall(expr),
+        | TypedStatement::Let { value: expr, .. } => expr_contains_host_side_effects(expr),
+        TypedStatement::MapSet { map, key, value } => {
+            expr_contains_host_side_effects(map)
+                || expr_contains_host_side_effects(key)
+                || expr_contains_host_side_effects(value)
+        }
         TypedStatement::If {
             cond,
             then_branch,
             else_branch,
         } => {
-            expr_contains_sensitive_syscall(cond)
-                || block_contains_sensitive_syscall(then_branch)
+            expr_contains_host_side_effects(cond)
+                || block_contains_host_side_effects(then_branch)
                 || else_branch
                     .as_ref()
-                    .map(block_contains_sensitive_syscall)
+                    .map(block_contains_host_side_effects)
                     .unwrap_or(false)
         }
         TypedStatement::While { cond, body } => {
-            expr_contains_sensitive_syscall(cond) || block_contains_sensitive_syscall(body)
+            expr_contains_host_side_effects(cond) || block_contains_host_side_effects(body)
         }
         TypedStatement::For {
             init,
@@ -4908,49 +7048,230 @@ fn statement_contains_sensitive_syscall(stmt: &TypedStatement) -> bool {
             ..
         } => {
             init.as_deref()
-                .map(statement_contains_sensitive_syscall)
+                .map(statement_contains_host_side_effects)
                 .unwrap_or(false)
                 || cond
                     .as_ref()
-                    .map(expr_contains_sensitive_syscall)
+                    .map(expr_contains_host_side_effects)
                     .unwrap_or(false)
                 || step
                     .as_deref()
-                    .map(statement_contains_sensitive_syscall)
+                    .map(statement_contains_host_side_effects)
                     .unwrap_or(false)
-                || block_contains_sensitive_syscall(body)
+                || block_contains_host_side_effects(body)
         }
         TypedStatement::ForEachMap { map, body, .. } => {
-            expr_contains_sensitive_syscall(map) || block_contains_sensitive_syscall(body)
+            expr_contains_host_side_effects(map) || block_contains_host_side_effects(body)
         }
         TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => false,
     }
 }
 
-fn expr_contains_sensitive_syscall(expr: &TypedExpr) -> bool {
+fn statement_contains_instruction_emission(stmt: &TypedStatement) -> bool {
+    match stmt {
+        TypedStatement::Expr(expr)
+        | TypedStatement::Return(Some(expr))
+        | TypedStatement::Let { value: expr, .. } => expr_contains_instruction_emission(expr),
+        TypedStatement::MapSet { map, key, value } => {
+            expr_contains_instruction_emission(map)
+                || expr_contains_instruction_emission(key)
+                || expr_contains_instruction_emission(value)
+        }
+        TypedStatement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            expr_contains_instruction_emission(cond)
+                || block_contains_instruction_emission(then_branch)
+                || else_branch
+                    .as_ref()
+                    .map(block_contains_instruction_emission)
+                    .unwrap_or(false)
+        }
+        TypedStatement::While { cond, body } => {
+            expr_contains_instruction_emission(cond) || block_contains_instruction_emission(body)
+        }
+        TypedStatement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            init.as_deref()
+                .map(statement_contains_instruction_emission)
+                .unwrap_or(false)
+                || cond
+                    .as_ref()
+                    .map(expr_contains_instruction_emission)
+                    .unwrap_or(false)
+                || step
+                    .as_deref()
+                    .map(statement_contains_instruction_emission)
+                    .unwrap_or(false)
+                || block_contains_instruction_emission(body)
+        }
+        TypedStatement::ForEachMap { map, body, .. } => {
+            expr_contains_instruction_emission(map) || block_contains_instruction_emission(body)
+        }
+        TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => false,
+    }
+}
+
+fn statement_mutates_durable_state(stmt: &TypedStatement) -> bool {
+    match stmt {
+        TypedStatement::Let { name, value } => {
+            is_state_binding(name) || expr_mutates_durable_state(value)
+        }
+        TypedStatement::Expr(expr) | TypedStatement::Return(Some(expr)) => {
+            expr_mutates_durable_state(expr)
+        }
+        TypedStatement::MapSet { map, key, value } => {
+            typed_map_expr_is_state(map)
+                || expr_mutates_durable_state(map)
+                || expr_mutates_durable_state(key)
+                || expr_mutates_durable_state(value)
+        }
+        TypedStatement::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => {
+            expr_mutates_durable_state(cond)
+                || block_mutates_durable_state(then_branch)
+                || else_branch
+                    .as_ref()
+                    .map(block_mutates_durable_state)
+                    .unwrap_or(false)
+        }
+        TypedStatement::While { cond, body } => {
+            expr_mutates_durable_state(cond) || block_mutates_durable_state(body)
+        }
+        TypedStatement::For {
+            init,
+            cond,
+            step,
+            body,
+            ..
+        } => {
+            init.as_deref()
+                .map(statement_mutates_durable_state)
+                .unwrap_or(false)
+                || cond
+                    .as_ref()
+                    .map(expr_mutates_durable_state)
+                    .unwrap_or(false)
+                || step
+                    .as_deref()
+                    .map(statement_mutates_durable_state)
+                    .unwrap_or(false)
+                || block_mutates_durable_state(body)
+        }
+        TypedStatement::ForEachMap { map, body, .. } => {
+            expr_mutates_durable_state(map) || block_mutates_durable_state(body)
+        }
+        TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => false,
+    }
+}
+
+fn expr_contains_host_side_effects(expr: &TypedExpr) -> bool {
     match &expr.expr {
         ExprKind::Call { name, args } => {
             SENSITIVE_SYSCALLS.contains(&name.as_str())
-                || args.iter().any(expr_contains_sensitive_syscall)
+                || HOST_SIDE_EFFECT_BUILTINS.contains(&name.as_str())
+                || args.iter().any(expr_contains_host_side_effects)
         }
         ExprKind::Binary { left, right, .. } => {
-            expr_contains_sensitive_syscall(left) || expr_contains_sensitive_syscall(right)
+            expr_contains_host_side_effects(left) || expr_contains_host_side_effects(right)
         }
-        ExprKind::Unary { expr, .. } => expr_contains_sensitive_syscall(expr),
-        ExprKind::NumericCast { expr } => expr_contains_sensitive_syscall(expr),
+        ExprKind::Unary { expr, .. } => expr_contains_host_side_effects(expr),
+        ExprKind::NumericCast { expr } => expr_contains_host_side_effects(expr),
         ExprKind::Conditional {
             cond,
             then_expr,
             else_expr,
         } => {
-            expr_contains_sensitive_syscall(cond)
-                || expr_contains_sensitive_syscall(then_expr)
-                || expr_contains_sensitive_syscall(else_expr)
+            expr_contains_host_side_effects(cond)
+                || expr_contains_host_side_effects(then_expr)
+                || expr_contains_host_side_effects(else_expr)
         }
-        ExprKind::Tuple(items) => items.iter().any(expr_contains_sensitive_syscall),
-        ExprKind::Member { object, .. } => expr_contains_sensitive_syscall(object),
+        ExprKind::Tuple(items) => items.iter().any(expr_contains_host_side_effects),
+        ExprKind::Member { object, .. } => expr_contains_host_side_effects(object),
         ExprKind::Index { target, index } => {
-            expr_contains_sensitive_syscall(target) || expr_contains_sensitive_syscall(index)
+            expr_contains_host_side_effects(target) || expr_contains_host_side_effects(index)
+        }
+        ExprKind::Number(_)
+        | ExprKind::Decimal(_)
+        | ExprKind::Bool(_)
+        | ExprKind::String(_)
+        | ExprKind::Bytes(_)
+        | ExprKind::Ident(_) => false,
+    }
+}
+
+fn expr_contains_instruction_emission(expr: &TypedExpr) -> bool {
+    match &expr.expr {
+        ExprKind::Call { name, args } => {
+            INSTRUCTION_EMITTING_BUILTINS.contains(&name.as_str())
+                || args.iter().any(expr_contains_instruction_emission)
+        }
+        ExprKind::Binary { left, right, .. } => {
+            expr_contains_instruction_emission(left) || expr_contains_instruction_emission(right)
+        }
+        ExprKind::Unary { expr, .. } => expr_contains_instruction_emission(expr),
+        ExprKind::NumericCast { expr } => expr_contains_instruction_emission(expr),
+        ExprKind::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_contains_instruction_emission(cond)
+                || expr_contains_instruction_emission(then_expr)
+                || expr_contains_instruction_emission(else_expr)
+        }
+        ExprKind::Tuple(items) => items.iter().any(expr_contains_instruction_emission),
+        ExprKind::Member { object, .. } => expr_contains_instruction_emission(object),
+        ExprKind::Index { target, index } => {
+            expr_contains_instruction_emission(target) || expr_contains_instruction_emission(index)
+        }
+        ExprKind::Number(_)
+        | ExprKind::Decimal(_)
+        | ExprKind::Bool(_)
+        | ExprKind::String(_)
+        | ExprKind::Bytes(_)
+        | ExprKind::Ident(_) => false,
+    }
+}
+
+fn expr_mutates_durable_state(expr: &TypedExpr) -> bool {
+    match &expr.expr {
+        ExprKind::Call { name, args } => {
+            matches!(
+                Builtin::from_name(name),
+                Some(Builtin::StateSet | Builtin::StateDel)
+            ) || (matches!(Builtin::from_name(name), Some(Builtin::Ensure))
+                && args.first().is_some_and(typed_map_expr_is_state))
+                || args.iter().any(expr_mutates_durable_state)
+        }
+        ExprKind::Binary { left, right, .. } => {
+            expr_mutates_durable_state(left) || expr_mutates_durable_state(right)
+        }
+        ExprKind::Unary { expr, .. } => expr_mutates_durable_state(expr),
+        ExprKind::NumericCast { expr } => expr_mutates_durable_state(expr),
+        ExprKind::Conditional {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            expr_mutates_durable_state(cond)
+                || expr_mutates_durable_state(then_expr)
+                || expr_mutates_durable_state(else_expr)
+        }
+        ExprKind::Tuple(items) => items.iter().any(expr_mutates_durable_state),
+        ExprKind::Member { object, .. } => expr_mutates_durable_state(object),
+        ExprKind::Index { target, index } => {
+            expr_mutates_durable_state(target) || expr_mutates_durable_state(index)
         }
         ExprKind::Number(_)
         | ExprKind::Decimal(_)
@@ -4965,6 +7286,15 @@ fn expr_contains_sensitive_syscall(expr: &TypedExpr) -> bool {
 mod tests {
     use super::*;
     use crate::parser::parse;
+
+    fn sample_account_literal() -> String {
+        iroha_data_model::account::AccountId::new(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                .parse()
+                .expect("public key"),
+        )
+        .to_string()
+    }
 
     fn count_calls_expr(expr: &TypedExpr, name: &str) -> usize {
         match &expr.expr {
@@ -5252,6 +7582,52 @@ mod tests {
     }
 
     #[test]
+    fn state_scalar_helper_param_is_accepted() {
+        let program = parse(
+            "state Counter: int; \
+             struct Ledger { counter: int; } \
+             state ledger: Ledger; \
+             fn read(state int value) -> int { return value; } \
+             fn main() -> int { \
+                 ledger = Ledger(7); \
+                 let _a = read(Counter); \
+                 return read(ledger.counter); \
+             }",
+        )
+        .expect("parse state scalar helper");
+        analyze(&program).expect("state scalar helper params should analyze");
+    }
+
+    #[test]
+    fn state_scalar_helper_param_requires_state_handle_argument() {
+        let program = parse(
+            "state Counter: int; \
+             fn read(state int value) -> int { return value; } \
+             fn main() -> int { let snapshot = Counter; return read(snapshot); }",
+        )
+        .expect("parse state scalar helper arg");
+        let err = analyze(&program).expect_err("passing loaded scalar state should error");
+        assert!(
+            err.message
+                .contains("requires a durable state handle argument")
+        );
+    }
+
+    #[test]
+    fn state_struct_helper_param_is_rejected() {
+        let program = parse(
+            "struct Ledger { counter: int; } \
+             fn read(state Ledger ledger) -> int { return ledger.counter; }",
+        )
+        .expect("parse state struct helper");
+        let err = analyze(&program).expect_err("aggregate state params should be rejected");
+        assert!(
+            err.message
+                .contains("aggregate state handles are not supported yet")
+        );
+    }
+
+    #[test]
     fn map_assignment_requires_map_target() {
         let program = parse("fn f() { let x = 1; x[0] = 2; }").expect("parse map assignment");
         let err = analyze(&program).expect_err("non-map assignment should error");
@@ -5458,7 +7834,7 @@ mod tests {
         let program = parse(
             "fn f() { \
                 let m: Map<(int, int), int> = Map::new(); \
-                let _x = contains(m, (1, 2)); \
+                let _x = m.contains((1, 2)); \
             }",
         )
         .expect("parse tuple map key");
@@ -5531,11 +7907,429 @@ mod tests {
 
     #[test]
     fn trigger_event_accepts_no_args() {
-        let program = parse(
-            "fn f() { let ev = trigger_event(); let _kind = json_get_name(ev, name(\"kind\")); }",
-        )
-        .expect("parse trigger_event");
+        let program =
+            parse("fn f() { let ev = trigger_event(); let _kind = ev.get_name(name(\"kind\")); }")
+                .expect("parse trigger_event");
         analyze(&program).expect("trigger_event should type-check");
+    }
+
+    #[test]
+    fn public_entrypoints_reject_trigger_event() {
+        let program = parse(
+            "seiyaku Demo { #[access(read=\"*\", write=\"*\")] kotoage fn f() { let _ev = trigger_event(); } }",
+        )
+        .expect("parse public trigger_event");
+        let err = analyze(&program).expect_err("public trigger_event should fail");
+        assert!(
+            err.message.contains("cannot use `trigger_event` here"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn invoke_entrypoint_accepts_test_functions() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count + 1; }
+
+                #[test]
+                fn drive_run() {
+                    let next = invoke_entrypoint("run", json("{\"count\": 7}"));
+                    assert_eq(next, 8);
+                }
+            }
+            "#,
+        )
+        .expect("parse invoke_entrypoint");
+        analyze(&program).expect("invoke_entrypoint in tests should type-check");
+    }
+
+    #[test]
+    fn invoke_entrypoint_rejects_non_test_functions() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count; }
+
+                fn helper() {
+                    let _next = invoke_entrypoint("run", json("{\"count\": 7}"));
+                }
+            }
+            "#,
+        )
+        .expect("parse non-test invoke_entrypoint");
+        let err = analyze(&program).expect_err("non-test invoke_entrypoint should fail");
+        assert!(err.message.contains("only available inside #[test]"));
+    }
+
+    #[test]
+    fn invoke_entrypoint_accepts_name_literal_target() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count + 1; }
+
+                #[test]
+                fn drive_run() {
+                    let next = invoke_entrypoint(name("run"), json("{\"count\": 7}"));
+                    assert_eq(next, 8);
+                }
+            }
+            "#,
+        )
+        .expect("parse name literal invoke_entrypoint");
+        analyze(&program).expect("name literal invoke_entrypoint should type-check");
+    }
+
+    #[test]
+    fn invoke_entrypoint_rejects_non_literal_target() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count; }
+
+                #[test]
+                fn drive_run() {
+                    let target = "run";
+                    let _next = invoke_entrypoint(target, json("{\"count\": 7}"));
+                }
+            }
+            "#,
+        )
+        .expect("parse dynamic target invoke_entrypoint");
+        let err = analyze(&program).expect_err("dynamic target should fail");
+        assert!(err.message.contains("requires a literal entrypoint name"));
+    }
+
+    #[test]
+    fn invoke_entrypoint_rejects_non_json_payload() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count; }
+
+                #[test]
+                fn drive_run() {
+                    let _next = invoke_entrypoint("run", 7);
+                }
+            }
+            "#,
+        )
+        .expect("parse non-json payload invoke_entrypoint");
+        let err = analyze(&program).expect_err("non-json payload should fail");
+        assert!(err.message.contains("expects a Json payload"));
+    }
+
+    #[test]
+    fn invoke_entrypoint_rejects_internal_target() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                fn helper() -> int { return 7; }
+
+                #[test]
+                fn drive_run() {
+                    let _next = invoke_entrypoint("helper", json("{}"));
+                }
+            }
+            "#,
+        )
+        .expect("parse internal target invoke_entrypoint");
+        let err = analyze(&program).expect_err("internal target should fail");
+        assert!(
+            err.message
+                .contains("may only target public/view/hajimari/kaizen")
+        );
+    }
+
+    #[test]
+    fn invoke_entrypoint_as_and_actor_helpers_type_check_in_tests() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> int { return count + 1; }
+
+                #[test]
+                fn drive_run() {
+                    let next = invoke_entrypoint_as("issuer", "run", json("{\"count\": 7}"));
+                    let acct = actor_account("issuer");
+                    let pk = actor_public_key("issuer");
+                    let sig = actor_sign("issuer", b"demo");
+                    expect_reject_as("issuer", "run", json("{\"count\": -1}"));
+                    let _ = (next, acct, pk, sig);
+                }
+            }
+            "#,
+        )
+        .expect("parse invoke_entrypoint_as");
+        analyze(&program).expect("test helpers should type-check");
+    }
+
+    #[test]
+    fn invoke_entrypoint_as_rejects_tuple_returning_targets() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                #[access(read="*", write="*")]
+                kotoage fn run(count: int) -> (int, int) { return (count, count + 1); }
+
+                #[test]
+                fn drive_run() {
+                    let _pair = invoke_entrypoint_as("issuer", "run", json("{\"count\": 7}"));
+                }
+            }
+            "#,
+        )
+        .expect("parse tuple invoke_entrypoint_as");
+        let err = analyze(&program).expect_err("tuple-returning target should fail");
+        assert!(
+            err.message
+                .contains("does not yet support tuple-returning entrypoints")
+        );
+    }
+
+    #[test]
+    fn actor_helpers_reject_non_test_functions() {
+        let program = parse(
+            r#"
+            seiyaku Demo {
+                fn helper() {
+                    let _acct = actor_account("issuer");
+                }
+            }
+            "#,
+        )
+        .expect("parse non-test actor helper");
+        let err = analyze(&program).expect_err("actor helper outside test should fail");
+        assert!(err.message.contains("only available inside #[test]"));
+    }
+
+    #[test]
+    fn view_entrypoints_reject_get_int_helper() {
+        let program = parse(
+            "seiyaku Demo { #[access(read=\"*\", write=\"*\")] view fn f(ev: Json) -> int { return ev.get_int(name(\"n\")); } }",
+        )
+        .expect("parse view get_int");
+        let err = analyze(&program).expect_err("view get_int should fail");
+        assert!(
+            err.message.contains("cannot use `get_int` here"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn view_entrypoints_reject_ensure() {
+        let program = parse(
+            "seiyaku Demo { view fn f() -> int { let balances: Map<int, int> = Map::new(); return balances.ensure(7, 9); } }",
+        )
+        .expect("parse ensure");
+        let err = analyze(&program).expect_err("view ensure should fail");
+        assert!(
+            err.message
+                .contains("view entrypoints cannot use mutating map helper `ensure`"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn state_map_can_be_passed_to_state_param_fn() {
+        let program = parse(
+            "seiyaku Demo { \
+                state Balances: Map<Name, int>; \
+                fn ensure_balance(state Map<Name, int> balances, key: Name) -> int { return balances.ensure(key, 0); } \
+                fn f() -> int { return ensure_balance(Balances, name(\"alice\")); } \
+            }",
+        )
+        .expect("parse state param helper");
+        analyze(&program).expect("state map helper should type-check");
+    }
+
+    #[test]
+    fn state_param_requires_durable_state_handle_argument() {
+        let program = parse(
+            "fn ensure_balance(state Map<Name, int> balances, key: Name) -> int { return balances.ensure(key, 0); } \
+             fn f() -> int { let balances: Map<Name, int> = Map::new(); return ensure_balance(balances, name(\"alice\")); }",
+        )
+        .expect("parse invalid state param arg");
+        let err = analyze(&program).expect_err("in-memory map should not satisfy state param");
+        assert!(
+            err.message
+                .contains("state parameter `balances` requires a durable state handle argument"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn public_entrypoints_reject_state_parameters() {
+        let program = parse("seiyaku Demo { kotoage fn f(state Map<Name, int> balances) {} }")
+            .expect("parse public state param");
+        let err = analyze(&program).expect_err("public state params should fail");
+        assert!(
+            err.message.contains(
+                "state parameter `balances` is only supported on internal helper functions"
+            ),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn view_entrypoints_accept_get_or() {
+        let program = parse(
+            "seiyaku Demo { view fn f() -> int { let balances: Map<int, int> = Map::new(); return balances.get_or(7, 9); } }",
+        )
+        .expect("parse get_or");
+        analyze(&program).expect("view get_or should type-check");
+    }
+
+    #[test]
+    fn view_entrypoints_reject_direct_durable_state_assignment() {
+        let program = parse(
+            "seiyaku Demo { state int counter; view fn f() -> int { counter = 1; return counter; } }",
+        )
+        .expect("parse direct durable state assignment");
+        let err = analyze(&program).expect_err("view durable state assignment should fail");
+        assert!(
+            err.message
+                .contains("view function `f` cannot perform durable state mutation"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn view_entrypoints_reject_state_map_mutation() {
+        let program = parse(
+            "seiyaku Demo { state balances: Map<int, int>; view fn f() -> int { balances[7] = 9; return 1; } }",
+        )
+        .expect("parse state map mutation");
+        let err = analyze(&program).expect_err("view state map mutation should fail");
+        assert!(
+            err.message
+                .contains("view function `f` cannot perform durable state mutation"),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn view_entrypoints_reject_transitive_durable_state_mutation() {
+        let program = parse(
+            "seiyaku Demo { state int counter; fn helper() { counter = counter + 1; } view fn f() -> int { helper(); return counter; } }",
+        )
+        .expect("parse transitive durable state mutation");
+        let err = analyze(&program).expect_err("view transitive durable mutation should fail");
+        assert!(
+            err.message.contains(
+                "view function `f` cannot call `helper` because `helper` performs durable state mutation"
+            ),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn view_entrypoints_reject_transitive_instruction_emission() {
+        let program = parse(
+            "seiyaku Demo { fn helper() { execute_instruction(norito_bytes(\"IB0\")); } view fn f() -> int { helper(); return 1; } }",
+        )
+        .expect("parse transitive instruction emission");
+        let err = analyze(&program).expect_err("view transitive instruction emission should fail");
+        assert!(
+            err.message.contains(
+                "view function `f` cannot call `helper` because `helper` performs instruction emission"
+            ),
+            "unexpected error message: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn resolve_account_alias_accepts_canonical_string() {
+        let program =
+            parse("fn f() { let _acct = resolve_account_alias(\"banking@centralbank\"); }")
+                .expect("parse resolve_account_alias");
+        analyze(&program).expect("resolve_account_alias should type-check");
+    }
+
+    #[test]
+    fn resolve_account_alias_accepts_alias_bytes() {
+        let program = parse(
+            "fn f() { let alias = blob(\"banking@centralbank\"); let _acct = resolve_account_alias(alias); }",
+        )
+        .expect("parse resolve_account_alias blob");
+        analyze(&program).expect("resolve_account_alias blob should type-check");
+    }
+
+    #[test]
+    fn durable_state_maps_accept_struct_values_via_opaque_type_names() {
+        let program = parse(
+            "seiyaku Demo {
+                struct Request {
+                    status: int,
+                    alias_blob: Blob,
+                    requested_by_actor_id: Blob,
+                    requested_by_actor: Json
+                }
+                state Requests: Map<Name, Request>;
+                kotoage fn create_request(proposal_id: Name,
+                                          alias_literal: Blob,
+                                          requested_by_actor_id: Blob,
+                                          requested_by_actor: Json) {
+                    Requests[proposal_id] = Request(
+                        1,
+                        alias_literal,
+                        requested_by_actor_id,
+                        requested_by_actor
+                    );
+                }
+            }",
+        )
+        .expect("parse durable struct map");
+        analyze(&program).expect("durable struct-valued state map should type-check");
+    }
+
+    #[test]
+    fn equality_between_event_account_and_resolved_alias_type_checks() {
+        let program = parse(
+            "fn f() { \
+                let ev = trigger_event(); \
+                let dst = ev.get_account_id(name(\"account_id\")); \
+                let sink = resolve_account_alias(\"banking@centralbank\"); \
+                let _same = dst == sink; \
+            }",
+        )
+        .expect("parse account equality");
+        analyze(&program).expect("account-id equality should type-check");
+    }
+
+    #[test]
+    fn get_asset_definition_id_accepts_trigger_payloads() {
+        let program = parse(
+            "fn f() { let ev = trigger_event(); let _asset = ev.get_asset_definition_id(name(\"asset_definition_id\")); }",
+        )
+        .expect("parse get_asset_definition_id");
+        analyze(&program).expect("get_asset_definition_id should type-check");
+    }
+
+    #[test]
+    fn get_numeric_accepts_trigger_amounts() {
+        let program = parse(
+            "fn f() { let ev = trigger_event(); let _amount: Amount = ev.get_numeric(name(\"amount\")); }",
+        )
+        .expect("parse get_numeric");
+        analyze(&program).expect("get_numeric should type-check");
     }
 
     #[test]
@@ -5595,20 +8389,21 @@ mod tests {
     fn trigger_decl_builds_typed_metadata() {
         use iroha_data_model::account::AccountId;
 
-        let program = parse(
+        let authority_literal = sample_account_literal();
+        let program = parse(&format!(
             r#"
-            seiyaku C {
-                kotoage fn run() {}
-                register_trigger wake {
+            seiyaku C {{
+                kotoage fn run() {{}}
+                register_trigger wake {{
                     call run;
                     on time pre_commit;
                     repeats 2;
-                    authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-                    metadata { tag: "alpha"; count: 1; enabled: true; }
-                }
-            }
+                    authority "{authority_literal}";
+                    metadata {{ tag: "alpha"; count: 1; enabled: true; }}
+                }}
+            }}
             "#,
-        )
+        ))
         .expect("parse trigger decl");
         let typed = analyze(&program).expect("analyze trigger decl");
         assert_eq!(typed.triggers.len(), 1);
@@ -5619,7 +8414,7 @@ mod tests {
         assert_eq!(
             trigger.authority,
             Some(
-                AccountId::parse_encoded("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+                AccountId::parse_encoded(authority_literal.as_str())
                     .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                     .expect("authority literal"),
             )
@@ -5650,6 +8445,310 @@ mod tests {
     }
 
     #[test]
+    fn trigger_decl_supports_structured_asset_data_filter() {
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("name"),
+        );
+        let asset_definition_literal = asset_definition.to_string();
+        let program = parse(&format!(
+            r#"
+            seiyaku C {{
+                kotoage fn run() {{}}
+                register_trigger wake {{
+                    call run;
+                    on data asset added {{
+                        asset_definition "{asset_definition_literal}";
+                    }}
+                }}
+            }}
+            "#,
+        ))
+        .expect("parse trigger decl");
+        let typed = analyze(&program).expect("analyze trigger decl");
+        let trigger = &typed.triggers[0];
+        assert_eq!(
+            trigger.filter,
+            EventFilterBox::Data(DataEventFilter::Asset(
+                AssetEventFilter::new()
+                    .for_events(AssetEventSet::Added)
+                    .for_asset_definition(asset_definition),
+            ))
+        );
+    }
+
+    #[test]
+    fn trigger_decl_supports_structured_data_filters_for_core_families() {
+        use iroha_data_model::{
+            account::{AccountId, ParsedAccountId},
+            events::{
+                EventFilterBox,
+                data::{
+                    DataEventFilter,
+                    prelude::{
+                        AccountEventFilter, AccountEventSet, AssetDefinitionEventFilter,
+                        AssetDefinitionEventSet, AssetEventFilter, AssetEventSet,
+                        ConfigurationEventFilter, ConfigurationEventSet, DomainEventFilter,
+                        DomainEventSet, ExecutorEventFilter, ExecutorEventSet, NftEventFilter,
+                        NftEventSet, PeerEventFilter, PeerEventSet, RoleEventFilter, RoleEventSet,
+                        TriggerEventFilter, TriggerEventSet,
+                    },
+                },
+            },
+            nft::NftId,
+            peer::PeerId,
+            role::RoleId,
+            rwa::RwaId,
+            trigger::TriggerId,
+        };
+
+        let account_literal = sample_account_literal();
+        let account = AccountId::parse_encoded(account_literal.as_str())
+            .map(ParsedAccountId::into_account_id)
+            .expect("account");
+        let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
+        let peer: PeerId = peer_literal.parse().expect("peer");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("name"),
+        );
+        let asset = AssetId::new(asset_definition.clone(), account.clone());
+        let asset_literal = asset.canonical_literal();
+        let nft: NftId = "n0$wonderland.universal".parse().expect("nft");
+        let rwa: RwaId = format!(
+            "{}$wonderland.universal",
+            iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
+        )
+        .parse()
+        .expect("rwa");
+        let trigger_id: TriggerId = "wake".parse().expect("trigger");
+        let role_id: RoleId = "auditor".parse().expect("role");
+
+        let cases = vec![
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data peer added {{
+                                peer "{peer_literal}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Peer(
+                    PeerEventFilter::new()
+                        .for_events(PeerEventSet::Added)
+                        .for_peer(peer),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data domain created {{
+                                domain "{domain}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Domain(
+                    DomainEventFilter::new()
+                        .for_events(DomainEventSet::Created)
+                        .for_domain(domain.clone()),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data account created {{
+                                account "{account_literal}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Account(
+                    AccountEventFilter::new()
+                        .for_events(AccountEventSet::Created)
+                        .for_account(account.clone()),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data asset added {{
+                                asset "{asset_literal}";
+                                asset_definition "{asset_definition}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Asset(
+                    AssetEventFilter::new()
+                        .for_events(AssetEventSet::Added)
+                        .for_asset(asset.clone())
+                        .for_asset_definition(asset_definition.clone()),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data asset_definition created {{
+                                asset_definition "{asset_definition}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::AssetDefinition(
+                    AssetDefinitionEventFilter::new()
+                        .for_events(AssetDefinitionEventSet::Created)
+                        .for_asset_definition(asset_definition.clone()),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data nft created {{
+                                nft "{nft}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Nft(
+                    NftEventFilter::new()
+                        .for_events(NftEventSet::Created)
+                        .for_nft(nft),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data rwa created {{
+                                rwa "{rwa}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Rwa(
+                    RwaEventFilter::new()
+                        .for_events(RwaEventSet::Created)
+                        .for_rwa(rwa),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data trigger created {{
+                                trigger "{trigger_id}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Trigger(
+                    TriggerEventFilter::new()
+                        .for_events(TriggerEventSet::Created)
+                        .for_trigger(trigger_id),
+                )),
+            ),
+            (
+                format!(
+                    r#"
+                    seiyaku C {{
+                        kotoage fn run() {{}}
+                        register_trigger wake {{
+                            call run;
+                            on data role created {{
+                                role "{role_id}";
+                            }}
+                        }}
+                    }}
+                    "#
+                ),
+                EventFilterBox::Data(DataEventFilter::Role(
+                    RoleEventFilter::new()
+                        .for_events(RoleEventSet::Created)
+                        .for_role(role_id),
+                )),
+            ),
+            (
+                r#"
+                seiyaku C {
+                    kotoage fn run() {}
+                    register_trigger wake {
+                        call run;
+                        on data configuration changed {}
+                    }
+                }
+                "#
+                .to_string(),
+                EventFilterBox::Data(DataEventFilter::Configuration(
+                    ConfigurationEventFilter::new().for_events(ConfigurationEventSet::Changed),
+                )),
+            ),
+            (
+                r#"
+                seiyaku C {
+                    kotoage fn run() {}
+                    register_trigger wake {
+                        call run;
+                        on data executor upgraded {}
+                    }
+                }
+                "#
+                .to_string(),
+                EventFilterBox::Data(DataEventFilter::Executor(
+                    ExecutorEventFilter::new().for_events(ExecutorEventSet::Upgraded),
+                )),
+            ),
+        ];
+
+        for (src, expected_filter) in cases {
+            let program = parse(&src).expect("parse trigger decl");
+            let typed = analyze(&program).expect("analyze trigger decl");
+            let trigger = &typed.triggers[0];
+            assert_eq!(trigger.filter, expected_filter);
+        }
+    }
+
+    #[test]
     fn trigger_decl_supports_pipeline_filter() {
         let program = parse(
             r#"
@@ -5669,6 +8768,55 @@ mod tests {
             trigger.filter,
             EventFilterBox::Pipeline(PipelineEventFilterBox::Block(_))
         ));
+    }
+
+    #[test]
+    fn trigger_decl_rejects_invalid_data_matcher_literal() {
+        let program = parse(
+            r#"
+            seiyaku C {
+                kotoage fn run() {}
+                register_trigger wake {
+                    call run;
+                    on data asset added {
+                        asset_definition "not-an-address";
+                    }
+                }
+            }
+            "#,
+        )
+        .expect("parse trigger decl");
+        let err = analyze(&program).expect_err("invalid matcher should error");
+        assert!(
+            err.message
+                .contains("invalid `asset_definition` matcher literal")
+        );
+    }
+
+    #[test]
+    fn trigger_decl_rejects_duplicate_data_matchers() {
+        let asset_definition_literal = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("name"),
+        )
+        .to_string();
+        let program = parse(&format!(
+            r#"
+            seiyaku C {{
+                kotoage fn run() {{}}
+                register_trigger wake {{
+                    call run;
+                    on data asset added {{
+                        asset_definition "{asset_definition_literal}";
+                        asset_definition "{asset_definition_literal}";
+                    }}
+                }}
+            }}
+            "#,
+        ))
+        .expect("parse trigger decl");
+        let err = analyze(&program).expect_err("duplicate matcher should error");
+        assert!(err.message.contains("duplicate `asset_definition` matcher"));
     }
 
     #[test]

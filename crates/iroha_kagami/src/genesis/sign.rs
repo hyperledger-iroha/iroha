@@ -7,8 +7,11 @@ use std::{
 
 use clap::Parser;
 use color_eyre::eyre::{WrapErr, eyre};
+use iroha_config::{base::toml::TomlSource, parameters::actual};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::{
+    asset::AssetDefinitionAlias,
+    da::commitment::DaProofPolicyBundle,
     isi::RegisterPublicLaneValidator,
     parameter::{SumeragiParameter, system::SumeragiConsensusMode},
     prelude::*,
@@ -46,6 +49,9 @@ pub struct Args {
     /// Algorithm of the genesis key (must match the genesis public key).
     #[clap(long, default_value = "ed25519", value_name = "ALGORITHM")]
     algorithm: Algorithm,
+    /// Optional peer config TOML used to derive the DA proof-policy bundle embedded into genesis.
+    #[clap(long, value_name = "PATH")]
+    config: Option<PathBuf>,
     /// Select the consensus mode to stamp into the manifest (optional override).
     #[clap(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
@@ -57,8 +63,8 @@ pub struct Args {
     mode_activation_height: Option<u64>,
 }
 
-const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus";
-const DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN: &str = "ivm";
+const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus.universal";
+const DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN: &str = "ivm.universal";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME: &str = "xor";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT: u64 = 10_000;
 const DEFAULT_NPOS_BOOTSTRAP_ESCROW_SEED: &[u8] = b"npos-escrow-account";
@@ -88,6 +94,24 @@ impl BootstrapRegistrations {
                 .downcast_ref::<Register<AssetDefinition>>()
             {
                 asset_defs.insert(register.object.id.clone());
+                continue;
+            }
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
+            {
+                match register {
+                    iroha_data_model::isi::register::RegisterBox::Domain(register) => {
+                        domains.insert(register.object.id.clone());
+                    }
+                    iroha_data_model::isi::register::RegisterBox::Account(register) => {
+                        accounts.insert(register.object.id.clone());
+                    }
+                    iroha_data_model::isi::register::RegisterBox::AssetDefinition(register) => {
+                        asset_defs.insert(register.object.id.clone());
+                    }
+                    _ => {}
+                }
             }
         }
         Self {
@@ -138,13 +162,53 @@ fn collect_topology_peers(manifest: &RawGenesisTransaction) -> Vec<PeerId> {
 
 fn default_npos_bootstrap_stake_asset_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        DEFAULT_NPOS_BOOTSTRAP_DOMAIN
-            .parse()
+        DomainId::parse_fully_qualified(DEFAULT_NPOS_BOOTSTRAP_DOMAIN)
             .expect("static stake asset domain must remain valid"),
         DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME
             .parse()
             .expect("static stake asset name must remain valid"),
     )
+}
+
+fn resolve_npos_bootstrap_stake_asset_id(
+    manifest: &RawGenesisTransaction,
+    configured: &str,
+) -> Result<AssetDefinitionId, color_eyre::eyre::Error> {
+    if let Ok(asset_id) = configured.parse::<AssetDefinitionId>() {
+        return Ok(asset_id);
+    }
+
+    let alias = configured.parse::<AssetDefinitionAlias>().map_err(|err| {
+        eyre!(
+            "invalid nexus.staking.stake_asset_id `{configured}`: {err}; expected canonical asset definition id or alias"
+        )
+    })?;
+
+    for instruction in manifest.instructions() {
+        if let Some(bind) = instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias>(
+        ) && bind.alias.as_ref() == Some(&alias)
+        {
+            return Ok(bind.asset_definition_id.clone());
+        }
+    }
+
+    Err(eyre!(
+        "nexus.staking.stake_asset_id alias `{configured}` is not bound in genesis manifest"
+    ))
+}
+
+fn configured_npos_bootstrap_stake_asset_id(
+    manifest: &RawGenesisTransaction,
+    config_path: Option<&Path>,
+) -> Result<AssetDefinitionId, color_eyre::eyre::Error> {
+    let Some(config_path) = config_path else {
+        return Ok(default_npos_bootstrap_stake_asset_id());
+    };
+
+    let config = load_peer_config(config_path)?;
+    resolve_npos_bootstrap_stake_asset_id(manifest, &config.nexus.staking.stake_asset_id)
 }
 
 fn append_npos_bootstrap(
@@ -153,18 +217,22 @@ fn append_npos_bootstrap(
     topology: &[PeerId],
     escrow_domain_id: &DomainId,
     escrow_account_id: &AccountId,
+    stake_asset_id: &AssetDefinitionId,
 ) -> Result<GenesisBuilder, color_eyre::eyre::Error> {
     if topology.is_empty() {
         return Ok(builder);
     }
 
-    let nexus_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_DOMAIN.parse()?;
-    let stake_asset_id = default_npos_bootstrap_stake_asset_id();
+    let default_stake_asset_id = default_npos_bootstrap_stake_asset_id();
 
     let mut builder = builder.next_transaction();
-    if !registrations.domains.contains(&nexus_domain) {
-        builder = builder.append_instruction(Register::domain(Domain::new(nexus_domain.clone())));
-        registrations.domains.insert(nexus_domain.clone());
+    if stake_asset_id == &default_stake_asset_id {
+        let nexus_domain = DomainId::parse_fully_qualified(DEFAULT_NPOS_BOOTSTRAP_DOMAIN)?;
+        if !registrations.domains.contains(&nexus_domain) {
+            builder =
+                builder.append_instruction(Register::domain(Domain::new(nexus_domain.clone())));
+            registrations.domains.insert(nexus_domain);
+        }
     }
     if !registrations.domains.contains(escrow_domain_id) {
         builder =
@@ -172,12 +240,11 @@ fn append_npos_bootstrap(
         registrations.domains.insert(escrow_domain_id.clone());
     }
     if !registrations.accounts.contains(escrow_account_id) {
-        builder = builder.append_instruction(Register::account(Account::new(
-            escrow_account_id.to_account_id(escrow_domain_id.clone()),
-        )));
+        builder =
+            builder.append_instruction(Register::account(Account::new(escrow_account_id.clone())));
         registrations.accounts.insert(escrow_account_id.clone());
     }
-    if !registrations.asset_defs.contains(&stake_asset_id) {
+    if !registrations.asset_defs.contains(stake_asset_id) {
         let definition = AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
             .with_name("NPOS Stake".to_owned())
             .with_metadata(Metadata::default());
@@ -188,9 +255,8 @@ fn append_npos_bootstrap(
     for peer in topology {
         let validator_id = AccountId::new(peer.public_key().clone());
         if !registrations.accounts.contains(&validator_id) {
-            builder = builder.append_instruction(Register::account(Account::new(
-                validator_id.to_account_id(nexus_domain.clone()),
-            )));
+            builder =
+                builder.append_instruction(Register::account(Account::new(validator_id.clone())));
             registrations.accounts.insert(validator_id.clone());
         }
         builder = builder.append_instruction(Mint::asset_numeric(
@@ -200,6 +266,7 @@ fn append_npos_bootstrap(
         builder = builder.append_instruction(RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
             validator: validator_id.clone(),
+            peer_id: peer.clone(),
             stake_account: validator_id.clone(),
             initial_stake: Numeric::from(DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT),
             metadata: Metadata::default(),
@@ -211,6 +278,38 @@ fn append_npos_bootstrap(
     }
 
     Ok(builder)
+}
+
+fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre::Error> {
+    let source = TomlSource::from_file(config_path).map_err(|err| {
+        eyre!(
+            "failed to read peer config at {}: {err}",
+            config_path.display()
+        )
+    })?;
+    actual::Root::from_toml_source(source).map_err(|err| {
+        eyre!(
+            "failed to parse peer config at {}: {err}",
+            config_path.display()
+        )
+    })
+}
+
+fn should_auto_bootstrap_npos_validators(
+    config_path: Option<&Path>,
+) -> Result<bool, color_eyre::eyre::Error> {
+    let Some(config_path) = config_path else {
+        return Ok(true);
+    };
+
+    let config = load_peer_config(config_path)?;
+    Ok(matches!(
+        config
+            .nexus
+            .staking
+            .validator_mode(LaneId::SINGLE, &config.nexus.lane_catalog),
+        actual::LaneValidatorMode::StakeElected
+    ))
 }
 
 impl<T: Write> RunArgs<T> for Args {
@@ -282,6 +381,7 @@ impl<T: Write> RunArgs<T> for Args {
         };
         let uses_npos = matches!(consensus_mode, SumeragiConsensusMode::Npos)
             || matches!(next_consensus_mode, Some(SumeragiConsensusMode::Npos));
+        let auto_bootstrap_npos = should_auto_bootstrap_npos_validators(self.config.as_deref())?;
         let topology_peers = if uses_npos {
             topology_override
                 .clone()
@@ -289,8 +389,10 @@ impl<T: Write> RunArgs<T> for Args {
         } else {
             Vec::new()
         };
-        let needs_npos_bootstrap =
-            uses_npos && !manifest_has_npos_bootstrap(&genesis) && !topology_peers.is_empty();
+        let needs_npos_bootstrap = uses_npos
+            && auto_bootstrap_npos
+            && !manifest_has_npos_bootstrap(&genesis)
+            && !topology_peers.is_empty();
         let mut bootstrap_registrations = if needs_npos_bootstrap {
             BootstrapRegistrations::from_manifest(&genesis)
         } else {
@@ -300,27 +402,14 @@ impl<T: Write> RunArgs<T> for Args {
                 asset_defs: BTreeSet::new(),
             }
         };
-        let mut builder = genesis.into_builder();
-
+        let bootstrap_stake_asset_id = if needs_npos_bootstrap {
+            configured_npos_bootstrap_stake_asset_id(&genesis, self.config.as_deref())?
+        } else {
+            default_npos_bootstrap_stake_asset_id()
+        };
         if self.topology.is_none() && !self.peer_pops.is_empty() {
             return Err(eyre!(
                 "--peer-pop requires --topology to align PoPs with peers"
-            ));
-        }
-
-        if let Some(topology) = topology_override.as_ref() {
-            // Put topology into a dedicated transaction so it remains separate
-            // from other genesis instructions.
-            let entries = build_topology_entries(topology, &self.peer_pops)?;
-            builder = builder.next_transaction().set_topology(entries);
-        }
-        if let Some(mode) = next_consensus_mode {
-            builder =
-                builder.append_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(mode)));
-        }
-        if let (Some(height), Some(_)) = (self.mode_activation_height, self.next_consensus_mode) {
-            builder = builder.append_parameter(Parameter::Sumeragi(
-                SumeragiParameter::ModeActivationHeight(height),
             ));
         }
         let genesis_key_pair = load_genesis_key(
@@ -328,22 +417,54 @@ impl<T: Write> RunArgs<T> for Args {
             self.seed.as_deref(),
             self.algorithm,
         )?;
-        if needs_npos_bootstrap {
-            let ivm_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN.parse()?;
-            let escrow_account_id = bootstrap_escrow_account_id(genesis_key_pair.public_key());
-            builder = append_npos_bootstrap(
-                builder,
-                &mut bootstrap_registrations,
-                &topology_peers,
-                &ivm_domain,
-                &escrow_account_id,
-            )?;
-        }
-        let genesis_block = builder
-            .build_raw()
-            .with_consensus_mode(consensus_mode)
-            .with_consensus_meta()
-            .build_and_sign(&genesis_key_pair)?;
+        let da_proof_policies = resolve_da_proof_policies(self.config.as_deref())?;
+        let direct_sign_safe = topology_override.is_none()
+            && next_consensus_mode.is_none()
+            && self.mode_activation_height.is_none()
+            && !needs_npos_bootstrap;
+        let genesis_block = if direct_sign_safe {
+            genesis
+                .with_consensus_mode(consensus_mode)
+                .build_and_sign_with_da_proof_policies(&genesis_key_pair, da_proof_policies)?
+        } else {
+            let mut builder = genesis.into_builder();
+
+            if let Some(topology) = topology_override.as_ref() {
+                // Put topology into a dedicated transaction so it remains separate
+                // from other genesis instructions.
+                let entries = build_topology_entries(topology, &self.peer_pops)?;
+                builder = builder.next_transaction().set_topology(entries);
+            }
+            if let Some(mode) = next_consensus_mode {
+                builder = builder
+                    .append_parameter(Parameter::Sumeragi(SumeragiParameter::NextMode(mode)));
+            }
+            if let (Some(height), Some(_)) = (self.mode_activation_height, self.next_consensus_mode)
+            {
+                builder = builder.append_parameter(Parameter::Sumeragi(
+                    SumeragiParameter::ModeActivationHeight(height),
+                ));
+            }
+            if needs_npos_bootstrap {
+                let ivm_domain =
+                    DomainId::parse_fully_qualified(DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN)?;
+                let escrow_account_id = bootstrap_escrow_account_id(genesis_key_pair.public_key());
+                builder = append_npos_bootstrap(
+                    builder,
+                    &mut bootstrap_registrations,
+                    &topology_peers,
+                    &ivm_domain,
+                    &escrow_account_id,
+                    &bootstrap_stake_asset_id,
+                )?;
+            }
+
+            builder
+                .build_raw()
+                .with_consensus_mode(consensus_mode)
+                .with_consensus_meta()
+                .build_and_sign_with_da_proof_policies(&genesis_key_pair, da_proof_policies)?
+        };
 
         eprintln!("Genesis public key: {}", genesis_key_pair.public_key());
 
@@ -457,6 +578,20 @@ fn build_topology_entries(
         .collect())
 }
 
+fn resolve_da_proof_policies(
+    config_path: Option<&Path>,
+) -> Result<Option<DaProofPolicyBundle>, color_eyre::eyre::Error> {
+    let Some(config_path) = config_path else {
+        return Ok(None);
+    };
+
+    let config = load_peer_config(config_path)?;
+
+    Ok(Some(iroha_core::da::proof_policy_bundle(
+        &config.nexus.lane_config,
+    )))
+}
+
 fn decode_hex(s: &str) -> Result<Vec<u8>, color_eyre::eyre::Error> {
     let s = s.trim_start_matches("0x");
     if !s.len().is_multiple_of(2) {
@@ -489,11 +624,16 @@ mod tests {
         path::PathBuf,
     };
 
+    use super::*;
     use iroha_crypto::KeyPair as CryptoKeyPair;
     use iroha_data_model::{
         ChainId,
+        asset::AssetDefinitionAlias,
         block::decode_framed_signed_block,
-        isi::staking::RegisterPublicLaneValidator,
+        isi::{
+            asset_alias::SetAssetDefinitionAlias, mint_burn::MintBox,
+            staking::RegisterPublicLaneValidator,
+        },
         parameter::{
             Parameter,
             system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
@@ -501,8 +641,6 @@ mod tests {
         transaction::Executable,
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
-
-    use super::*;
 
     #[test]
     fn peer_pops_without_topology_is_rejected() {
@@ -514,6 +652,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -543,6 +682,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -591,6 +731,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -623,6 +764,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -644,6 +786,7 @@ mod tests {
             private_key: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -664,6 +807,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -689,6 +833,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: Some(ConsensusModeArg::Permissioned),
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -724,6 +869,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -771,6 +917,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -803,6 +950,82 @@ mod tests {
     }
 
     #[test]
+    fn sign_without_manifest_mutations_preserves_direct_manifest_payload() {
+        use std::num::NonZeroU64;
+
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::parameter::BlockParameter;
+
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("sign-direct-manifest-regression"),
+            ".",
+        )
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
+        .append_parameter(Parameter::Block(BlockParameter::MaxTransactions(
+            NonZeroU64::new(512).expect("non-zero"),
+        )))
+        .next_transaction()
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+
+        let genesis_file = tempfile::NamedTempFile::new().expect("create temp genesis file");
+        let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
+        fs::write(genesis_file.path(), json).expect("write genesis json");
+
+        let seed = "sign-direct-manifest-regression";
+        let key_pair = KeyPair::from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519);
+        let expected = manifest
+            .clone()
+            .build_and_sign(&key_pair)
+            .expect("direct manifest signing should succeed");
+
+        let args = Args {
+            genesis_file: genesis_file.path().to_path_buf(),
+            out_file: None,
+            topology: None,
+            peer_pops: vec![],
+            private_key: None,
+            seed: Some(seed.to_owned()),
+            algorithm: Algorithm::Ed25519,
+            config: None,
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).expect("sign should succeed");
+        writer.flush().expect("flush output");
+        let bytes = writer.into_inner().expect("extract buffer");
+        let actual = decode_framed_signed_block(&bytes).expect("decode signed block");
+
+        let actual_instructions: Vec<_> = actual
+            .transactions_vec()
+            .iter()
+            .map(|tx| tx.instructions().clone())
+            .collect();
+        let expected_instructions: Vec<_> = expected
+            .0
+            .transactions_vec()
+            .iter()
+            .map(|tx| tx.instructions().clone())
+            .collect();
+        assert_eq!(
+            actual_instructions, expected_instructions,
+            "signing an unchanged manifest should preserve parsed transaction payloads"
+        );
+        assert_eq!(
+            actual.da_proof_policies(),
+            expected.0.da_proof_policies(),
+            "signing an unchanged manifest should preserve DA proof policies"
+        );
+    }
+
+    #[test]
     fn sign_auto_bootstraps_npos_validators_for_topology() {
         let peer = PeerId::new(
             CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal)
@@ -818,6 +1041,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -850,6 +1074,144 @@ mod tests {
         );
     }
 
+    fn nexus_profile_with_staking_overrides(overrides: &str) -> PathBuf {
+        use std::fmt::Write as _;
+
+        let mut config =
+            fs::read_to_string(nexus_profile_config_path()).expect("read nexus profile config");
+        writeln!(config, "\n[nexus.staking]\n{overrides}").expect("append staking overrides");
+        let mut temp = tempfile::Builder::new()
+            .prefix("kagami-nexus-profile-")
+            .suffix(".toml")
+            .tempfile()
+            .expect("create temp config");
+        write!(temp, "{config}").expect("write temp config");
+        let (_file, path) = temp.keep().expect("persist temp config");
+        path
+    }
+
+    fn nexus_profile_with_validator_modes(public_mode: &str, restricted_mode: &str) -> PathBuf {
+        nexus_profile_with_staking_overrides(&format!(
+            "public_validator_mode = \"{public_mode}\"\nrestricted_validator_mode = \"{restricted_mode}\""
+        ))
+    }
+
+    fn nexus_profile_with_stake_asset_id(stake_asset_id: &str) -> PathBuf {
+        nexus_profile_with_staking_overrides(&format!(
+            "public_validator_mode = \"stake_elected\"\nrestricted_validator_mode = \"admin_managed\"\nstake_asset_id = \"{stake_asset_id}\""
+        ))
+    }
+
+    #[test]
+    fn sign_auto_bootstraps_using_configured_alias_backed_stake_asset() {
+        let peer = PeerId::new(
+            CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let topology_json = norito::json::to_json(&vec![peer.clone()]).unwrap();
+        let configured_asset_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            .parse()
+            .expect("valid canonical asset id");
+        let args = Args {
+            genesis_file: alias_backed_npos_genesis_file(),
+            out_file: None,
+            topology: Some(topology_json),
+            peer_pops: vec![format!("{}=00", peer.public_key())],
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            config: Some(nexus_profile_with_stake_asset_id("xor#universal")),
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).expect("sign should succeed");
+        writer.flush().expect("flush output");
+        let bytes = writer.into_inner().expect("extract buffer");
+        let block = decode_framed_signed_block(&bytes).expect("decode signed block");
+
+        let mut minted_asset_ids = std::collections::BTreeSet::new();
+        let mut registered_asset_ids = std::collections::BTreeSet::new();
+        for tx in block.external_transactions() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instr in instructions {
+                    if let Some(mint) = instr.as_any().downcast_ref::<MintBox>()
+                        && let MintBox::Asset(mint_asset) = mint
+                    {
+                        minted_asset_ids.insert(mint_asset.destination.definition().clone());
+                    }
+                    if let Some(register) =
+                        instr.as_any().downcast_ref::<Register<AssetDefinition>>()
+                    {
+                        registered_asset_ids.insert(register.object.id.clone());
+                    }
+                }
+            }
+        }
+
+        assert!(
+            minted_asset_ids.contains(&configured_asset_id),
+            "expected bootstrap mint to target configured stake asset"
+        );
+        assert!(
+            !registered_asset_ids.contains(&default_npos_bootstrap_stake_asset_id()),
+            "alias-backed stake asset should not force the legacy localnet bootstrap asset"
+        );
+    }
+
+    #[test]
+    fn sign_skips_npos_validator_bootstrap_for_admin_managed_lane() {
+        let peer = PeerId::new(
+            CryptoKeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let topology_json = norito::json::to_json(&vec![peer.clone()]).unwrap();
+        let args = Args {
+            genesis_file: npos_genesis_file(),
+            out_file: None,
+            topology: Some(topology_json),
+            peer_pops: vec![format!("{}=00", peer.public_key())],
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            config: Some(nexus_profile_with_validator_modes(
+                "admin_managed",
+                "admin_managed",
+            )),
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).expect("sign should succeed");
+        writer.flush().expect("flush output");
+        let bytes = writer.into_inner().expect("extract buffer");
+        let block = decode_framed_signed_block(&bytes).expect("decode signed block");
+
+        let mut validators = std::collections::BTreeSet::new();
+        for tx in block.external_transactions() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instr in instructions {
+                    if let Some(register) =
+                        instr.as_any().downcast_ref::<RegisterPublicLaneValidator>()
+                    {
+                        validators.insert(register.validator.clone());
+                    }
+                }
+            }
+        }
+
+        assert!(
+            validators.is_empty(),
+            "admin-managed lane configs must not auto-inject NPoS validator bootstrap"
+        );
+    }
+
     #[test]
     fn sign_links_genesis_account_into_ivm_without_reregistering_it() {
         let peer = PeerId::new(
@@ -866,6 +1228,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -882,16 +1245,11 @@ mod tests {
             .expect("signed genesis transaction")
             .authority()
             .clone();
-        let ivm_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN
-            .parse()
-            .expect("ivm domain");
-
         let mut ivm_genesis_registrations = 0usize;
         for tx in block.external_transactions() {
             if let Executable::Instructions(instructions) = tx.instructions() {
                 for instr in instructions {
                     if let Some(register) = instr.as_any().downcast_ref::<Register<Account>>()
-                        && register.object.domain == ivm_domain
                         && register.object.id == genesis_account
                     {
                         ivm_genesis_registrations += 1;
@@ -916,6 +1274,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: Some(5),
@@ -941,6 +1300,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: Some(ConsensusModeArg::Npos),
             mode_activation_height: Some(10),
@@ -966,6 +1326,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: Some(ConsensusModeArg::Npos),
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -991,6 +1352,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -999,6 +1361,47 @@ mod tests {
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
             .expect("NPoS genesis with parameters should sign");
+    }
+
+    fn nexus_profile_config_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|path| path.parent())
+            .expect("workspace root")
+            .join("defaults/nexus/config.toml")
+    }
+
+    #[test]
+    fn sign_embeds_da_proof_policies_from_peer_config() {
+        let args = Args {
+            genesis_file: minimal_genesis_file(),
+            out_file: None,
+            topology: None,
+            peer_pops: Vec::new(),
+            private_key: Some(test_private_key_hex()),
+            seed: None,
+            algorithm: Algorithm::Ed25519,
+            config: Some(nexus_profile_config_path()),
+            consensus_mode: None,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).expect("sign should succeed");
+        writer.flush().expect("flush output");
+        let bytes = writer.into_inner().expect("extract buffer");
+        let block = decode_framed_signed_block(&bytes).expect("decode signed block");
+        let bundle = block
+            .da_proof_policies()
+            .expect("expected genesis to embed configured DA proof policies");
+        let aliases: Vec<_> = bundle
+            .policies
+            .iter()
+            .map(|policy| policy.alias.as_str())
+            .collect();
+
+        assert_eq!(aliases, vec!["core", "governance", "zk"]);
     }
 
     #[test]
@@ -1011,6 +1414,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -1031,6 +1435,7 @@ mod tests {
             private_key: Some(test_private_key_hex()),
             seed: None,
             algorithm: Algorithm::Ed25519,
+            config: None,
             consensus_mode: None,
             next_consensus_mode: None,
             mode_activation_height: None,
@@ -1047,20 +1452,16 @@ mod tests {
     }
 
     fn minimal_genesis_file() -> PathBuf {
-        let mut genesis_file = tempfile::Builder::new()
+        let genesis_file = tempfile::Builder::new()
             .prefix("kagami-genesis-test-")
             .tempfile()
             .expect("create temp genesis file");
-        let genesis_json = r#"{
-            "chain": "test-chain",
-            "executor": null,
-            "ivm_dir": ".",
-            "consensus_mode": "Permissioned",
-            "transactions": [
-                {}
-            ]
-        }"#;
-        write!(genesis_file, "{genesis_json}").expect("write genesis json");
+        let manifest =
+            GenesisBuilder::new_without_executor(ChainId::from("test-chain"), PathBuf::from("."))
+                .build_raw()
+                .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+        let genesis_json = norito::json::to_json_pretty(&manifest).expect("serialize genesis");
+        fs::write(genesis_file.path(), genesis_json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
         path
     }
@@ -1072,6 +1473,7 @@ mod tests {
             .expect("create temp genesis file");
         let genesis_json = r#"{
             "chain": "test-chain",
+            "chain_discriminant": 1,
             "executor": null,
             "ivm_dir": ".",
             "transactions": [
@@ -1095,6 +1497,40 @@ mod tests {
                 ))
                 .build_raw()
                 .with_consensus_mode(SumeragiConsensusMode::Npos);
+        let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
+        fs::write(genesis_file.path(), json).expect("write genesis json");
+        let (_file, path) = genesis_file.keep().expect("persist temp genesis");
+        path
+    }
+
+    fn alias_backed_npos_genesis_file() -> PathBuf {
+        let genesis_file = tempfile::Builder::new()
+            .prefix("kagami-npos-alias-genesis-")
+            .tempfile()
+            .expect("create temp genesis file");
+        let asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            .parse()
+            .expect("valid canonical asset id");
+        let alias: AssetDefinitionAlias = "xor#universal".parse().expect("valid alias");
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("npos-sign-alias"),
+            PathBuf::from("."),
+        )
+        .append_instruction(Register::asset_definition(
+            AssetDefinition::new(asset_definition_id.clone(), NumericSpec::default())
+                .with_name("xor".to_owned())
+                .with_metadata(Metadata::default()),
+        ))
+        .append_instruction(SetAssetDefinitionAlias::bind(
+            asset_definition_id,
+            alias,
+            None,
+        ))
+        .append_parameter(Parameter::Custom(
+            SumeragiNposParameters::default().into_custom_parameter(),
+        ))
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Npos);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");

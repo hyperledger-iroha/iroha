@@ -1,0 +1,32 @@
+{
+  "name": "language-kotodama",
+  "displayName": "Kotodama Language",
+  "description": "TextMate grammar for the Kotodama smart-contract language",
+  "version": "0.0.1",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/<org>/language-kotodama"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "kotodama",
+        "aliases": [
+          "Kotodama",
+          "kotodama"
+        ],
+        "extensions": [
+          ".ko"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "kotodama",
+        "scopeName": "source.kotodama",
+        "path": "./syntaxes/kotodama.tmLanguage.json"
+      }
+    ]
+  }
+}

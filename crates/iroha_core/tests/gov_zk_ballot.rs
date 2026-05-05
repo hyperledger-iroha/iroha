@@ -71,10 +71,11 @@ fn new_state() -> State {
     let query_handle = LiveQueryStore::start_test();
     let alice_id = (*ALICE_ID).clone();
     let bob_id = (*BOB_ID).clone();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&alice_id);
-    let alice = Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
-    let bob = Account::new(bob_id.clone().to_account_id(domain_id)).build(&bob_id);
+    let alice = Account::new(alice_id.clone()).build(&alice_id);
+    let bob = Account::new(bob_id.clone()).build(&bob_id);
     let world = World::with([domain], [alice, bob], Vec::<AssetDefinition>::new());
     let mut state = State::new_for_testing(world, kura, query_handle);
     state.zk.halo2.enabled = true;
@@ -1013,13 +1014,13 @@ fn zk_ballot_rejects_owner_non_string() {
     .execute(&ALICE_ID, &mut stx)
     .unwrap_err();
     let s = format!("{err}");
-    assert!(s.contains("owner must be a canonical account id"));
+    assert!(s.contains("owner must be a canonical I105 account id"));
 
     let events = stx.world.take_external_events();
     assert!(events.iter().any(|event| matches!(
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::BallotRejected(rej)))
-            if rej.reason.contains("owner must be a canonical account id")
+            if rej.reason.contains("owner must be a canonical I105 account id")
     )));
 }
 

@@ -10,8 +10,7 @@ object AddressCopyTelemetry {
     private const val TAG = "AddressCopyTelemetry"
 
     enum class CopyMode(val analyticsLabel: String) {
-        I105("i105"),
-        I105_DEFAULT("i105_default")
+        I105("i105")
     }
 
     private val counters = ConcurrentHashMap<CopyMode, Int>()

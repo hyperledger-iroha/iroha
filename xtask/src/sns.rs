@@ -648,9 +648,9 @@ fn ensure_asset_literal(literal: &str, field: &str, prefix: &str, errors: &mut V
         ));
         return;
     }
-    if let Err(err) = iroha_data_model::asset::AssetId::parse_encoded(trimmed) {
+    if let Err(err) = iroha_data_model::asset::AssetId::parse_literal(trimmed) {
         errors.push(format!(
-            "{prefix}: {field} `{literal}` must be an encoded asset id (`norito:<hex>`): {err}"
+            "{prefix}: {field} `{literal}` must be an asset-holding id in `<base58-asset-definition-id>#<i105-account-id>` form: {err}"
         ));
     }
 }
@@ -2547,7 +2547,8 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod catalog_verify_tests {
     use super::*;
 
-    const SAMPLE_ASSET_ID: &str = "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c3000000000000000141b40d658cbfbb00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033320000000000000017000000000000000f00000000000000070000000000000064656661756c740b000000000000000300000000000000786f72";
+    const SAMPLE_ASSET_ID: &str =
+        "6sLdgCzX8t3h4cU4cinuyqHVivrr#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 
     fn sample_pricing() -> PricingTier {
         PricingTier {
@@ -2569,8 +2570,8 @@ mod catalog_verify_tests {
             suffix: ".sora".into(),
             suffix_id: 1,
             status: "active".into(),
-            steward_account: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into(),
-            fund_splitter_account: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into(),
+            steward_account: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
+            fund_splitter_account: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into(),
             payment_asset_id: SAMPLE_ASSET_ID.into(),
             referral_cap_bps: 500,
             min_term_years: 1,
@@ -2580,7 +2581,7 @@ mod catalog_verify_tests {
             policy_version: 1,
             reserved_labels: vec![ReservedLabel {
                 label: "treasury".into(),
-                assigned_to: Some("6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ".into()),
+                assigned_to: Some("sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB".into()),
                 release_at_ms: None,
                 note: None,
             }],

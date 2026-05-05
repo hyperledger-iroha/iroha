@@ -1,93 +1,105 @@
 ---
-lang: ur
-direction: rtl
-source: docs/portal/docs/sns/address-checksum-runbook.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
+id: address-checksum-runbook
+title: Account Address Checksum Incident Runbook
+sidebar_label: Checksum incidents
+description: Operational response for i105 checksum failures (ADDR-7).
 ---
 
-<div dir="rtl">
-
-:::note اصل نسخہ
-یہ صفحہ `docs/source/sns/address_checksum_failure_runbook.md` کا خلاصہ ہے۔ پہلے
-ماخذ فائل اپ ڈیٹ کریں، پھر یہ کاپی sync کریں۔
+:::note Canonical Source
+This page mirrors `docs/source/sns/address_checksum_failure_runbook.md`. Update
+the source file first, then sync this copy.
 :::
 
-Torii، SDKs، اور والٹ/ایکسپلورر کلائنٹس پر `ERR_CHECKSUM_MISMATCH`
-(`ChecksumMismatch`) ظاہر ہوتے ہی ADDR-6/ADDR-7 رن بک فعال کرنا لازم ہے۔
+Checksum failures surface as `ERR_CHECKSUM_MISMATCH` (`ChecksumMismatch`) across
+Torii, SDKs, and wallet/explorer clients. The ADDR-6/ADDR-7 roadmap items now
+require operators to follow this runbook whenever checksum alerts or support
+tickets fire.
 
-## یہ play کب چلائیں
+## When to run the play
 
-- **الرٹس:** `AddressInvalidRatioSlo` (`dashboards/alerts/address_ingest_rules.yml`)
-  میں `reason="ERR_CHECKSUM_MISMATCH"` ظاہر ہو۔
-- **فکسچر ڈرفٹ:** `account_address_fixture_status` Prometheus فائل یا Grafana
-  ڈیش بورڈ کسی SDK کے لیے mismatch رپورٹ کرے۔
-- **سپورٹ اسکیلیشنز:** والٹ/ایکسپلورر/SDK ٹیمیں چیک سم ایررز، IME کرپشن، یا
-  clipboard اسکین ناکامیوں کی اطلاع دیں۔
-- **ہاتھوں کا مشاہدہ:** پروڈکشن Torii لاگز میں مسلسل
-  `address_parse_error=checksum_mismatch` نظر آئے۔
+- **Alerts:** `AddressInvalidRatioSlo` (defined in
+  `dashboards/alerts/address_ingest_rules.yml`) trips and the annotations list
+  `reason="ERR_CHECKSUM_MISMATCH"`.
+- **Fixture drift:** The `account_address_fixture_status` Prometheus textfile or
+  Grafana dashboard reports a checksum mismatch for any SDK copy.
+- **Support escalations:** Wallet/explorer/SDK teams cite checksum errors, IME
+  corruption, or clipboard scans that no longer decode.
+- **Manual observation:** Torii logs show repeated `address_parse_error=checksum_mismatch`
+  for production endpoints.
 
-	Local-8/Local-12 کولیشنز کے لیے متعلقہ playbooks استعمال کریں۔
+If the incident is specifically about Local-8/Local-12 collisions, follow the
+`AddressLocal8Resurgence` or `AddressLocal12Collision` playbooks instead.
 
-## شواہد کی چیک لسٹ
+## Evidence checklist
 
-| ثبوت | کمانڈ / مقام | نوٹس |
-|------|--------------|-------|
-| Grafana اسنیپ شاٹ | `dashboards/grafana/address_ingest.json` | invalid وجوہ اور متاثرہ endpoints محفوظ کریں۔ |
-| Alert payload | PagerDuty/Slack + `dashboards/alerts/address_ingest_rules.yml` | context لیبل اور ٹائم اسٹیمپ شامل کریں۔ |
-| فکسچر صحت | `artifacts/account_fixture/address_fixture.prom` + Grafana | ثابت کرتا ہے کہ SDK کی کاپیاں canonical JSON سے نہیں ہٹیں۔ |
-| PromQL | `sum by (context) (increase(torii_address_invalid_total{reason="ERR_CHECKSUM_MISMATCH"}[5m]))` | انسیڈنٹ رپورٹ کے لیے CSV ایکسپورٹ کریں۔ |
-| لاگز | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` | PII ہٹانے کے بعد شیئر کریں۔ |
-| فکسچر ویری فیکیشن | `cargo xtask address-vectors --verify` | جنریٹر اور کمیٹیڈ JSON کی یکسانیت۔ |
-| SDK parity | `python3 scripts/account_fixture_helper.py check ...` | الرٹ میں مذکور ہر SDK کے لیے چلائیں۔ |
-| Clipboard/IME چیک | `iroha tools address inspect <literal>` | چھپے حروف یا IME تبدیلیوں کی شناخت۔ |
+| Evidence | Command / Location | Notes |
+|----------|-------------------|-------|
+| Grafana snapshot | `dashboards/grafana/address_ingest.json` | Capture invalid reason breakdowns and affected endpoints. |
+| Alert payload | PagerDuty/Slack + `dashboards/alerts/address_ingest_rules.yml` | Include context labels and timestamps. |
+| Fixture health | `artifacts/account_fixture/address_fixture.prom` + Grafana | Proves whether SDK copies drifted from `fixtures/account/address_vectors.json`. |
+| PromQL query | `sum by (context) (increase(torii_address_invalid_total{reason="ERR_CHECKSUM_MISMATCH"}[5m]))` | Export CSV for the incident doc. |
+| Logs | `journalctl -u iroha_torii --since -30m | rg 'checksum_mismatch'` (or log aggregation) | Scrub PII before sharing. |
+| Fixture verification | `cargo xtask address-vectors --verify` | Confirms canonical generator and committed JSON agree. |
+| SDK parity check | `python3 scripts/account_fixture_helper.py check --target <path> --metrics-out artifacts/account_fixture/<label>.prom --metrics-label <label>` | Run for every SDK reported in alerts/tickets. |
+| Clipboard/IME sanity | `iroha tools address inspect <literal>` | Detects hidden characters or IME rewrites; cite `address_display_guidelines.md`. |
 
-## فوری ردِعمل
+## Immediate response
 
-1. الرٹ کا اعتراف کریں، Grafana + PromQL لنکس انسیڈنٹ تھریڈ میں دیں، اور
-   متاثرہ Torii contexts نوٹ کریں۔
-2. manifest promotions اور address parsing والے SDK ریلیز روک دیں۔
-3. ڈیش بورڈ اسنیپ شاٹس اور Prometheus artefacts کو
-   `docs/source/sns/incidents/YYYY-MM/<ticket>/` میں محفوظ کریں۔
-4. `checksum_mismatch` دکھانے والے لاگ نمونے جمع کریں۔
-5. `#sdk-parity` میں SDK مالکان کو اطلاع دیں تاکہ فوری triage ہو سکے۔
+1. Acknowledge the alert, link Grafana snapshots + PromQL output in the incident
+   thread, and note affected Torii contexts.
+2. Freeze manifest promotions / SDK releases touching address parsing.
+3. Save dashboard snapshots and the generated Prometheus textfile artefacts in
+   the incident folder (`docs/source/sns/incidents/YYYY-MM/<ticket>/`).
+4. Pull log samples showing `checksum_mismatch` payloads.
+5. Notify SDK owners (`#sdk-parity`) with sample payloads so they can triage.
 
-## وجہ کی علیحدگی
+## Root-cause isolation
 
-### فکسچر یا جنریٹر ڈرفٹ
-- `cargo xtask address-vectors --verify` دوبارہ چلائیں؛ ناکامی پر ری جنریٹ کریں۔
-- ہر SDK کے لیے `ci/account_fixture_metrics.sh` یا `scripts/account_fixture_helper.py check`
-  چلائیں تاکہ بنڈل canonical JSON سے میچ کرے۔
+### Fixture or generator drift
 
-### کلائنٹ انکوڈر / IME ریگریشن
-- `iroha tools address inspect` کے ذریعے زیرو وِد، kana یا truncate شدہ strings پکڑیں۔
-- `docs/source/sns/address_display_guidelines.md` کے مطابق UX بہاؤ دوبارہ چیک کریں۔
+- Re-run `cargo xtask address-vectors --verify`; regenerate if it fails.
+- Execute `ci/account_fixture_metrics.sh` (or individual
+  `scripts/account_fixture_helper.py check`) for each SDK to confirm bundled
+  fixtures match the canonical JSON.
 
-### Manifest یا رجسٹری مسائل
-- `address_manifest_ops.md` فالو کریں تاکہ تازہ ترین manifest bundle validate ہو
-  اور Local-8 selectors واپس نہ آئیں۔
+### Client encoders / IME regressions
 
-### بدنیتی پر مبنی/خراب ٹریفک
-- Torii لاگز اور `torii_http_requests_total` کے ذریعے حملہ آور IPs/app IDs
-  شناخت کریں اور کم از کم 24 گھنٹے کے لاگز محفوظ رکھیں۔
+- Inspect user-provided literals via `iroha tools address inspect` to find zero-width
+  joins, kana conversions, or truncated payloads.
+- Cross-check wallet/explorer flows with
+  `docs/source/sns/address_display_guidelines.md` (canonical i105 copy/share,
+  alias labeling, QR helpers) to ensure they follow the approved UX.
 
-## اصلاح اور بحالی
+### Manifest or registry issues
 
-| منظر | اقدامات |
-|------|---------|
-| فکسچر ڈرفٹ | `fixtures/account/address_vectors.json` ری جنریٹ کریں، `cargo xtask address-vectors --verify` دوبارہ چلائیں، SDK بنڈلز اپ ڈیٹ کریں، اور `address_fixture.prom` ٹکٹ میں شامل کریں۔ |
-| SDK/کلائنٹ ریگریشن | canonical فکسچر اور `iroha tools address inspect` آؤٹ پٹ کے ساتھ ایشوز فائل کریں اور ریلیزز کو `ci/check_address_normalize.sh` جیسی parity CI کے پیچھے گیٹ کریں۔ |
-| بدنیتی سبمشنز | مسئلہ پیدا کرنے والے principals کو ریٹ لمٹ/بلاک کریں، اور selector tombstone کی ضرورت ہو تو گورننس کو escalate کریں۔ |
+- Follow `address_manifest_ops.md` to re-validate the latest manifest bundle and
+  ensure no Local-8 selectors resurfaced.
+  appear in payloads.
 
-اصلاحات کے بعد PromQL دوبارہ چلائیں تاکہ `ERR_CHECKSUM_MISMATCH`
-کم از کم 30 منٹ تک صفر رہے (`/tests/*` مستثنیٰ)۔
+### Malicious or malformed traffic
 
-## اختتام
+- Break down offending IPs/app IDs via Torii logs and `torii_http_requests_total`.
+- Preserve at least 24 hours of logs for Security/Governance follow-up.
 
-1. Grafana اسنیپ شاٹس، PromQL CSV، لاگ اقتباسات، اور `address_fixture.prom` آرکائیو کریں۔
-2. `status.md` (ADDR سیکشن) اور روڈ میپ قطار اپ ڈیٹ کریں۔
-3. `docs/source/sns/incidents/` کے تحت پوسٹ انسیڈنٹ نوٹس شامل کریں۔
-4. SDK ریلیز نوٹس میں checksum فکسز کا ذکر کریں جہاں موزوں ہو۔
-5. الرٹ صرف تب بند کریں جب 24 گھنٹے تک الرٹ سبز رہے اور تمام فکسچر چیکس پاس ہوں۔
+## Mitigation & recovery
 
-</div>
+| Scenario | Actions |
+|----------|---------|
+| Fixture drift | Regenerate `fixtures/account/address_vectors.json`, rerun `cargo xtask address-vectors --verify`, update SDK bundles, and attach `address_fixture.prom` snapshots to the ticket. |
+| SDK/client regression | File issues referencing the canonical fixture + `iroha tools address inspect` output, and gate releases behind the SDK parity CI (e.g., `ci/check_address_normalize.sh`). |
+| Malicious submissions | Rate-limit or block offending principals, escalate to Governance if tombstoning selectors is required. |
+
+Once mitigations land, rerun the PromQL query above to confirm
+`ERR_CHECKSUM_MISMATCH` stays at zero (excluding `/tests/*`) for at least
+30 minutes before downgrading the incident.
+
+## Closure
+
+1. Archive Grafana snapshots, PromQL CSV, log excerpts, and `address_fixture.prom`.
+2. Update `status.md` (ADDR section) plus the roadmap row if tooling/docs
+   changed.
+3. File post-incident notes under `docs/source/sns/incidents/` when new lessons
+   emerge.
+4. Ensure SDK release notes mention checksum fixes when applicable.
+5. Confirm the alert stays green for 24h and fixture checks remain green before
+   resolving.

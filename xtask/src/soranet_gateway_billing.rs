@@ -723,9 +723,9 @@ mod tests {
             catalog_path,
             guardrails_path: Some(guardrails_path),
             output_dir: output_dir.clone(),
-            payer: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string(),
-            treasury: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string(),
-            asset_definition: "xor#wonderland".to_string(),
+            payer: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_string(),
+            treasury: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_string(),
+            asset_definition: "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string(),
             allow_hard_cap: false,
         })
         .expect("billing run succeeds");
@@ -808,9 +808,9 @@ mod tests {
             catalog_path,
             guardrails_path: Some(guardrails_path),
             output_dir,
-            payer: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string(),
-            treasury: "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_string(),
-            asset_definition: "xor#wonderland".to_string(),
+            payer: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_string(),
+            treasury: "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_string(),
+            asset_definition: "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string(),
             allow_hard_cap: false,
         });
 

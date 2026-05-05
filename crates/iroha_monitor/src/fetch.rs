@@ -110,6 +110,7 @@ pub struct StatusPayload {
 pub struct MetricsSnapshot {
     pub gas_used: Option<u64>,
     pub fee_units: Option<u64>,
+    pub fee_scale: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -388,6 +389,7 @@ fn parse_prometheus_metrics(text: &str) -> MetricsSnapshot {
     MetricsSnapshot {
         gas_used: values.get("block_gas_used").copied(),
         fee_units: values.get("block_fee_total_units").copied(),
+        fee_scale: values.get("block_fee_total_scale").copied(),
     }
 }
 
@@ -457,6 +459,7 @@ fn stub_metrics_snapshot(peer_index: usize) -> MetricsSnapshot {
     MetricsSnapshot {
         gas_used: Some(100 + peer_index as u64 * 17),
         fee_units: Some(50 + peer_index as u64 * 7),
+        fee_scale: Some(0),
     }
 }
 
@@ -466,10 +469,11 @@ mod tests {
 
     #[test]
     fn parse_prometheus_extracts_expected_metrics() {
-        let text = "# HELP\nblock_gas_used 123\nblock_fee_total_units 456\nother_metric 1";
+        let text = "# HELP\nblock_gas_used 123\nblock_fee_total_units 456\nblock_fee_total_scale 3\nother_metric 1";
         let metrics = parse_prometheus_metrics(text);
         assert_eq!(metrics.gas_used, Some(123));
         assert_eq!(metrics.fee_units, Some(456));
+        assert_eq!(metrics.fee_scale, Some(3));
     }
 
     #[test]
@@ -487,10 +491,11 @@ mod tests {
 
     #[test]
     fn parse_prometheus_skips_non_integer_samples() {
-        let text = "block_gas_used 12.5\nblock_gas_used 42\nblock_fee_total_units NaN\nblock_fee_total_units 24";
+        let text = "block_gas_used 12.5\nblock_gas_used 42\nblock_fee_total_units NaN\nblock_fee_total_units 24\nblock_fee_total_scale oops\nblock_fee_total_scale 2";
         let metrics = parse_prometheus_metrics(text);
         assert_eq!(metrics.gas_used, Some(42));
         assert_eq!(metrics.fee_units, Some(24));
+        assert_eq!(metrics.fee_scale, Some(2));
     }
 
     #[test]

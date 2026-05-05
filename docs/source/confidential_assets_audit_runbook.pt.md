@@ -32,7 +32,7 @@ ao validar fluxos de ativos confidenciais. Complementa o manual de rotação
   opcionalmente, delimitando o escopo para uma única definição de ativo. Exemplo de CLI:
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - Metadados de políticas e transições pendentes estão disponíveis através

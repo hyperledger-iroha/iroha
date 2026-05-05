@@ -32,7 +32,7 @@ translator: machine-google-reviewed
   တစ်ခုတည်းသော ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုမှုကို စိတ်ကြိုက်ရွေးချယ်နိုင်သည်။ CLI ဥပမာ-
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - မူဝါဒ မက်တာဒေတာနှင့် ဆိုင်းငံ့ထားသော အကူးအပြောင်းများမှတဆင့် ရရှိနိုင်ပါသည်။

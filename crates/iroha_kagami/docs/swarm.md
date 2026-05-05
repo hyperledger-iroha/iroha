@@ -1,11 +1,11 @@
-# Iroha Swarm
+# Kagami Docker Compose
 
 Tools for generating Docker Compose configuration for Iroha.
 
 ## Usage
 
 ```bash
-kagami swarm [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-file <FILE>
+kagami docker [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-file <FILE>
 ```
 
 ### Options
@@ -42,7 +42,7 @@ kagami swarm [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-f
 - `-i, --image <NAME>`: Specifies the Docker image used by the peer services. 
   - By default, the image is pulled from Docker Hub if not cached. 
   - Pass the `--build` option to build the image from a Dockerfile instead. 
-  - **Note:** Swarm only guarantees that the Docker Compose configuration it generates is compatible with the same Git revision it is built from itself. Therefore, if the specified image is not compatible with the version of Swarm you are running, the generated configuration might not work.
+  - **Note:** Kagami only guarantees that the Docker Compose configuration it generates is compatible with the same Git revision it is built from itself. Therefore, if the specified image is not compatible with the version of Kagami you are running, the generated configuration might not work.
 
 - `-b, --build <DIR>`: Builds the image from the Dockerfile in the specified directory. 
   - Do not rebuild if the image has been cached. 
@@ -73,7 +73,7 @@ kagami swarm [OPTIONS] --peers <COUNT> --config-dir <DIR> --image <NAME> --out-f
 Generate a configuration with 4 peers, using `Iroha` as the cryptographic seed, using `./peer_config` as a directory with configuration, and using `.` as a directory with the Iroha `Dockerfile` to build a `myiroha:local` image, saving the Compose config to `./my-configs/docker-compose.build.yml` in the current directory: 
 
 ```bash
-kagami swarm \
+kagami docker \
     --peers 4 \
     --seed Iroha \
     --peer-config ./peer_overrides.toml \
@@ -86,7 +86,7 @@ kagami swarm \
 Generate the same configuration, but use an existing image pulled from Docker Hub instead. The output is printed to stdout (notice how the target path still has to be provided, as it is used to resolve the config and build directories):
 
 ```bash
-kagami swarm \
+kagami docker \
     --peers 4 \
     --seed Iroha \
     --healthcheck \
@@ -103,7 +103,7 @@ kagami swarm \
 3. Run:
 
 ```bash
-kagami swarm \
+kagami docker \
     --peers 4 \
     --seed Iroha \
     --config-dir ./peer_config \
@@ -149,10 +149,10 @@ For Iroha3, drop `--next-consensus-mode`/`--mode-activation-height` and keep `--
        --out-file ./cfg/genesis.signed.nrt
    ```
 
-3. Render the Docker Compose file; Swarm refuses to proceed if `genesis.json` is missing `sumeragi_npos_parameters`, so the compose workflow always carries the NPoS parameters:
+3. Render the Docker Compose file; Kagami refuses to proceed if `genesis.json` is missing `sumeragi_npos_parameters`, so the compose workflow always carries the NPoS parameters:
 
    ```bash
-   kagami swarm \
+   kagami docker \
        --peers 4 \
        --consensus-mode permissioned \
        --next-consensus-mode npos \

@@ -38,7 +38,7 @@ Le parseur exige la ligne d'en-tete suivante (l'ordre est גמיש):
 | `suffix_id` | Oui | זיהוי מספרי דה סיומת (עשרוני או `0x` hex). |
 | `owner` | Oui | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Oui | Entier `1..=255`. |
-| `payment_asset_id` | Oui | Actif de Settlement (למשל `xor#sora`). |
+| `payment_asset_id` | Oui | Actif de Settlement (למשל `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Oui | Entiers non signnes representant des unites natives de l'actif. |
 | `settlement_tx` | Oui | Valeur JSON או שרשרת מילותי התוצאה של טרנזקציית ה-paiement או hash. |
 | `payment_payer` | Oui | AccountId qui a autorise le paiement. |
@@ -77,18 +77,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -112,7 +112,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -132,9 +132,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- L'helper emet un `POST /v1/sns/registrations` par requete et s'arrete au premier
+- L'helper emet un `POST /v1/sns/names` par requete et s'arrete au premier
   שגיאה ב-HTTP. התשובות נשלחות לכניסה לרישום NDJSON.
-- `--poll-status` תחקור מחדש `/v1/sns/registrations/{selector}` אפר צ'אק
+- `--poll-status` תחקור מחדש `/v1/sns/names/{namespace}/{literal}` אפר צ'אק
   soumission (jusqu'a `--poll-attempts`, defaut 5) pour confirmer que
   הרישום נראה לעין. Fournissez `--suffix-map` (JSON de `suffix_id`
   vers des valeurs "סיומת") pour que l'outil derive les litteraux
@@ -225,7 +225,7 @@ suivantes:
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -249,7 +249,7 @@ reussite/echec des soumissions. Le tableau filter par `release` pour que les
   הפניות a des fichiers sont resolues relativement a l'emplacement du CSV.
   Les metadata non-objet produisent une reur de validation.
 - **בקרים:** les cellules מגלה את `--default-controllers`. פורניסז
-  des lists explicites (לדוגמה `i105...;i105...`) quand vous deleguez a des
+  des lists explicites (לדוגמה `<i105-account-id>;<i105-account-id>`) quand vous deleguez a des
   שחקנים שאינם בעלי.
 
 Les echecs sont signales avec des numeros de ligne contextuels (לדוגמה

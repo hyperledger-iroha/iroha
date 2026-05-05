@@ -1,18 +1,38 @@
-<!-- Auto-generated stub for Japanese (ja) translation. Replace this content with the full translation. -->
-
 ---
 lang: ja
 direction: ltr
 source: ivm.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c07499edafa5f9d743fbb4b1bbd169725674dca7760d3912b0acb40c7c00fdf3
 source_last_modified: "2026-02-08T10:32:13.839888+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-04-02
 ---
 
-# 翻訳作業中
+# IVM リファレンス
 
-このファイルは英語版ドキュメントの日本語訳の雛形です。翻訳が完了したら、上記メタデータの `status` を更新してください。
+このファイルは、IVM のアーキテクチャと ABI に関するメモのための、workspace ルートにある入口ドキュメントです。
+詳細なドキュメントは `docs/source/` と `crates/ivm/docs/` にあります。
 
-翻訳本文をここに記載し、完了後はメタデータの `status` を `complete` に更新してください。最新の英語版との差分を確認したら、更新日を `translation_last_reviewed` に反映します。
+関連ドキュメント:
+- `docs/source/ivm_architecture_plan.md`
+- `docs/source/ivm_syscalls.md`
+- `crates/ivm/docs/pointer_abi.md`
+
+<!-- BEGIN GENERATED POINTER TYPES -->
+| ID | Name | ABI v1 |
+|---|---|---|
+| 0x0001 | AccountId | OK |
+| 0x0002 | AssetDefinitionId | OK |
+| 0x0003 | Name | OK |
+| 0x0004 | Json | OK |
+| 0x0005 | NftId | OK |
+| 0x0006 | Blob | OK |
+| 0x0007 | AssetId | OK |
+| 0x0008 | DomainId | OK |
+| 0x0009 | NoritoBytes | OK |
+| 0x000A | DataSpaceId | OK |
+| 0x000B | AxtDescriptor | OK |
+| 0x000C | AssetHandle | OK |
+| 0x000D | ProofBlob | OK |
+<!-- END GENERATED POINTER TYPES -->

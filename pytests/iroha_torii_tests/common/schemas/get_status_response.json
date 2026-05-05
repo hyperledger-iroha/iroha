@@ -14,6 +14,12 @@
     "txs_rejected": {
       "type": "integer"
     },
+    "last_rejection_at_ms": {
+      "type": ["integer", "null"]
+    },
+    "txs_rejected_recent_5m": {
+      "type": "integer"
+    },
     "uptime": {
       "type": "object",
       "properties": {
@@ -98,6 +104,8 @@
     "blocks",
     "txs_approved",
     "txs_rejected",
+    "last_rejection_at_ms",
+    "txs_rejected_recent_5m",
     "uptime",
     "view_changes",
     "queue_size",

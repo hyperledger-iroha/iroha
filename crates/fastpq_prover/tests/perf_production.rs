@@ -20,7 +20,6 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
-use std::str::FromStr;
 
 const PARAMETER_SET: &str = "fastpq-lane-balanced";
 const DEFAULT_ROW_COUNT: usize = 20_000;
@@ -101,8 +100,11 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
 }
 
 fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTransition) {
-    let asset_definition = AssetDefinitionId::new("perf".parse().unwrap(), "xor".parse().unwrap());
-    let domain = DomainId::from_str("perf").expect("domain id");
+    let asset_definition = AssetDefinitionId::new(
+        DomainId::try_new("perf", "universal").unwrap(),
+        "xor".parse().unwrap(),
+    );
+    let domain = DomainId::try_new("perf", "universal").expect("domain id");
     let from_account = deterministic_account(&format!("sender_{index:04}"), &domain);
     let to_account = deterministic_account(&format!("receiver_{index:04}"), &domain);
     let amount = 1 + (index as u64 % 100);

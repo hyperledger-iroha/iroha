@@ -4,15 +4,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { noritoEncodeInstruction, noritoDecodeInstruction } from "../src/norito.js";
+import { __resetNativeStateForTests } from "../src/native.js";
 import { makeNativeTest, noritoRequiredMethods } from "./helpers/native.js";
 
 const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
-const ACCOUNT_ID = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+const ACCOUNT_ID = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 
 const REGISTER_DOMAIN = {
   Register: {
     Domain: {
-      id: "wonderland",
+      id: "wonderland.sora",
       logo: null,
       metadata: {
         key: "value",
@@ -36,11 +37,15 @@ const REGISTER_ACCOUNT = {
 const REGISTER_ASSET = {
   Register: {
     AssetDefinition: {
-      id: "rose#wonderland",
+      id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+      name: "",
+      description: null,
+      alias: null,
       logo: null,
       metadata: {},
       mintable: "Infinitely",
       spec: { scale: null },
+      balance_scope_policy: "Global",
       confidential_policy: {
         mode: "TransparentOnly",
         vk_set_hash: null,
@@ -67,13 +72,29 @@ function loadInstructionBytes(name) {
   return Buffer.from(fixture.instruction, "base64");
 }
 
-function loadEncodedAssetIdFromFixture(name) {
+function loadAssetIdFromFixture(name) {
   const decoded = noritoDecodeInstruction(loadInstructionBytes(name));
   const destination = decoded?.Mint?.Asset?.destination ?? decoded?.Burn?.Asset?.destination;
-  if (typeof destination !== "string" || !destination.startsWith("norito:")) {
-    throw new Error(`fixture ${name} did not decode to encoded AssetId literal`);
+  if (typeof destination !== "string" || !destination.includes("#")) {
+    throw new Error(`fixture ${name} did not decode to canonical public AssetId literal`);
   }
   return destination;
+}
+
+function withMissingNativeBinding(callback) {
+  const previousNativeDir = process.env.IROHA_JS_NATIVE_DIR;
+  process.env.IROHA_JS_NATIVE_DIR = "/definitely/missing/iroha-js-native";
+  __resetNativeStateForTests();
+  try {
+    return callback();
+  } finally {
+    if (previousNativeDir === undefined) {
+      delete process.env.IROHA_JS_NATIVE_DIR;
+    } else {
+      process.env.IROHA_JS_NATIVE_DIR = previousNativeDir;
+    }
+    __resetNativeStateForTests();
+  }
 }
 
 test("noritoEncodeInstruction returns canonical bytes", () => {
@@ -105,7 +126,7 @@ test("norito encode/decode supports mint asset instructions", () => {
     Mint: {
       Asset: {
         object: "42",
-        destination: loadEncodedAssetIdFromFixture("mint_asset_numeric.json"),
+        destination: loadAssetIdFromFixture("mint_asset_numeric.json"),
       },
     },
   };
@@ -118,7 +139,7 @@ test("norito encode/decode supports transfer asset instructions", () => {
   const instruction = {
     Transfer: {
       Asset: {
-        source: loadEncodedAssetIdFromFixture("mint_asset_numeric.json"),
+        source: loadAssetIdFromFixture("mint_asset_numeric.json"),
         object: "10",
         destination: ACCOUNT_ID,
       },
@@ -129,21 +150,88 @@ test("norito encode/decode supports transfer asset instructions", () => {
   assert.deepEqual(decoded, instruction);
 });
 
-test("noritoDecodeInstruction keeps encoded asset ids without @domain rewrites", () => {
+baseTest("noritoEncodeInstruction uses pure JS fallback for supported instruction JSON", () => {
+  const instruction = {
+    Transfer: {
+      Asset: {
+        source: loadAssetIdFromFixture("mint_asset_numeric.json"),
+        object: "7",
+        destination: ACCOUNT_ID,
+      },
+    },
+  };
+  let encoded;
+  withMissingNativeBinding(() => {
+    encoded = Buffer.from(noritoEncodeInstruction(instruction));
+  });
+  assert.ok(encoded.length > 32);
+  assert.deepEqual(noritoDecodeInstruction(encoded), instruction);
+});
+
+baseTest("noritoEncodeInstruction requires native binding for unsupported instruction JSON", () => {
+  const instruction = {
+    Log: {
+      level: "INFO",
+      message: "unsupported by the pure JS fallback",
+    },
+  };
+  withMissingNativeBinding(() => {
+    assert.throws(
+      () => noritoEncodeInstruction(instruction),
+      /Native binding required/,
+    );
+  });
+});
+
+baseTest("noritoDecodeInstruction requires native binding for canonical bytes", () => {
+  const bytes = loadInstructionBytes("mint_asset_numeric.json");
+  withMissingNativeBinding(() => {
+    assert.throws(
+      () => noritoDecodeInstruction(bytes),
+      /Native binding required/,
+    );
+  });
+});
+
+baseTest("noritoEncodeInstruction passes pre-encoded payloads through without native binding", () => {
+  const payload = Buffer.from([1, 2, 3, 4]);
+  withMissingNativeBinding(() => {
+    assert.strictEqual(noritoEncodeInstruction(payload), payload);
+    assert.deepEqual(noritoEncodeInstruction(payload.toString("base64")), payload);
+    assert.deepEqual(noritoEncodeInstruction(`0x${payload.toString("hex")}`), payload);
+  });
+});
+
+test("norito encode/decode supports ExecuteTrigger instructions", () => {
+  const instruction = {
+    ExecuteTrigger: {
+      trigger: "staged_mint_request_hbl",
+      args: {
+        action: "create",
+        request_id: "mr1",
+      },
+    },
+  };
+  const encoded = noritoEncodeInstruction(instruction);
+  const decoded = noritoDecodeInstruction(encoded);
+  assert.deepEqual(decoded, instruction);
+});
+
+test("noritoDecodeInstruction keeps canonical asset-holding ids without @domain rewrites", () => {
   const bytes = loadInstructionBytes("mint_asset_numeric.json");
   const decoded = noritoDecodeInstruction(bytes);
   const assetId = decoded?.Mint?.Asset?.destination;
   assert.equal(typeof assetId, "string");
-  assert.equal(assetId.startsWith("norito:"), true);
+  assert.equal(assetId.includes("#"), true);
   assert.equal(assetId.includes("@"), false);
 });
 
-test("noritoDecodeInstruction preserves encoded nested asset identifiers", () => {
+test("noritoDecodeInstruction preserves nested asset-holding identifiers", () => {
   const bytes = loadInstructionBytes("burn_asset_numeric.json");
   const decoded = noritoDecodeInstruction(bytes);
   const assetId = decoded?.Burn?.Asset?.destination;
   assert.equal(typeof assetId, "string");
-  assert.equal(assetId.startsWith("norito:"), true);
+  assert.equal(assetId.includes("#"), true);
   assert.equal(assetId.includes("@"), false);
 });
 

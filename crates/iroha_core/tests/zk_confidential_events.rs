@@ -51,7 +51,7 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
     state.zk.halo2.enabled = true;
     state.zk.verify_timeout = std::time::Duration::ZERO;
 
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id =
         AssetDefinitionId::new(domain_id.clone(), "zcoin".parse().expect("asset name"));
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -61,11 +61,7 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
     let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
     let instructions: [InstructionBox; 5] = [
         Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new_in_domain(
-            account_id.clone(),
-            domain_id.clone(),
-        ))
-        .into(),
+        Register::account(NewAccount::new(account_id.clone())).into(),
         Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone()).with_name("zcoin".to_owned()),
         )

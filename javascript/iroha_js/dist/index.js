@@ -1,19 +1,19 @@
 /**
  * Entry point for the experimental Iroha JS SDK.
  *
- * Native bindings (Norito + crypto) are provided via `iroha_js_host`. When the
- * native module is unavailable, the SDK falls back to pure JS implementations.
+ * Native bindings (Norito + crypto) are provided via the required `iroha_js_host`
+ * module.
  */
 export {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
-  DEFAULT_DOMAIN_NAME,
   decodeI105AccountAddress,
   encodeI105AccountAddress,
   inspectAccountId,
   configureCurveSupport,
 } from "./address.js";
+export { normalizeIdentifierInput } from "./normalizers.js";
 export { MultisigSpecBuilder, MultisigSpec } from "./multisig.js";
 export { ValidationError, ValidationErrorCode } from "./validationError.js";
 export {
@@ -21,28 +21,47 @@ export {
   TransactionStatusError,
   TransactionTimeoutError,
   IsoMessageTimeoutError,
-  ToriiDataModelCompatibilityError,
+  ToriiDataModelMismatchError,
   ToriiHttpError,
   extractPipelineStatusKind,
   decodePdpCommitmentHeader,
   buildConnectWebSocketUrl,
+  encryptIdentifierInputForPolicy,
+  buildIdentifierRequestForPolicy,
   buildRbcSampleRequest,
+  getIdentifierBfvPublicParameters,
   openConnectWebSocket,
+  verifyIdentifierResolutionReceipt,
 } from "./toriiClient.js";
 export { NoritoRpcClient, NoritoRpcError } from "./noritoRpcClient.js";
 export {
+  CRYPTO_ALGORITHMS,
+  SUPPORTED_CRYPTO_ALGORITHMS,
+  supportedCryptoAlgorithms,
+  normalizeCryptoAlgorithm,
   generateKeyPair,
+  loadKeyPair,
   publicKeyFromPrivate,
+  sign,
+  verify,
   signEd25519,
   verifyEd25519,
+  publicKeyMultihash,
+  privateKeyMultihash,
   deriveConfidentialKeyset,
   deriveConfidentialKeysetFromHex,
+  deriveConfidentialDiversifierV2,
+  deriveConfidentialOwnerTagV2,
+  deriveConfidentialReceiveAddressV2,
+  deriveConfidentialNoteV2,
+  deriveConfidentialNullifierV2,
   generateSm2KeyPair,
   deriveSm2KeyPairFromSeed,
   loadSm2KeyPair,
   signSm2,
   verifySm2,
   sm2PublicKeyMultihash,
+  buildKaigiRosterJoinProof,
   SM2_PRIVATE_KEY_LENGTH,
   SM2_PUBLIC_KEY_LENGTH,
   SM2_SIGNATURE_LENGTH,
@@ -52,8 +71,11 @@ export {
 export {
   canonicalQueryString,
   canonicalRequestMessage,
+  canonicalRequestSignatureMessage,
   buildCanonicalRequestHeaders,
+  buildCanonicalJsonRequest,
 } from "./canonicalRequest.js";
+export { buildSoraCloudHfDeployRequest } from "./soracloud.js";
 export {
   buildTouchManifest,
   buildAxtDescriptor,
@@ -80,7 +102,6 @@ export {
 export {
   hashSignedTransaction,
   resignSignedTransaction,
-  encodeSignedTransactionNorito,
   buildRegisterDomainTransaction,
   buildTransaction,
   buildMintAssetTransaction,
@@ -97,17 +118,34 @@ export {
   buildTransferAssetDefinitionTransaction,
   buildTransferDomainTransaction,
   buildTransferNftTransaction,
+  buildRegisterRwaTransaction,
+  buildTransferRwaTransaction,
+  buildMergeRwasTransaction,
+  buildRedeemRwaTransaction,
+  buildFreezeRwaTransaction,
+  buildUnfreezeRwaTransaction,
+  buildHoldRwaTransaction,
+  buildReleaseRwaTransaction,
+  buildForceTransferRwaTransaction,
+  buildSetRwaControlsTransaction,
+  buildSetRwaKeyValueTransaction,
+  buildRemoveRwaKeyValueTransaction,
   buildCreateKaigiTransaction,
+  buildPrivateKaigiFeeSpend,
+  buildConfidentialTransferProofV2,
+  buildConfidentialUnshieldProofV2,
+  buildConfidentialUnshieldProofV3,
+  buildPrivateCreateKaigiTransaction,
   buildJoinKaigiTransaction,
+  buildPrivateJoinKaigiTransaction,
   buildLeaveKaigiTransaction,
   buildEndKaigiTransaction,
+  buildPrivateEndKaigiTransaction,
   buildRecordKaigiUsageTransaction,
   buildSetKaigiRelayManifestTransaction,
   buildRegisterKaigiRelayTransaction,
   buildRegisterSmartContractCodeTransaction,
   buildRegisterSmartContractBytesTransaction,
-  buildDeactivateContractInstanceTransaction,
-  buildActivateContractInstanceTransaction,
   buildRemoveSmartContractBytesTransaction,
   buildProposeDeployContractTransaction,
   buildCastZkBallotTransaction,
@@ -127,15 +165,8 @@ export {
   buildTimeTriggerAction,
   buildPrecommitTriggerAction,
   submitSignedTransaction,
+  submitTransactionEntrypoint,
 } from "./transaction.js";
-export {
-  buildOfflineEnvelope,
-  parseOfflineEnvelope,
-  serializeOfflineEnvelope,
-  readOfflineEnvelopeFile,
-  replayOfflineEnvelope,
-  writeOfflineEnvelopeFile,
-} from "./offlineEnvelope.js";
 export {
   OfflineQrPayloadKind,
   OfflineQrStreamDecoder,
@@ -159,34 +190,43 @@ export {
   sakuraQrStreamLowPowerSkin,
 } from "./offlineQrStream.js";
 export {
-  PETAL_STREAM_GRID_SIZES,
-  OfflinePetalStreamOptions,
-  OfflinePetalStreamGrid,
-  OfflinePetalStreamSampleGrid,
-  OfflinePetalStreamEncoder,
-  OfflinePetalStreamDecoder,
-  OfflinePetalStreamScanSession,
-  samplePetalStreamGridFromRgba,
-  decodePetalStreamFrameAuto,
-} from "./offlinePetalStream.js";
-export {
-  OfflineCounterJournal,
-  OfflineCounterJournalError,
-  OfflineCounterPlatform,
-} from "./offlineCounterJournal.js";
-export {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,
   buildBurnTriggerRepetitionsInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
+  buildRegisterAssetDefinitionInstruction,
+  buildGrantAccountPermissionInstruction,
+  buildSetAssetDefinitionAliasInstruction,
+  buildExecuteTriggerInstruction,
+  buildExecuteTriggerNorito,
+  buildMultisigTriggerArgs,
+  isMultisigSignerAuthorized,
+  buildMultisigExecuteTriggerInstruction,
+  buildMultisigExecuteTriggerNorito,
   buildRegisterMultisigInstruction,
   buildProposeMultisigInstruction,
+  buildProposeMultisigExecuteTriggerInstruction,
+  buildProposeMultisigExecuteTriggerNorito,
+  buildMultisigContractCallProposeRequest,
+  buildMultisigContractCallApproveRequest,
   buildTransferAssetInstruction,
   buildTransferDomainInstruction,
   buildTransferAssetDefinitionInstruction,
   buildTransferNftInstruction,
+  buildRegisterRwaInstruction,
+  buildTransferRwaInstruction,
+  buildMergeRwasInstruction,
+  buildRedeemRwaInstruction,
+  buildFreezeRwaInstruction,
+  buildUnfreezeRwaInstruction,
+  buildHoldRwaInstruction,
+  buildReleaseRwaInstruction,
+  buildForceTransferRwaInstruction,
+  buildSetRwaControlsInstruction,
+  buildSetRwaKeyValueInstruction,
+  buildRemoveRwaKeyValueInstruction,
   buildCreateKaigiInstruction,
   buildJoinKaigiInstruction,
   buildLeaveKaigiInstruction,
@@ -196,8 +236,6 @@ export {
   buildRegisterKaigiRelayInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
-  buildDeactivateContractInstanceInstruction,
-  buildActivateContractInstanceInstruction,
   buildRemoveSmartContractBytesInstruction,
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
@@ -205,6 +243,7 @@ export {
   buildEnactReferendumInstruction,
   buildFinalizeReferendumInstruction,
   buildPersistCouncilForEpochInstruction,
+  buildSubmitAgendaProposalInstruction,
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
   buildCancelTwitterEscrowInstruction,
@@ -220,6 +259,8 @@ export {
   encodeInstruction,
   normalizeAccountId,
   normalizeAssetId,
+  normalizeAssetHoldingId,
+  normalizeRwaId,
 } from "./instructionBuilders.js";
 export {
   resolveToriiClientConfig,
@@ -246,24 +287,47 @@ export {
   buildSampleCamt052Message,
   buildSampleCamt056Message,
 } from "./isoBridge.js";
+export {
+  SCCP_DOMAIN_SORA,
+  SCCP_DOMAIN_ETH,
+  SCCP_DOMAIN_BSC,
+  SCCP_DOMAIN_SOL,
+  SCCP_DOMAIN_TON,
+  SCCP_DOMAIN_TRON,
+  SCCP_DOMAIN_SORA_KUSAMA,
+  SCCP_DOMAIN_SORA_POLKADOT,
+  SCCP_CORE_REMOTE_DOMAINS,
+  isSupportedSccpDomain,
+  canonicalSccpBurnPayloadBytes,
+  canonicalSccpTokenAddPayloadBytes,
+  canonicalSccpTokenControlPayloadBytes,
+  canonicalSccpGovernancePayloadBytes,
+  canonicalSccpCommitmentBytes,
+  sccpBurnMessageId,
+  sccpTokenAddMessageId,
+  sccpTokenPauseMessageId,
+  sccpTokenResumeMessageId,
+  sccpGovernanceMessageId,
+  sccpGovernanceTargetDomain,
+  sccpPayloadHash,
+  sccpParliamentCertificateHash,
+  sccpCommitmentLeafHash,
+  sccpMerkleRootFromCommitment,
+  validateSccpBurnBundleSurface,
+  validateSccpGovernanceBundleSurface,
+} from "./sccp.js";
 export { decodeReplicationOrder, SorafsGatewayFetchError, sorafsGatewayFetch } from "./sorafs.js";
 export { ConnectRetryPolicy } from "./connectRetryPolicy.js";
 
 import * as toriiNamespace from "./toriiClient.js";
 import * as noritoNamespace from "./norito.js";
 import * as cryptoNamespace from "./crypto.js";
-import * as offlineNamespace from "./offlineEnvelope.js";
-import * as offlineCounterNamespace from "./offlineCounterJournal.js";
 import * as offlineQrStreamNamespace from "./offlineQrStream.js";
-import * as offlinePetalStreamNamespace from "./offlinePetalStream.js";
 
 export const Torii = toriiNamespace;
 export const Norito = noritoNamespace;
 export const Crypto = cryptoNamespace;
-export const Offline = offlineNamespace;
-export const OfflineCounters = offlineCounterNamespace;
 export const OfflineQrStream = offlineQrStreamNamespace;
-export const OfflinePetalStream = offlinePetalStreamNamespace;
 export {
   ConnectError,
   ConnectErrorCategory,
@@ -293,6 +357,7 @@ export {
   hostPatternsCoverDerivedHosts,
   canonicalGatewaySuffix,
   prettyGatewaySuffix,
+  tairaMonPrettyGatewaySuffix,
   canonicalGatewayWildcard,
 } from "./soradns.js";
 export {

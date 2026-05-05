@@ -10,7 +10,7 @@
  *   5. Persisting a council snapshot
  *
  * By default the script only prints the deterministic hashes. Set
- *   GOV_SUBMIT=1 TORII_URL=http://localhost:8080 AUTHORITY=6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn PRIVATE_KEY_HEX=...
+ *   GOV_SUBMIT=1 TORII_URL=http://localhost:8080 AUTHORITY=sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB PRIVATE_KEY_HEX=...
  * to submit them to a Torii node (requires the account to hold the relevant permissions).
  */
 import { Buffer } from "node:buffer";
@@ -30,14 +30,15 @@ const SHOULD_FETCH = process.env.GOV_FETCH === "1";
 const CHAIN_ID = process.env.CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
 const AUTHORITY =
   process.env.AUTHORITY ??
-  "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+  "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 const PRIVATE_KEY =
   process.env.PRIVATE_KEY_HEX != null
     ? Buffer.from(process.env.PRIVATE_KEY_HEX, "hex")
     : Buffer.alloc(32, 0x11);
 
-const SAMPLE_NAMESPACE = "apps";
-const SAMPLE_CONTRACT_ID = "demo.contract";
+const SAMPLE_CONTRACT_ADDRESS =
+  process.env.GOV_CONTRACT_ADDRESS ??
+  "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
 const SAMPLE_REFERENDUM_ID = "demo-referendum";
 const SAMPLE_REFERENDUM_HASH = Buffer.alloc(32, 0xaa);
 const SAMPLE_PROPOSAL_HASH = Buffer.alloc(32, 0xbb);
@@ -83,8 +84,7 @@ async function main() {
           chainId: CHAIN_ID,
           authority: AUTHORITY,
           proposal: {
-            namespace: SAMPLE_NAMESPACE,
-            contractId: SAMPLE_CONTRACT_ID,
+            contractAddress: SAMPLE_CONTRACT_ADDRESS,
             codeHash: Buffer.alloc(32, 0xcd),
             abiHash: Buffer.alloc(32, 0xef),
             abiVersion: "1",

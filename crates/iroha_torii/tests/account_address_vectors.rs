@@ -1,13 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Validate Torii's account address handling against the shared compliance vectors.
 
-use std::{path::Path, str::FromStr};
+use std::path::Path;
 
 use hex::FromHex;
 use iroha_data_model::{
     account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
     domain::DomainId,
-    name::Name,
 };
 use norito::json::{self, JsonDeserialize};
 
@@ -79,8 +78,6 @@ struct Member {
 struct Encodings {
     canonical_hex: String,
     i105: I105Encoding,
-    i105_default: String,
-    i105_default_fullwidth: String,
 }
 
 #[derive(Debug, JsonDeserialize)]
@@ -110,7 +107,7 @@ struct ExpectedError {
 }
 
 fn domain(label: &str) -> DomainId {
-    DomainId::new(Name::from_str(label).expect("valid domain label"))
+    DomainId::try_new(label, "universal").expect("valid domain label")
 }
 
 fn decode_canonical(hex_value: &str) -> Vec<u8> {
@@ -176,7 +173,7 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
     assert_eq!(
         canonical_bytes(&parsed_i105),
         canonical_payload,
-        "{}: parse_encoded I105 canonical mismatch",
+        "{}: parse_encoded i105 canonical mismatch",
         case.case_id
     );
 
@@ -199,31 +196,6 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
         case.case_id
     );
 
-    // Compressed parse_encoded coverage
-    let parsed_compressed = AccountAddress::parse_encoded(&case.encodings.i105_default, None)
-        .expect("parse_encoded i105_default");
-    assert_eq!(
-        canonical_bytes(&parsed_compressed),
-        canonical_payload,
-        "{}: parse_encoded i105_default canonical mismatch",
-        case.case_id
-    );
-
-    // Compressed decoding (half-/full-width)
-    for (encoding, label) in [
-        (&case.encodings.i105_default, "i105_default-half"),
-        (&case.encodings.i105_default_fullwidth, "i105_default-full"),
-    ] {
-        let decoded = AccountAddress::from_i105(encoding)
-            .unwrap_or_else(|err| panic!("{label} decode failed: {err}"));
-        assert_eq!(
-            canonical_bytes(&decoded),
-            canonical_payload,
-            "{}: {label} canonical mismatch",
-            case.case_id
-        );
-    }
-
     match case.category.as_str() {
         "single" => validate_single_case(case, &canonical),
         "multisig" => validate_multisig_case(case, &canonical),
@@ -238,11 +210,6 @@ fn validate_negative_case(case: &NegativeCase, default_prefix: u16) {
             let err =
                 AccountAddress::from_i105_for_discriminant(&case.input, Some(expected_prefix))
                     .expect_err("I105 negative should fail");
-            assert_error(&err, &case.expected_error, &case.case_id);
-        }
-        "i105_default" => {
-            let err = AccountAddress::from_i105(&case.input)
-                .expect_err("i105_default negative should fail");
             assert_error(&err, &case.expected_error, &case.case_id);
         }
         "canonical_hex" => {
@@ -280,10 +247,6 @@ fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &s
                 panic!("{case_id}: expected UnexpectedNetworkPrefix, got {err}");
             }
         }
-        "MissingI105Sentinel" => assert!(
-            matches!(err, AccountAddressError::MissingI105Sentinel),
-            "{case_id}: expected MissingI105Sentinel, got {err}"
-        ),
         "InvalidCompressedChar" | "InvalidI105Char" => {
             if let AccountAddressError::InvalidI105Char(ch) = err {
                 let expected_char = expected

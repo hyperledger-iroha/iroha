@@ -84,7 +84,7 @@ the per-proof bonus pools without requiring bespoke orchestration code.
 
 ### Generating rent ledger plans
 
-Run `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+Run `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc`
 to convert a persisted rent quote into executable ledger transfers. The command
 parses the embedded `ledger_projection`, emits Norito `Transfer` instructions
 that collect the base rent into the treasury, routes the reserve/provider

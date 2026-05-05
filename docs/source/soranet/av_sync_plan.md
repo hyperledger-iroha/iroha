@@ -31,5 +31,5 @@ summary: Specification for NSC-28b covering telemetry, validation, and enforceme
 ## Rollout
 1. Implement telemetry updates and segment auditor changes.
 2. Run impaired network tests to calibrate hysteresis.
-3. Deploy to Testus with `streaming.sync.enabled = true` but `observe_only = true`; monitor telemetry and alerts.
+3. Deploy to Taira with `streaming.sync.enabled = true` but `observe_only = true`; monitor telemetry and alerts.
 4. Flip `streaming.sync.observe_only = false` (and, if necessary, adjust thresholds) once metrics stabilize; enable in Nexus afterwards.

@@ -86,7 +86,7 @@ Record the outcome of each review in the release tracker and refuse promotion to
 - **Container images:** `iroha{2,3}-<version>-<os>-image.tar` generated from the Dockerfile using the same deploy binaries. Naming does not embed the registry tag, ensuring reproducible tarball names.
 - **Hashes:** Each artifact emits `<name>.sha256`; `scripts/run_release_pipeline.py` collates them into `SHA256SUMS` and `release_manifest.json`, which downstream signing/publication systems use verbatim.
 - **Signatures:** When `--signing-key` is supplied, both bundle and image scripts create matching `.sig` and `.pub` files (PEM-encoded public key). The pipeline preserves these alongside the artifacts so publication jobs only need to upload.
-- **Manifests:** `generate_release_manifest.py` records profile, format, path, and SHA256 for every bundle/AppImage encountered. Keep this JSON attached to the release checklist and status updates.
+- **Manifests:** `generate_release_manifest.py` records profile, format, path, and SHA256 for every bundle/AppImage encountered. `scripts/run_release_pipeline.py` may then append an `evidence` block for archived rollout artefacts (for example FASTPQ rollout bundles, their reviewer-facing summaries, Grafana exports, and CBDC rollout validation paths). Keep this JSON attached to the release checklist and status updates.
 - **Deterministic directories:** All artifacts live under `artifacts/releases/<version>/artifacts/`; rerunning the pipeline after a clean build should overwrite the same filenames, enabling reproducibility checks (diff of tarball hashes, manifest comparison).
 
 **Build prerequisites**
@@ -109,7 +109,7 @@ Record pass/fail in the release ticket. Any ❌ requires engineering sign-off be
 ## Configuration & Manifest Checks
 - Run `scripts/select_release_profile.py --list` to confirm network profile mappings.
 - Verify `release/network_profiles.toml` includes the new version numbers, lane counts, and default artifact names.
-- Attach the generated `artifacts/release_manifest.json` and `artifacts/network_profiles.json` to the release PR checklist.
+- Attach the generated `artifacts/release_manifest.json` and `artifacts/network_profiles.json` to the release PR checklist. When FASTPQ or CBDC rollout bundles are archived as part of the same run, verify that `release_manifest.json.evidence` points at the copied rollout bundle roots and any FASTPQ `fastpq_rollout_summary.{json,md}` files.
 - Ensure `defaults/` templates in the bundles match their target (single vs. nexus). If not, regenerate with `cargo xtask gen-config --profile <...>`.
 
 ## Approvals & Sign-off

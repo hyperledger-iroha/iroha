@@ -16,7 +16,7 @@ Esta página refleja `docs/source/sns/local_to_global_toolkit.md` del mono-repo.
 
 - `scripts/address_local_toolkit.sh` encapsula la CLI `iroha` para producir:
   - `audit.json` -- estructura de salida de `iroha tools address audit --format json`.
-  - `normalized.txt` -- literaux I105 (preferido) / comprimido (`sora`) (segunda opción) convertidos para cada seleccionador de dominio local.
+  - `normalized.txt` -- literaux i105 (preferido) / comprimido (`sora`) (segunda opción) convertidos para cada seleccionador de dominio local.
 - Asociación del script en el panel de control de direcciones (`dashboards/grafana/address_ingest.json`)
   y las reglas Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) para comprobar que el cutover Local-8 /
   Local-12 est sur. Vigile los paneles de colisión Local-8 y Local-12 y las alertas
@@ -33,7 +33,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 Opciones:
 
-- `--format I105` para la salida `sora...` en lugar de I105.
+- `--format i105` para la salida `sora...` en lugar de i105.
 - `domainless output (default)` para emettre des literaux nus.
 - `--audit-only` para ignorar la etapa de conversión.
 - `--allow-errors` para continuar con el escaneo cuando aparecen líneas mal formadas (corresponden al comportamiento de la CLI).El script escribe los caminos de los artefactos al final de la ejecución. Joignez les dos fichiers a

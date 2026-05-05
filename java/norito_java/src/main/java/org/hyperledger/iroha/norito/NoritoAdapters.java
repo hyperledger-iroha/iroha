@@ -14,12 +14,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Function;
 
 /** Factory helpers for Norito adapters. */
 public final class NoritoAdapters {
   private NoritoAdapters() {}
 
-  // Reflection avoids unchecked casts while staying compatible with Android API levels < 26.
+  // Reflection avoids unchecked casts while supporting Android API levels below 26.
   private static final Method TYPE_ADAPTER_ENCODE;
   private static final Method TYPE_ADAPTER_DECODE;
 
@@ -97,6 +98,30 @@ public final class NoritoAdapters {
 
   public static TypeAdapter<String> stringAdapter() {
     return StringAdapter.INSTANCE;
+  }
+
+  /**
+   * Adapter for Rust {@code #[norito(transparent)]} newtypes.
+   *
+   * <p>Transparent wrappers encode exactly like their inner value. They do not add a struct field
+   * frame or any additional length prefix.
+   */
+  public static <T> TypeAdapter<T> transparent(TypeAdapter<T> inner) {
+    return transparent(inner, Function.identity(), Function.identity());
+  }
+
+  /**
+   * Adapter for Rust {@code #[norito(transparent)]} newtypes with a distinct Java wrapper type.
+   *
+   * <p>Use this for Java models that wrap an inner Norito value. It delegates directly to the inner
+   * adapter, so callers still add the usual outer field delimiter when this transparent type appears
+   * as a field of a struct or variant.
+   */
+  public static <T, U> TypeAdapter<T> transparent(
+      TypeAdapter<U> inner,
+      Function<? super T, ? extends U> unwrap,
+      Function<? super U, ? extends T> wrap) {
+    return new TransparentAdapter<>(inner, unwrap, wrap);
   }
 
   public static <T> TypeAdapter<Optional<T>> option(TypeAdapter<T> inner) {
@@ -357,15 +382,13 @@ public final class NoritoAdapters {
 
     @Override
     public void encode(NoritoEncoder encoder, byte[] value) {
-      final boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
-      encoder.writeLength(value.length, compactLen);
+      encoder.writeLength(value.length, false);
       encoder.writeBytes(value);
     }
 
     @Override
     public byte[] decode(NoritoDecoder decoder) {
-      final boolean compactLen = decoder.compactLenActive();
-      long length = decoder.readLength(compactLen);
+      long length = decoder.readLength(false);
       if (length > Integer.MAX_VALUE) {
         throw new IllegalArgumentException("Raw byte vector too large");
       }
@@ -426,6 +449,41 @@ public final class NoritoAdapters {
     @Override
     public boolean isSelfDelimiting() {
       return true;
+    }
+  }
+
+  private static final class TransparentAdapter<T, U> implements TypeAdapter<T> {
+    private final TypeAdapter<U> inner;
+    private final Function<? super T, ? extends U> unwrap;
+    private final Function<? super U, ? extends T> wrap;
+
+    private TransparentAdapter(
+        final TypeAdapter<U> inner,
+        final Function<? super T, ? extends U> unwrap,
+        final Function<? super U, ? extends T> wrap) {
+      this.inner = Objects.requireNonNull(inner, "inner");
+      this.unwrap = Objects.requireNonNull(unwrap, "unwrap");
+      this.wrap = Objects.requireNonNull(wrap, "wrap");
+    }
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final T value) {
+      inner.encode(encoder, unwrap.apply(value));
+    }
+
+    @Override
+    public T decode(final NoritoDecoder decoder) {
+      return wrap.apply(inner.decode(decoder));
+    }
+
+    @Override
+    public int fixedSize() {
+      return inner.fixedSize();
+    }
+
+    @Override
+    public boolean isSelfDelimiting() {
+      return inner.isSelfDelimiting();
     }
   }
 
@@ -683,7 +741,7 @@ public final class NoritoAdapters {
       if ((encoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
         encodePacked(encoder, entries);
       } else {
-        encodeCompat(encoder, entries);
+        encodeDelimited(encoder, entries);
       }
     }
 
@@ -697,7 +755,7 @@ public final class NoritoAdapters {
       if ((decoder.flags() & NoritoHeader.PACKED_SEQ) != 0) {
         return decodePacked(decoder, count);
       }
-      return decodeCompat(decoder, count);
+      return decodeDelimited(decoder, count);
     }
 
     @Override
@@ -705,7 +763,7 @@ public final class NoritoAdapters {
       return true;
     }
 
-    private Map<K, V> decodeCompat(final NoritoDecoder decoder, final int count) {
+    private Map<K, V> decodeDelimited(final NoritoDecoder decoder, final int count) {
       Map<K, V> map = new LinkedHashMap<>(count);
       boolean compactLen = decoder.compactLenActive();
       for (int i = 0; i < count; i++) {
@@ -776,7 +834,7 @@ public final class NoritoAdapters {
       throw new IllegalArgumentException("Map keys must be Comparable for deterministic encoding");
     }
 
-    private void encodeCompat(final NoritoEncoder encoder, final List<Map.Entry<K, V>> entries) {
+    private void encodeDelimited(final NoritoEncoder encoder, final List<Map.Entry<K, V>> entries) {
       boolean compactLen = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
       for (Map.Entry<K, V> entry : entries) {
         byte[] keyBytes = encodeField(encoder, key, entry.getKey());

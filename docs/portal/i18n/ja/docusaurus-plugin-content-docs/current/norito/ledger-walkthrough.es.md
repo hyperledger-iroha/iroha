@@ -30,8 +30,8 @@ translation_last_reviewed: 2026-02-07
 ラス クラーベスのデリバダのデモ:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 ロス・ヴァローレス・リストアンド・ラス・プリメラス・クエンタスを確認:
@@ -50,7 +50,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dentro de wonderland (reemplaza --limit por un numero mayor si hace falta)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions que ya existen
@@ -66,7 +66,7 @@ Norito からのコマンドの実行、フィルタリングとページの決�
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI のインプリメエル ハッシュ デ ラ トランザクション環境 (例、`0x5f...`)。グアルダロ パラ コンサルタント エル スタド マス タルデ。
@@ -74,7 +74,7 @@ CLI のインプリメエル ハッシュ デ ラ トランザクション環境
 ## 3. アクニャ ユニダデス アン ラ クエンタ デル オペラドール
 
 `(asset definition, account)` での活動を続けてください。アクーニャ
-`coffee#wonderland` と `$ADMIN_ACCOUNT` の 250 単位:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` と `$ADMIN_ACCOUNT` の 250 単位:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -1,79 +1,70 @@
----
-lang: fr
-direction: ltr
-source: docs/source/nexus.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: c8da33b0abb8a6d46dbaaed657c8338a9d723a97f6f28ff29a62caf84c0dbfd6
-source_last_modified: "2025-12-27T07:56:34.355655+00:00"
-translation_last_reviewed: 2026-01-01
----
+#! Iroha 3 – Sora Nexus Ledger: Technical Design Specification
 
-#! Iroha 3 - Sora Nexus Ledger: Specification technique de conception
+This document proposes the Sora Nexus Ledger architecture for Iroha 3, evolving Iroha 2 toward a single global, logically unified ledger organized around Data Spaces (DS). Data Spaces provide strong privacy domains (“private data spaces”) and open participation (“public data spaces”). The design preserves composability across the global ledger while ensuring strict isolation and confidentiality for private‑DS data, and introduces data‑availability scaling via erasure coding across Kura (block storage) and WSV (World State View).
 
-Ce document propose l architecture du Sora Nexus Ledger pour Iroha 3, faisant evoluer Iroha 2 vers un ledger global unique, logiquement unifie, organise autour des Data Spaces (DS). Les Data Spaces fournissent des domaines de confidentialite forts ("private data spaces") et une participation ouverte ("public data spaces"). Le design preserve la composabilite a travers le ledger global tout en assurant une isolation stricte et la confidentialite des donnees des DS prives, et introduit une mise a l echelle de la disponibilite des donnees via l erasure coding sur Kura (stockage des blocs) et WSV (World State View).
+The same repository builds both Iroha 2 (self-hosted networks) and Iroha 3 (SORA Nexus). Execution is powered by
+the shared Iroha Virtual Machine (IVM) and Kotodama toolchain, so contracts and bytecode artifacts remain
+portable across self-hosted deployments and the Nexus global ledger.
 
-Le meme depot construit Iroha 2 (reseaux auto-heberges) et Iroha 3 (SORA Nexus). L execution est assuree par la Iroha Virtual Machine (IVM) et la chaine d outils Kotodama partagees, donc les contrats et artefacts de bytecode restent portables entre deployments auto-heberges et le ledger global Nexus.
+Goals
+- One global logical ledger composed from many cooperating validators and Data Spaces.
+- Private Data Spaces for permissioned operation (e.g., CBDCs), with data never leaving the private DS.
+- Public Data Spaces with open participation, Ethereum-like permissionless access.
+- Composable smart contracts across Data Spaces, subject to explicit permissions for access to private‑DS assets.
+- Performance isolation so public activity cannot degrade private‑DS internal transactions.
+- Data availability at scale: erasure‑coded Kura and WSV to support effectively unbounded data while keeping private‑DS data private.
 
-Objectifs
-- Un ledger logique global compose de nombreux validateurs cooperatifs et Data Spaces.
-- Des Data Spaces prives pour operation permissionnee (ex., CBDC), avec des donnees qui ne quittent jamais le DS prive.
-- Des Data Spaces publics avec participation ouverte, acces sans permission de type Ethereum.
-- Des contrats intelligents composables entre Data Spaces, soumis a des permissions explicites pour acces aux actifs des DS prives.
-- Isolation de performance pour que l activite publique ne degrade pas les transactions internes des DS prives.
-- Disponibilite des donnees a grande echelle: Kura et WSV avec erasure coding pour supporter des donnees effectivement illimitees tout en gardant privees les donnees des DS prives.
+Non‑Goals (Initial Phase)
+- Defining token economics or validator incentives; scheduling and staking policies are pluggable.
+- Changing `abi_version` away from `1` or expanding syscall/pointer‑ABI surfaces is out of scope; ABI v1 is fixed and runtime upgrades do not change the host ABI.
 
-Non-Objectifs (Phase initiale)
-- Definir les economies de tokens ou incitations de validateurs; la planification et le staking sont enfichables.
-- Introduire une nouvelle version ABI ou etendre les surfaces syscalls/pointer-ABI; l ABI v1 est fixe et les runtime upgrades ne changent pas l ABI du host.
+Terminology
+- Nexus Ledger: The global logical ledger formed by composing Data Space (DS) blocks into a single, ordered history and state commitment.
+- Data Space (DS): A bounded execution and storage domain with its own validators, governance, privacy class, DA policy, quotas, and fee policy. Two classes exist: public DS and private DS.
+- Private Data Space: Permissioned validators and access control; transaction data and state never leave the DS. Only commitments/metadata are anchored globally.
+- Public Data Space: Permissionless participation; full data and state are publicly available.
+- Data Space Manifest (DS Manifest): A Norito-encoded manifest that declares DS parameters (validators/QC keys, privacy class, ISI policy, DA parameters, retention, quotas, ZK policy, fees). The manifest hash is anchored on the nexus chain. Unless overridden, DS quorum certificates use ML‑DSA‑87 (Dilithium5‑class) as the default post‑quantum signature scheme.
+- Space Directory: A global on‑chain directory contract that tracks DS manifests, versions, and governance/rotation events for resolvability and audits.
+- DSID: A globally unique identifier for a Data Space. Used to namespace all objects and references.
+- Anchor: A cryptographic commitment from a DS block/header included into the nexus chain to bind DS history into the global ledger.
+- Kura: Iroha block storage. Extended here with erasure‑coded blob storage and commitments.
+- WSV: Iroha World State View. Extended here with versioned, snapshot‑capable, erasure‑coded state segments.
+- IVM: Iroha Virtual Machine for smart contract execution (Kotodama bytecode `.to`).
+ - AIR: Algebraic Intermediate Representation. An algebraic view of computation for STARK‑style proofs, describing execution as field‑based traces with transition and boundary constraints.
 
-Terminologie
-- Nexus Ledger: Le ledger logique global forme par la composition de blocs Data Space (DS) en un historique unique et ordonne et un engagement d etat.
-- Data Space (DS): Un domaine borne d execution et de stockage avec ses propres validateurs, gouvernance, classe de confidentialite, politique DA, quotas et politique de fees. Deux classes existent: DS public et DS prive.
-- Private Data Space: Validateurs permissionnes et controle d acces; les donnees de transaction et d etat ne quittent jamais le DS. Seuls des engagements/metadata sont ancres globalement.
-- Public Data Space: Participation sans permission; donnees completes et etat disponibles publiquement.
-- Data Space Manifest (DS Manifest): Un manifeste encode Norito declarant les parametres DS (validateurs/cles QC, classe de confidentialite, politique ISI, parametres DA, retention, quotas, politique ZK, fees). Le hash du manifeste est ancre sur la chaine nexus. Sauf indication contraire, les quorum certificates DS utilisent ML-DSA-87 (classe Dilithium5) comme schema de signature post-quantum par defaut.
-- Space Directory: Un contrat de repertoire global on-chain qui suit les manifestes DS, les versions et les evenements de gouvernance/rotation pour resolvabilite et audits.
-- DSID: Un identifiant global unique pour un Data Space. Utilise pour namespacing de tous les objets et references.
-- Anchor: Un engagement cryptographique d un bloc/header DS inclus dans la chaine nexus pour lier l historique DS au ledger global.
-- Kura: Stockage des blocs Iroha. Etendu ici avec un stockage blob en erasure coding et des engagements.
-- WSV: World State View Iroha. Etendu ici avec des segments d etat versionnes, capables de snapshots, en erasure coding.
-- IVM: Iroha Virtual Machine pour execution de contrats intelligents (bytecode Kotodama `.to`).
- - AIR: Algebraic Intermediate Representation. Une vue algebrique du calcul pour des preuves type STARK, decrivant l execution comme des traces basees sur des champs avec contraintes de transition et de bord.
+Data Spaces Model
+- Identity: `DataSpaceId (DSID)` identifies a DS and namespaces everything. DS can be instantiated at two granularities:
+  - Domain‑DS: `ds::domain::<domain_name>` — execution and state scoped to a domain.
+  - Asset‑DS: `ds::asset::<domain_name>::<asset_name>` — execution and state scoped to a single asset definition.
+  Both forms coexist; transactions can touch multiple DSIDs atomically.
+- Manifest lifecycle: DS creation, updates (key rotation, policy changes), and retirement are recorded in the Space Directory. Each per‑slot DS artifact references the latest manifest hash.
+- Classes: Public DS (open participation, public DA) and Private DS (permissioned, confidential DA). Hybrid policies are possible via manifest flags.
+- Policies per DS: ISI permissions, DA parameters `(k,m)`, encryption, retention, quotas (min/max tx share per block), ZK/optimistic proof policy, fees.
+- Governance: DS membership and validator rotation defined by the manifest’s governance section (on-chain proposals, multisig, or external governance anchored by nexus transactions and attestations).
 
-Modele des Data Spaces
-- Identite: `DataSpaceId (DSID)` identifie un DS et namespace tout. Les DS peuvent etre instancies a deux granularites:
-  - Domain-DS: `ds::domain::<domain_name>` - execution et etat limites a un domaine.
-  - Asset-DS: `ds::asset::<domain_name>::<asset_name>` - execution et etat limites a une seule definition d asset.
-  Les deux formes coexistent; les transactions peuvent toucher plusieurs DSID de maniere atomique.
-- Cycle de vie du manifeste: creation DS, mises a jour (rotation de cles, changements de politique) et retraite sont enregistres dans le Space Directory. Chaque artefact par slot reference le hash du manifeste le plus recent.
-- Classes: DS public (participation ouverte, DA publique) et DS prive (permissionne, DA confidentiel). Des politiques hybrides sont possibles via des flags de manifeste.
-- Politiques par DS: permissions ISI, parametres DA `(k,m)`, chiffrement, retention, quotas (part min/max de tx par bloc), politique de preuves ZK/optimistes, fees.
-- Gouvernance: membres DS et rotation des validateurs definies par la section gouvernance du manifeste (propositions on-chain, multisig, ou gouvernance externe ancree par transactions et attestations nexus).
+Dataspace-aware gossip
+- Transaction gossip batches now carry a plane tag (public vs restricted) derived from the lane catalog; restricted batches are unicast to the online peers in the current commit topology (respecting `transaction_gossip_restricted_target_cap`) while public batches use `transaction_gossip_public_target_cap` (set `null` for broadcast). Target selection reshuffles on the per-plane cadence set by `transaction_gossip_public_target_reshuffle_ms` and `transaction_gossip_restricted_target_reshuffle_ms` (default: `transaction_gossip_period_ms`). When no commit-topology peers are online, operators can choose to either refuse or forward restricted payloads onto the public overlay via `transaction_gossip_restricted_public_payload` (default `refuse`); telemetry surfaces fallback attempts, forward/drop counts, and the configured policy alongside per-dataspace target selections.
+- Unknown dataspaces are re-queued when `transaction_gossip_drop_unknown_dataspace` is enabled; otherwise they fall back to restricted targeting to avoid leaks.
+- Receive-side validation drops entries whose lanes/dataspaces disagree with the local catalog, whose plane tag does not match the derived dataspace visibility, or whose advertised route does not match the locally re-derived routing decision.
 
-Gossip conscient des dataspaces
-- Les lots de gossip de transactions portent maintenant un tag de plan (public vs restreint) derive du catalogue de lanes; les lots restreints sont unicast vers les pairs en ligne de la topologie de commit actuelle (respectant `transaction_gossip_restricted_target_cap`) tandis que les lots publics utilisent `transaction_gossip_public_target_cap` (mettre `null` pour broadcast). La selection des cibles se remelange a la cadence par plan definie par `transaction_gossip_public_target_reshuffle_ms` et `transaction_gossip_restricted_target_reshuffle_ms` (par defaut: `transaction_gossip_period_ms`). Quand aucun pair de la topologie de commit n est en ligne, les operateurs peuvent choisir de refuser ou de relayer des payloads restreints vers l overlay public via `transaction_gossip_restricted_public_payload` (par defaut `refuse`); la telemetrie expose les tentatives de fallback, les comptages forward/drop et la politique configuree aux cotes des selections de cibles par dataspace.
-- Les dataspaces inconnus sont remis en file quand `transaction_gossip_drop_unknown_dataspace` est active; sinon ils tombent sur un ciblage restreint pour eviter les fuites.
-- La validation cote reception drop les entrees dont les lanes/dataspaces ne correspondent pas au catalogue local, dont le tag de plan ne correspond pas a la visibilite dataspace derivee, ou dont la route annoncee ne correspond pas a la decision de routage rederivee localement.
+Capability manifests & UAID
+- Universal accounts: Every participant receives a deterministic UAID (`UniversalAccountId` in `crates/iroha_data_model/src/nexus/manifest.rs`) that spans all dataspaces. Capability manifests (`AssetPermissionManifest`) bind a UAID to a specific dataspace, activation/expiry epochs, and an ordered list of allow/deny `ManifestEntry` rules that scope `dataspace`, `program_id`, `method`, `asset`, and optional AMX roles. Deny rules always win; the evaluator emits either `ManifestVerdict::Denied` with an audit reason or an `Allowed` grant with the matching allowance metadata.
+- UAID portfolio snapshots are now exposed via `GET /v1/accounts/{uaid}/portfolio` (see `docs/source/torii/portfolio_api.md`), backed by the deterministic aggregator in `iroha_core::nexus::portfolio`.
+- Allowances: Each allow entry carries deterministic `AllowanceWindow` buckets (`PerSlot`, `PerMinute`, `PerDay`) plus an optional `max_amount`. Hosts and SDKs consume the same Norito payload, so enforcement remains identical across hardware and SDK implementations.
+- Audit telemetry: The Space Directory broadcasts `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}` (`crates/iroha_data_model/src/events/data/space_directory.rs`) whenever a manifest changes state. The new `SpaceDirectoryEventFilter` surface allows Torii/data-event subscribers to monitor UAID manifest updates, revocations, and deny-wins decisions without custom plumbing.
 
-Manifeste de capacites et UAID
-- Comptes universels: Chaque participant recoit un UAID deterministe (`UniversalAccountId` dans `crates/iroha_data_model/src/nexus/manifest.rs`) qui couvre tous les dataspaces. Les manifestes de capacites (`AssetPermissionManifest`) lient un UAID a un dataspace specifique, des epochs d activation/expiration, et une liste ordonnee de regles allow/deny `ManifestEntry` qui bornent `dataspace`, `program_id`, `method`, `asset` et des roles AMX optionnels. Les regles deny gagnent toujours; l evaluateur emet soit `ManifestVerdict::Denied` avec une raison d audit, soit un grant `Allowed` avec la metadata d allocation correspondante.
-- Les snapshots de portefeuille UAID sont exposes via `GET /v1/accounts/{uaid}/portfolio` (voir `docs/source/torii/portfolio_api.md`), appuyes par l agregateur deterministe dans `iroha_core::nexus::portfolio`.
-- Allowances: Chaque entree allow porte des buckets `AllowanceWindow` deterministes (`PerSlot`, `PerMinute`, `PerDay`) plus un `max_amount` optionnel. Les hosts et SDKs consomment le meme payload Norito, donc l enforcement reste identique sur tous les hardwares et SDKs.
-- Telemetrie d audit: Le Space Directory emet `SpaceDirectoryEvent::{ManifestActivated, ManifestExpired, ManifestRevoked}` (`crates/iroha_data_model/src/events/data/space_directory.rs`) chaque fois qu un manifeste change d etat. La surface `SpaceDirectoryEventFilter` permet aux abonnes Torii/data-event de surveiller les mises a jour UAID, les revocations et les decisions deny-wins sans plomberie specifique.
+### UAID manifest operations
 
-### Operations de manifeste UAID
+Space Directory operations ship in two forms so operators can choose either the
+in-binary CLI (for scripted rollouts) or direct Torii submissions (for automated
+CI/CD). Both paths enforce the `CanPublishSpaceDirectoryManifest{dataspace}`
+permission inside the executor (`crates/iroha_core/src/smartcontracts/isi/space_directory.rs`)
+and record lifecycle events in world state (`iroha_core::state::space_directory_manifests`).
 
-Les operations du Space Directory sont livreies sous deux formes pour que les operateurs puissent choisir soit le
-CLI integre (pour des deploiements scriptes) soit des soumissions Torii directes (pour un
-CI/CD automatise). Les deux chemins appliquent le droit `CanPublishSpaceDirectoryManifest{dataspace}`
- dans l executeur (`crates/iroha_core/src/smartcontracts/isi/space_directory.rs`)
-et enregistrent des evenements de cycle de vie dans le world state (`iroha_core::state::space_directory_manifests`).
+#### CLI workflow (`iroha app space-directory manifest …`)
 
-#### Flux de travail CLI (`iroha app space-directory manifest ...`)
-
-1. **Encoder le JSON du manifeste** - convertir des brouillons de politique en octets Norito et emettre un
-   hash reproductible avant revue:
+1. **Encode manifest JSON** — convert policy drafts into Norito bytes and emit a
+   reproducible hash before review:
 
    ```bash
    iroha app space-directory manifest encode \
@@ -82,12 +73,12 @@ et enregistrent des evenements de cycle de vie dans le world state (`iroha_core:
      --hash-out artifacts/capability.manifest.hash
    ```
 
-   Le helper accepte soit `--json` (manifeste JSON brut) soit `--manifest` (payload `.to` existant)
-   et reflete la logique dans
+   The helper accepts either `--json` (raw JSON manifest) or `--manifest` (existing
+   `.to` payload) and mirrors the logic in
    `crates/iroha_cli/src/space_directory.rs::ManifestEncodeArgs`.
 
-2. **Publier/remplacer des manifestes** - mettre en file des instructions `PublishSpaceDirectoryManifest`
-   depuis des sources Norito ou JSON:
+2. **Publish/replace manifests** — enqueue `PublishSpaceDirectoryManifest`
+   instructions from either Norito or JSON sources:
 
    ```bash
    iroha app space-directory manifest publish \
@@ -95,11 +86,11 @@ et enregistrent des evenements de cycle de vie dans le world state (`iroha_core:
      --reason "Retail wave 4 on-boarding"
    ```
 
-   `--reason` remplit `entries[*].notes` pour les enregistrements qui omettaient des notes operateur.
+   `--reason` backfills `entries[*].notes` for records that omitted operator notes.
 
-3. **Expirer** des manifestes qui ont atteint leur fin de vie planifiee ou **revoquer**
-   des UAID a la demande. Les deux commandes acceptent `--uaid uaid:<hex>` ou un digest hex
-   de 64 caracteres (LSB=1) et l identifiant numerique du dataspace:
+3. **Expire** manifests that reached their scheduled end of life or **revoke**
+   UAIDs on demand. Both commands accept `--uaid uaid:<hex>` or a raw 64-hex
+   digest (LSB=1) and the numeric dataspace id:
 
    ```bash
    iroha app space-directory manifest expire \
@@ -114,9 +105,9 @@ et enregistrent des evenements de cycle de vie dans le world state (`iroha_core:
      --reason "Fraud investigation NX-16-R05"
    ```
 
-4. **Produire des bundles d audit** - `manifest audit-bundle` ecrit le JSON du manifeste,
-   le payload `.to`, le hash, le profil de dataspace et des metadonnees lisibles par machine dans un
-   repertoire de sortie pour que les reviewers de gouvernance telechargent une seule archive:
+4. **Produce audit bundles** — `manifest audit-bundle` writes the manifest JSON,
+   `.to` payload, hash, dataspace profile, and machine-readable metadata to an
+   output directory so governance reviewers can download a single archive:
 
    ```bash
    iroha app space-directory manifest audit-bundle \
@@ -125,279 +116,278 @@ et enregistrent des evenements de cycle de vie dans le world state (`iroha_core:
      --out-dir artifacts/capability_bundle
    ```
 
-   Le bundle integre des hooks `SpaceDirectoryEvent` depuis le profil pour prouver que le
-   dataspace expose les webhooks d audit obligatoires; voir `docs/space-directory.md`
-   pour la structure des champs et les exigences de preuve.
+   The bundle embeds `SpaceDirectoryEvent` hooks from the profile to prove the
+   dataspace exposes the mandatory audit webhooks; see `docs/space-directory.md`
+   for the field layout and evidence requirements.
 
-#### APIs Torii
+#### Torii APIs
 
-Les operateurs et SDKs peuvent effectuer les memes actions via HTTPS. Torii applique les
-meme verifications de permission et signe les transactions au nom de l autorite fournie
-(les cles privees ne circulent qu en memoire dans le handler securise de Torii):
+Operators and SDKs can perform the same actions over HTTPS. Torii enforces the
+same permission checks and signs transactions on behalf of the supplied
+authority (private keys travel only in-memory inside Torii’s secure handler):
 
-- `GET /v1/space-directory/uaids/{uaid}` - resoudre les liaisons de dataspace courantes
-  pour un UAID (adresses normalisees, ids de dataspace, liaisons de programme). Ajouter
-  `canonical I105 output` pour la sortie Sora Name Service (I105 prefere; I105 est le second choix Sora-only).
-- `GET /v1/accounts/{uaid}/portfolio` -
-  agregateur adosse a Norito qui reflete `ToriiClient.getUaidPortfolio` pour que les wallets
-  rendent les holdings universels sans scruter l etat par dataspace. Ajouter
-  `asset_id=<asset#definition::owner>` pour filtrer l instantane a un seul actif.
-- `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` - obtenir le JSON du manifeste
-  canonique, les metadonnees de cycle de vie et le hash du manifeste pour audits.
-- `POST /v1/space-directory/manifests` - soumettre des manifestes nouveaux ou de remplacement
-  depuis JSON (`authority`, `private_key`, `manifest`, `reason` optionnel). Torii
-  renvoie `202 Accepted` une fois la transaction en file.
-- `POST /v1/space-directory/manifests/revoke` - mettre en file des revocations d urgence
-  avec UAID, id de dataspace, epoch effectif et reason optionnel (reflete la disposition
-  CLI).
+- `GET /v1/space-directory/uaids/{uaid}` — resolve the current dataspace bindings
+  for a UAID (normalized addresses, dataspace ids, program bindings). Add
+  `canonical I105 output` for Sora Name Service output (canonical I105 output only).
+- `GET /v1/accounts/{uaid}/portfolio` —
+  Norito-backed aggregator that mirrors `ToriiClient.getUaidPortfolio` so wallets
+  can render universal holdings without scraping per-dataspace state. Pass
+  `asset_id=<canonical_base58_asset_definition_id>` to filter the snapshot down to one asset.
+- `GET /v1/space-directory/uaids/{uaid}/manifests?dataspace={id}` — fetch the
+  canonical manifest JSON, lifecycle metadata, and manifest hash for audits.
+- `POST /v1/space-directory/manifests` — submit new or replacement manifests
+  from JSON (`authority`, `private_key`, `manifest`, optional `reason`). Torii
+  returns `202 Accepted` once the transaction is queued.
+- `POST /v1/space-directory/manifests/revoke` — enqueue emergency revocations
+  with the UAID, dataspace id, effective epoch, and optional reason (mirrors the
+  CLI layout).
 
-Le SDK JS (`javascript/iroha_js/src/toriiClient.js`) couvre deja ces surfaces de lecture
-via `ToriiClient.getUaidPortfolio`, `.getUaidBindings`, et
-`.getUaidManifests`; les futures versions Swift/Python reutiliseront les memes payloads REST.
-Voir `docs/source/torii/portfolio_api.md` pour les schemas request/response complets et
-`docs/space-directory.md` pour le playbook operateur end-to-end.
+The JS SDK (`javascript/iroha_js/src/toriiClient.js`) already wraps these read
+surfaces via `ToriiClient.getUaidPortfolio`, `.getUaidBindings`, and
+`.getUaidManifests`; future Swift/Python releases reuse the same REST payloads.
+Reference `docs/source/torii/portfolio_api.md` for complete request/response
+schemas and `docs/space-directory.md` for the end-to-end operator playbook.
 
-Mises a jour recentes SDK/AMX
-- **NX-11 (verification relay cross-lane):** les helpers SDK valident maintenant les
-  envelopes de relay de lane exposes par `/v1/sumeragi/status`. Le client Rust livre
-  des helpers `iroha::nexus` pour construire/verifier des preuves relay et rejeter des tuples
-  dupliques `(lane_id, dataspace_id, height)`, le binding Python expose
-  `verify_lane_relay_envelope_bytes`/`lane_settlement_hash`, et le SDK JS expose
-  `verifyLaneRelayEnvelope`/`laneRelayEnvelopeSample` pour que les operateurs puissent valider
-  des preuves de transfert cross-lane avec des hashes coherents avant de les relayer.
-  (crates/iroha/src/nexus.rs:1, python/iroha_python/iroha_python_rs/src/lib.rs:666, crates/iroha_js_host/src/lib.rs:640, javascript/iroha_js/src/nexus.js:1)
-- **NX-17 (guardrails budget AMX):** `ivm::analysis::enforce_amx_budget` estime
-  le cout d execution par dataspace et groupe en utilisant le rapport d analyse statique et
-  impose les budgets 30 ms / 140 ms captures ici. Le helper expose des violations claires
-  pour budgets par DS et groupe et est couvert par des tests unitaires,
-  rendant le budget de slot AMX deterministe pour les planificateurs Nexus et les outils
-  SDK. (crates/ivm/src/analysis.rs:142, crates/ivm/src/analysis.rs:241)
+Recent SDK/AMX updates
+- **NX-11 (cross-lane relay verification):** SDK helpers now validate the lane relay
+  envelopes exposed by `/v1/sumeragi/status`. The Rust client ships `iroha::nexus`
+  helpers for building/verifying relay proofs and rejecting duplicate `(lane_id,
+  dataspace_id, height)` tuples, the Python binding exposes
+  `verify_lane_relay_envelope_bytes`/`lane_settlement_hash`, and the JS SDK surfaces
+  `verifyLaneRelayEnvelope`/`laneRelayEnvelopeSample` so operators can gate cross-lane
+  transfer proofs with consistent hashes before forwarding them downstream.【crates/iroha/src/nexus.rs:1】【python/iroha_python/iroha_python_rs/src/lib.rs:666】【crates/iroha_js_host/src/lib.rs:640】【javascript/iroha_js/src/nexus.js:1】
+- **NX-17 (AMX budget guardrails):** `ivm::analysis::enforce_amx_budget` estimates
+  per-dataspace and group execution cost using the static analysis report and enforces
+  the 30 ms / 140 ms budgets captured here. The helper surfaces clear violations for
+  per-DS and group budgets and is covered by unit tests, making the AMX slot budget
+  deterministic for Nexus schedulers and SDK tooling.【crates/ivm/src/analysis.rs:142】【crates/ivm/src/analysis.rs:241】
 
-Architecture de haut niveau
-1) Couche de composition globale (Nexus Chain)
-- Maintient un ordre canonique unique de blocs Nexus de 1 s qui finalisent des transactions atomiques sur un ou plusieurs Data Spaces (DS). Chaque transaction committe met a jour le world state global unifie (vecteur de racines par DS).
-- Contient une metadata minimale plus des preuves/QC agreges pour assurer composabilite, finalite et detection de fraude (DSIDs touches, racines d etat par DS avant/apres, engagements DA, preuves de validite par DS, et le quorum certificate DS utilisant ML-DSA-87). Aucune donnee privee n est incluse.
-- Consensus: Comite BFT global, pipeline, de taille 22 (3f+1 avec f=7), selectionne depuis un pool allant jusqu a ~200k validateurs potentiels par un mecanisme VRF/stake par epoch. Le comite nexus sequence les transactions et finalise le bloc en 1 s.
+High‑Level Architecture
+1) Global Composition Layer (Nexus Chain)
+- Maintains a single, canonical ordering of 1‑second Nexus Blocks that finalize atomic transactions spanning one or more Data Spaces (DS). Every committed transaction updates the unified global world state (vector of per‑DS roots).
+- Contains minimal metadata plus aggregated proofs/QCs to ensure composability, finality, and fraud detection (DSIDs touched, per‑DS state roots before/after, DA commitments, per‑DS validity proofs, and the DS quorum certificate using ML‑DSA‑87). No private data is included.
+- Consensus: Single global, pipelined BFT committee of size 22 (3f+1 with f=7), selected from a pool of up to ~200k potential validators by an epochal VRF/stake mechanism. The nexus committee sequences transactions and finalizes the block within 1s.
 
-2) Couche Data Space (Public/Prive)
-- Execute des fragments par DS des transactions globales, met a jour le WSV local DS et produit des artefacts de validite par bloc (preuves DS agregees et engagements DA) qui se rassemblent dans le bloc Nexus de 1 s.
-- Les DS prives chiffrent les donnees au repos et en transit entre validateurs autorises; seuls les engagements et preuves PQ de validite sortent du DS.
-- Les DS publics exportent les corps de donnees complets (via DA) et les preuves PQ de validite.
+2) Data Space Layer (Public/Private)
+- Executes per‑DS fragments of global transactions, updates DS‑local WSV, and produces per‑block validity artifacts (aggregated per‑DS proofs and DA commitments) that roll up into the 1‑second Nexus Block.
+- Private DS encrypt data‑at‑rest and data‑in‑flight among authorized validators; only commitments and PQ validity proofs leave the DS.
+- Public DS export full data bodies (via DA) and PQ validity proofs.
 
-3) Transactions atomiques cross-Data-Space (AMX)
-- Modele: Chaque transaction utilisateur peut toucher plusieurs DS (ex., domain DS et un ou plusieurs asset DS). Elle est committee atomiquement dans un bloc Nexus de 1 s ou abandonnee; aucun effet partiel.
-- Prepare-commit dans 1 s: Pour chaque transaction candidate, les DS touches executent en parallele contre le meme snapshot (racines DS debut de slot) et produisent des preuves PQ par DS (FASTPQ-ISI) et engagements DA. Le comite nexus commit la transaction seulement si toutes les preuves DS requises verifient et que les certificats DA arrivent (cible <=300 ms); sinon la transaction est replanifiee pour le slot suivant.
-- Consistance: Les ensembles lecture-ecriture sont declares; la detection de conflits a lieu au commit contre les racines de debut de slot. L execution optimiste sans verrou par DS evite les stalls globaux; l atomicite est imposee par la regle de commit nexus (tout-ou-rien entre DS).
-- Confidentialite: Les DS prives n exportent que des preuves/engagements lies aux racines DS pre/post. Aucune donnee privee brute ne quitte le DS.
+3) Atomic Cross‑Data‑Space Transactions (AMX)
+- Model: Each user transaction may touch multiple DS (e.g., domain DS and one or more asset DS). It commits atomically in a single Nexus Block or aborts; no partial effects.
+- Prepare‑Commit within 1s: For each candidate transaction, touched DS execute in parallel against the same snapshot (start‑of‑slot DS roots) and produce per‑DS PQ validity proofs (FASTPQ‑ISI) and DA commitments. The nexus committee commits the transaction only if all required DS proofs verify and the DA certificates arrive (≤300 ms target); otherwise the transaction is re‑scheduled for the next slot.
+- Consistency: Read‑write sets are declared; conflict detection occurs at commit against the start‑of‑slot roots. Lock‑free optimistic execution per DS avoids global stalls; atomicity is enforced by the nexus commit rule (all‑or‑nothing across DS).
+- Privacy: Private DS export only proofs/commitments tied to pre/post DS roots. No raw private data leaves the DS.
 
-4) Disponibilite des donnees (DA) avec erasure coding
-- Kura stocke les corps de blocs et snapshots WSV comme blobs en erasure coding. Les blobs publics sont largement shardes; les blobs prives sont stockes uniquement dans les validateurs DS prives, avec des chunks chiffres.
-- Les engagements DA sont enregistres dans les artefacts DS et les blocs Nexus, permettant echantillonnage et recuperation sans reveler de contenus prives.
+4) Data Availability (DA) with Erasure Coding
+- Kura stores block bodies and WSV snapshots as erasure-coded blobs. Public blobs are widely sharded; private blobs are stored only within private‑DS validators, with encrypted chunks.
+- DA Commitments are recorded in both DS artifacts and Nexus Blocks, enabling sampling and recovery guarantees without revealing private contents.
 
-Structure des blocs et des commits
-- Artefact de preuve Data Space (par slot 1 s, par DS)
-  - Champs: dsid, slot, pre_state_root, post_state_root, ds_tx_set_hash, kura_da_commitment, wsv_da_commitment, manifest_hash, ds_qc (ML-DSA-87), ds_validity_proof (FASTPQ-ISI).
-  - Les DS prives exportent des artefacts sans corps de donnees; les DS publics permettent la recuperation de corps via DA.
+Block and Commit Structure
+- Data Space Proof Artifact (per 1s slot, per DS)
+  - Fields: dsid, slot, pre_state_root, post_state_root, ds_tx_set_hash, kura_da_commitment, wsv_da_commitment, manifest_hash, ds_qc (ML‑DSA‑87), ds_validity_proof (FASTPQ‑ISI).
+  - Private‑DS export artifacts without data bodies; public DS allow body retrieval via DA.
 
-- Bloc Nexus (cadence 1 s)
-  - Champs: block_number, parent_hash, slot_time, tx_list (transactions atomiques cross-DS avec DSIDs touches), ds_artifacts[], nexus_qc.
-  - Fonction: finalise toutes les transactions atomiques dont les artefacts DS requis verifient; met a jour le vecteur global des racines DS en une etape.
+- Nexus Block (1s cadence)
+  - Fields: block_number, parent_hash, slot_time, tx_list (atomic cross‑DS transactions with DSIDs touched), ds_artifacts[], nexus_qc.
+  - Function: finalizes all atomic transactions whose required DS artifacts verify; updates the global world state vector of DS roots in one step.
 
-Consensus et planification
-- Consensus de la Nexus Chain: BFT global pipeline (classe Sumeragi) avec un comite de 22 noeuds (3f+1 avec f=7) visant des blocs de 1 s et une finalite de 1 s. Les membres du comite sont selectionnes par epoch via VRF/stake parmi ~200k candidats; la rotation maintient la decentralisation et la resistance a la censure.
-- Consensus Data Space: Chaque DS execute son propre BFT parmi ses validateurs pour produire des artefacts par slot (preuves, engagements DA, DS QC). Les comites lane-relay sont dimensionnes a `3f+1` via le `fault_tolerance` du dataspace et echantillonnes de maniere deterministe par epoch depuis le pool de validateurs du dataspace en utilisant la graine VRF de l epoch liee a `(dataspace_id, lane_id)`. Les DS prives sont permissionnes; les DS publics permettent une liveness ouverte soumise a des politiques anti-Sybil. Le comite global nexus reste inchange.
-- Planification des transactions: Les utilisateurs soumettent des transactions atomiques declarant les DSIDs touches et des ensembles lecture-ecriture. Les DS executent en parallele dans le slot; le comite nexus inclut la transaction dans le bloc de 1 s si tous les artefacts DS verifient et que les certificats DA sont a temps (<=300 ms).
-- Isolation de performance: Chaque DS a des mempools et une execution independants. Les quotas par DS limitent combien de transactions touchant un DS peuvent etre commises par bloc pour eviter head-of-line blocking et proteger la latence des DS prives.
+Consensus and Scheduling
+- Nexus Chain Consensus: Single global, pipelined BFT (Sumeragi-class) with a 22-node committee (3f+1 with f=7) targeting 1s blocks and 1s finality. Committee members are epochally selected via VRF/stake from ~200k candidates; rotation maintains decentralization and censorship resistance.
+- Data Space Consensus: Each DS runs its own BFT among its validators to produce per‑slot artifacts (proofs, DA commitments, DS QC). Lane-relay committees are sized at `3f+1` using the dataspace `fault_tolerance` setting and are sampled deterministically per epoch from the dataspace validator pool using the VRF epoch seed bound with `(dataspace_id, lane_id)`. Private DS are permissioned; public DS allow open liveness subject to anti‑Sybil policies. The global nexus committee remains unchanged.
+- Transaction Scheduling: Users submit atomic transactions declaring touched DSIDs and read‑write sets. DS execute in parallel within the slot; the nexus committee includes the transaction in the 1s block if all DS artifacts verify and DA certificates are timely (≤300 ms).
+- Performance Isolation: Each DS has independent mempools and execution. Per‑DS quotas bound how many transactions touching a given DS can be committed per block to avoid head‑of‑line blocking and protect private DS latency.
 
-Modele de donnees et namespacing
-- IDs qualifies par DS: Toutes les entites (domaines, comptes, actifs, roles) sont qualifiees par `dsid`. Exemple: `ds::<domain>::account`, `ds::<domain>::asset#precision`.
-- References globales: Une reference globale est un tuple `(dsid, object_id, version_hint)` et peut etre place on-chain dans la couche nexus ou dans des descripteurs AMX pour usage cross-DS.
-- Serialization Norito: Tous les messages cross-DS (descripteurs AMX, preuves) utilisent les codecs Norito. Pas de serde dans les chemins production.
+Data Model and Namespacing
+- DS‑Qualified IDs: All entities (domains, accounts, assets, roles) are qualified by `dsid`. Example: `ds::<domain>::account`, `ds::<domain>::asset#precision`.
+- Global References: A global reference is a tuple `(dsid, object_id, version_hint)` and can be placed on‑chain in the nexus layer or in AMX descriptors for cross‑DS use.
+- Norito Serialization: All cross‑DS messages (AMX descriptors, proofs) use Norito codecs. No serde usage in production paths.
 
-Contrats intelligents et extensions IVM
-- Contexte d execution: Ajouter `dsid` au contexte d execution IVM. Les contrats Kotodama s executent toujours dans un Data Space specifique.
-- Primitives atomiques cross-DS:
-  - `amx_begin()` / `amx_commit()` delimitent une transaction atomique multi-DS dans l host IVM.
-  - `amx_touch(dsid, key)` declare une intention lecture/ecriture pour la detection de conflits contre les racines snapshot du slot.
-  - `verify_space_proof(dsid, proof, statement)` -> bool
-  - `use_asset_handle(handle, op, amount)` -> result (operation permise seulement si la politique l autorise et si le handle est valide)
-- Handles d actifs et fees:
-  - Les operations d actifs sont autorisees par les politiques ISI/roles du DS; les fees sont payees dans le token gas du DS. Des tokens de capacite optionnels et des politiques plus riches (multi-approver, rate-limits, geofencing) peuvent etre ajoutes plus tard sans changer le modele atomique.
-- Determinisme: Toutes les syscalls sont pures et deterministes compte tenu des entrees et des ensembles lecture/ecriture AMX declares. Aucun effet cache de temps ou d environnement.
+Smart Contracts and IVM Extensions
+- Execution Context: Add `dsid` to IVM execution context. Kotodama contracts always execute within a specific Data Space.
+- Atomic Cross‑DS Primitives:
+  - `amx_begin()` / `amx_commit()` demarcate an atomic multi‑DS transaction in the IVM host.
+  - `amx_touch(dsid, key)` declares read/write intent for conflict detection against slot snapshot roots.
+  - `verify_space_proof(dsid, proof, statement)` → bool
+  - `use_asset_handle(handle, op, amount)` → result (operation permitted only if policy allows and handle is valid)
+- Asset Handles and Fees:
+  - Asset operations are authorized by the DS’s ISI/role policies; fees are paid in the DS’s gas token. Optional capability tokens and richer policy (multi‑approver, rate‑limits, geofencing) can be added later without changing the atomic model.
+- Determinism: All syscalls are pure and deterministic given inputs and declared AMX read/write sets. No hidden time or environment effects.
 
-Preuves de validite post-quantum (ISIs generalises)
-- FASTPQ-ISI (PQ, sans trusted setup): Un argument base sur hash, kernelise, qui generalise le design de transfer a toutes les familles ISI tout en visant des preuves sous-seconde pour des lots a echelle 20k sur du materiel classe GPU.
-  - Profil operationnel:
-    - Les noeuds de production construisent le prover via `fastpq_prover::Prover::canonical`, qui initialise toujours le backend de production; le mock deterministe a ete retire. (crates/fastpq_prover/src/proof.rs:126)
-    - `zk.fastpq.execution_mode` (config) et `irohad --fastpq-execution-mode` permettent aux operateurs de figer l execution CPU/GPU de maniere deterministe tandis que le hook observer enregistre les triples requested/resolved/backend pour audits de flotte. (crates/iroha_config/src/parameters/user.rs:1357, crates/irohad/src/main.rs:270, crates/irohad/src/main.rs:2192, crates/iroha_telemetry/src/metrics.rs:8887)
-- Arithmetisation:
-  - AIR de mise a jour KV: Traite WSV comme une map key-value typee engagee via Poseidon2-SMT. Chaque ISI s etend en un petit ensemble de lignes read-check-write sur des cles (comptes, actifs, roles, domaines, metadata, supply).
-  - Contraintes gatees par opcode: Une table AIR unique avec colonnes selecteurs impose les regles par ISI (conservation, compteurs monotones, permissions, range checks, mises a jour de metadata bornees).
-  - Arguments de lookup: Tables transparentes, hash-committed, pour permissions/roles, precisions d actifs et parametres de politique evitent des contraintes bit-heavy.
-- Engagements d etat et mises a jour:
-  - Preuve SMT agreggee: Toutes les cles touchees (pre/post) sont prouvees contre `old_root`/`new_root` en utilisant une frontiere compressee avec siblings dedupes.
-  - Invariants: Les invariants globaux (ex., supply total par actif) sont imposes via egalite de multisets entre lignes d effets et compteurs suivis.
-- Systeme de preuve:
-  - Engagements polynomiaux style FRI (DEEP-FRI) avec haute arite (8/16) et blow-up 8-16; hashes Poseidon2; transcript Fiat-Shamir avec SHA-2/3.
-  - Recursion optionnelle: agregation recursive locale DS pour compresser des micro-batches a une preuve par slot si necessaire.
-- Portee et exemples couverts:
-  - Actifs: transfer, mint, burn, enregistrer/desenregistrer des definitions d actifs, set precision (bornee), set metadata.
-  - Comptes/Domains: creer/supprimer, set key/threshold, ajouter/supprimer signatories (etat uniquement; les checks de signature sont attestes par les validateurs DS, pas prouves dans l AIR).
-  - Roles/Permissions (ISI): accorder/revoquer roles et permissions; appliques par tables de lookup et checks de politique monotone.
-  - Contrats/AMX: marqueurs AMX begin/commit, mint/revoke de capacites si active; prouves comme transitions d etat et compteurs de politique.
-- Checks hors AIR pour preserver la latence:
-  - Signatures et cryptographie lourde (ex., signatures utilisateur ML-DSA) sont verifiees par les validateurs DS et attestees dans le DS QC; la preuve de validite couvre uniquement la coherence d etat et la conformite de politique. Cela garde les preuves PQ rapides.
-- Cibles de performance (illustratives, CPU 32-core + une GPU moderne):
-  - 20k ISIs mixtes avec faible touche de cles (<=8 cles/ISI): ~0.4-0.9 s de preuve, ~150-450 KB de preuve, ~5-15 ms de verification.
-  - ISIs plus lourdes (plus de cles/contraintes riches): micro-batch (ex., 10x2k) + recursion pour garder par slot <1 s.
-- Configuration DS Manifest:
+Post‑Quantum Validity Proofs (Generalized ISIs)
+- FASTPQ‑ISI (PQ, no trusted setup): A kernelized, hash‑based argument that generalizes the transfer design to all ISI families while targeting sub‑second proving for 20k‑scale batches on GPU‑class hardware.
+  - Operational profile:
+    - Production nodes construct the prover through `fastpq_prover::Prover::canonical`, which now always initialises the production backend; the deterministic mock has been removed.【crates/fastpq_prover/src/proof.rs:126】
+    - `zk.fastpq.execution_mode` (config) and `irohad --fastpq-execution-mode` allow operators to pin CPU/GPU execution deterministically while the observer hook records requested/resolved/backend triples for fleet audits.【crates/iroha_config/src/parameters/user.rs:1357】【crates/irohad/src/main.rs:270】【crates/irohad/src/main.rs:2192】【crates/iroha_telemetry/src/metrics.rs:8887】
+- Arithmetization:
+  - KV‑Update AIR: Treat WSV as a typed key‑value map committed via Poseidon2‑SMT. Each ISI expands to a small set of read‑check‑write rows over keys (accounts, assets, roles, domains, metadata, supply).
+  - Opcode‑gated constraints: A single AIR table with selector columns enforces per‑ISI rules (conservation, monotonic counters, permissions, range checks, bounded metadata updates).
+  - Lookup arguments: Transparent, hash‑committed tables for permissions/roles, asset precisions, and policy parameters avoid heavy bitwise constraints.
+- State commitments and updates:
+  - Aggregated SMT Proof: All touched keys (pre/post) are proven against `old_root`/`new_root` using a compressed frontier with deduped siblings.
+  - Invariants: Global invariants (e.g., total supply per asset) are enforced via multiset equality between effect rows and tracked counters.
+- Proof system:
+  - FRI‑style polynomial commitments (DEEP‑FRI) with high arity (8/16) and blow‑up 8–16; Poseidon2 hashes; Fiat‑Shamir transcript with SHA‑2/3.
+  - Optional recursion: DS‑local recursive aggregation to compress micro‑batches to one proof per slot if needed.
+- Scope and examples covered:
+  - Assets: transfer, mint, burn, register/unregister asset definitions, set precision (bounded), set metadata.
+  - Accounts/Domains: create/remove, set key/threshold, add/remove signatories (state‑only; signature checks are attested by DS validators, not proven inside the AIR).
+  - Roles/Permissions (ISI): grant/revoke roles and permissions; enforced by lookup tables and monotonic policy checks.
+  - Contracts/AMX: AMX begin/commit markers, capability mint/revoke if enabled; proven as state transitions and policy counters.
+- Out‑of‑AIR checks to preserve latency:
+  - Signatures and heavy cryptography (e.g., ML‑DSA user signatures) are verified by DS validators and attested in the DS QC; the validity proof covers only state consistency and policy compliance. This keeps proofs PQ and fast.
+- Performance targets (illustrative, 32‑core CPU + single modern GPU):
+  - 20k mixed ISIs with small key‑touch (≤8 keys/ISI): ~0.4–0.9 s prove, ~150–450 KB proof, ~5–15 ms verify.
+  - Heavier ISIs (more keys/rich constraints): micro‑batch (e.g., 10×2k) + recursion to keep per‑slot <1 s.
+- DS Manifest configuration:
   - `zk.policy = "fastpq_isi"`
   - `zk.hash = "poseidon2"`, `zk.fri = { blowup: 8|16, arity: 8|16 }`
   - `state.commitment = "smt_poseidon2"`
   - `zk.recursion = { none | local }`
-  - `attestation.signatures_in_proof = false` (signatures verifiees par DS QC)
-  - `attestation.qc_signature = "ml_dsa_87"` (par defaut; alternatives doivent etre declarees explicitement)
+  - `attestation.signatures_in_proof = false` (signatures verified by DS QC)
+  - `attestation.qc_signature = "ml_dsa_87"` (default; alternatives must be explicitly declared)
 - Fallbacks:
-  - Les ISIs complexes/personnalises peuvent utiliser un STARK general (`zk.policy = "stark_fri_general"`) avec preuve differee et finalite 1 s via attestation QC + slashing sur preuves invalides.
-  - Les options non-PQ (ex., Plonk avec KZG) demandent un trusted setup et ne sont plus supportees dans le build par defaut.
+  - Complex/custom ISIs may use a general STARK (`zk.policy = "stark_fri_general"`) with deferred proof and 1 s finality via QC attestation + slashing on invalid proofs.
+  - Non‑PQ options (e.g., Plonk with KZG) require a trusted setup and are no longer supported in the default build.
 
-Introduction a AIR (pour Nexus)
-- Trace d execution: Une matrice avec largeur (colonnes de registres) et longueur (pas). Chaque ligne est une etape logique du traitement ISI; les colonnes contiennent valeurs pre/post, selecteurs et flags.
-- Contraintes:
-  - Contraintes de transition: imposent des relations ligne-a-ligne (ex., post_balance = pre_balance - amount pour une ligne de debit quand `sel_transfer = 1`).
-  - Contraintes de bord: lient l I/O publique (old_root/new_root, compteurs) aux premieres/dernieres lignes.
-  - Lookups/permutations: garantissent l appartenance et les egalites de multiset contre des tables engagees (permissions, parametres d actifs) sans circuits bits lourds.
-- Engagement et verification:
-  - Le prover engage les traces via des encodages base sur hash et construit des polynomes de faible degre valides si les contraintes tiennent.
-  - Le verificateur verifie le faible degre via FRI (base sur hash, post-quantum) avec quelques ouvertures Merkle; le cout est logarithmique en pas.
-- Exemple (Transfer): registres incluant pre_balance, amount, post_balance, nonce et selecteurs. Les contraintes imposent non-negativite/range, conservation et monotonie du nonce, tandis qu une multi-preuve SMT agreggee lie les feuilles pre/post aux racines old/new.
+AIR Primer (for Nexus)
+- Execution trace: A matrix with width (register columns) and length (steps). Each row is a logical step of ISI processing; columns hold pre/post values, selectors, and flags.
+- Constraints:
+  - Transition constraints: enforce row‑to‑row relations (e.g., post_balance = pre_balance − amount for a debit row when `sel_transfer = 1`).
+  - Boundary constraints: bind public I/O (old_root/new_root, counters) to the first/last rows.
+  - Lookups/permutations: ensure membership and multiset equalities against committed tables (permissions, asset params) without bit‑heavy circuits.
+- Commitment and verification:
+  - Prover commits to traces via hash‑based encodings and constructs low‑degree polynomials that are valid iff constraints hold.
+  - Verifier checks low‑degree via FRI (hash‑based, post‑quantum) with a few Merkle openings; cost is logarithmic in steps.
+- Example (Transfer): registers include pre_balance, amount, post_balance, nonce, and selectors. Constraints enforce non‑negativity/range, conservation, and nonce monotonicity, while an aggregated SMT multi‑proof links pre/post leaves to old/new roots.
 
-Stabilite ABI (ABI v1)
-- La surface ABI v1 est fixe; aucun nouveau syscall ni type pointer-ABI n est introduit dans ce release.
-- Les runtime upgrades doivent garder `abi_version = 1` avec `added_syscalls`/`added_pointer_types` vides.
-- Les goldens ABI (liste syscalls, hash ABI, IDs pointer type) restent fixes et ne doivent pas changer.
+ABI Stability (ABI v1)
+- ABI v1 surface is fixed; no new syscalls or pointer‑ABI types are introduced in this release.
+- Runtime upgrades must keep `abi_version = 1` with empty `added_syscalls`/`added_pointer_types`.
+- ABI goldens (syscall list, ABI hash, pointer type IDs) remain pinned and must not change.
 
-Modele de confidentialite
-- Contention des donnees privees: corps de transaction, diffs d etat et snapshots WSV pour DS prives ne quittent jamais le sous-ensemble de validateurs prives.
-- Exposition publique: Seuls les headers, engagements DA et preuves PQ de validite sont exportes.
-- Preuves ZK optionnelles: Les DS prives peuvent produire des preuves ZK (ex., solde suffisant, politique satisfaite) permettant des actions cross-DS sans reveler l etat interne.
-- Controle d acces: L autorisation est appliquee par les politiques ISI/roles dans le DS. Les tokens de capacite sont optionnels et peuvent etre introduits plus tard si necessaire.
+Privacy Model
+- Private Data Containment: Transaction bodies, state diffs, and WSV snapshots for private DS never leave the private validator subset.
+- Public Exposure: Only headers, DA commitments, and PQ validity proofs are exported.
+- Optional ZK Proofs: Private DS may produce ZK proofs (e.g., balance sufficient, policy satisfied) enabling cross‑DS actions without revealing internal state.
+- Access Control: Authorization is enforced by ISI/role policies inside the DS. Capability tokens are optional and can be introduced later if needed.
 
-Isolation de performance et QoS
-- Consensus, mempools et stockage separes par DS.
-- Quotas de planification Nexus par DS pour borner le temps d inclusion des anchors et eviter head-of-line blocking.
-- Budgets de ressources de contrat par DS (compute/memory/IO), appliques par l host IVM. La contention DS public ne peut pas consommer les budgets DS prives.
-- Les appels cross-DS asynchrones evitent de longues attentes synchrones dans l execution DS privee.
+Performance Isolation and QoS
+- Separate consensus, mempools, and storage per DS.
+- Nexus scheduling quotas per DS to bound anchor inclusion time and avoid head-of-line blocking.
+- Contract resource budgets per DS (compute/memory/IO), enforced by IVM host. Public‑DS contention cannot consume private‑DS budgets.
+- Asynchronous cross‑DS calls avoid long synchronous waits inside private‑DS execution.
 
-Disponibilite des donnees et design de stockage
+Data Availability and Storage Design
 1) Erasure Coding
-- Utiliser Reed-Solomon systematique (ex., GF(2^16)) pour l erasure coding au niveau blob des blocs Kura et snapshots WSV: parametres `(k, m)` avec `n = k + m` shards.
-- Parametres par defaut (proposes, DS publics): `k=32, m=16` (n=48), permettant une recuperation jusqu a 16 pertes de shards avec ~1.5x d expansion. Pour DS prives: `k=16, m=8` (n=24) dans l ensemble permissionne. Les deux sont configurables via DS Manifest.
-- Blobs publics: Shards distribues sur de nombreux noeuds DA/validateurs avec checks de disponibilite par echantillonnage. Les engagements DA dans les headers permettent la verification light client.
-- Blobs prives: Shards chiffres et distribues uniquement chez les validateurs DS prives (ou custodians designes). La chaine globale porte uniquement des engagements DA (pas de localisation de shards ni de cles).
+- Use systematic Reed‑Solomon (e.g., GF(2^16)) for blob‑level erasure coding of Kura blocks and WSV snapshots: parameters `(k, m)` with `n = k + m` shards.
+- Default parameters (proposed, public DS): `k=32, m=16` (n=48), enabling recovery from up to 16 shard losses with ~1.5× expansion. For private DS: `k=16, m=8` (n=24) within the permissioned set. Both are configurable per DS Manifest.
+- Public Blobs: Shards distributed across many DA nodes/validators with sampling‑based availability checks. DA commitments in headers allow light clients to verify.
+- Private Blobs: Shards encrypted and distributed only within private‑DS validators (or designated custodians). Global chain carries only DA commitments (no shard locations or keys).
 
-2) Engagements et echantillonnage
-- Pour chaque blob: calculer une racine Merkle sur les shards et l inclure dans `*_da_commitment`. Rester PQ en evitant les engagements a courbe elliptique.
-- Attesters DA: attesters regionaux echantillonnes par VRF (ex., 64 par region) emettent un certificat ML-DSA-87 attestant un echantillonnage reussi des shards. Cible de latence d attestation DA <=300 ms. Le comite nexus valide les certificats au lieu de recuperer des shards.
+2) Commitments and Sampling
+- For each blob: compute a Merkle root over shards and include it in `*_da_commitment`. Remain PQ by avoiding elliptic‑curve commitments.
+- DA Attesters: VRF‑sampled regional attesters (e.g., 64 per region) issue an ML‑DSA‑87 certificate attesting successful shard sampling. Target DA attestation latency ≤300 ms. Nexus committee validates certificates instead of pulling shards.
 
-3) Integration Kura
-- Les blocs stockent les corps de transaction comme blobs en erasure coding avec engagements Merkle.
-- Les headers portent des engagements de blobs; les corps sont recuperes via le reseau DA pour DS publics et via canaux prives pour DS prives.
+3) Kura Integration
+- Blocks store transaction bodies as erasure-coded blobs with Merkle commitments.
+- Headers carry blob commitments; bodies are retrievable via DA network for public DS and via private channels for private DS.
 
-4) Integration WSV
-- Snapshotting WSV: Periodiquement, checkpoint de l etat DS en snapshots chunkes et erasure codes avec engagements enregistres dans les headers. Entre snapshots, maintenir des journaux de changements. Les snapshots publics sont largement shards; les snapshots prives restent dans les validateurs prives.
-- Acces par preuve: Les contrats peuvent fournir (ou demander) des preuves d etat (Merkle/Verkle) ancrees par des engagements de snapshot. Les DS prives peuvent fournir des attestations zero-knowledge a la place de preuves brutes.
+4) WSV Integration
+- WSV Snapshotting: Periodically checkpoint DS state into chunked, erasure-coded snapshots with commitments recorded in headers. Between snapshots, maintain change logs. Public snapshots are widely sharded; private snapshots remain within private validators.
+- Proof‑Carrying Access: Contracts can provide (or request) state proofs (Merkle/Verkle) anchored by snapshot commitments. Private DS may supply zero‑knowledge attestations instead of raw proofs.
 
-5) Retention et pruning
-- Pas de pruning pour DS publics: conserver tous les corps Kura et snapshots WSV via DA (scaling horizontal). Les DS prives peuvent definir une retention interne, mais les engagements exportes restent immuables. La couche nexus conserve tous les blocs Nexus et engagements d artefacts DS.
+5) Retention and Pruning
+- No pruning for public DS: retain all Kura bodies and WSV snapshots via DA (horizontal scaling). Private DS may define internal retention, but exported commitments remain immutable. Nexus layer retains all Nexus Blocks and DS artifact commitments.
 
-Reseaux et roles de noeuds
-- Validateurs globaux: participent au consensus nexus, valident les blocs Nexus et artefacts DS, effectuent des checks DA pour DS publics.
-- Validateurs Data Space: executent le consensus DS, executent les contrats, gerent Kura/WSV local, gerent DA pour leur DS.
-- Noeuds DA (optionnels): stockent/publicisent des blobs publics, facilitent l echantillonnage. Pour DS prives, les noeuds DA sont co-localises avec les validateurs ou des custodians de confiance.
+Networking and Node Roles
+- Global Validators: Participate in nexus consensus, validate Nexus Blocks and DS artifacts, perform DA checks for public DS.
+- Data Space Validators: Run DS consensus, execute contracts, manage local Kura/WSV, handle DA for their DS.
+- DA Nodes (optional): Store/publicize public blobs, facilitate sampling. For private DS, DA nodes are co-located with validators or trusted custodians.
 
-Ameliorations et considerations systeme
-- Decouplage sequencing/mempool: adopter un mempool DAG (ex., style Narwhal) alimentant un BFT pipeline au niveau nexus pour reduire la latence et ameliorer le throughput sans changer le modele logique.
-- Quotas DS et fairness: quotas par DS par bloc et caps de poids pour eviter head-of-line blocking et assurer une latence previsible pour DS prives.
-- Attestation DS (PQ): Les quorum certificates DS par defaut utilisent ML-DSA-87 (classe Dilithium5). C est post-quantum et plus volumineux que les signatures EC mais acceptable a un QC par slot. Les DS peuvent explicitement opter pour ML-DSA-65/44 (plus petit) ou signatures EC si declare dans le DS Manifest; les DS publics sont fortement encourages a garder ML-DSA-87.
-- Attesters DA: Pour DS publics, utiliser des attesters regionaux echantillonnes par VRF qui emettent des certificats DA. Le comite nexus valide les certificats au lieu d un echantillonnage brut de shards; les DS prives gardent les attestations DA internes.
-- Recursion et preuves par epoch: aggreger plusieurs micro-batches au sein d un DS en une preuve recursive par slot/epoch pour garder la taille des preuves et le temps de verification stables sous forte charge.
-- Scalabilite par lanes (si besoin): si un comite global unique devient un goulot, introduire K lanes de sequencing paralleles avec un merge deterministe. Cela preserve un ordre global unique tout en scalant horizontalement.
-- Acceleration deterministe: fournir des kernels SIMD/CUDA feature-gates pour hashing/FFT avec un fallback CPU bit-exact pour preserver le determinisme cross-hardware.
-- Seuils d activation de lanes (proposition): activer 2-4 lanes si (a) la finalite p95 depasse 1.2 s pendant >3 minutes consecutives, ou (b) l occupation par bloc depasse 85% pendant >5 minutes, ou (c) le taux de tx entrant exigerait >1.2x la capacite de bloc a des niveaux soutenus. Les lanes bucketisent les transactions de maniere deterministe par hash DSID et fusionnent dans le bloc nexus.
+System‑Level Improvements and Considerations
+- Sequencing/mempool decoupling: Adopt a DAG mempool (e.g., Narwhal‑style) feeding a pipelined BFT at the nexus layer to lower latency and improve throughput without changing the logical model.
+- DS quotas and fairness: Per‑DS per‑block quotas and weight caps to avoid head‑of‑line blocking and ensure predictable latency for private DS.
+- DS attestation (PQ): Default DS quorum certificates use ML‑DSA‑87 (Dilithium5‑class). This is post‑quantum and larger than EC signatures but acceptable at one QC per slot. DS may explicitly opt for ML‑DSA‑65/44 (smaller) or EC signatures if declared in the DS Manifest; public DS are strongly encouraged to keep ML‑DSA‑87.
+- DA attesters: For public DS, use VRF‑sampled regional attesters that issue DA certificates. The nexus committee validates certificates instead of raw shard sampling; private DS keep DA attestations internal.
+- Recursion and epoch proofs: Optionally aggregate multiple micro‑batches within a DS into one recursive proof per slot/epoch to keep proof sizes and verify time steady under high load.
+- Lane scaling (if needed): If a single global committee becomes a bottleneck, introduce K parallel sequencing lanes with a deterministic merge. This preserves a single global order while scaling horizontally.
+- Deterministic acceleration: Provide SIMD/CUDA feature‑gated kernels for hashing/FFT with a bit‑exact CPU fallback to preserve cross‑hardware determinism.
+- Lane activation thresholds (proposal): Enable 2–4 lanes if either (a) p95 finality exceeds 1.2 s for >3 consecutive minutes, or (b) per‑block occupancy exceeds 85% for >5 minutes, or (c) incoming tx rate would require >1.2× block capacity at sustained levels. Lanes deterministically bucket transactions by DSID hash and merge in the nexus block.
 
-Fees et economie (defauts initiaux)
-- Unite de gas: token gas par DS avec compute/IO mesure; les fees sont payees dans l asset gas natif du DS. La conversion entre DS est une preoccupation applicative.
-- Priorite d inclusion: round-robin entre DS avec quotas par DS pour preserver l equite et les SLO 1 s; dans un DS, les encheres de fees peuvent briser les egalites.
-- Futur: un marche de fees global ou des politiques minimisant le MEV peuvent etre explorees sans changer l atomicite ou le design des preuves PQ.
+Fees and Economics (Initial Defaults)
+- Gas unit: per‑DS gas token with metered compute/IO; fees are paid in the DS’s native gas asset. Conversion across DS is an application concern.
+- Inclusion priority: round‑robin across DS with per‑DS quotas to preserve fairness and 1s SLOs; within a DS, fee bidding can break ties.
+- Future: optional global fee market or MEV‑minimizing policies can be explored without changing atomicity or PQ proof design.
 
-Flux cross-Data-Space (Exemple)
-1) Un utilisateur soumet une transaction AMX touchant un DS public P et un DS prive S: deplacer l actif X de S vers un beneficiaire B dont le compte est dans P.
-2) Dans le slot, P et S executent chacun leur fragment contre le snapshot du slot. S verifie l autorisation et la disponibilite, met a jour son etat interne, et produit une preuve PQ de validite et un engagement DA (aucune donnee privee ne fuit). P prepare la mise a jour d etat correspondante (ex., mint/burn/locking dans P selon la politique) et sa preuve.
-3) Le comite nexus verifie les deux preuves DS et certificats DA; si les deux verifient dans le slot, la transaction est committee atomiquement dans le bloc Nexus de 1 s, mettant a jour les racines DS dans le vecteur global de world state.
-4) Si une preuve ou un certificat DA manque ou est invalide, la transaction est abandonnee (sans effets), et le client peut resoumettre pour le slot suivant. Aucune donnee privee ne quitte S a aucune etape.
+Cross‑Data‑Space Workflow (Example)
+1) A user submits an AMX transaction touching public DS P and private DS S: move asset X from S to beneficiary B whose account is in P.
+2) Within the slot, P and S each execute their fragment against the slot snapshot. S verifies authorization and availability, updates its internal state, and produces a PQ validity proof and DA commitment (no private data leaked). P prepares the corresponding state update (e.g., mint/burn/locking in P according to policy) and its proof.
+3) The nexus committee verifies both DS proofs and DA certificates; if both verify within the slot, the transaction is committed atomically in the 1s Nexus Block, updating both DS roots in the global world state vector.
+4) If any proof or DA certificate is missing/invalid, the transaction aborts (no effects), and the client may resubmit for the next slot. No private data leaves S at any step.
 
-- Considerations de securite
-- Execution deterministe: Les syscalls IVM restent deterministes; les resultats cross-DS sont pilotes par le commit AMX et la finalite, pas par l horloge ou le timing reseau.
-- Controle d acces: Les permissions ISI dans les DS prives restreignent qui peut soumettre des transactions et quelles operations sont autorisees. Les tokens de capacite encodent des droits fins pour usage cross-DS.
-- Confidentialite: Chiffrement end-to-end pour les donnees DS privees, shards erasure-codes stockes uniquement parmi les membres autorises, preuves ZK optionnelles pour attestations externes.
-- Resistance DoS: Isolation aux couches mempool/consensus/stockage empeche la congestion publique d impacter la progression des DS prives.
+- Security Considerations
+- Deterministic Execution: IVM syscalls remain deterministic; cross‑DS outcomes are driven by AMX commit and finality, not wall‑clock or network timing.
+- Access Control: ISI permissions in private DS restrict who may submit transactions and what operations are allowed. Capability tokens encode fine‑grained rights for cross‑DS use.
+- Confidentiality: End‑to‑end encryption for private‑DS data, erasure‑coded shards stored only among authorized members, optional ZK proofs for external attestations.
+- DoS Resistance: Isolation at mempool/consensus/storage layers prevents public congestion from impacting private‑DS progress.
 
-Changements des composants Iroha
-- iroha_data_model: Introduire `DataSpaceId`, identifiants qualifies DS, descripteurs AMX (ensembles lecture/ecriture), types de preuve/engagement DA. Serialization Norito uniquement.
-- ivm: Maintenir la surface ABI v1 fixe (pas de nouveaux syscalls ni types pointer-ABI); AMX/runtime upgrades utilisent les primitives v1 existantes; garder les goldens ABI.
-- iroha_core: Implementer le planificateur nexus, Space Directory, routage/validation AMX, verification d artefacts DS et enforcement de politiques pour echantillonnage DA et quotas.
-- Space Directory et loaders de manifestes: faire passer la metadata des endpoints FMS (et autres descripteurs de services common-good) via le parsing de manifestes DS pour que les noeuds auto-decouvrent des endpoints locaux en rejoignant un Data Space.
-- kura: Blob store avec erasure coding, engagements, APIs de recuperation respectant les politiques prive/public.
-- WSV: Snapshotting, chunking, engagements; APIs de preuve; integration avec detection et verification de conflits AMX.
-- irohad: Roles de noeud, reseautage DA, membership/authentification DS prive, configuration via `iroha_config` (pas de toggles env en production).
+Changes to Iroha Components
+- iroha_data_model: Introduce `DataSpaceId`, DS‑qualified identifiers, AMX descriptors (read/write sets), proof/DA commitment types. Norito‑only serialization.
+- ivm: Keep ABI v1 surface fixed (no new syscalls/pointer‑ABI types); AMX/runtime upgrades must use existing v1 primitives; keep ABI goldens pinned.
+- iroha_core: Implement nexus scheduler, Space Directory, AMX routing/validation, DS artifact verification, and policy enforcement for DA sampling and quotas.
+- Space Directory & manifest loaders: Thread FMS endpoint metadata (and other common-good service descriptors) through DS manifest parsing so nodes auto-discover local service endpoints when joining a Data Space.
+- kura: Blob store with erasure coding, commitments, retrieval APIs respecting private/public policies.
+- WSV: Snapshotting, chunking, commitments; proof APIs; integration with AMX conflict detection and verification.
+- irohad: Node roles, networking for DA, private‑DS membership/authentication, configuration via `iroha_config` (no env toggles in production paths).
 
-Configuration et determinisme
-- Tout comportement runtime est configure via `iroha_config` et propage via constructeurs/hosts. Pas de toggles env en production.
-- Acceleration hardware (SIMD/NEON/METAL/CUDA) est optionnelle et feature-gated; les fallbacks deterministes doivent produire des resultats identiques entre hardware.
-- - Post-Quantum par defaut: Tous les DS doivent utiliser des preuves de validite PQ (STARK/FRI) et ML-DSA-87 pour les QC DS par defaut. Les alternatives requierent une declaration explicite dans le DS Manifest et une approbation de politique.
+Configuration and Determinism
+- All runtime behavior configured via `iroha_config` and threaded through constructors/hosts. No production env toggles.
+- Hardware acceleration (SIMD/NEON/METAL/CUDA) is optional and feature-gated; deterministic fallbacks must produce identical results across hardware.
+- - Post‑Quantum default: All DS must use PQ validity proofs (STARK/FRI) and ML‑DSA‑87 for DS QCs by default. Alternatives require explicit DS Manifest declaration and policy approval.
 
-### Controle du cycle de vie des lanes en runtime
+### Runtime Lane Lifecycle Control
 
-- **Endpoint admin:** `POST /v1/nexus/lifecycle` (Torii) accepte un corps Norito/JSON avec `additions` (objets `LaneConfig` complets) et `retire` (ids de lane) pour ajouter ou retirer des lanes sans redemarrage. Les requetes sont gatees par `nexus.enabled=true` et reutilisent la meme vue configuration/etat Nexus que la queue.
-- **Comportement:** En succes, le noeud applique le plan de cycle de vie a la metadata WSV/Kura, reconstruit le routage/limites/manifestes de queue, et repond avec `{ ok: true, lane_count: <u32> }`. Les plans qui echouent la validation (ids retire inconnus, aliases/ids dupliques, Nexus desactive) renvoient `400 Bad Request` avec un `lane_lifecycle_error`.
-- **Securite:** Le handler utilise le lock de vue d etat partagee pour eviter les courses avec des lecteurs lors des mises a jour de catalogues; les appelants doivent encore serialiser les mises a jour de cycle de vie en externe pour eviter des plans conflictuels.
-- **Propagation:** Le routage/limites de la queue et les manifests de lane sont reconstruits depuis le catalogue mis a jour, et les workers consensus/DA/RBC lisent la config de lane via des snapshots d etat; le scheduling et la selection des validateurs basculent sans redemarrage (le travail en vol termine avec l ancienne config).
-- **Nettoyage stockage:** Kura et la geometrie WSV tiered sont reconciliees (creer/retirer/relabel), les mappings de curseurs de shards DA sont synchronises/persistes, et les lanes retirees sont purgees des caches de lane relay et des stores de commitments DA/confidential-compute/pin-intent.
+- **Admin endpoint:** `POST /v1/nexus/lifecycle` (Torii) accepts a Norito/JSON body with `additions` (full `LaneConfig` objects) and `retire` (lane ids) to add or remove lanes without restart. Requests are gated on `nexus.enabled=true` and reuse the same Nexus configuration/state view as the queue.
+- **Behaviour:** On success the node applies the lifecycle plan to WSV/Kura metadata, rebuilds queue routing/limits/manifests, and responds with `{ ok: true, lane_count: <u32> }`. Plans that fail validation (unknown retire ids, duplicate aliases/ids, Nexus disabled) return `400 Bad Request` with a `lane_lifecycle_error`.
+- **Safety:** The handler uses the shared state view lock to avoid racing with readers while updating catalogs; callers should still serialize lifecycle updates externally to avoid conflicting plans.
+- **Propagation:** Queue routing/limits and lane manifests are rebuilt from the updated catalog, and consensus/DA/RBC workers read the refreshed lane config via state snapshots so scheduling and validator selection shift without restart (in-flight work completes under the previous config).
+- **Storage cleanup:** Kura and tiered WSV geometry are reconciled (create/retire/relabel), DA shard cursor mappings are synced/persisted, and retired lanes are pruned from lane relay caches plus DA commitment/confidential-compute/pin-intent stores.
 
-Chemin de migration (Iroha 2 -> Iroha 3)
-1) Introduire des IDs qualifies par dataspace et la composition de bloc nexus/etat global dans le data model; ajouter des feature flags pour conserver les modes herites d'Iroha 2 pendant la transition.
-2) Implementer des backends Kura/WSV en erasure coding derriere des feature flags, en preservant les backends actuels comme defaults pendant les phases initiales.
-3) Maintenir la surface ABI v1 fixe; implementer AMX sans nouveaux syscalls/types pointer et mettre a jour tests/docs sans changer ABI.
-4) Livrer une chaine nexus minimale avec un seul DS public et des blocs 1 s; puis ajouter un premier pilote DS prive exportant uniquement preuves/engagements.
-5) Etendre aux transactions atomiques cross-DS completes (AMX) avec preuves FASTPQ-ISI locales DS et attesters DA; activer ML-DSA-87 QCs sur tous les DS.
+Migration Path (Iroha 2 → Iroha 3)
+1) Introduce data‑space‑qualified IDs and nexus block/global state composition in data model; add feature flags to keep Iroha 2 legacy modes during transition.
+2) Implement Kura/WSV erasure‑coding backends behind feature flags, preserving current backends as defaults during early phases.
+3) Keep ABI v1 surface fixed; implement AMX without new syscalls/pointer types and update tests/docs without changing ABI.
+4) Deliver minimal nexus chain with a single public DS and 1s blocks; then add first private‑DS pilot exporting proofs/commitments only.
+5) Expand to full atomic cross‑DS transactions (AMX) with DS‑local FASTPQ‑ISI proofs and DA attesters; enable ML‑DSA‑87 QCs across DS.
 
-Strategie de tests
-- Tests unitaires pour types data model, roundtrips Norito, comportements syscalls AMX, encodage/decodage de preuves.
-- Tests IVM pour figer les goldens ABI v1 (liste syscalls, hash ABI, IDs pointer type).
-- Tests d integration pour transactions atomiques cross-DS (positives/negatives), cibles de latence attester DA (<=300 ms), et isolation de performance sous charge.
-- Tests de securite pour verification DS QC (ML-DSA-87), detection de conflits/semantique d abort, et prevention des fuites de shards confidentiels.
+Testing Strategy
+- Unit tests for data model types, Norito roundtrips, AMX syscall behaviors, and proof encoding/decoding.
+- IVM tests to pin ABI v1 syscall list/ABI hash/pointer‑type goldens.
+- Integration tests for atomic cross‑DS transactions (positive/negative), DA attester latency targets (≤300 ms), and performance isolation under load.
+- Reproducible localnet proof workflow: `scripts/run_nexus_cross_dataspace_atomic_swap.sh` and `docs/source/nexus_cross_dataspace_localnet.md` run and explain the `integration_tests/tests/nexus/cross_dataspace_localnet.rs` all-or-nothing ds1↔ds2 swap/rollback scenario.
+- Security tests for DS QC verification (ML‑DSA‑87), conflict detection/abort semantics, and confidential shard leakage prevention.
 
-### Actifs de telemetrie et runbook NX-18
+### NX-18 Telemetry & Runbook Assets
 
-- **Dashboard Grafana:** `dashboards/grafana/nexus_lanes.json` exporte maintenant le dashboard "Nexus Lane Finality & Oracles" demande par NX-18. Les panels couvrent `histogram_quantile()` sur `iroha_slot_duration_ms`, `iroha_da_quorum_ratio`, avertissements de disponibilite DA (`sumeragi_da_gate_block_total{reason="missing_local_data"}`), gauges de prix/staleness/TWAP/haircut d oracles, et le panel live `iroha_settlement_buffer_xor` pour que les operateurs prouvent les SLO 1 s slot, DA et tresorerie sans requetes bespoke.
-- **CI gate:** `scripts/telemetry/check_slot_duration.py` parse des snapshots Prometheus, imprime la latence p50/p95/p99 et applique les seuils NX-18 (p95 <= 1000 ms, p99 <= 1100 ms). Le harness compagnon `scripts/telemetry/nx18_acceptance.py` gate le quorum DA, staleness/TWAP/haircuts d oracles, buffers de settlement et quantiles de slot en un passage (`--json-out` persiste les preuves), et les deux tournent dans `ci/check_nexus_lane_smoke.sh` pour les RC.
-- **Bundler d evidence:** `scripts/telemetry/bundle_slot_artifacts.py` copie le snapshot de metrics + resume JSON dans `artifacts/nx18/` et emet `slot_bundle_manifest.json` avec des digests SHA-256, garantissant que chaque RC telecharge exactement les artefacts qui ont declenche le gate NX-18.
-- **Automation de release:** `scripts/run_release_pipeline.py` invoque maintenant `ci/check_nexus_lane_smoke.sh` (skip avec `--skip-nexus-lane-smoke`) et copie `artifacts/nx18/` dans la sortie release afin que la preuve NX-18 accompagne les artefacts bundle/image sans etape manuelle.
-- **Runbook:** `docs/source/runbooks/nexus_lane_finality.md` documente le flux on-call (seuils, etapes d incident, capture d evidence, drills de chaos) qui accompagne le dashboard, remplissant la puce "publish operator dashboards/runbooks" de NX-18.
-- **Helpers telemetrie:** reutiliser `scripts/telemetry/compare_dashboards.py` existant pour diff de dashboards exportes (evitant le drift staging/prod) et `scripts/telemetry/check_nexus_audit_outcome.py` pendant les rehearsals routed-trace ou chaos afin que chaque drill NX-18 archive le payload `nexus.audit.outcome` correspondant.
+- **Grafana board:** `dashboards/grafana/nexus_lanes.json` now exports the “Nexus Lane Finality & Oracles” dashboard requested by NX‑18. Panels cover `histogram_quantile()` on `iroha_slot_duration_ms`, `iroha_da_quorum_ratio`, DA availability warnings (`sumeragi_da_gate_block_total{reason="missing_local_data"}`), oracle price/staleness/TWAP/haircut gauges, and the live `iroha_settlement_buffer_xor` buffer panel so operators can prove the 1 s slot, DA, and treasury SLOs without bespoke queries.
+- **CI gate:** `scripts/telemetry/check_slot_duration.py` parses Prometheus snapshots, prints the p50/p95/p99 slot latency, and enforces the NX‑18 thresholds (p95 ≤ 1000 ms, p99 ≤ 1100 ms). The companion harness `scripts/telemetry/nx18_acceptance.py` gates DA quorum, oracle staleness/TWAP/haircuts, settlement buffers, and slot quantiles in one pass (`--json-out` persists evidence), and both run inside `ci/check_nexus_lane_smoke.sh` for RCs.
+- **Evidence bundler:** `scripts/telemetry/bundle_slot_artifacts.py` copies the metrics snapshot + JSON summary into `artifacts/nx18/` and emits `slot_bundle_manifest.json` with SHA-256 digests, ensuring every RC uploads the exact artefacts that triggered the NX‑18 gate.
+- **Release automation:** `scripts/run_release_pipeline.py` now invokes `ci/check_nexus_lane_smoke.sh` (skip with `--skip-nexus-lane-smoke`) and `ci/check_nexus_cross_dataspace_localnet.sh` (skip with `--skip-nexus-cross-dataspace-proof`), then copies `artifacts/nx18/` into the release output so NX‑18 evidence and cross-dataspace regression proofing ride alongside the bundle/image artefacts without a manual step.
+- **Runbook:** `docs/source/runbooks/nexus_lane_finality.md` documents the on-call workflow (thresholds, incident steps, evidence capture, chaos drills) that accompanies the dashboard, fulfilling the “publish operator dashboards/runbooks” bullet from NX‑18.
+- **Telemetry helpers:** reuse the existing `scripts/telemetry/compare_dashboards.py` to diff exported dashboards (preventing staging/prod drift) and `scripts/telemetry/check_nexus_audit_outcome.py` during routed-trace or chaos rehearsals so every NX‑18 drill archives the matching `nexus.audit.outcome` payload.
 
-Questions ouvertes (clarification necessaire)
-1) Signatures de transaction: Decision - les utilisateurs finaux sont libres de choisir tout algorithme de signature que leur DS cible annonce (Ed25519, secp256k1, ML-DSA, etc.). Les hosts doivent faire respecter les flags de capacite multisig/curve dans les manifestes, fournir des fallbacks deterministes et documenter les implications de latence lors du mixage d algorithmes. A finaliser: le flux de negotiation de capacites a travers Torii/SDKs et la mise a jour des tests d admission.
-2) Economie de gas: Chaque DS peut denominer le gas en un token local, tandis que les fees de settlement globales sont payees en SORA XOR. A finaliser: definir la conversion standard (DEX lane publique vs autres sources de liquidite), les hooks comptables du ledger, et les safeguards pour DS qui subventionnent ou fixent des prix a zero.
-3) Attesters DA: Nombre cible par region et seuil (ex., 64 echantillonnes, 43-of-64 signatures ML-DSA-87) pour tenir <=300 ms tout en maintenant la durabilite. Des regions a inclure des le jour un?
-4) Parametres DA par defaut: Nous proposons DS public `k=32, m=16` et DS prive `k=16, m=8`. Souhaitez-vous un profil de redondance plus eleve (ex., `k=30, m=20`) pour certaines classes DS?
-5) Granularite DS: Les domaines et assets peuvent etre DS. Devons-nous supporter des DS hierarchiques (domain DS comme parent d asset DS) avec heritage optionnel de politiques, ou rester plat pour v1?
-6) ISIs lourdes: Pour des ISIs complexes qui ne peuvent pas produire des preuves sous-seconde, devons-nous (a) les rejeter, (b) les diviser en etapes atomiques plus petites entre blocs, ou (c) autoriser une inclusion differee avec flags explicites?
-7) Conflits cross-DS: Le jeu lecture/ecriture declare par le client est-il suffisant, ou l host doit-il l inferer et l etendre automatiquement pour securite (au cout de plus de conflits)?
+Open Questions (Clarification Needed)
+1) Transaction signatures: Decision — end users are free to pick any signing algorithm that their target DS advertises (Ed25519, secp256k1, ML‑DSA, etc.). Hosts must enforce multisig/curve capability flags in manifests, provide deterministic fallbacks, and document latency implications when mixing algorithms. Outstanding: finalise capability negotiation flow across Torii/SDKs and update admission tests.
+2) Gas economics: Each DS may denominate gas in a local token, while global settlement fees are paid in SORA XOR. Outstanding: define the standard conversion path (public-lane DEX vs. other liquidity sources), ledger accounting hooks, and safeguards for DS that subsidise or zero-price transactions.
+3) DA attesters: Target number per region and threshold (e.g., 64 sampled, 43‑of‑64 ML‑DSA‑87 signatures) to meet ≤300 ms while maintaining durability. Any regions we must include from day one?
+4) Default DA parameters: We proposed public DS `k=32, m=16` and private DS `k=16, m=8`. Do you want a higher redundancy profile (e.g., `k=30, m=20`) for certain DS classes?
+5) DS granularity: Domains and assets can both be DS. Should we support hierarchical DS (domain DS as parent of asset DS) with optional inheritance of policies, or keep them flat for v1?
+6) Heavy ISIs: For complex ISIs that cannot produce sub‑second proofs, should we (a) reject them, (b) split into smaller atomic steps across blocks, or (c) allow delayed inclusion with explicit flags?
+7) Cross‑DS conflicts: Is client‑declared read/write set sufficient, or should the host infer and expand it automatically for safety (at cost of more conflicts)?
 
-Annexe: Conformite aux politiques du depot
-- Norito est utilise pour tous les formats on-wire et la serialisation JSON via les helpers Norito.
-- ABI v1 seulement; pas de toggles runtime pour les politiques ABI. Les surfaces syscalls et pointer-types sont fixes et figees par les tests golden.
-- Determinisme preserve entre hardware; acceleration optionnelle et gatee.
-- Pas de serde en chemins production; pas de configuration basee sur environnement en production.
+Appendix: Compliance with Repository Policies
+- Norito is used for all wire formats and JSON serialization via Norito helpers.
+- ABI v1 only; no runtime toggles for ABI policies. Syscall and pointer‑type surfaces are fixed and pinned by golden tests.
+- Determinism preserved across hardware; acceleration is optional and gated.
+- No serde in production paths; no environment-based configuration in production.

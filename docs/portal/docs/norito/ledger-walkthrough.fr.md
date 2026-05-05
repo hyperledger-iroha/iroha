@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2ea0c0b2f750131568e801b5fe583ae46ebddda3ce4f9fb52387725c2e227520
-source_last_modified: "2025-11-07T12:25:39.145308+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: a26e8de48d00066a9551f1909840165fc33e0ffc18b38b7ac4c6491b2c825f7b
+source_last_modified: "2026-04-03T17:43:03.931384+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -31,8 +31,8 @@ IDs de compte que vous comptez utiliser. Le bundle par defaut inclut deja deux c
 issus des cles de demo :
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Confirmez les valeurs en listant les premiers comptes :
@@ -51,7 +51,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dans wonderland (remplacez --limit par un nombre plus eleve si besoin)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions qui existent deja
@@ -68,7 +68,7 @@ Creez un nouvel actif infiniment mintable appele `coffee` dans le domaine
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 Le CLI affiche le hash de transaction soumis (par exemple, `0x5f...`). Conservez-le
@@ -77,7 +77,7 @@ pour consulter le statut plus tard.
 ## 3. Minter des unites sur le compte operateur
 
 Les quantites d'actifs vivent sous la paire `(asset definition, account)`. Mintez 250
-unites de `coffee#wonderland` dans `$ADMIN_ACCOUNT` :
+unites de `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` dans `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \

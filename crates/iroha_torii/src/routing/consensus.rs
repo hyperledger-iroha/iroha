@@ -5,13 +5,15 @@ use iroha_data_model::prelude::ChainId;
 use iroha_data_model::{
     block::consensus::{
         SumeragiBlockSyncRosterStatus, SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus,
-        SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
-        SumeragiConsensusMessageHandlingStatus, SumeragiDataspaceCommitment,
-        SumeragiLaneCommitment, SumeragiLaneGovernance, SumeragiMembershipMismatchStatus,
-        SumeragiMembershipStatus, SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus,
-        SumeragiPendingRbcEntry, SumeragiPendingRbcStatus, SumeragiQcStatus,
-        SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRuntimeUpgradeHook,
-        SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+        SumeragiCommitPipelineStatus, SumeragiConsensusCapsStatus,
+        SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
+        SumeragiDataspaceCommitment, SumeragiLaneCommitment, SumeragiLaneGovernance,
+        SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+        SumeragiNposRepairCoverageStatus, SumeragiNposTimeoutsStatus,
+        SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry, SumeragiPendingRbcStatus,
+        SumeragiQcStatus, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
+        SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook, SumeragiStatusWire,
+        SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
         SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
         SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
         SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
@@ -99,7 +101,6 @@ struct CollectorsResponse {
     view: u64,
     collectors_k: u64,
     redundant_send_r: u64,
-    #[norito(skip_serializing_if = "Option::is_none")]
     epoch_seed: Option<String>,
     collectors: Vec<CollectorEntry>,
     prf: PrfContext,
@@ -774,11 +775,7 @@ pub async fn handle_v1_sumeragi_collectors(
     let snap = sumeragi::status_snapshot();
     let peers = state.commit_topology_snapshot();
     let chain_height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-    let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
     let n = peers.len();
-    let min_votes = topology.min_votes_for_commit();
-    let tail = topology.proxy_tail_index();
-    let available = n.saturating_sub(tail);
     let fallback_mode = match snap.mode_tag.as_str() {
         iroha_core::sumeragi::consensus::NPOS_TAG | "Npos" => ConsensusMode::Npos,
         iroha_core::sumeragi::consensus::PERMISSIONED_TAG | "Permissioned" => {
@@ -797,20 +794,79 @@ pub async fn handle_v1_sumeragi_collectors(
         chain_height,
         fallback_mode,
     );
-    let (mut k_raw, redundant_send_r, seed_from_mode) = match mode {
+    let (plan_height, plan_view) =
+        collector_plan_context(snap.prf_height, snap.prf_view, chain_height);
+    let npos_collector_config = if matches!(mode, ConsensusMode::Npos) {
+        sumeragi::load_npos_collector_config_from_world(&world, state.chain_id_ref())
+    } else {
+        None
+    };
+    let npos_param_seed = if matches!(mode, ConsensusMode::Npos) {
+        world
+            .sumeragi_npos_parameters()
+            .map(|params| params.epoch_seed())
+    } else {
+        None
+    };
+    let seed_from_mode = npos_collector_config
+        .map(|cfg| cfg.seed)
+        .or(npos_param_seed);
+    let prefer_snapshot_seed = snap.prf_height >= chain_height;
+    let epoch_seed = match mode {
+        ConsensusMode::Permissioned => None,
+        ConsensusMode::Npos => {
+            if prefer_snapshot_seed {
+                snap.prf_epoch_seed.or(seed_from_mode)
+            } else {
+                seed_from_mode.or(snap.prf_epoch_seed)
+            }
+        }
+    };
+    if peers.is_empty() {
+        let consensus_mode_label = match mode {
+            ConsensusMode::Permissioned => "Permissioned",
+            ConsensusMode::Npos => "Npos",
+        };
+        let epoch_seed_hex = epoch_seed.map(hex::encode);
+        let payload = CollectorsResponse {
+            consensus_mode: consensus_mode_label,
+            mode: consensus_mode_label,
+            topology_len: 0,
+            min_votes_for_commit: 0,
+            proxy_tail_index: 0,
+            height: plan_height,
+            view: plan_view,
+            collectors_k: 0,
+            redundant_send_r: 0,
+            epoch_seed: epoch_seed_hex.clone(),
+            collectors: Vec::new(),
+            prf: PrfContext {
+                height: plan_height,
+                view: plan_view,
+                epoch_seed: epoch_seed_hex,
+            },
+        };
+        let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
+            Ok(fmt) => fmt,
+            Err(resp) => return Ok(resp),
+        };
+        return Ok(crate::utils::respond_with_format(payload, format));
+    }
+    let topology = iroha_core::sumeragi::network_topology::Topology::new(peers.clone());
+    let min_votes = topology.min_votes_for_commit();
+    let tail = topology.proxy_tail_index();
+    let available = n.saturating_sub(tail);
+    let (mut k_raw, redundant_send_r) = match mode {
         ConsensusMode::Permissioned => {
             let params = world.parameters().sumeragi();
             (
                 params.collectors_k as usize,
                 params.collectors_redundant_send_r,
-                None,
             )
         }
         ConsensusMode::Npos => {
-            if let Some(cfg) =
-                sumeragi::load_npos_collector_config_from_world(&world, state.chain_id_ref())
-            {
-                (cfg.k, cfg.redundant_send_r, Some(cfg.seed))
+            if let Some(cfg) = npos_collector_config {
+                (cfg.k, cfg.redundant_send_r)
             } else {
                 let params = world.parameters().sumeragi();
                 iroha_logger::warn!(
@@ -819,7 +875,6 @@ pub async fn handle_v1_sumeragi_collectors(
                 (
                     params.collectors_k as usize,
                     params.collectors_redundant_send_r,
-                    None,
                 )
             }
         }
@@ -835,18 +890,6 @@ pub async fn handle_v1_sumeragi_collectors(
     if k == 0 && available > 0 {
         k = available;
     }
-    let mut epoch_seed = snap.prf_epoch_seed.or(seed_from_mode);
-    if epoch_seed.is_none() {
-        epoch_seed = world
-            .sumeragi_npos_parameters()
-            .map(|params| params.epoch_seed());
-    }
-    let plan_height = if snap.prf_height > 0 {
-        snap.prf_height
-    } else {
-        chain_height
-    };
-    let plan_view = snap.prf_view;
     let collectors = sumeragi::collectors::deterministic_collectors(
         &topology,
         mode,
@@ -896,6 +939,18 @@ pub async fn handle_v1_sumeragi_collectors(
         Err(resp) => return Ok(resp),
     };
     Ok(crate::utils::respond_with_format(payload, format))
+}
+
+fn collector_plan_context(
+    snapshot_height: u64,
+    snapshot_view: u64,
+    chain_height: u64,
+) -> (u64, u64) {
+    if snapshot_height >= chain_height {
+        (snapshot_height, snapshot_view)
+    } else {
+        (chain_height, 0)
+    }
 }
 
 /// GET /v1/sumeragi/params — snapshot of on-chain Sumeragi parameters
@@ -1773,7 +1828,8 @@ fn nexus_fee_snapshot_value(fee: &sumeragi::status::NexusFeeSnapshot) -> Value {
         json_entry(
             "last_amount",
             fee.last_amount
-                .map(|amount| Value::from(format!("{amount}")))
+                .as_ref()
+                .map(|amount| Value::from(amount.to_string()))
                 .unwrap_or(Value::Null),
         ),
         json_entry(
@@ -1867,6 +1923,10 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         ),
         json_entry("da_gate_total", snap.view_change_causes.da_gate_total),
         json_entry(
+            "censorship_evidence_total",
+            snap.view_change_causes.censorship_evidence_total,
+        ),
+        json_entry(
             "missing_payload_total",
             snap.view_change_causes.missing_payload_total,
         ),
@@ -1908,6 +1968,11 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "last_da_gate_timestamp_ms",
             snap.view_change_causes.last_da_gate_timestamp_ms,
+        ),
+        json_entry(
+            "last_censorship_evidence_timestamp_ms",
+            snap.view_change_causes
+                .last_censorship_evidence_timestamp_ms,
         ),
         json_entry(
             "last_missing_payload_timestamp_ms",
@@ -2214,6 +2279,67 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("pause_queue_depths", commit_pause_queue_depths),
         json_entry("resume_queue_depths", commit_resume_queue_depths),
     ]);
+    let commit_pipeline = json_object(vec![
+        json_entry("last_total_ms", snap.commit_pipeline.last_total_ms),
+        json_entry("last_validation_ms", snap.commit_pipeline.last_validation_ms),
+        json_entry("last_qc_rebuild_ms", snap.commit_pipeline.last_qc_rebuild_ms),
+        json_entry("last_gate_ms", snap.commit_pipeline.last_gate_ms),
+        json_entry("last_finalize_ms", snap.commit_pipeline.last_finalize_ms),
+        json_entry(
+            "last_drain_results_ms",
+            snap.commit_pipeline.last_drain_results_ms,
+        ),
+        json_entry(
+            "last_drain_qc_verify_ms",
+            snap.commit_pipeline.last_drain_qc_verify_ms,
+        ),
+        json_entry(
+            "last_drain_persist_ms",
+            snap.commit_pipeline.last_drain_persist_ms,
+        ),
+        json_entry(
+            "last_drain_kura_store_ms",
+            snap.commit_pipeline.last_drain_kura_store_ms,
+        ),
+        json_entry(
+            "last_drain_state_apply_ms",
+            snap.commit_pipeline.last_drain_state_apply_ms,
+        ),
+        json_entry(
+            "last_drain_state_commit_ms",
+            snap.commit_pipeline.last_drain_state_commit_ms,
+        ),
+        json_entry("ema_total_ms", snap.commit_pipeline.ema_total_ms),
+        json_entry("ema_validation_ms", snap.commit_pipeline.ema_validation_ms),
+        json_entry("ema_gate_ms", snap.commit_pipeline.ema_gate_ms),
+        json_entry("ema_finalize_ms", snap.commit_pipeline.ema_finalize_ms),
+    ]);
+    let round_gap = json_object(vec![
+        json_entry(
+            "last_deliver_to_state_commit_ms",
+            snap.round_gap.last_deliver_to_state_commit_ms,
+        ),
+        json_entry(
+            "last_state_commit_to_next_propose_ms",
+            snap.round_gap.last_state_commit_to_next_propose_ms,
+        ),
+        json_entry(
+            "last_deliver_to_next_propose_ms",
+            snap.round_gap.last_deliver_to_next_propose_ms,
+        ),
+        json_entry(
+            "ema_deliver_to_state_commit_ms",
+            snap.round_gap.ema_deliver_to_state_commit_ms,
+        ),
+        json_entry(
+            "ema_state_commit_to_next_propose_ms",
+            snap.round_gap.ema_state_commit_to_next_propose_ms,
+        ),
+        json_entry(
+            "ema_deliver_to_next_propose_ms",
+            snap.round_gap.ema_deliver_to_next_propose_ms,
+        ),
+    ]);
     let kura_store = json_object(vec![
         json_entry("failures_total", snap.kura_store.failures_total),
         json_entry("abort_total", snap.kura_store.abort_total),
@@ -2306,7 +2432,15 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             "stake_quorum_timeout_total",
             snap.view_change_causes.stake_quorum_timeout_total,
         ),
+        json_entry(
+            "roster_unavailable_total",
+            snap.view_change_causes.roster_unavailable_total,
+        ),
         json_entry("da_gate_total", snap.view_change_causes.da_gate_total),
+        json_entry(
+            "censorship_evidence_total",
+            snap.view_change_causes.censorship_evidence_total,
+        ),
         json_entry(
             "missing_payload_total",
             snap.view_change_causes.missing_payload_total,
@@ -2320,6 +2454,45 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry(
             "last_cause_timestamp_ms",
             snap.view_change_causes.last_cause_timestamp_ms,
+        ),
+        json_entry(
+            "last_commit_failure_timestamp_ms",
+            snap.view_change_causes.last_commit_failure_timestamp_ms,
+        ),
+        json_entry(
+            "last_quorum_timeout_timestamp_ms",
+            snap.view_change_causes.last_quorum_timeout_timestamp_ms,
+        ),
+        json_entry(
+            "last_stake_quorum_timeout_timestamp_ms",
+            snap.view_change_causes
+                .last_stake_quorum_timeout_timestamp_ms,
+        ),
+        json_entry(
+            "last_roster_unavailable_timestamp_ms",
+            snap.view_change_causes
+                .last_roster_unavailable_timestamp_ms,
+        ),
+        json_entry(
+            "last_da_gate_timestamp_ms",
+            snap.view_change_causes.last_da_gate_timestamp_ms,
+        ),
+        json_entry(
+            "last_censorship_evidence_timestamp_ms",
+            snap.view_change_causes
+                .last_censorship_evidence_timestamp_ms,
+        ),
+        json_entry(
+            "last_missing_payload_timestamp_ms",
+            snap.view_change_causes.last_missing_payload_timestamp_ms,
+        ),
+        json_entry(
+            "last_missing_qc_timestamp_ms",
+            snap.view_change_causes.last_missing_qc_timestamp_ms,
+        ),
+        json_entry(
+            "last_validation_reject_timestamp_ms",
+            snap.view_change_causes.last_validation_reject_timestamp_ms,
         ),
     ]);
     let block_sync_roster = json_object(vec![
@@ -2831,6 +3004,33 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             ])
         })
         .unwrap_or(Value::Null);
+    let npos_repair_coverage = snap
+        .npos_repair_coverage
+        .as_ref()
+        .map(|coverage| {
+            json_object(vec![
+                json_entry("last_repair_height", coverage.last_repair_height),
+                json_entry("last_repair_view", coverage.last_repair_view),
+                json_entry("reason", coverage.reason.clone()),
+                json_entry(
+                    "selected_repair_peer_count",
+                    coverage.selected_repair_peer_count,
+                ),
+                json_entry(
+                    "required_stake_quorum_bps",
+                    coverage.required_stake_quorum_bps,
+                ),
+                json_entry(
+                    "selected_stake_coverage_bps",
+                    coverage.selected_stake_coverage_bps,
+                ),
+                json_entry(
+                    "reached_stake_quorum_coverage",
+                    coverage.reached_stake_quorum_coverage,
+                ),
+            ])
+        })
+        .unwrap_or(Value::Null);
     crate::json_object(vec![
         json_entry("mode_tag", &snap.mode_tag),
         json_entry(
@@ -2891,6 +3091,7 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.effective_pacemaker_interval_ms,
         ),
         json_entry("effective_npos_timeouts", effective_npos_timeouts),
+        json_entry("npos_repair_coverage", npos_repair_coverage),
         json_entry("effective_collectors_k", snap.effective_collectors_k),
         json_entry(
             "effective_redundant_send_r",
@@ -2906,6 +3107,8 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
         json_entry("tx_queue", tx_queue),
         json_entry("worker_loop", worker_loop),
         json_entry("commit_inflight", commit_inflight),
+        json_entry("commit_pipeline", commit_pipeline),
+        json_entry("round_gap", round_gap),
         json_entry("missing_block_fetch", missing_block_fetch),
         json_entry(
             "committed_edge_conflict_obsolete_total",
@@ -3007,6 +3210,12 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
             snap.consensus_missing_block_height_progress_deferred_total,
         ),
         json_entry(
+            "qc_deferred_missing_payload_total",
+            snap.qc_deferred_missing_payload_total,
+        ),
+        json_entry("qc_deferred_resolved_total", snap.qc_deferred_resolved_total),
+        json_entry("qc_deferred_expired_total", snap.qc_deferred_expired_total),
+        json_entry(
             "consensus_missing_qc_reacquire_attempt_total",
             snap.consensus_missing_qc_reacquire_attempt_total,
         ),
@@ -3060,6 +3269,18 @@ fn status_snapshot_json(snap: &sumeragi::StatusSnapshot) -> norito::json::Value 
                     .map(|(state, ms)| json_entry(*state, *ms))
                     .collect::<Vec<_>>(),
             ),
+        ),
+        json_entry(
+            "blocksync_range_pull_escalation_total",
+            snap.blocksync_range_pull_escalation_total,
+        ),
+        json_entry(
+            "blocksync_range_pull_success_total",
+            snap.blocksync_range_pull_success_total,
+        ),
+        json_entry(
+            "blocksync_range_pull_failure_total",
+            snap.blocksync_range_pull_failure_total,
         ),
         json_entry(
             "blocksync_range_pull_candidate_exhausted_total",
@@ -3464,11 +3685,11 @@ mod status_tests {
             sponsor_cap_exceeded_total: 1,
             config_errors_total: 1,
             transfer_failures_total: 1,
-            last_amount: Some(42),
-            last_asset_id: Some("xor#sora".to_owned()),
+            last_amount: Some(Numeric::from(42_u32)),
+            last_asset_id: Some("61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned()),
             last_payer: Some(sumeragi::status::NexusFeePayer::Sponsor),
             last_payer_id: Some(
-                "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU".to_owned(),
+                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
             ),
             last_error: Some("denied".to_owned()),
         };
@@ -4072,6 +4293,31 @@ mod status_tests {
                 signatures_required: 3,
                 last_updated_ms: 1234,
             },
+            commit_pipeline: status::CommitPipelineSnapshot {
+                last_total_ms: 84,
+                last_validation_ms: 21,
+                last_qc_rebuild_ms: 8,
+                last_gate_ms: 9,
+                last_finalize_ms: 17,
+                last_drain_results_ms: 12,
+                last_drain_qc_verify_ms: 1,
+                last_drain_persist_ms: 2,
+                last_drain_kura_store_ms: 3,
+                last_drain_state_apply_ms: 4,
+                last_drain_state_commit_ms: 5,
+                ema_total_ms: 80,
+                ema_validation_ms: 19,
+                ema_gate_ms: 8,
+                ema_finalize_ms: 16,
+            },
+            round_gap: status::RoundGapSnapshot {
+                last_deliver_to_state_commit_ms: 31,
+                last_state_commit_to_next_propose_ms: 12,
+                last_deliver_to_next_propose_ms: 43,
+                ema_deliver_to_state_commit_ms: 29,
+                ema_state_commit_to_next_propose_ms: 10,
+                ema_deliver_to_next_propose_ms: 39,
+            },
             ..Default::default()
         };
         let payload = status_snapshot_json(&snap);
@@ -4141,6 +4387,46 @@ mod status_tests {
             commit_quorum.get("last_updated_ms").and_then(Value::as_u64),
             Some(1234)
         );
+        let commit_pipeline = payload
+            .get("commit_pipeline")
+            .and_then(Value::as_object)
+            .expect("commit_pipeline object");
+        assert_eq!(
+            commit_pipeline.get("last_total_ms").and_then(Value::as_u64),
+            Some(84)
+        );
+        assert_eq!(
+            commit_pipeline
+                .get("last_drain_state_commit_ms")
+                .and_then(Value::as_u64),
+            Some(5)
+        );
+        assert_eq!(
+            commit_pipeline.get("ema_finalize_ms").and_then(Value::as_u64),
+            Some(16)
+        );
+        let round_gap = payload
+            .get("round_gap")
+            .and_then(Value::as_object)
+            .expect("round_gap object");
+        assert_eq!(
+            round_gap
+                .get("last_deliver_to_state_commit_ms")
+                .and_then(Value::as_u64),
+            Some(31)
+        );
+        assert_eq!(
+            round_gap
+                .get("last_state_commit_to_next_propose_ms")
+                .and_then(Value::as_u64),
+            Some(12)
+        );
+        assert_eq!(
+            round_gap
+                .get("ema_deliver_to_next_propose_ms")
+                .and_then(Value::as_u64),
+            Some(39)
+        );
     }
 }
 
@@ -4181,6 +4467,9 @@ pub async fn handle_v1_sumeragi_status(
                     redundant_send_r: caps.redundant_send_r,
                     da_enabled: caps.da_enabled,
                     rbc_chunk_max_bytes: caps.rbc_chunk_max_bytes,
+                    rbc_encoding: caps.rbc_encoding,
+                    rbc_rs16_data_shards: caps.rbc_rs16_data_shards,
+                    rbc_rs16_parity_shards: caps.rbc_rs16_parity_shards,
                     rbc_session_ttl_ms: caps.rbc_session_ttl_ms,
                     rbc_store_max_sessions: caps.rbc_store_max_sessions,
                     rbc_store_soft_sessions: caps.rbc_store_soft_sessions,
@@ -4206,6 +4495,18 @@ pub async fn handle_v1_sumeragi_status(
                     witness_ms: timeouts.witness_ms,
                 }
             }),
+            npos_repair_coverage: snap
+                .npos_repair_coverage
+                .as_ref()
+                .map(|coverage| SumeragiNposRepairCoverageStatus {
+                    last_repair_height: coverage.last_repair_height,
+                    last_repair_view: coverage.last_repair_view,
+                    reason: coverage.reason.clone(),
+                    selected_repair_peer_count: coverage.selected_repair_peer_count,
+                    required_stake_quorum_bps: coverage.required_stake_quorum_bps,
+                    selected_stake_coverage_bps: coverage.selected_stake_coverage_bps,
+                    reached_stake_quorum_coverage: coverage.reached_stake_quorum_coverage,
+                }),
             effective_collectors_k: snap.effective_collectors_k,
             effective_redundant_send_r: snap.effective_redundant_send_r,
             leader_index: snap.leader_index,
@@ -4243,7 +4544,9 @@ pub async fn handle_v1_sumeragi_status(
                 commit_failure_total: snap.view_change_causes.commit_failure_total,
                 quorum_timeout_total: snap.view_change_causes.quorum_timeout_total,
                 stake_quorum_timeout_total: snap.view_change_causes.stake_quorum_timeout_total,
+                roster_unavailable_total: snap.view_change_causes.roster_unavailable_total,
                 da_gate_total: snap.view_change_causes.da_gate_total,
+                censorship_evidence_total: snap.view_change_causes.censorship_evidence_total,
                 missing_payload_total: snap.view_change_causes.missing_payload_total,
                 missing_qc_total: snap.view_change_causes.missing_qc_total,
                 validation_reject_total: snap.view_change_causes.validation_reject_total,
@@ -4258,7 +4561,13 @@ pub async fn handle_v1_sumeragi_status(
                 last_stake_quorum_timeout_timestamp_ms: snap
                     .view_change_causes
                     .last_stake_quorum_timeout_timestamp_ms,
+                last_roster_unavailable_timestamp_ms: snap
+                    .view_change_causes
+                    .last_roster_unavailable_timestamp_ms,
                 last_da_gate_timestamp_ms: snap.view_change_causes.last_da_gate_timestamp_ms,
+                last_censorship_evidence_timestamp_ms: snap
+                    .view_change_causes
+                    .last_censorship_evidence_timestamp_ms,
                 last_missing_payload_timestamp_ms: snap
                     .view_change_causes
                     .last_missing_payload_timestamp_ms,
@@ -4374,6 +4683,22 @@ pub async fn handle_v1_sumeragi_status(
                 last_targets: snap.missing_block_fetch_last_targets,
                 last_dwell_ms: snap.missing_block_fetch_last_dwell_ms,
             },
+            qc_deferred_missing_payload_total: snap.qc_deferred_missing_payload_total,
+            qc_deferred_resolved_total: snap.qc_deferred_resolved_total,
+            qc_deferred_expired_total: snap.qc_deferred_expired_total,
+            consensus_missing_qc_reacquire_attempt_total: snap
+                .consensus_missing_qc_reacquire_attempt_total,
+            consensus_missing_qc_reacquire_success_total: snap
+                .consensus_missing_qc_reacquire_success_total,
+            consensus_missing_qc_reacquire_exhausted_total: snap
+                .consensus_missing_qc_reacquire_exhausted_total,
+            consensus_forced_proposal_attempt_total: snap.consensus_forced_proposal_attempt_total,
+            consensus_forced_proposal_success_total: snap.consensus_forced_proposal_success_total,
+            blocksync_range_pull_escalation_total: snap.blocksync_range_pull_escalation_total,
+            blocksync_range_pull_success_total: snap.blocksync_range_pull_success_total,
+            blocksync_range_pull_failure_total: snap.blocksync_range_pull_failure_total,
+            blocksync_range_pull_candidate_exhausted_total: snap
+                .blocksync_range_pull_candidate_exhausted_total,
             committed_edge_conflict_obsolete_total: snap.committed_edge_conflict_obsolete_total,
             roster_sidecar_mismatch_obsolete_total: snap.roster_sidecar_mismatch_obsolete_total,
             da_gate: SumeragiDaGateStatus {
@@ -4774,6 +5099,35 @@ pub async fn handle_v1_sumeragi_status(
                     lane_relay_rx: snap.commit_inflight.resume_queue_depths.lane_relay_rx,
                     background_rx: snap.commit_inflight.resume_queue_depths.background_rx,
                 },
+            },
+            commit_pipeline: SumeragiCommitPipelineStatus {
+                last_total_ms: snap.commit_pipeline.last_total_ms,
+                last_validation_ms: snap.commit_pipeline.last_validation_ms,
+                last_qc_rebuild_ms: snap.commit_pipeline.last_qc_rebuild_ms,
+                last_gate_ms: snap.commit_pipeline.last_gate_ms,
+                last_finalize_ms: snap.commit_pipeline.last_finalize_ms,
+                last_drain_results_ms: snap.commit_pipeline.last_drain_results_ms,
+                last_drain_qc_verify_ms: snap.commit_pipeline.last_drain_qc_verify_ms,
+                last_drain_persist_ms: snap.commit_pipeline.last_drain_persist_ms,
+                last_drain_kura_store_ms: snap.commit_pipeline.last_drain_kura_store_ms,
+                last_drain_state_apply_ms: snap.commit_pipeline.last_drain_state_apply_ms,
+                last_drain_state_commit_ms: snap.commit_pipeline.last_drain_state_commit_ms,
+                ema_total_ms: snap.commit_pipeline.ema_total_ms,
+                ema_validation_ms: snap.commit_pipeline.ema_validation_ms,
+                ema_gate_ms: snap.commit_pipeline.ema_gate_ms,
+                ema_finalize_ms: snap.commit_pipeline.ema_finalize_ms,
+            },
+            round_gap: SumeragiRoundGapStatus {
+                last_deliver_to_state_commit_ms: snap.round_gap.last_deliver_to_state_commit_ms,
+                last_state_commit_to_next_propose_ms: snap
+                    .round_gap
+                    .last_state_commit_to_next_propose_ms,
+                last_deliver_to_next_propose_ms: snap.round_gap.last_deliver_to_next_propose_ms,
+                ema_deliver_to_state_commit_ms: snap.round_gap.ema_deliver_to_state_commit_ms,
+                ema_state_commit_to_next_propose_ms: snap
+                    .round_gap
+                    .ema_state_commit_to_next_propose_ms,
+                ema_deliver_to_next_propose_ms: snap.round_gap.ema_deliver_to_next_propose_ms,
             },
         };
         return Ok(crate::NoritoBody(wire).into_response());
@@ -5285,6 +5639,30 @@ pub async fn handle_v1_sumeragi_rbc_status(
             m.sumeragi_rbc_sessions_pruned_total.get(),
         ),
         json_entry(
+            "init_requests_total",
+            m.sumeragi_rbc_init_requests_total.get(),
+        ),
+        json_entry(
+            "chunk_requests_total",
+            m.sumeragi_rbc_chunk_requests_total.get(),
+        ),
+        json_entry(
+            "requested_chunks_total",
+            m.sumeragi_rbc_requested_chunks_total.get(),
+        ),
+        json_entry(
+            "init_repair_fallback_total",
+            m.sumeragi_rbc_repair_fallback_total
+                .with_label_values(&["init"])
+                .get(),
+        ),
+        json_entry(
+            "chunk_repair_fallback_total",
+            m.sumeragi_rbc_repair_fallback_total
+                .with_label_values(&["chunk"])
+                .get(),
+        ),
+        json_entry(
             "ready_broadcasts_total",
             m.sumeragi_rbc_ready_broadcasts_total.get(),
         ),
@@ -5301,6 +5679,14 @@ pub async fn handle_v1_sumeragi_rbc_status(
         json_entry(
             "payload_bytes_delivered_total",
             m.sumeragi_rbc_payload_bytes_delivered_total.get(),
+        ),
+        json_entry(
+            "reconstructed_stripes_total",
+            m.sumeragi_rbc_reconstructed_stripes_total.get(),
+        ),
+        json_entry(
+            "seed_latency_count",
+            m.sumeragi_rbc_seed_latency_ms.get_sample_count(),
         ),
         json_entry(
             "payload_rebroadcasts_skipped_total",

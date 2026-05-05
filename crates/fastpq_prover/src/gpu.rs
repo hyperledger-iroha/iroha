@@ -41,14 +41,45 @@ pub(crate) struct ColumnDispatch<'a> {
 
 enum ColumnDispatchInner<'a> {
     Ready,
+    Cuda(PendingCudaColumns<'a>),
     #[cfg(target_os = "macos")]
     Metal(metal::PendingColumns<'a>),
+}
+
+struct PendingCudaColumns<'a> {
+    columns: &'a mut [Vec<u64>],
+    extent: usize,
+    buffer: Vec<u64>,
+    pending: fastpq_cuda::PendingCudaDispatch,
+}
+
+impl PendingCudaColumns<'_> {
+    fn wait(self) -> Result<(), GpuError> {
+        let PendingCudaColumns {
+            columns,
+            extent,
+            buffer,
+            pending,
+        } = self;
+        pending.wait().map_err(|err| GpuError::Execution {
+            backend: GpuBackend::Cuda,
+            message: err.to_string(),
+        })?;
+        restore(columns, &buffer, extent);
+        Ok(())
+    }
 }
 
 impl<'a> ColumnDispatch<'a> {
     pub(crate) fn ready() -> Self {
         Self {
             inner: ColumnDispatchInner::Ready,
+        }
+    }
+
+    fn cuda(pending: PendingCudaColumns<'a>) -> Self {
+        Self {
+            inner: ColumnDispatchInner::Cuda(pending),
         }
     }
 
@@ -62,6 +93,7 @@ impl<'a> ColumnDispatch<'a> {
     pub fn wait(self) -> Result<(), GpuError> {
         match self.inner {
             ColumnDispatchInner::Ready => Ok(()),
+            ColumnDispatchInner::Cuda(pending) => pending.wait(),
             #[cfg(target_os = "macos")]
             ColumnDispatchInner::Metal(pending) => pending.wait(),
         }
@@ -75,16 +107,48 @@ pub(crate) struct LdeDispatch {
 
 enum LdeDispatchInner {
     Ready(Option<Vec<Vec<u64>>>),
+    Cuda(PendingCudaLde),
     #[cfg(target_os = "macos")]
     Metal(metal::PendingLde),
     #[cfg(test)]
     TestError(GpuError),
 }
 
+struct PendingCudaLde {
+    eval_len: usize,
+    eval_buffer: Vec<u64>,
+    pending: fastpq_cuda::PendingCudaDispatch,
+}
+
+impl PendingCudaLde {
+    fn wait(self) -> Result<Option<Vec<Vec<u64>>>, GpuError> {
+        let PendingCudaLde {
+            eval_len,
+            eval_buffer,
+            pending,
+        } = self;
+        pending.wait().map_err(|err| GpuError::Execution {
+            backend: GpuBackend::Cuda,
+            message: err.to_string(),
+        })?;
+        let mut result = Vec::with_capacity(eval_buffer.len() / eval_len);
+        for chunk in eval_buffer.chunks_exact(eval_len) {
+            result.push(chunk.to_vec());
+        }
+        Ok(Some(result))
+    }
+}
+
 impl LdeDispatch {
     pub(crate) fn ready(result: Option<Vec<Vec<u64>>>) -> Self {
         Self {
             inner: LdeDispatchInner::Ready(result),
+        }
+    }
+
+    fn cuda(pending: PendingCudaLde) -> Self {
+        Self {
+            inner: LdeDispatchInner::Cuda(pending),
         }
     }
 
@@ -105,6 +169,7 @@ impl LdeDispatch {
     pub fn wait(self) -> Result<Option<Vec<Vec<u64>>>, GpuError> {
         match self.inner {
             LdeDispatchInner::Ready(result) => Ok(result),
+            LdeDispatchInner::Cuda(pending) => pending.wait(),
             #[cfg(target_os = "macos")]
             LdeDispatchInner::Metal(pending) => pending.wait(),
             #[cfg(test)]
@@ -117,6 +182,7 @@ impl LdeDispatch {
 pub fn fft_columns(
     columns: &mut [Vec<u64>],
     log_size: u32,
+    root: u64,
     backend: GpuBackend,
 ) -> Result<(), GpuError> {
     if columns.is_empty() {
@@ -127,13 +193,14 @@ pub fn fft_columns(
         return Err(GpuError::InvalidInput("columns must share length"));
     }
 
-    fft_columns_async(columns, log_size, backend)?.wait()
+    fft_columns_async(columns, log_size, root, backend)?.wait()
 }
 
 /// Initiate an FFT dispatch and return a guard that completes on [`ColumnDispatch::wait`].
 pub fn fft_columns_async<'a>(
     columns: &'a mut [Vec<u64>],
     log_size: u32,
+    root: u64,
     backend: GpuBackend,
 ) -> Result<ColumnDispatch<'a>, GpuError> {
     if columns.is_empty() {
@@ -145,10 +212,7 @@ pub fn fft_columns_async<'a>(
     }
 
     match backend {
-        GpuBackend::Cuda => {
-            fft_cuda(columns, log_size)?;
-            Ok(ColumnDispatch::ready())
-        }
+        GpuBackend::Cuda => fft_cuda_async(columns, log_size, root),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
         GpuBackend::Metal => metal::fft_columns_async(columns, log_size).map(ColumnDispatch::metal),
         other => Err(GpuError::Unsupported(other)),
@@ -159,6 +223,7 @@ pub fn fft_columns_async<'a>(
 pub fn ifft_columns(
     columns: &mut [Vec<u64>],
     log_size: u32,
+    root: u64,
     backend: GpuBackend,
 ) -> Result<(), GpuError> {
     if columns.is_empty() {
@@ -169,13 +234,14 @@ pub fn ifft_columns(
         return Err(GpuError::InvalidInput("columns must share length"));
     }
 
-    ifft_columns_async(columns, log_size, backend)?.wait()
+    ifft_columns_async(columns, log_size, root, backend)?.wait()
 }
 
 /// Initiate an IFFT dispatch, returning a pending guard.
 pub fn ifft_columns_async<'a>(
     columns: &'a mut [Vec<u64>],
     log_size: u32,
+    root: u64,
     backend: GpuBackend,
 ) -> Result<ColumnDispatch<'a>, GpuError> {
     if columns.is_empty() {
@@ -187,10 +253,7 @@ pub fn ifft_columns_async<'a>(
     }
 
     match backend {
-        GpuBackend::Cuda => {
-            ifft_cuda(columns, log_size)?;
-            Ok(ColumnDispatch::ready())
-        }
+        GpuBackend::Cuda => ifft_cuda_async(columns, log_size, root),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
         GpuBackend::Metal => {
             metal::ifft_columns_async(columns, log_size).map(ColumnDispatch::metal)
@@ -204,6 +267,7 @@ pub fn lde_columns(
     coeffs: &[Vec<u64>],
     trace_log: u32,
     blowup_log: u32,
+    lde_root: u64,
     coset: u64,
     backend: GpuBackend,
 ) -> Result<Option<Vec<Vec<u64>>>, GpuError> {
@@ -217,7 +281,7 @@ pub fn lde_columns(
         ));
     }
 
-    lde_columns_async(coeffs, trace_log, blowup_log, coset, backend)?.wait()
+    lde_columns_async(coeffs, trace_log, blowup_log, lde_root, coset, backend)?.wait()
 }
 
 /// Initiate an LDE evaluation and return a pending guard.
@@ -225,6 +289,7 @@ pub fn lde_columns_async(
     coeffs: &[Vec<u64>],
     trace_log: u32,
     blowup_log: u32,
+    lde_root: u64,
     coset: u64,
     backend: GpuBackend,
 ) -> Result<LdeDispatch, GpuError> {
@@ -239,10 +304,7 @@ pub fn lde_columns_async(
     }
 
     match backend {
-        GpuBackend::Cuda => {
-            let result = lde_cuda(coeffs, trace_log, blowup_log, coset)?;
-            Ok(LdeDispatch::ready(result))
-        }
+        GpuBackend::Cuda => lde_cuda_async(coeffs, trace_log, blowup_log, lde_root, coset),
         #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
         GpuBackend::Metal => {
             metal::lde_columns_async(coeffs, trace_log, blowup_log, coset).map(LdeDispatch::metal)
@@ -251,48 +313,64 @@ pub fn lde_columns_async(
     }
 }
 
-fn fft_cuda(columns: &mut [Vec<u64>], log_size: u32) -> Result<(), GpuError> {
+fn fft_cuda_async<'a>(
+    columns: &'a mut [Vec<u64>],
+    log_size: u32,
+    root: u64,
+) -> Result<ColumnDispatch<'a>, GpuError> {
     let extent = 1usize << log_size;
+    let column_count = columns.len();
     let mut buffer = flatten(columns);
-    // NOTE: Launch parameters still require validation on SM80+ CUDA hardware.
-    fastpq_cuda::fastpq_fft(&mut buffer, columns.len(), log_size).map_err(|err| {
-        GpuError::Execution {
+    let pending = fastpq_cuda::fastpq_fft_submit(&mut buffer, column_count, log_size, root)
+        .map_err(|err| GpuError::Execution {
             backend: GpuBackend::Cuda,
             message: err.to_string(),
-        }
-    })?;
-    restore(columns, &buffer, extent);
-    Ok(())
+        })?;
+    Ok(ColumnDispatch::cuda(PendingCudaColumns {
+        columns,
+        extent,
+        buffer,
+        pending,
+    }))
 }
 
-fn ifft_cuda(columns: &mut [Vec<u64>], log_size: u32) -> Result<(), GpuError> {
+fn ifft_cuda_async<'a>(
+    columns: &'a mut [Vec<u64>],
+    log_size: u32,
+    root: u64,
+) -> Result<ColumnDispatch<'a>, GpuError> {
     let extent = 1usize << log_size;
+    let column_count = columns.len();
     let mut buffer = flatten(columns);
-    fastpq_cuda::fastpq_ifft(&mut buffer, columns.len(), log_size).map_err(|err| {
-        GpuError::Execution {
+    let pending = fastpq_cuda::fastpq_ifft_submit(&mut buffer, column_count, log_size, root)
+        .map_err(|err| GpuError::Execution {
             backend: GpuBackend::Cuda,
             message: err.to_string(),
-        }
-    })?;
-    restore(columns, &buffer, extent);
-    Ok(())
+        })?;
+    Ok(ColumnDispatch::cuda(PendingCudaColumns {
+        columns,
+        extent,
+        buffer,
+        pending,
+    }))
 }
 
-fn lde_cuda(
+fn lde_cuda_async(
     coeffs: &[Vec<u64>],
     trace_log: u32,
     blowup_log: u32,
+    lde_root: u64,
     coset: u64,
-) -> Result<Option<Vec<Vec<u64>>>, GpuError> {
-    let eval_len = 1usize << (trace_log + blowup_log);
-    let column_count = coeffs.len();
+) -> Result<LdeDispatch, GpuError> {
     let coeff_buffer = flatten(coeffs);
-    let mut eval_buffer = vec![0u64; column_count * eval_len];
-    fastpq_cuda::fastpq_lde(
+    let eval_len = 1usize << (trace_log + blowup_log);
+    let mut eval_buffer = vec![0u64; coeffs.len() * eval_len];
+    let pending = fastpq_cuda::fastpq_lde_submit(
         &coeff_buffer,
-        column_count,
+        coeffs.len(),
         trace_log,
         blowup_log,
+        lde_root,
         coset,
         &mut eval_buffer,
     )
@@ -300,12 +378,11 @@ fn lde_cuda(
         backend: GpuBackend::Cuda,
         message: err.to_string(),
     })?;
-
-    let mut result = Vec::with_capacity(column_count);
-    for chunk in eval_buffer.chunks_exact(eval_len) {
-        result.push(chunk.to_vec());
-    }
-    Ok(Some(result))
+    Ok(LdeDispatch::cuda(PendingCudaLde {
+        eval_len,
+        eval_buffer,
+        pending,
+    }))
 }
 
 fn flatten(columns: &[Vec<u64>]) -> Vec<u64> {
@@ -406,7 +483,7 @@ fn poseidon_hash_columns_fused_cuda(batch: &PoseidonColumnBatch) -> Result<Vec<u
 
 #[cfg(test)]
 mod tests {
-    use super::{ColumnDispatch, LdeDispatch};
+    use super::{ColumnDispatch, GpuBackend, GpuError, LdeDispatch};
 
     #[test]
     fn column_dispatch_ready_waits() {
@@ -418,5 +495,21 @@ mod tests {
         let ready = LdeDispatch::ready(Some(vec![vec![1, 2, 3]]));
         let result = ready.wait().expect("wait succeeds");
         assert_eq!(result.unwrap()[0], vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn lde_dispatch_from_error_returns_payload_error() {
+        let dispatch = LdeDispatch::from_error(GpuError::Execution {
+            backend: GpuBackend::Cuda,
+            message: "boom".into(),
+        });
+        let err = dispatch.wait().expect_err("error should surface");
+        assert!(matches!(
+            err,
+            GpuError::Execution {
+                backend: GpuBackend::Cuda,
+                ..
+            }
+        ));
     }
 }

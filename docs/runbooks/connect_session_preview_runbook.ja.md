@@ -87,7 +87,7 @@ translation_last_reviewed: 2026-01-01
 
 1. **ステージングされたセッションを削除する。** キュー深度のアラームが意味を持ち続けるよう、プレビューセッションは必ず削除する:
    ```js
-   await client.deleteConnectSession(preview.sidBase64Url);
+   await client.deleteConnectSession({ sid: preview.sidBase64Url, tokenManagement: session.token_management });
    ```
    Swift のみのテストでは、Rust/CLI helper から同じエンドポイントを呼ぶ。
 2. **ジャーナルを削除する。** 永続化されたキュージャーナル (`ApplicationSupport/ConnectQueue/<sid>.to`、IndexedDB ストアなど) を削除し、次回の実行がクリーンに始まるようにする。replay 問題を調査する必要がある場合は、削除前にファイルのハッシュを記録する。

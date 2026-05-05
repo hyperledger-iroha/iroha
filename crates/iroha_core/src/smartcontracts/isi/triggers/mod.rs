@@ -213,12 +213,20 @@ pub mod isi {
         let mut new_trigger = trigger;
 
         if !skip_permission_check {
-            // Enforce minimal permission: only genesis block, domain owner of the trigger owner,
-            // or an account with CanRegisterTrigger{authority: <owner>} may register the trigger.
+            // Enforce minimal permission: only genesis block, the trigger owner,
+            // domain owner of the trigger owner, or an account with
+            // CanRegisterTrigger{authority: <owner>} may register the trigger.
             let owner = new_trigger.action().authority().clone();
             let is_genesis = state_transaction._curr_block.is_genesis();
+            let is_owner = authority == &owner;
             let mut is_domain_owner = false;
-            for domain_id in state_transaction.world.domains_for_subject(&owner) {
+            for alias in state_transaction.world.bound_account_aliases(&owner) {
+                let Some(domain_id) = alias
+                    .domain_id(&state_transaction.nexus.dataspace_catalog)
+                    .expect("bound account alias dataspace must exist in catalog")
+                else {
+                    continue;
+                };
                 let domain_owner = state_transaction
                     .world
                     .domain(&domain_id)
@@ -231,7 +239,7 @@ pub mod isi {
             }
             let has_permission =
                 (!is_genesis) && state_transaction.can_register_trigger_for(authority, &owner);
-            if !(is_genesis || is_domain_owner || has_permission) {
+            if !(is_genesis || is_owner || is_domain_owner || has_permission) {
                 return Err(Error::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
                         "Missing CanRegisterTrigger{{authority: {owner}}} permission for {authority}"
@@ -250,6 +258,20 @@ pub mod isi {
                     ),
                 ));
             }
+        }
+
+        if new_trigger.action().retry_policy().is_some()
+            && !matches!(
+                new_trigger.action().filter(),
+                EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(_)))
+            )
+        {
+            return Err(Error::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "time-trigger retry policy is only supported for scheduled time triggers"
+                        .into(),
+                ),
+            ));
         }
 
         // If a time trigger is scheduled at or before the current block creation time,
@@ -276,6 +298,7 @@ pub mod isi {
                     filter: EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(
                         schedule,
                     ))),
+                    retry_policy: act.retry_policy,
                     metadata: act.metadata,
                 };
                 new_trigger = Trigger::new(new_trigger.id().clone(), updated);
@@ -754,7 +777,7 @@ pub mod query {
         query::{
             dsl::{CompoundPredicate, EvaluatePredicate},
             error::QueryExecutionFail as Error,
-            trigger::FindTriggers,
+            trigger::{FindTriggerById, FindTriggers},
         },
         trigger::{Trigger, TriggerId},
     };
@@ -762,7 +785,7 @@ pub mod query {
     use super::*;
     use crate::{
         prelude::*,
-        smartcontracts::{ValidQuery, triggers::set::SetReadOnly},
+        smartcontracts::{ValidQuery, ValidSingularQuery, triggers::set::SetReadOnly},
         state::StateReadOnly,
     };
 
@@ -805,6 +828,17 @@ pub mod query {
             Ok(Box::new(
                 iter.filter(move |trigger| filter.applies(trigger)),
             ))
+        }
+    }
+
+    impl ValidSingularQuery for FindTriggerById {
+        #[metrics(+"find_trigger_by_id")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Trigger, Error> {
+            state_ro
+                .world()
+                .triggers()
+                .trigger_by_id(self.trigger_id())
+                .ok_or_else(|| Error::Find(FindError::Trigger(self.trigger_id().clone())))
         }
     }
 }
@@ -911,20 +945,16 @@ mod tests {
             .set_height(NonZeroU64::new(2).expect("nonzero"));
 
         // Create domain and accounts
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(
-            ALICE_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-        Register::account(Account::new(
-            BOB_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
 
         // Register a by-call trigger owned by Alice
         let trig_id: TriggerId = "bycall_authz_test".parse().unwrap();
@@ -993,20 +1023,16 @@ mod tests {
         stx._curr_block
             .set_height(NonZeroU64::new(2).expect("nonzero"));
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
-        Register::account(Account::new(
-            ALICE_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register alice");
-        Register::account(Account::new(
-            BOB_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register bob");
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register alice");
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register bob");
         let bob_id = (*BOB_ID).clone();
 
         let trig_id: TriggerId = "perm_cleanup".parse().expect("trigger id");
@@ -1098,15 +1124,13 @@ mod tests {
             .set_height(NonZeroU64::new(2).expect("nonzero"));
 
         // Create domain and account
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(
-            ALICE_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
 
         // Register a by-call trigger that may run exactly once
         let trig_id: TriggerId = "manual_once".parse().unwrap();
@@ -1148,20 +1172,16 @@ mod tests {
         stx._curr_block
             .set_height(NonZeroU64::new(2).expect("nonzero"));
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(
-            ALICE_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-        Register::account(Account::new(
-            BOB_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
 
         let trig_id: TriggerId = "reg_trigger_denied".parse().unwrap();
         let trig = Trigger::new(
@@ -1204,20 +1224,16 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(
-            ALICE_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-        Register::account(Account::new(
-            BOB_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(BOB_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
 
         let trig_id: TriggerId = "reg_trigger_allowed".parse().unwrap();
         let trig = Trigger::new(
@@ -1259,15 +1275,13 @@ mod tests {
             0,
         ));
         let mut stx = state_block.transaction();
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(
-            ALICE_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
 
         // Register a by-call trigger with Exactly(1) repeat
         let trig_id: TriggerId = "utrig_burn_rm".parse().unwrap();
@@ -1331,15 +1345,13 @@ mod tests {
             0,
         ));
         let mut stx = state_block.transaction();
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(
-            ALICE_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
 
         let rose_id: TriggerId = "utrig_rose".parse().unwrap();
         let tulip_id: TriggerId = "utrig_tulip".parse().unwrap();
@@ -1403,15 +1415,13 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(
-            ALICE_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
 
         let trig_id: TriggerId = "time_zero_period".parse().unwrap();
         let schedule = ExecutionTime::Schedule(
@@ -1443,6 +1453,52 @@ mod tests {
     }
 
     #[test]
+    fn trigger_retry_policy_rejects_non_scheduled_time_trigger_on_registration() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let world = World::with(
+            [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+        );
+        let state = State::new(world, kura, query_handle);
+
+        let block = new_dummy_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let trig_id: TriggerId = "time_retry_precommit".parse().unwrap();
+        let trigger = Trigger::new(
+            trig_id,
+            Action {
+                executable: Executable::Instructions(Vec::<InstructionBox>::new().into()),
+                repeats: Repeats::Exactly(1),
+                authority: ALICE_ID.clone(),
+                filter: EventFilterBox::Time(TimeEventFilter(ExecutionTime::PreCommit)),
+                retry_policy: Some(TimeTriggerRetryPolicy {
+                    max_retries: std::num::NonZeroU32::new(1).expect("nonzero"),
+                    retry_after_ms: std::num::NonZeroU64::new(5).expect("nonzero"),
+                }),
+                metadata: Metadata::default(),
+            },
+        );
+
+        let err = Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("precommit retry policy must be rejected");
+
+        match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                msg,
+            )) => assert!(
+                msg.contains("retry policy is only supported for scheduled time triggers"),
+                "unexpected message: {msg}"
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
     fn trigger_registration_enforces_metadata_limit() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -1452,15 +1508,13 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        Register::account(Account::new(
-            ALICE_ID.clone().to_account_id(domain_id.clone()),
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
+        Register::account(Account::new(ALICE_ID.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
 
         let id = CustomParameterId::from_str("max_metadata_value_bytes").unwrap();
         let param = Parameter::Custom(CustomParameter::new(id, Json::new(4u32)));

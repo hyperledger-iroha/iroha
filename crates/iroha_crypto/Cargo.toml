@@ -11,9 +11,10 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["std", "rand", "json", "ecc-batch"]
+default = ["std", "rand", "json", "ecc-batch", "bfv-accel"]
 std = []
 json = ["norito/json", "mv"]
+bfv-accel = []
 # Enable support for TC26 GOST (Streebog + GOST R 34.10-2012) algorithms.
 # Implementation lives in `signature::gost` (Streebog hashing + TC26 curves).
 gost = ["dep:once_cell", "dep:num-bigint", "dep:num-traits", "dep:streebog", "dep:crypto-bigint", "dep:subtle"]
@@ -23,7 +24,8 @@ sm = ["sm-ccm", "dep:sm2", "dep:sm3", "dep:sm4", "dep:rfc6979", "dep:sm4_gcm", "
 sm-ffi-openssl = ["dep:openssl"]
 sm-neon = ["dep:sm4-neon", "dep:sm3-neon"]
 sm-neon-force = ["sm", "sm-neon", "sm4-neon/force-neon", "sm3-neon/force-neon"]
-sm_proptest = []
+crypto-parity-tests = ["dep:amcl", "dep:openssl", "dep:secp256k1"]
+bench = []
 # Enable support for BLS signatures. Disabled by default due to long compile times.
 # Backend selection:
 # - bls-backend-blstrs: pure Rust blstrs backend (no arkworks)
@@ -105,6 +107,8 @@ sm4_gcm = { package = "sm4-gcm", version = "0.1.2", optional = true, default-fea
 sm4-neon = { path = "../sm4_neon", optional = true }
 sm3-neon = { path = "../sm3_neon", optional = true }
 openssl = { version = "0.10.75", optional = true, default-features = false, features = ["vendored"] }
+amcl = { version = "0.2.0", optional = true, default-features = false, features = ["secp256k1"] }
+secp256k1 = { version = "0.31.1", optional = true, features = ["rand"] }
 
 
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
@@ -118,21 +122,13 @@ k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecd
 
 argon2 = { version = "0.5.3", default-features = false, features = ["std"] }
 
-# PQC (Dilithium available by default, Kyber always available for streaming HPKE)
-pqcrypto-dilithium = { version = "0.5" }
+# PQC (ML-DSA available by default, ML-KEM available through `soranet_pq`)
+pqcrypto-mldsa = { version = "0.1.2" }
 pqcrypto-traits = { version = "0.3.5" }
 time = { workspace = true, features = ["formatting", "parsing"] }
 
 [dev-dependencies]
-proptest = { version = "1.9.0", default-features = false, features = ["std"] }
-
-# these crypto libraries are not used to implement actual crypto algorithms
-# but to test some of the primitives against them
-amcl = { version = "0.2.0", default-features = false, features = ["secp256k1"] }
-secp256k1 = { version = "0.31.1", features = ["rand"] }
-libsodium-sys-stable = "1.22.4"
-openssl = { version = "0.10.75", features = ["vendored"] }
-criterion = { version = "0.7.0" }
+criterion = { workspace = true }
 num-bigint = "0.4.6"
 lazy_static = "1.5.0"
 tempfile = "3.23.0"

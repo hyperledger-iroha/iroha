@@ -48,40 +48,6 @@ if TYPE_CHECKING:
         SorafsPorSubmissionResponse,
         SorafsPorVerdictResponse,
     )
-else:
-    try:
-        from .client import (
-            SorafsPorIngestionProviderStatus,
-            SorafsPorIngestionStatus,
-            SorafsPorObservationResponse,
-            SorafsPorSubmissionResponse,
-            SorafsPorVerdictResponse,
-        )
-    except ImportError:  # pragma: no cover - circular import during boot
-        class SorafsPorSubmissionResponse:
-            """Fallback placeholder until the client module finishes importing."""
-
-            pass
-
-        class SorafsPorObservationResponse(SorafsPorSubmissionResponse):
-            """Fallback placeholder until the client module finishes importing."""
-
-            pass
-
-        class SorafsPorVerdictResponse(SorafsPorSubmissionResponse):
-            """Fallback placeholder until the client module finishes importing."""
-
-            pass
-
-        class SorafsPorIngestionStatus:
-            """Fallback placeholder until the client module finishes importing."""
-
-            pass
-
-        class SorafsPorIngestionProviderStatus(SorafsPorIngestionStatus):
-            """Fallback placeholder until the client module finishes importing."""
-
-            pass
 
 __all__ = [
     "SorafsAliasPolicy",

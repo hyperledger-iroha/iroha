@@ -29,8 +29,8 @@ translation_last_reviewed: 2026-02-07
 حسابات الهوية. يوجد في الحزمة الافتراضية حسابان مستفيدان من المفاتيح التجريبية:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 قم بالإجابة على الأسئلة السابقة بالحسابات الأولى:
@@ -49,7 +49,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts внутри wonderland (увеличьте --limit при необходимости)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions, которые уже существуют
@@ -63,7 +63,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 يعرض CLI المعاملات الصحيحة الأخرى (على سبيل المثال، `0x5f…`). إنه صاحب الذات
@@ -72,7 +72,7 @@ iroha --config defaults/client.toml asset definition register \
 ## 3. قم بإضافة وحدات حساب المشغل
 
 كل الكائنات الحية النشطة تحت `(asset definition, account)`. خذ 250
-الوحدة `coffee#wonderland` إلى `$ADMIN_ACCOUNT`:
+الوحدة `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` إلى `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

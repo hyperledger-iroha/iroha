@@ -150,7 +150,7 @@ obligations that the Norito ↔ ISO 20022 bridge must enforce before emitting m
 | `settlement_id`                                        | `TxId`                                 | Stable lifecycle identifier |
 | `delivery_leg.asset_definition_id` (security)          | `SctiesLeg/FinInstrmId`                | Canonical identifier (ISIN, CUSIP, …) |
 | `delivery_leg.quantity`                                | `SctiesLeg/Qty`                        | Decimal string; honours asset precision |
-| `payment_leg.asset_definition_id` (currency)           | `CashLeg/Ccy`                          | ISO currency code |
+| `payment_leg.asset_definition_id` (currency)           | `CashLeg/Ccy`                          | ISO currency code; CLI offline previews fall back to `XXX` when only an opaque canonical asset-definition address is available and no original 3-letter code can be recovered from the identifier alone |
 | `payment_leg.quantity`                                 | `CashLeg/Amt`                          | Decimal string; rounded per Numeric spec |
 | `delivery_leg.from` (seller / delivering party)        | `DlvrgSttlmPties/Pty/Bic`              | BIC of delivering participant *(account canonical ID is currently exported in metadata)* |
 | `delivery_leg.from` account identifier                 | `DlvrgSttlmPties/Acct`                 | Free-form; Norito metadata carries exact account ID |
@@ -192,7 +192,7 @@ status (e.g., `ConfSts = ACCP`) rather than the PvP “purpose”.
 | PvP field                                     | ISO 20022 path            | Notes |
 |-----------------------------------------------|---------------------------|-------|
 | `settlement_id`                               | `TxId`                    | Stable lifecycle identifier |
-| `primary_leg.asset_definition_id`             | `SttlmCcy`                | Currency code for the primary leg |
+| `primary_leg.asset_definition_id`             | `SttlmCcy`                | Currency code for the primary leg; CLI offline previews fall back to `XXX` when the input is an opaque canonical asset-definition address |
 | `primary_leg.quantity`                        | `SttlmAmt`                | Amount delivered by initiator |
 | `counter_leg.asset_definition_id`             | `AddtlInf` (JSON payload) | Counter currency code embedded in supplemental info |
 | `counter_leg.quantity`                        | `SttlmQty`                | Counter amount |
@@ -208,12 +208,12 @@ iroha app settlement dvp \
   --settlement-id DVP-FIXTURE-1 \
   --delivery-asset security#equities \
   --delivery-quantity 500 \
-  --delivery-from i105... \
-  --delivery-to i105... \
+  --delivery-from <i105-account-id> \
+  --delivery-to <i105-account-id> \
   --payment-asset usd#fi \
   --payment-quantity 1050000 \
-  --payment-from i105... \
-  --payment-to i105... \
+  --payment-from <i105-account-id> \
+  --payment-to <i105-account-id> \
   --delivery-instrument-id US0378331005 \
   --place-of-settlement-mic XNAS \
   --partial-indicator npar \

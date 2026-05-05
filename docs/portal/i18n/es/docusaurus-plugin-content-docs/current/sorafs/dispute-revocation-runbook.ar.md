@@ -69,7 +69,7 @@ Utilice el código `docs/source/sorafs/dispute_revocation_runbook.md`. احرص 
      --base64-out=dispute.b64 \
      --json-out=dispute_summary.json \
      --request-out=dispute_request.json \
-     --authority=i105... \
+     --authority=<i105-account-id> \
      --private-key=ed25519:<key>
    ```3. راجع `dispute_summary.json` (تأكد من النوع، resumen الأدلة، والطوابع الزمنية).
 4. Inserte el archivo JSON en Torii `/v1/sorafs/capacity/dispute` para crear archivos. Adaptador de corriente `dispute_id_hex`؛ فهي تثبّت إجراءات الإلغاء اللاحقة وتقارير التدقيق.

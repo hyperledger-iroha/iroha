@@ -7,7 +7,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ZstdEncodeError {
+pub enum ZstdEncodeError {
     InvalidInput,
     Capacity,
     Huffman(HuffmanError),
@@ -27,7 +27,7 @@ impl From<fse::FseError> for ZstdEncodeError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ZstdDecodeError {
+pub enum ZstdDecodeError {
     InvalidInput,
     Unsupported,
     Huffman(HuffmanError),
@@ -62,6 +62,11 @@ const LL_BITS: [u8; MAX_LL + 1] = [
 const ML_BITS: [u8; MAX_ML + 1] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     1, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+];
+const OF_BASE: [u32; MAX_OFF + 1] = [
+    0, 1, 1, 5, 0xD, 0x1D, 0x3D, 0x7D, 0xFD, 0x1FD, 0x3FD, 0x7FD, 0xFFD, 0x1FFD, 0x3FFD, 0x7FFD,
+    0xFFFD, 0x1FFFD, 0x3FFFD, 0x7FFFD, 0xFFFFD, 0x1FFFFD, 0x3FFFFD, 0x7FFFFD, 0xFFFFFD, 0x1FFFFFD,
+    0x3FFFFFD, 0x7FFFFFD, 0xFFFFFFD, 0x1FFFFFFD, 0x3FFFFFFD, 0x7FFFFFFD,
 ];
 const LL_DEFAULT_NORM: [i16; MAX_LL + 1] = [
     4, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 2, 1, 1, 1, 1, 1,
@@ -99,7 +104,7 @@ struct SeqDef {
     offset: u32,
 }
 
-pub(crate) fn encode_frame(
+pub fn encode_frame(
     input: &[u8],
     chunk_size: usize,
     counts: &[u32],
@@ -107,9 +112,27 @@ pub(crate) fn encode_frame(
     sequences: &[GpuZstdSequence],
     checksum: bool,
 ) -> Result<Vec<u8>, ZstdEncodeError> {
+    if chunk_size == 0 {
+        return Err(ZstdEncodeError::InvalidInput);
+    }
+    let expected_chunks = input.len().div_ceil(chunk_size);
+    if counts.len() != expected_chunks || offsets.len() != expected_chunks {
+        return Err(ZstdEncodeError::InvalidInput);
+    }
+
     let mut out = Vec::with_capacity(input.len().saturating_add(64));
     let header = encode_frame_header(input.len(), chunk_size, checksum)?;
     out.extend_from_slice(&header);
+
+    if input.is_empty() {
+        let block = encode_block(&[], &[])?;
+        write_block(&mut out, &block, true)?;
+        if checksum {
+            let hash = xxh32(input);
+            out.extend_from_slice(&hash.to_le_bytes());
+        }
+        return Ok(out);
+    }
 
     let chunk_count = counts.len();
     for chunk_idx in 0..chunk_count {
@@ -135,7 +158,7 @@ pub(crate) fn encode_frame(
     Ok(out)
 }
 
-pub(crate) fn decode_frame(input: &[u8]) -> Result<Vec<u8>, ZstdDecodeError> {
+pub fn decode_frame(input: &[u8]) -> Result<Vec<u8>, ZstdDecodeError> {
     let mut idx = 0usize;
     if input.len() < 5 {
         return Err(ZstdDecodeError::InvalidInput);
@@ -616,10 +639,13 @@ fn decode_sequences_bitstream(
     let ll_base = ll_base_table();
     let ml_base = ml_base_table();
     let mut out = Vec::with_capacity(nb_seq);
-    for _ in 0..nb_seq {
-        let ll_symbol = fse_decode_symbol(&ll_table, &mut reader, &mut state_ll)?;
-        let ml_symbol = fse_decode_symbol(&ml_table, &mut reader, &mut state_ml)?;
-        let of_symbol = fse_decode_symbol(&of_table, &mut reader, &mut state_of)?;
+    for idx in 0..nb_seq {
+        let ll_entry = fse_decode_entry(&ll_table, state_ll)?;
+        let ml_entry = fse_decode_entry(&ml_table, state_ml)?;
+        let of_entry = fse_decode_entry(&of_table, state_of)?;
+        let ll_symbol = ll_entry.symbol;
+        let ml_symbol = ml_entry.symbol;
+        let of_symbol = of_entry.symbol;
         if ll_symbol as usize > MAX_LL || ml_symbol as usize > MAX_ML {
             return Err(ZstdDecodeError::InvalidInput);
         }
@@ -637,12 +663,20 @@ fn decode_sequences_bitstream(
         let match_len = ml_base_val
             .saturating_add(ml_extra)
             .saturating_add(MIN_MATCH);
-        let offset = (1u32 << of_bits).saturating_add(of_extra);
+        if of_symbol < 2 {
+            return Err(ZstdDecodeError::Unsupported);
+        }
+        let offset = OF_BASE[of_symbol as usize].saturating_add(of_extra);
         out.push(SeqDef {
             lit_len,
             match_len,
             offset,
         });
+        if idx + 1 != nb_seq {
+            fse_update_state(&ll_table, &mut reader, &mut state_ll, ll_entry)?;
+            fse_update_state(&ml_table, &mut reader, &mut state_ml, ml_entry)?;
+            fse_update_state(&of_table, &mut reader, &mut state_of, of_entry)?;
+        }
     }
     Ok(out)
 }
@@ -945,6 +979,7 @@ fn encode_sequences_bitstream(seqs: &[SeqDef]) -> Result<Vec<u8>, ZstdEncodeErro
     let mut ll_codes = Vec::with_capacity(seqs.len());
     let mut ml_codes = Vec::with_capacity(seqs.len());
     let mut of_codes = Vec::with_capacity(seqs.len());
+    let mut of_bases = Vec::with_capacity(seqs.len());
     for seq in seqs {
         let ll_code = ll_code(seq.lit_len);
         let ml_base_val = seq
@@ -952,13 +987,18 @@ fn encode_sequences_bitstream(seqs: &[SeqDef]) -> Result<Vec<u8>, ZstdEncodeErro
             .checked_sub(MIN_MATCH)
             .ok_or(ZstdEncodeError::InvalidInput)?;
         let ml_code = ml_code(ml_base_val);
-        let of_code = of_code(seq.offset);
+        let of_base = seq
+            .offset
+            .checked_add(3)
+            .ok_or(ZstdEncodeError::InvalidInput)?;
+        let of_code = of_code(of_base);
         if of_code as usize > DEFAULT_MAX_OFF {
             return Err(ZstdEncodeError::InvalidInput);
         }
         ll_codes.push(ll_code as u16);
         ml_codes.push(ml_code as u16);
         of_codes.push(of_code as u16);
+        of_bases.push(of_base);
     }
 
     let mut writer = ZstdBitWriter::with_capacity(seqs.len().saturating_mul(8).saturating_add(8));
@@ -973,7 +1013,7 @@ fn encode_sequences_bitstream(seqs: &[SeqDef]) -> Result<Vec<u8>, ZstdEncodeErro
     let of_bits = of_codes[last] as u32;
     writer.add_bits(last_seq.lit_len as u64, ll_bits)?;
     writer.add_bits((last_seq.match_len - MIN_MATCH) as u64, ml_bits)?;
-    writer.add_bits(last_seq.offset as u64, of_bits)?;
+    writer.add_bits(of_bases[last] as u64, of_bits)?;
 
     for idx in (0..last).rev() {
         let ll_code = ll_codes[idx];
@@ -998,7 +1038,7 @@ fn encode_sequences_bitstream(seqs: &[SeqDef]) -> Result<Vec<u8>, ZstdEncodeErro
         }
         writer.add_bits(seq.lit_len as u64, ll_bits)?;
         writer.add_bits(ml_base_val as u64, ml_bits)?;
-        writer.add_bits(seq.offset as u64, of_bits)?;
+        writer.add_bits(of_bases[idx] as u64, of_bits)?;
     }
 
     fse_flush_state(&mut writer, &ml_table, state_ml)?;
@@ -1168,20 +1208,29 @@ fn fse_flush_state(
     Ok(())
 }
 
-fn fse_decode_symbol(
+fn fse_decode_entry(table: &FseDTable, state: u32) -> Result<fse::DecodeEntry, ZstdDecodeError> {
+    let table_size = 1u32 << table.table_log;
+    if state < table_size {
+        return Err(ZstdDecodeError::InvalidInput);
+    }
+    let idx = (state - table_size) as usize;
+    table
+        .decode
+        .get(idx)
+        .copied()
+        .ok_or(ZstdDecodeError::InvalidInput)
+}
+
+fn fse_update_state(
     table: &FseDTable,
     reader: &mut BitReaderRev<'_>,
     state: &mut u32,
-) -> Result<u16, ZstdDecodeError> {
-    let table_size = 1u32 << table.table_log;
-    if *state < table_size {
-        return Err(ZstdDecodeError::InvalidInput);
-    }
-    let idx = (*state - table_size) as usize;
-    let entry = table.decode.get(idx).ok_or(ZstdDecodeError::InvalidInput)?;
+    entry: fse::DecodeEntry,
+) -> Result<(), ZstdDecodeError> {
     let bits = reader.read_bits(entry.nb_bits as u32)? as u32;
+    let table_size = 1u32 << table.table_log;
     *state = entry.new_state + bits + table_size;
-    Ok(entry.symbol)
+    Ok(())
 }
 
 fn bitstream_end_mark_len(data: &[u8]) -> Result<u32, ZstdDecodeError> {
@@ -1515,6 +1564,71 @@ mod tests {
         seed
     }
 
+    fn hash4(input: &[u8], pos: usize) -> usize {
+        let mut value = input[pos] as u32
+            | ((input[pos + 1] as u32) << 8)
+            | ((input[pos + 2] as u32) << 16)
+            | ((input[pos + 3] as u32) << 24);
+        value ^= value >> 16;
+        value = value.wrapping_mul(0x7feb_352d);
+        value ^= value >> 15;
+        value = value.wrapping_mul(0x846c_a68b);
+        value ^= value >> 16;
+        (value as usize) & (4096 - 1)
+    }
+
+    fn simple_match_sequences(input: &[u8]) -> (Vec<GpuZstdSequence>, Vec<u32>, Vec<u32>) {
+        let mut hash_table = [-1isize; 4096];
+        let mut seqs = Vec::new();
+        let mut lit_start = 0usize;
+        let mut pos = 0usize;
+        while pos + 3 <= input.len() {
+            let mut match_len = 0usize;
+            let mut offset = 0usize;
+            if pos + 4 <= input.len() {
+                let hash = hash4(input, pos);
+                let match_pos = hash_table[hash];
+                hash_table[hash] = pos as isize;
+                if match_pos >= 0 && pos > match_pos as usize {
+                    let match_pos = match_pos as usize;
+                    let max_len = 64usize.min(input.len() - pos).min(input.len() - match_pos);
+                    while match_len < max_len
+                        && input[match_pos + match_len] == input[pos + match_len]
+                    {
+                        match_len += 1;
+                    }
+                    if match_len >= 3 {
+                        offset = pos - match_pos;
+                    } else {
+                        match_len = 0;
+                    }
+                }
+            }
+
+            if match_len >= 3 {
+                seqs.push(GpuZstdSequence {
+                    lit_len: (pos - lit_start) as u32,
+                    match_len: match_len as u32,
+                    offset: offset as u32,
+                    reserved: 0,
+                });
+                pos += match_len;
+                lit_start = pos;
+            } else {
+                pos += 1;
+            }
+        }
+        seqs.push(GpuZstdSequence {
+            lit_len: (input.len() - lit_start) as u32,
+            match_len: 0,
+            offset: 0,
+            reserved: 0,
+        });
+        let counts = vec![seqs.len() as u32];
+        let offsets = vec![0u32];
+        (seqs, counts, offsets)
+    }
+
     #[test]
     fn encode_frame_roundtrip_no_matches() {
         let payload = b"zstd frame no matches payload";
@@ -1531,6 +1645,44 @@ mod tests {
             .expect("encode");
         let decoded = zstd::decode_all(std::io::Cursor::new(&encoded)).expect("decode");
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn encode_frame_empty_payload_writes_valid_last_block() {
+        let encoded = encode_frame(&[], 1 << 15, &[], &[], &[], true).expect("encode");
+        let decoded = zstd::decode_all(std::io::Cursor::new(&encoded)).expect("decode");
+        assert!(decoded.is_empty());
+        assert_eq!(
+            decode_frame(&encoded).expect("local decode"),
+            Vec::<u8>::new()
+        );
+    }
+
+    #[test]
+    fn encode_frame_rejects_invalid_chunk_metadata() {
+        let payload = b"metadata";
+        let sequences = vec![GpuZstdSequence {
+            lit_len: payload.len() as u32,
+            match_len: 0,
+            offset: 0,
+            reserved: 0,
+        }];
+
+        let err = encode_frame(payload, 0, &[1], &[0], &sequences, false)
+            .expect_err("zero chunk size should be invalid");
+        assert!(matches!(err, ZstdEncodeError::InvalidInput));
+
+        let err = encode_frame(payload, 1 << 15, &[1], &[], &sequences, false)
+            .expect_err("missing offsets should be invalid");
+        assert!(matches!(err, ZstdEncodeError::InvalidInput));
+
+        let err = encode_frame(payload, 4, &[1], &[0], &sequences, false)
+            .expect_err("wrong chunk count should be invalid");
+        assert!(matches!(err, ZstdEncodeError::InvalidInput));
+
+        let err = encode_frame(payload, payload.len(), &[1], &[1], &sequences, false)
+            .expect_err("sequence offset outside range should be invalid");
+        assert!(matches!(err, ZstdEncodeError::InvalidInput));
     }
 
     #[test]
@@ -1582,6 +1734,32 @@ mod tests {
         let offsets = vec![0u32];
         let encoded =
             encode_frame(payload, 1 << 15, &counts, &offsets, &sequences, false).expect("encode");
+        let decoded = zstd::decode_all(std::io::Cursor::new(&encoded)).expect("decode");
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn encode_frame_roundtrip_with_many_sequence_extra_bits() {
+        let mut payload = Vec::with_capacity(8 * 1024);
+        for idx in 0..(8 * 1024) {
+            payload.push(match idx % 17 {
+                0..=7 => b'A',
+                8..=11 => b'B',
+                12..=14 => (idx as u8).wrapping_mul(31),
+                _ => b'\n',
+            });
+        }
+        let (sequences, counts, offsets) = simple_match_sequences(&payload);
+        assert!(sequences.len() > 128);
+        let encoded = encode_frame(
+            &payload,
+            payload.len(),
+            &counts,
+            &offsets,
+            &sequences,
+            false,
+        )
+        .expect("encode");
         let decoded = zstd::decode_all(std::io::Cursor::new(&encoded)).expect("decode");
         assert_eq!(decoded, payload);
     }
@@ -1639,6 +1817,15 @@ mod tests {
         let last = encoded.len().saturating_sub(1);
         encoded[last] ^= 0xFF;
         let err = decode_frame(&encoded).expect_err("bad checksum");
+        assert!(matches!(err, ZstdDecodeError::InvalidInput));
+    }
+
+    #[test]
+    fn decode_frame_rejects_truncated_header_and_bad_magic() {
+        let err = decode_frame(&[]).expect_err("empty input");
+        assert!(matches!(err, ZstdDecodeError::InvalidInput));
+
+        let err = decode_frame(&[0u8; 5]).expect_err("bad magic");
         assert!(matches!(err, ZstdDecodeError::InvalidInput));
     }
 

@@ -83,10 +83,10 @@ repo packet နှင့်တွဲပြီး အပြောင်းအလ�
 [settlement.repo]
 default_haircut_bps = 1500
 margin_frequency_secs = 86400
-eligible_collateral = ["bond#wonderland", "note#wonderland"]
+eligible_collateral = ["4fEiy2n5VMFVfi6BzDJge519zAzg", "7dk8Pj8Bqo6XUqch4K2sF8MCM1zd"]
 
 [settlement.repo.collateral_substitution_matrix]
-"bond#wonderland" = ["note#wonderland", "bill#wonderland"]
+"4fEiy2n5VMFVfi6BzDJge519zAzg" = ["7dk8Pj8Bqo6XUqch4K2sF8MCM1zd", "6zK1LDcJ3FvkpfoZQ8kHUaW6sA7F"]
 ```
 
 လည်ပတ်မှုစစ်ဆေးစာရင်း-
@@ -186,10 +186,10 @@ SDK တိုင်းကို မထိဘဲ အုပ်ချုပ်မ�
 [settlement.repo]
 default_haircut_bps = 1750
 margin_frequency_secs = 43200
-eligible_collateral = ["bond#wonderland", "note#wonderland"]
+eligible_collateral = ["4fEiy2n5VMFVfi6BzDJge519zAzg", "7dk8Pj8Bqo6XUqch4K2sF8MCM1zd"]
 
 [settlement.repo.collateral_substitution_matrix]
-"bond#wonderland" = ["note#wonderland", "bill#wonderland"]
+"4fEiy2n5VMFVfi6BzDJge519zAzg" = ["7dk8Pj8Bqo6XUqch4K2sF8MCM1zd", "6zK1LDcJ3FvkpfoZQ8kHUaW6sA7F"]
 ```
 
 ** အပြောင်းအလဲစီမံခန့်ခွဲမှုစာရင်း **1. အဆိုပြုထားသော TOML အတိုအထွာ (အစားထိုး matrix deltas အပါအဝင်) hash ကို အဆင့်သတ်မှတ်ပါ
@@ -573,7 +573,7 @@ archive ကိုမဖွင့်ဘဲ။ `scripts/repo_evidence_manifest.py`
 ```bash
 python3 scripts/repo_evidence_manifest.py \
   --root artifacts/finance/repo/wonderland-2026q1 \
-  --agreement-id repo#wonderland \
+  --agreement-id 7mxD1tKRyv32je4kZwcWa9wa33bX \
   --output artifacts/finance/repo/wonderland-2026q1/manifest.json \
   --exclude 'scratch/*'
 ```
@@ -588,7 +588,7 @@ stdout၊ စားပွဲမှပြန်လည်သုံးသပ်န�
 
 ```json
 {
-  "agreement_id": "repo#wonderland",
+  "agreement_id": "7mxD1tKRyv32je4kZwcWa9wa33bX",
   "generated_at": "2026-04-30T11:58:43Z",
   "root": "/var/tmp/repo/wonderland-2026q1",
   "file_count": 5,
@@ -803,8 +803,8 @@ hash သို့မဟုတ် event streams များကို ပြန�
 
 1. **လျှပ်တစ်ပြက်လက်ကျန်များ** စွမ်းအားပေးသော `FindAssets` မေးမြန်းချက်ကို အသုံးပြုပါ။
    `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) သို့မဟုတ်
-   `i105...` အတွက် XOR လက်ကျန်များကို တင်ပို့ရန် `iroha_python` အကူအညီပေးသူ
-   `i105...` နှင့် သုံးသပ်ချက်တွင် ပါဝင်သည့် စားပွဲအကောင့်တိုင်း။ စတိုး
+   `<i105-account-id>` အတွက် XOR လက်ကျန်များကို တင်ပို့ရန် `iroha_python` အကူအညီပေးသူ
+   `<i105-account-id>` နှင့် သုံးသပ်ချက်တွင် ပါဝင်သည့် စားပွဲအကောင့်တိုင်း။ စတိုး
    JSON အောက်တွင်
    `artifacts/finance/repo/<period>/treasury_assets.json` နှင့် git ကိုမှတ်တမ်းတင်ပါ။
    ပါရှိသော `README.md` တွင် commit/toolchain

@@ -51,9 +51,7 @@ pub fn sort_triplets_gpu(triplets: &mut [AccessTriplet]) -> Result<(), GpuSortEr
 
     #[cfg(feature = "cuda")]
     {
-        use ivm::cuda;
-
-        if cuda::cuda_disabled() {
+        if !ivm::cuda_available() {
             return Err(GpuSortError::Unsupported);
         }
 
@@ -70,7 +68,7 @@ pub fn sort_triplets_gpu(triplets: &mut [AccessTriplet]) -> Result<(), GpuSortEr
             lo.push(lo_word);
         }
 
-        match cuda::bitonic_sort_pairs(&mut hi, &mut lo) {
+        match ivm::bitonic_sort_pairs(&mut hi, &mut lo) {
             Some(()) => {
                 for (out, (hi_word, lo_word)) in triplets.iter_mut().zip(hi.into_iter().zip(lo)) {
                     out.key = (hi_word >> 32) as u32;

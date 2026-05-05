@@ -11,14 +11,13 @@ use std::{
     num::NonZeroU32,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     Identifiable,
-    asset::AssetId,
     block::{self, SignedBlock, consensus::SumeragiStatusWire},
     events::{
         EventBox,
@@ -26,12 +25,13 @@ use iroha_data_model::{
         pipeline::PipelineEventBox,
         stream::EventMessage,
     },
-    isi::Mint,
+    isi::SetKeyValue,
     nexus::LaneLifecyclePlan,
-    prelude::ChainId,
+    prelude::{ChainId, DomainId},
     query::{QueryOutput, SignedQuery},
     transaction::{SignedTransaction, TransactionBuilder},
 };
+use iroha_primitives::json::Json;
 use iroha_telemetry::metrics::Status as TelemetryStatus;
 pub use iroha_telemetry::metrics::{GovernanceStatus, Uptime};
 use iroha_version::{codec::EncodeVersioned, error::Error as VersionError};
@@ -59,6 +59,8 @@ use tokio_tungstenite::{
 use url::Url;
 
 use crate::compose::SigningAuthority;
+
+const NORITO_MIME_TYPE: &str = "application/x-norito";
 
 /// Convenience result alias for Torii client operations.
 pub type ToriiResult<T> = std::result::Result<T, ToriiError>;
@@ -285,9 +287,26 @@ fn reject_code_from_headers(headers: &HeaderMap) -> Option<String> {
 }
 
 fn error_message_from_body(body: &[u8]) -> Option<String> {
-    decode_norito_with_alignment::<ToriiErrorEnvelope>(body)
-        .ok()
-        .map(|envelope| envelope.summary())
+    if let Ok(envelope) = decode_norito_with_alignment::<ToriiErrorEnvelope>(body) {
+        return Some(envelope.summary());
+    }
+
+    if let Ok(value) = norito::json::from_slice::<json::Value>(body) {
+        if let Some(message) = value
+            .get("message")
+            .or_else(|| value.get("error"))
+            .and_then(json::Value::as_str)
+        {
+            let code = value.get("code").and_then(json::Value::as_str);
+            return Some(match code {
+                Some(code) if !code.is_empty() => format!("{code}: {message}"),
+                _ => message.to_owned(),
+            });
+        }
+    }
+
+    let text = String::from_utf8_lossy(body).trim().to_owned();
+    if text.is_empty() { None } else { Some(text) }
 }
 
 fn compose_base_urls(base_url: &str) -> ToriiResult<(Url, Url)> {
@@ -372,6 +391,13 @@ pub struct SmokeCommitSnapshot {
     pub elapsed: Duration,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SmokeTransactionStatus {
+    Committed(u64),
+    Rejected(String),
+    Expired,
+}
+
 /// Options governing a full readiness smoke probe (status poll + commit check).
 #[derive(Debug, Clone)]
 pub struct ReadinessSmokePlan {
@@ -397,7 +423,7 @@ impl ReadinessSmokePlan {
         }
     }
 
-    /// Build a plan that mints a small amount of `rose#wonderland` with the supplied signer.
+    /// Build a plan that updates metadata on the bundled genesis domain.
     ///
     /// Each attempt carries a unique nonce so retries do not collide.
     pub fn for_signer_with_attempts(
@@ -441,9 +467,9 @@ impl ReadinessSmokePlan {
 /// Errors that can occur while constructing a readiness smoke plan.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadinessSmokeBuildError {
-    /// Failed to parse the default smoke asset identifier.
-    #[error("invalid readiness smoke asset `{0}`")]
-    InvalidAsset(String),
+    /// Failed to construct the smoke domain identifier.
+    #[error("invalid readiness smoke domain `{0}`")]
+    InvalidDomain(String),
 }
 
 /// Result of a readiness smoke probe.
@@ -459,7 +485,102 @@ pub struct ReadinessSmokeOutcome {
     pub status: Option<ToriiStatusSnapshot>,
 }
 
-const SMOKE_ASSET_ID: &str = "rose#wonderland";
+/// Summary of a local Torii MCP probe.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalMcpProbeResult {
+    /// MCP protocol version advertised by `initialize`.
+    pub protocol_version: String,
+    /// Optional server toolset version hash returned by `tools/list`.
+    pub toolset_version: Option<String>,
+    /// Number of visible tools in the local MCP catalog.
+    pub tool_count: usize,
+    /// Visible tool names returned by `tools/list`.
+    pub tool_names: Vec<String>,
+}
+
+impl LocalMcpProbeResult {
+    fn from_documents(
+        capabilities: &json::Value,
+        initialize: &json::Value,
+        tools_list: &json::Value,
+    ) -> ToriiResult<Self> {
+        if !capabilities.is_object() {
+            return Err(decode_error(
+                "mcp capabilities",
+                "GET /v1/mcp must return a JSON object",
+            ));
+        }
+
+        let init_result = initialize
+            .as_object()
+            .and_then(|doc| doc.get("result"))
+            .and_then(json::Value::as_object)
+            .ok_or_else(|| decode_error("mcp initialize", "missing result object"))?;
+        let protocol_version =
+            parse_required_string(init_result, &["protocolVersion"], "mcp initialize result")?;
+
+        let tools_result = tools_list
+            .as_object()
+            .and_then(|doc| doc.get("result"))
+            .and_then(json::Value::as_object)
+            .ok_or_else(|| decode_error("mcp tools/list", "missing result object"))?;
+        let tools = tools_result
+            .get("tools")
+            .and_then(json::Value::as_array)
+            .ok_or_else(|| decode_error("mcp tools/list result", "missing tools array"))?;
+        let mut tool_names = Vec::with_capacity(tools.len());
+        for (index, tool) in tools.iter().enumerate() {
+            let tool_obj = tool.as_object().ok_or_else(|| {
+                decode_error(
+                    "mcp tools/list result.tools",
+                    format!("tool {index} must be an object"),
+                )
+            })?;
+            tool_names.push(parse_required_string(
+                tool_obj,
+                &["name"],
+                "mcp tools/list result.tools[].name",
+            )?);
+        }
+
+        if !tool_names.iter().any(|name| name.starts_with("iroha.")) {
+            return Err(decode_error(
+                "mcp tools/list result",
+                "expected curated iroha.* tools to be exposed",
+            ));
+        }
+        if tool_names.iter().any(|name| name.starts_with("torii.")) {
+            return Err(decode_error(
+                "mcp tools/list result",
+                "raw torii.* tools must stay hidden for local Mochi sandboxes",
+            ));
+        }
+        for required in [
+            "iroha.status",
+            "iroha.sumeragi.status",
+            "iroha.transactions.submit",
+            "iroha.transactions.submit_and_wait",
+        ] {
+            if !tool_names.iter().any(|name| name == required) {
+                return Err(decode_error(
+                    "mcp tools/list result",
+                    format!("missing required curated tool `{required}`"),
+                ));
+            }
+        }
+
+        Ok(Self {
+            protocol_version,
+            toolset_version: tools_result
+                .get("toolsetVersion")
+                .and_then(json::Value::as_str)
+                .map(str::to_owned),
+            tool_count: tool_names.len(),
+            tool_names,
+        })
+    }
+}
+
 const SMOKE_TTL: Duration = Duration::from_secs(30);
 
 fn build_readiness_smoke_transaction(
@@ -468,13 +589,19 @@ fn build_readiness_smoke_transaction(
     attempt: usize,
 ) -> Result<SignedTransaction, ReadinessSmokeBuildError> {
     let chain_id = ChainId::from(chain_id.to_owned());
-    let definition = SMOKE_ASSET_ID
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_millis();
+    let domain_id = DomainId::try_new("wonderland", "universal")
+        .map_err(|_| ReadinessSmokeBuildError::InvalidDomain("wonderland.universal".to_owned()))?;
+    let key = "mochi_smoke"
         .parse()
-        .map_err(|_| ReadinessSmokeBuildError::InvalidAsset(SMOKE_ASSET_ID.to_owned()))?;
-    let asset_id = AssetId::new(definition, signer.account_id().clone());
+        .expect("readiness smoke metadata key is valid");
+    let value = Json::new(format!("{now_ms}:{attempt}"));
     let quantity = u32::try_from(attempt + 1).unwrap_or(u32::MAX);
     let mut builder = TransactionBuilder::new(chain_id, signer.account_id().clone())
-        .with_instructions([Mint::asset_numeric(quantity, asset_id)]);
+        .with_instructions([SetKeyValue::domain(domain_id, key, value)]);
 
     if let Some(nonce) = NonZeroU32::new(quantity) {
         builder.set_nonce(nonce);
@@ -934,8 +1061,6 @@ pub struct ExplorerAccountRecord {
     pub id: String,
     /// I105-encoded literal for the account.
     pub i105_address: String,
-    /// i105-default Sora literal for the account.
-    pub i105_default_address: String,
     /// Network prefix emitted by Torii.
     pub network_prefix: u16,
     /// Metadata payload attached to the account.
@@ -958,11 +1083,6 @@ impl ExplorerAccountRecord {
             record,
             &["i105_address"],
             "explorer account record.i105_address",
-        )?;
-        let i105_default_address = parse_required_string(
-            record,
-            &["i105_default_address"],
-            "explorer account record.i105_default_address",
         )?;
         let network_prefix = parse_u64_field(
             record,
@@ -1005,7 +1125,6 @@ impl ExplorerAccountRecord {
         Ok(Self {
             id,
             i105_address,
-            i105_default_address,
             network_prefix: prefix,
             metadata,
             owned_domains,
@@ -1184,7 +1303,7 @@ pub struct ExplorerDomainsQuery {
 /// Explorer asset definition entry returned by `/v1/explorer/asset-definitions`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAssetDefinitionRecord {
-    /// Canonical asset definition identifier (`name#domain` literal).
+    /// Canonical Base58 asset definition identifier.
     pub id: String,
     /// Mintability flag serialized by Torii (`Infinitely`, `Once`, etc.).
     pub mintable: String,
@@ -1306,7 +1425,7 @@ pub struct ExplorerAssetDefinitionsQuery {
 /// Explorer asset entry returned by `/v1/explorer/assets`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAssetRecord {
-    /// Canonical asset identifier (`name#domain@account` literal).
+    /// Canonical asset identifier (`norito:<hex>`).
     pub id: String,
     /// Definition backing the asset.
     pub definition_id: String,
@@ -1637,6 +1756,85 @@ fn parse_u64_value(value: &json::Value, allow_zero: bool, context: &str) -> Tori
         return Err(decode_error(context, "value must be greater than zero"));
     }
     Ok(parsed)
+}
+
+fn parse_optional_u64_field(
+    record: &json::Map,
+    keys: &[&str],
+    context: &str,
+) -> ToriiResult<Option<u64>> {
+    pick_value(record, keys)
+        .map(|value| parse_u64_value(value, true, context))
+        .transpose()
+}
+
+fn parse_pipeline_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeTransactionStatus>> {
+    let record = value
+        .as_object()
+        .ok_or_else(|| decode_error("pipeline transaction status", "must be a JSON object"))?;
+    let status = record
+        .get("status")
+        .and_then(json::Value::as_object)
+        .ok_or_else(|| {
+            decode_error(
+                "pipeline transaction status.status",
+                "must be a JSON object",
+            )
+        })?;
+    let kind = parse_required_string(status, &["kind"], "pipeline transaction status.kind")?;
+    let height = parse_optional_u64_field(
+        status,
+        &["block_height", "blockHeight"],
+        "pipeline transaction status.block_height",
+    )?;
+
+    match kind.as_str() {
+        "Committed" | "Applied" => Ok(Some(SmokeTransactionStatus::Committed(
+            height.unwrap_or_default(),
+        ))),
+        "Approved" => Ok(height.map(SmokeTransactionStatus::Committed)),
+        "Rejected" => Ok(Some(SmokeTransactionStatus::Rejected(
+            smoke_rejection_reason(status),
+        ))),
+        "Expired" => Ok(Some(SmokeTransactionStatus::Expired)),
+        "Queued" => Ok(None),
+        _ => Ok(None),
+    }
+}
+
+fn parse_explorer_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeTransactionStatus>> {
+    let record = value
+        .as_object()
+        .ok_or_else(|| decode_error("explorer transaction record", "must be a JSON object"))?;
+    let status = parse_required_string(record, &["status"], "explorer transaction record.status")?;
+    match status.as_str() {
+        "Committed" | "Applied" | "Approved" => {
+            let height = parse_optional_u64_field(
+                record,
+                &["block", "block_height", "blockHeight"],
+                "explorer transaction record.block",
+            )?
+            .unwrap_or_default();
+            Ok(Some(SmokeTransactionStatus::Committed(height)))
+        }
+        "Rejected" => Ok(Some(SmokeTransactionStatus::Rejected(
+            smoke_rejection_reason(record),
+        ))),
+        "Expired" => Ok(Some(SmokeTransactionStatus::Expired)),
+        _ => Ok(None),
+    }
+}
+
+fn smoke_rejection_reason(record: &json::Map) -> String {
+    pick_value(record, &["rejection_reason", "rejectionReason", "reason"])
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| json::to_string(value).unwrap_or_else(|_| format!("{value:?}")))
+        })
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "rejected".to_owned())
 }
 
 fn pick_value<'a>(record: &'a json::Map, keys: &[&str]) -> Option<&'a json::Value> {
@@ -2074,6 +2272,11 @@ impl ToriiClient {
         self.http_endpoint("metrics")
     }
 
+    /// URL of the native `/v1/mcp` endpoint.
+    pub fn mcp_endpoint(&self) -> ToriiResult<Url> {
+        self.http_endpoint("v1/mcp")
+    }
+
     /// URL of the `/v1/blocks` Explorer endpoint.
     pub fn blocks_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/blocks")
@@ -2107,6 +2310,16 @@ impl ToriiClient {
     /// URL of the `/v1/explorer/nfts` endpoint.
     pub fn explorer_nfts_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/explorer/nfts")
+    }
+
+    /// URL of the `/v1/explorer/transactions/{hash}` endpoint.
+    pub fn explorer_transaction_endpoint(&self, hash: &str) -> ToriiResult<Url> {
+        self.http_endpoint(&format!("v1/explorer/transactions/{hash}"))
+    }
+
+    /// URL of the `/v1/pipeline/transactions/status` endpoint.
+    pub fn pipeline_transaction_status_endpoint(&self) -> ToriiResult<Url> {
+        self.http_endpoint("v1/pipeline/transactions/status")
     }
 
     /// URL of the `/v1/triggers` endpoint.
@@ -2230,7 +2443,7 @@ impl ToriiClient {
         let response = self
             .http
             .post(url)
-            .header("Content-Type", "application/octet-stream")
+            .header("Content-Type", NORITO_MIME_TYPE)
             .body(payload.to_vec())
             .send()
             .await?;
@@ -2256,7 +2469,7 @@ impl ToriiClient {
         let response = self
             .http
             .post(url)
-            .header("Content-Type", "application/octet-stream")
+            .header("Content-Type", NORITO_MIME_TYPE)
             .body(payload.to_vec())
             .send()
             .await?;
@@ -2284,7 +2497,7 @@ impl ToriiClient {
         self.submit_transaction(&bytes).await
     }
 
-    /// Submit a signed transaction and wait until it appears in the committed block stream.
+    /// Submit a signed transaction and wait until local Torii reports it as committed.
     ///
     /// This helper is primarily intended for readiness smoke checks in local tooling.
     pub async fn submit_and_wait_for_commit(
@@ -2298,17 +2511,98 @@ impl ToriiClient {
 
         let block_stream = self.block_stream().await?;
         let events_stream = self.events_stream().await?;
-        let block_rx = block_stream.subscribe();
-        let event_rx = events_stream.subscribe();
+        let mut block_rx = block_stream.subscribe();
+        let mut event_rx = events_stream.subscribe();
 
-        let result = submit_and_wait_for_commit_with_receivers(
-            tx_hash,
-            options,
-            self.submit_signed_transaction(transaction),
-            block_rx,
-            event_rx,
-        )
-        .await;
+        self.submit_signed_transaction(transaction).await?;
+
+        let wait = async {
+            let mut status_poll = tokio::time::interval(Duration::from_millis(250));
+            loop {
+                tokio::select! {
+                    _ = status_poll.tick() => {
+                        if let Some(status) =
+                            self.fetch_smoke_transaction_status(tx_hash_str.as_str()).await?
+                        {
+                            match status {
+                                SmokeTransactionStatus::Committed(height) => return Ok(height),
+                                SmokeTransactionStatus::Rejected(reason) => {
+                                    return Err(ToriiError::SmokeRejected {
+                                        hash: tx_hash_str.clone(),
+                                        reason,
+                                    });
+                                }
+                                SmokeTransactionStatus::Expired => {
+                                    return Err(ToriiError::SmokeRejected {
+                                        hash: tx_hash_str.clone(),
+                                        reason: "expired".to_owned(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    message = block_rx.recv() => {
+                        match message {
+                            Ok(BlockStreamEvent::Block { block, .. }) => {
+                                if block.transactions_vec().iter().any(|tx| tx.hash() == tx_hash) {
+                                    return Ok(block.header().height().get());
+                                }
+                            }
+                            Ok(BlockStreamEvent::DecodeError { error }) => {
+                                return Err(ToriiError::Decode(error.message));
+                            }
+                            Ok(BlockStreamEvent::Closed) => {}
+                            Ok(BlockStreamEvent::Lagged { .. } | BlockStreamEvent::Text { .. }) => {}
+                            Err(RecvError::Lagged(_)) | Err(RecvError::Closed) => {}
+                        }
+                    }
+                    message = event_rx.recv() => {
+                        match message {
+                            Ok(EventStreamEvent::Event { event, .. }) => {
+                                if let EventBox::Pipeline(PipelineEventBox::Transaction(tx_event)) = event.as_ref()
+                                    && tx_event.hash() == &tx_hash
+                                {
+                                    match tx_event.status() {
+                                        iroha_data_model::events::pipeline::TransactionStatus::Rejected(reason) => {
+                                            return Err(ToriiError::SmokeRejected {
+                                                hash: tx_hash_str.clone(),
+                                                reason: format!("{reason:?}"),
+                                            });
+                                        }
+                                        iroha_data_model::events::pipeline::TransactionStatus::Expired => {
+                                            return Err(ToriiError::SmokeRejected {
+                                                hash: tx_hash_str.clone(),
+                                                reason: "expired".to_owned(),
+                                            });
+                                        }
+                                        iroha_data_model::events::pipeline::TransactionStatus::Approved => {
+                                            if let Some(height) =
+                                                tx_event.block_height().map(std::num::NonZeroU64::get)
+                                            {
+                                                return Ok(height);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            Ok(EventStreamEvent::DecodeError { error }) => {
+                                return Err(ToriiError::Decode(error.message));
+                            }
+                            Ok(EventStreamEvent::Closed) => {}
+                            Ok(EventStreamEvent::Lagged { .. } | EventStreamEvent::Text { .. }) => {}
+                            Err(RecvError::Lagged(_)) | Err(RecvError::Closed) => {}
+                        }
+                    }
+                }
+            }
+        };
+
+        let result = tokio::time::timeout(options.timeout, wait)
+            .await
+            .map_err(|_| ToriiError::Timeout {
+                context: format!("smoke commit {tx_hash_str}"),
+            })?;
 
         drop(block_stream);
         drop(events_stream);
@@ -2328,6 +2622,69 @@ impl ToriiClient {
         }
     }
 
+    async fn fetch_smoke_transaction_status(
+        &self,
+        tx_hash: &str,
+    ) -> ToriiResult<Option<SmokeTransactionStatus>> {
+        if let Some(status) = self.fetch_pipeline_transaction_status(tx_hash).await? {
+            return Ok(Some(status));
+        }
+        self.fetch_explorer_transaction_status(tx_hash).await
+    }
+
+    async fn fetch_pipeline_transaction_status(
+        &self,
+        tx_hash: &str,
+    ) -> ToriiResult<Option<SmokeTransactionStatus>> {
+        let url = self.pipeline_transaction_status_endpoint()?;
+        let response = self
+            .http
+            .get(url)
+            .query(&[("hash", tx_hash)])
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+        let bytes = response.bytes().await?;
+        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        parse_pipeline_smoke_status(&value)
+    }
+
+    async fn fetch_explorer_transaction_status(
+        &self,
+        tx_hash: &str,
+    ) -> ToriiResult<Option<SmokeTransactionStatus>> {
+        let url = self.explorer_transaction_endpoint(tx_hash)?;
+        let response = self
+            .http
+            .get(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+        let bytes = response.bytes().await?;
+        let value = json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        parse_explorer_smoke_status(&value)
+    }
+
     /// Submit a signed query and decode the response into a typed [`QueryOutput`].
     pub async fn execute_query(&self, query: &SignedQuery) -> ToriiResult<QueryOutput> {
         let response = self.submit_query(&query.encode_versioned()).await?;
@@ -2340,7 +2697,7 @@ impl ToriiClient {
         let response = self
             .http
             .get(url)
-            .header(reqwest::header::ACCEPT, "application/norito")
+            .header(reqwest::header::ACCEPT, NORITO_MIME_TYPE)
             .send()
             .await?;
 
@@ -2353,7 +2710,10 @@ impl ToriiClient {
         }
 
         let body = response.bytes().await?;
-        decode_norito_with_alignment(body.as_ref())
+        decode_norito_with_alignment(body.as_ref()).or_else(|_| {
+            norito::codec::decode_adaptive(body.as_ref())
+                .map_err(|err| ToriiError::Decode(err.to_string()))
+        })
     }
 
     /// Fetch a telemetry snapshot together with derived metrics.
@@ -2373,7 +2733,7 @@ impl ToriiClient {
         let response = self
             .http
             .get(url)
-            .header(reqwest::header::ACCEPT, "application/norito")
+            .header(reqwest::header::ACCEPT, NORITO_MIME_TYPE)
             .send()
             .await?;
 
@@ -2393,6 +2753,21 @@ impl ToriiClient {
     pub async fn fetch_configuration(&self) -> ToriiResult<json::Value> {
         let url = self.configuration_endpoint()?;
         self.fetch_json(url).await
+    }
+
+    /// Fetch the native MCP capabilities payload.
+    pub async fn fetch_mcp_capabilities(&self) -> ToriiResult<json::Value> {
+        let url = self.mcp_endpoint()?;
+        self.fetch_json(url).await
+    }
+
+    /// Run the local Mochi MCP smoke sequence against `/v1/mcp`.
+    pub async fn validate_local_mcp(&self) -> ToriiResult<LocalMcpProbeResult> {
+        let capabilities = self.fetch_mcp_capabilities().await?;
+        let initialize = self.mcp_initialize().await?;
+        self.mcp_initialized().await?;
+        let tools = self.mcp_tools_list().await?;
+        LocalMcpProbeResult::from_documents(&capabilities, &initialize, &tools)
     }
 
     /// Apply a Nexus lane lifecycle plan via Torii.
@@ -2874,6 +3249,90 @@ impl ToriiClient {
         json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))
     }
 
+    async fn post_json(&self, url: Url, payload: &json::Value) -> ToriiResult<json::Value> {
+        let body = json::to_vec(payload).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let response = self
+            .http
+            .post(url)
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+        let bytes = response.bytes().await?;
+        json::from_slice(&bytes).map_err(|err| ToriiError::Decode(err.to_string()))
+    }
+
+    async fn post_notification(&self, url: Url, payload: &json::Value) -> ToriiResult<()> {
+        let body = json::to_vec(payload).map_err(|err| ToriiError::Decode(err.to_string()))?;
+        let response = self
+            .http
+            .post(url)
+            .header("Content-Type", "application/json")
+            .body(body)
+            .send()
+            .await?;
+        if response.status() != StatusCode::ACCEPTED {
+            return Err(ToriiError::UnexpectedStatus {
+                status: response.status(),
+                reject_code: None,
+                message: None,
+            });
+        }
+        let bytes = response.bytes().await?;
+        if !bytes.is_empty() {
+            return Err(decode_error(
+                "mcp notifications/initialized",
+                "expected an empty response body",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn mcp_initialize(&self) -> ToriiResult<json::Value> {
+        let url = self.mcp_endpoint()?;
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {
+                    "name": "mochi-local-sandbox",
+                    "version": "1"
+                }
+            }
+        });
+        self.post_json(url, &payload).await
+    }
+
+    async fn mcp_initialized(&self) -> ToriiResult<()> {
+        let url = self.mcp_endpoint()?;
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        });
+        self.post_notification(url, &payload).await
+    }
+
+    async fn mcp_tools_list(&self) -> ToriiResult<json::Value> {
+        let url = self.mcp_endpoint()?;
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {}
+        });
+        self.post_json(url, &payload).await
+    }
+
     async fn connect_ws(&self, url: Url) -> ToriiResult<ToriiWebSocket> {
         let mut request = url
             .to_string()
@@ -2926,6 +3385,7 @@ impl ToriiClient {
     }
 }
 
+#[cfg(test)]
 async fn submit_and_wait_for_commit_with_receivers<Fut>(
     tx_hash: HashOf<SignedTransaction>,
     options: SmokeCommitOptions,
@@ -3159,17 +3619,18 @@ pub enum BlockStreamEvent {
 }
 
 /// High-level helper that consumes WebSocket frames and publishes decoded blocks.
-#[derive(Debug)]
 pub struct BlockStream {
     subscription: WsSubscription,
     sender: broadcast::Sender<BlockStreamEvent>,
+    initial_receiver: std::sync::Mutex<Option<broadcast::Receiver<BlockStreamEvent>>>,
     decode_handle: JoinHandle<()>,
 }
 
 impl BlockStream {
     fn new(subscription: WsSubscription) -> Self {
         let mut receiver = subscription.subscribe();
-        let (sender, _receiver) = broadcast::channel(128);
+        let (sender, _) = broadcast::channel(128);
+        let initial_receiver = sender.subscribe();
         let forwarder = sender.clone();
 
         let decode_handle = tokio::spawn(async move {
@@ -3177,7 +3638,20 @@ impl BlockStream {
                 match receiver.recv().await {
                     Ok(WsFrame::Binary(frame)) => {
                         let raw_len = frame.len();
-                        match block::decode_versioned_signed_block(&frame) {
+                        let decoded =
+                            block::decode_framed_signed_block(&frame).or_else(|framed_err| {
+                                match block::decode_versioned_signed_block(&frame) {
+                                    Ok(block) => Ok(block),
+                                    Err(versioned_err) => {
+                                        if matches!(framed_err, VersionError::NotVersioned) {
+                                            Err(versioned_err)
+                                        } else {
+                                            Err(framed_err)
+                                        }
+                                    }
+                                }
+                            });
+                        match decoded {
                             Ok(block) => {
                                 let block = Arc::<SignedBlock>::new(block);
                                 let summary = BlockSummary::from_block(block.as_ref());
@@ -3243,13 +3717,18 @@ impl BlockStream {
         Self {
             subscription,
             sender,
+            initial_receiver: std::sync::Mutex::new(Some(initial_receiver)),
             decode_handle,
         }
     }
 
     /// Acquire a receiver for decoded block events.
     pub fn subscribe(&self) -> broadcast::Receiver<BlockStreamEvent> {
-        self.sender.subscribe()
+        self.initial_receiver
+            .lock()
+            .expect("block stream receiver lock poisoned")
+            .take()
+            .unwrap_or_else(|| self.sender.subscribe())
     }
 
     /// Abort both the raw WebSocket subscription and decoder task.
@@ -3450,14 +3929,20 @@ fn account_event_summary(event: &AccountEvent) -> (String, String) {
     match event {
         AccountEvent::Created(account) => (
             "Account created".to_owned(),
-            account
-                .account
-                .id()
-                .to_account_id(account.domain.clone())
-                .to_string(),
+            account.account.id().to_string(),
         ),
         AccountEvent::Deleted(id) => ("Account deleted".to_owned(), id.to_string()),
         AccountEvent::Asset(asset_event) => asset_event_summary(asset_event),
+        AccountEvent::ControllerReplaced(change) => (
+            "Account controller replaced".to_owned(),
+            format!(
+                "account={} previous_account={} previous_controller={} new_controller={}",
+                change.account,
+                change.previous_account,
+                change.previous_controller,
+                change.new_controller
+            ),
+        ),
         AccountEvent::PermissionAdded(change) => (
             "Account permission granted".to_owned(),
             format!("{change:?}"),
@@ -3480,8 +3965,87 @@ fn account_event_summary(event: &AccountEvent) -> (String, String) {
             "Account metadata removed".to_owned(),
             format!("account={} key={}", change.target(), change.key()),
         ),
+        AccountEvent::Recovery(recovery_event) => account_recovery_event_summary(recovery_event),
         AccountEvent::Repo(repo_event) => repo_account_event_summary(repo_event),
     }
+}
+
+fn account_recovery_event_summary(event: &AccountRecoveryEvent) -> (String, String) {
+    match event {
+        AccountRecoveryEvent::PolicySet(payload) => (
+            "Account recovery policy set".to_owned(),
+            format!(
+                "account={} alias={} guardians={} quorum={} timelock_ms={}",
+                payload.account,
+                account_alias_detail(&payload.alias),
+                payload.policy.guardians().len(),
+                payload.policy.quorum(),
+                payload.policy.timelock_ms().get()
+            ),
+        ),
+        AccountRecoveryEvent::PolicyCleared(payload) => (
+            "Account recovery policy cleared".to_owned(),
+            format!(
+                "account={} alias={}",
+                payload.account,
+                account_alias_detail(&payload.alias)
+            ),
+        ),
+        AccountRecoveryEvent::Proposed(payload) => (
+            "Account recovery proposed".to_owned(),
+            format!(
+                "account={} alias={} proposed_by={} proposed_controller={} execute_after_ms={} approvals={}",
+                payload.account,
+                account_alias_detail(&payload.alias),
+                payload.request.proposed_by,
+                payload.request.proposed_controller,
+                payload.request.execute_after_ms,
+                payload.request.approvals.len()
+            ),
+        ),
+        AccountRecoveryEvent::Approved(payload) => (
+            "Account recovery approved".to_owned(),
+            format!(
+                "account={} alias={} approver={} approvals={}",
+                payload.account,
+                account_alias_detail(&payload.alias),
+                payload.approver,
+                payload.request.approvals.len()
+            ),
+        ),
+        AccountRecoveryEvent::Cancelled(payload) => (
+            "Account recovery cancelled".to_owned(),
+            format!(
+                "account={} alias={} cancelled_by={} status={:?}",
+                payload.account,
+                account_alias_detail(&payload.alias),
+                payload.cancelled_by,
+                payload.request.status
+            ),
+        ),
+        AccountRecoveryEvent::Finalized(payload) => (
+            "Account recovery finalized".to_owned(),
+            format!(
+                "account={} previous_account={} alias={} status={:?}",
+                payload.account,
+                payload.previous_account,
+                account_alias_detail(&payload.alias),
+                payload.request.status
+            ),
+        ),
+    }
+}
+
+fn account_alias_detail(alias: &iroha_data_model::account::AccountAlias) -> String {
+    let domain = alias
+        .domain
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "-".to_owned());
+    format!(
+        "label={} domain={} dataspace={}",
+        alias.label, domain, alias.dataspace
+    )
 }
 
 fn repo_account_event_summary(event: &RepoAccountEvent) -> (String, String) {
@@ -3685,17 +4249,18 @@ pub enum EventStreamEvent {
 }
 
 /// High-level helper that consumes WebSocket frames and publishes decoded events.
-#[derive(Debug)]
 pub struct EventStream {
     subscription: WsSubscription,
     sender: broadcast::Sender<EventStreamEvent>,
+    initial_receiver: std::sync::Mutex<Option<broadcast::Receiver<EventStreamEvent>>>,
     decode_handle: JoinHandle<()>,
 }
 
 impl EventStream {
     fn new(subscription: WsSubscription) -> Self {
         let mut receiver = subscription.subscribe();
-        let (sender, _receiver) = broadcast::channel(128);
+        let (sender, _) = broadcast::channel(128);
+        let initial_receiver = sender.subscribe();
         let forwarder = sender.clone();
 
         let decode_handle = tokio::spawn(async move {
@@ -3763,13 +4328,18 @@ impl EventStream {
         Self {
             subscription,
             sender,
+            initial_receiver: std::sync::Mutex::new(Some(initial_receiver)),
             decode_handle,
         }
     }
 
     /// Acquire a receiver for decoded events.
     pub fn subscribe(&self) -> broadcast::Receiver<EventStreamEvent> {
-        self.sender.subscribe()
+        self.initial_receiver
+            .lock()
+            .expect("event stream receiver lock poisoned")
+            .take()
+            .unwrap_or_else(|| self.sender.subscribe())
     }
 
     /// Abort both the raw WebSocket subscription and decoder task.
@@ -4473,7 +5043,10 @@ mod tests {
             EventBox, SharedDataEvent,
             data::{
                 DataEvent, offline,
-                prelude::{AccountEvent, PeerEvent},
+                prelude::{
+                    AccountControllerReplaced, AccountEvent, AccountRecoveryEvent,
+                    AccountRecoveryPolicySet, PeerEvent,
+                },
             },
             pipeline::PipelineEventBox,
             stream::EventMessage,
@@ -4491,7 +5064,7 @@ mod tests {
     use iroha_telemetry::metrics::{
         GovernanceStatus, Status as TelemetryStatus, TxGossipSnapshot, Uptime,
     };
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, PEER_KEYPAIR};
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, PEER_KEYPAIR};
     use reqwest::{
         StatusCode,
         header::{HeaderMap, HeaderValue},
@@ -4583,7 +5156,7 @@ mod tests {
                             "Service Unavailable"
                         };
                         let header = format!(
-                            "HTTP/1.1 {status} {reason}\r\ncontent-length: {}\r\ncontent-type: application/norito\r\n\r\n",
+                            "HTTP/1.1 {status} {reason}\r\ncontent-length: {}\r\ncontent-type: {NORITO_MIME_TYPE}\r\n\r\n",
                             body.len()
                         );
                         let _ = stream.write_all(header.as_bytes());
@@ -4720,6 +5293,201 @@ mod tests {
         assert_eq!(
             client.nexus_lifecycle_endpoint().unwrap().as_str(),
             "http://127.0.0.1:8080/v1/nexus/lifecycle"
+        );
+    }
+
+    #[test]
+    fn composes_mcp_endpoint() {
+        let client = ToriiClient::new("http://127.0.0.1:8080").expect("valid url");
+        assert_eq!(
+            client.mcp_endpoint().unwrap().as_str(),
+            "http://127.0.0.1:8080/v1/mcp"
+        );
+    }
+
+    fn mock_json_body(value: norito::json::Value) -> String {
+        norito::json::to_string(&value).expect("serialize mock json body")
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn validate_local_mcp_accepts_curated_iroha_tools() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        let capabilities = server.mock(|when, then| {
+            when.method(GET).path("/v1/mcp");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(mock_json_body(norito::json!({
+                    "capabilities": {
+                        "tools": {
+                            "count": 4
+                        }
+                    }
+                })));
+        });
+        let initialize = server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/mcp")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "mochi-local-sandbox",
+                            "version": "1"
+                        }
+                    }
+                })));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {
+                            "tools": {
+                                "count": 4
+                            }
+                        }
+                    }
+                })));
+        });
+        let initialized = server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/mcp")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized"
+                })));
+            then.status(202);
+        });
+        let tools_list = server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/mcp")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/list",
+                    "params": {}
+                })));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "toolsetVersion": "demo-v1",
+                        "tools": [
+                            { "name": "iroha.status" },
+                            { "name": "iroha.sumeragi.status" },
+                            { "name": "iroha.transactions.submit" },
+                            { "name": "iroha.transactions.submit_and_wait" }
+                        ]
+                    }
+                })));
+        });
+
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let result = client.validate_local_mcp().await.expect("mcp probe");
+        assert_eq!(result.protocol_version, "2025-06-18");
+        assert_eq!(result.toolset_version.as_deref(), Some("demo-v1"));
+        assert_eq!(result.tool_count, 4);
+        assert!(
+            result
+                .tool_names
+                .iter()
+                .all(|name| name.starts_with("iroha."))
+        );
+
+        capabilities.assert();
+        initialize.assert();
+        initialized.assert();
+        tools_list.assert();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn validate_local_mcp_rejects_raw_torii_tools() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        server.mock(|when, then| {
+            when.method(GET).path("/v1/mcp");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(mock_json_body(norito::json!({ "capabilities": {} })));
+        });
+        server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/mcp")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "mochi-local-sandbox",
+                            "version": "1"
+                        }
+                    }
+                })));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": { "protocolVersion": "2025-06-18" }
+                })));
+        });
+        server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/mcp")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized"
+                })));
+            then.status(202);
+        });
+        server.mock(|when, then| {
+            when.method(POST)
+                .path("/v1/mcp")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/list",
+                    "params": {}
+                })));
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(mock_json_body(norito::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "tools": [
+                            { "name": "iroha.status" },
+                            { "name": "torii.get_v1_accounts" },
+                            { "name": "iroha.sumeragi.status" },
+                            { "name": "iroha.transactions.submit" },
+                            { "name": "iroha.transactions.submit_and_wait" }
+                        ]
+                    }
+                })));
+        });
+
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let err = client
+            .validate_local_mcp()
+            .await
+            .expect_err("raw torii tools should fail");
+        assert!(
+            err.to_string().contains("torii.* tools"),
+            "unexpected error: {err}"
         );
     }
 
@@ -4969,7 +5737,7 @@ mod tests {
             return;
         };
         let status = TelemetryStatus::default();
-        let body = norito::to_bytes(&status).expect("encode status");
+        let body = encode_status_payload(&status);
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/status")
@@ -5205,7 +5973,7 @@ mod tests {
             hash: tx_hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Expired,
         }));
         let summary = EventSummary::from_event(&event_box);
@@ -5268,7 +6036,7 @@ mod tests {
             hash: tx_hash,
             block_height: None,
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             status: TransactionStatus::Rejected(rejection),
         }));
         let summary = EventSummary::from_event(&event_box);
@@ -5359,6 +6127,16 @@ mod tests {
 
     fn data_event_fixture_event() -> EventBox {
         data_event_fixture_message().into()
+    }
+
+    fn encode_status_payload(status: &TelemetryStatus) -> Vec<u8> {
+        norito::codec::encode_adaptive(status)
+    }
+
+    fn encode_sumeragi_status_payload(status: &SumeragiStatusWire) -> Vec<u8> {
+        let mut encoded = Vec::new();
+        norito::core::to_bytes_in(status, &mut encoded).expect("encode framed status");
+        encoded
     }
 
     fn sample_sumeragi_status_wire() -> SumeragiStatusWire {
@@ -5510,7 +6288,7 @@ mod tests {
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
                 validator_ids: vec![
-                    "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned(),
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
                 ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
@@ -6233,20 +7011,20 @@ mod tests {
             queue_size: 7,
             ..TelemetryStatus::default()
         };
-        let body = norito::to_bytes(&status).expect("encode status");
+        let body = encode_status_payload(&status);
         let sumeragi = sample_sumeragi_status_wire();
-        let sumeragi_body = norito::to_bytes(&sumeragi).expect("encode sumeragi status");
+        let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
 
         server.mock(|when, then| {
             when.method(GET).path("/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(body.clone());
         });
         server.mock(|when, then| {
             when.method(GET).path("/v1/sumeragi/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(sumeragi_body.clone());
         });
         server.mock(|when, then| {
@@ -6328,12 +7106,12 @@ mod tests {
             queue_size: 3,
             ..TelemetryStatus::default()
         };
-        let body = norito::to_bytes(&status).expect("encode status");
+        let body = encode_status_payload(&status);
 
         server.mock(|when, then| {
             when.method(GET).path("/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(body.clone());
         });
         server.mock(|when, then| {
@@ -6399,20 +7177,20 @@ mod tests {
             queue_size: 2,
             ..TelemetryStatus::default()
         };
-        let body = norito::to_bytes(&status).expect("encode status");
+        let body = encode_status_payload(&status);
         let sumeragi = sample_sumeragi_status_wire();
-        let sumeragi_body = norito::to_bytes(&sumeragi).expect("encode sumeragi status");
+        let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
 
         server.mock(|when, then| {
             when.method(GET).path("/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(body.clone());
         });
         server.mock(|when, then| {
             when.method(GET).path("/v1/sumeragi/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(sumeragi_body.clone());
         });
         let metrics_mock = server.mock(|when, then| {
@@ -6472,20 +7250,20 @@ mod tests {
             queue_size: 4,
             ..TelemetryStatus::default()
         };
-        let body = norito::to_bytes(&status).expect("encode status");
+        let body = encode_status_payload(&status);
         let sumeragi = sample_sumeragi_status_wire();
-        let sumeragi_body = norito::to_bytes(&sumeragi).expect("encode sumeragi status");
+        let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
 
         server.mock(|when, then| {
             when.method(GET).path("/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(body.clone());
         });
         server.mock(|when, then| {
             when.method(GET).path("/v1/sumeragi/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(sumeragi_body.clone());
         });
         let metrics_mock = server.mock(|when, then| {
@@ -6531,20 +7309,20 @@ mod tests {
             queue_size: 5,
             ..TelemetryStatus::default()
         };
-        let body = norito::to_bytes(&status).expect("encode status");
+        let body = encode_status_payload(&status);
         let sumeragi = sample_sumeragi_status_wire();
-        let sumeragi_body = norito::to_bytes(&sumeragi).expect("encode sumeragi status");
+        let sumeragi_body = encode_sumeragi_status_payload(&sumeragi);
 
         server.mock(|when, then| {
             when.method(GET).path("/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(body.clone());
         });
         server.mock(|when, then| {
             when.method(GET).path("/v1/sumeragi/status");
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(sumeragi_body.clone());
         });
         server.mock(|when, then| {
@@ -6588,7 +7366,7 @@ mod tests {
             queue_size: 9,
             ..TelemetryStatus::default()
         };
-        let ok_body = norito::to_bytes(&status).expect("encode status");
+        let ok_body = encode_status_payload(&status);
         let Some((addr, shutdown, handle)) =
             spawn_status_stub(vec![(503, Vec::new()), (200, ok_body.clone())])
         else {
@@ -6887,6 +7665,7 @@ mod tests {
             return;
         };
         let status = TelemetryStatus {
+            build: Default::default(),
             peers: 2,
             blocks: 5,
             blocks_non_empty: 3,
@@ -6894,6 +7673,8 @@ mod tests {
             da_reschedule_total: 0,
             txs_approved: 7,
             txs_rejected: 1,
+            last_rejection_at_ms: None,
+            txs_rejected_recent_5m: 0,
             uptime: Uptime(Duration::from_secs(123)),
             view_changes: 0,
             queue_size: 4,
@@ -6909,14 +7690,65 @@ mod tests {
             taikai_ingest: Vec::new(),
             da_receipt_cursors: Vec::new(),
         };
-        let encoded = norito::to_bytes(&status).expect("encode status");
+        let encoded = norito::codec::encode_adaptive(&status);
 
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/status")
-                .header("accept", "application/norito");
+                .header("accept", NORITO_MIME_TYPE);
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
+                .body(encoded.clone());
+        });
+
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let decoded = client.fetch_status().await.expect("status");
+
+        mock.assert();
+        assert_eq!(decoded.blocks, status.blocks);
+        assert_eq!(decoded.queue_size, status.queue_size);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_status_decodes_framed_norito_payload() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+
+        let status = TelemetryStatus {
+            build: Default::default(),
+            peers: 2,
+            blocks: 5,
+            blocks_non_empty: 3,
+            commit_time_ms: 42,
+            da_reschedule_total: 0,
+            txs_approved: 7,
+            txs_rejected: 1,
+            last_rejection_at_ms: None,
+            txs_rejected_recent_5m: 0,
+            uptime: Uptime(Duration::from_secs(123)),
+            view_changes: 0,
+            queue_size: 4,
+            crypto: iroha_telemetry::metrics::CryptoStatus::default(),
+            stack: iroha_telemetry::metrics::StackStatus::default(),
+            sumeragi: None,
+            governance: GovernanceStatus::default(),
+            teu_lane_commit: Vec::new(),
+            teu_dataspace_backlog: Vec::new(),
+            tx_gossip: TxGossipSnapshot::default(),
+            sorafs_micropayments: Vec::new(),
+            taikai_alias_rotations: Vec::new(),
+            taikai_ingest: Vec::new(),
+            da_receipt_cursors: Vec::new(),
+        };
+        let encoded = norito::to_bytes(&status).expect("encode framed status");
+
+        let mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/status")
+                .header("accept", NORITO_MIME_TYPE);
+            then.status(200)
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(encoded.clone());
         });
 
@@ -6940,6 +7772,7 @@ mod tests {
         let addr = listener.local_addr().expect("listener address");
 
         let initial = TelemetryStatus {
+            build: Default::default(),
             peers: 2,
             blocks: 10,
             blocks_non_empty: 8,
@@ -6947,6 +7780,8 @@ mod tests {
             da_reschedule_total: 2,
             txs_approved: 5,
             txs_rejected: 1,
+            last_rejection_at_ms: None,
+            txs_rejected_recent_5m: 0,
             uptime: Uptime(Duration::from_secs(5)),
             view_changes: 0,
             queue_size: 4,
@@ -6963,6 +7798,7 @@ mod tests {
             da_receipt_cursors: Vec::new(),
         };
         let updated = TelemetryStatus {
+            build: Default::default(),
             peers: 3,
             blocks: 11,
             blocks_non_empty: 9,
@@ -6970,6 +7806,8 @@ mod tests {
             da_reschedule_total: 5,
             txs_approved: 9,
             txs_rejected: 3,
+            last_rejection_at_ms: Some(7_000),
+            txs_rejected_recent_5m: 3,
             uptime: Uptime(Duration::from_secs(7)),
             view_changes: 2,
             queue_size: 9,
@@ -6987,8 +7825,8 @@ mod tests {
         };
 
         let responses = vec![
-            norito::to_bytes(&initial).expect("encode initial status"),
-            norito::to_bytes(&updated).expect("encode updated status"),
+            norito::codec::encode_adaptive(&initial),
+            norito::codec::encode_adaptive(&updated),
         ];
 
         let server_task = tokio::spawn(async move {
@@ -7007,7 +7845,7 @@ mod tests {
                         }
                     }
                     let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/norito\r\nConnection: close\r\n\r\n",
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: {NORITO_MIME_TYPE}\r\nConnection: close\r\n\r\n",
                         payload.len()
                     )
                     .into_bytes();
@@ -7070,7 +7908,7 @@ mod tests {
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/status")
-                .header("accept", "application/norito");
+                .header("accept", NORITO_MIME_TYPE);
             then.status(200).body(vec![0, 1, 2, 3, 4]);
         });
 
@@ -7090,14 +7928,15 @@ mod tests {
             return;
         };
         let status = sample_sumeragi_status_wire();
-        let encoded = norito::to_bytes(&status).expect("encode status");
+        let mut encoded = Vec::new();
+        norito::core::to_bytes_in(&status, &mut encoded).expect("encode framed status");
 
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/v1/sumeragi/status")
-                .header("accept", "application/norito");
+                .header("accept", NORITO_MIME_TYPE);
             then.status(200)
-                .header("content-type", "application/norito")
+                .header("content-type", NORITO_MIME_TYPE)
                 .body(encoded.clone());
         });
 
@@ -7149,7 +7988,7 @@ mod tests {
         let mock = server.mock(|when, then| {
             when.method(GET)
                 .path("/status")
-                .header("accept", "application/norito");
+                .header("accept", NORITO_MIME_TYPE);
             then.status(502);
         });
 
@@ -7944,9 +8783,8 @@ state_tiered_cold_entries 2
     #[test]
     fn explorer_account_record_decodes_payload() {
         let value = norito::json!({
-            "id": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-            "i105_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-            "i105_default_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+            "i105_address": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
             "network_prefix": 42,
             "metadata": { "role": "admin" },
             "owned_domains": 2,
@@ -7956,15 +8794,11 @@ state_tiered_cold_entries 2
         let record = ExplorerAccountRecord::from_json(&value).expect("record");
         assert_eq!(
             record.id,
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
         );
         assert_eq!(
             record.i105_address,
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
-        );
-        assert_eq!(
-            record.i105_default_address,
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
         );
         assert_eq!(record.network_prefix, 42);
         assert_eq!(record.metadata, norito::json!({ "role": "admin" }));
@@ -7984,9 +8818,8 @@ state_tiered_cold_entries 2
             },
             "items": [
                 {
-                    "id": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                    "i105_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                    "i105_default_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                    "id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+                    "i105_address": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
                     "network_prefix": 1,
                     "metadata": {},
                     "owned_domains": 0,
@@ -8001,7 +8834,7 @@ state_tiered_cold_entries 2
         assert_eq!(page.items.len(), 1);
         assert_eq!(
             page.items[0].id,
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
         );
     }
 
@@ -8011,7 +8844,7 @@ state_tiered_cold_entries 2
             "id": "sora",
             "logo": "https://example/logo.svg",
             "metadata": { "tier": "p0" },
-            "owned_by": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "owned_by": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             "accounts": 5,
             "assets": 3,
             "nfts": 1
@@ -8021,7 +8854,7 @@ state_tiered_cold_entries 2
         assert_eq!(record.logo.as_deref(), Some("https://example/logo.svg"));
         assert_eq!(
             record.owned_by,
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
         assert_eq!(record.accounts, 5);
         assert_eq!(record.assets, 3);
@@ -8032,7 +8865,7 @@ state_tiered_cold_entries 2
     fn explorer_domains_page_validates_entries() {
         let value = norito::json!({
             "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},
-            "items":[{ "id":"sora","owned_by":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","accounts":1,"assets":0,"nfts":0 }]
+            "items":[{ "id":"sora","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","accounts":1,"assets":0,"nfts":0 }]
         });
         let page = ExplorerDomainsPage::from_json(&value).expect("page");
         assert_eq!(page.items.len(), 1);
@@ -8042,20 +8875,20 @@ state_tiered_cold_entries 2
     #[test]
     fn explorer_asset_definition_record_decodes_payload() {
         let value = norito::json!({
-            "id": "usd#sora",
+            "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
             "mintable": "Infinitely",
             "logo": null,
             "metadata": { "decimals": 2 },
-            "owned_by": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "owned_by": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             "assets": 10
         });
         let record = ExplorerAssetDefinitionRecord::from_json(&value).expect("record");
-        assert_eq!(record.id, "usd#sora");
+        assert_eq!(record.id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
         assert_eq!(record.mintable, "Infinitely");
         assert_eq!(record.assets, 10);
         assert_eq!(
             record.owned_by,
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
     }
 
@@ -8064,27 +8897,27 @@ state_tiered_cold_entries 2
         let value = norito::json!({
             "pagination":{"page":1,"per_page":5,"total_pages":1,"total_items":1},
             "items":[
-                {"id":"usd#sora","mintable":"Infinitely","owned_by":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","assets":2}
+                {"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","mintable":"Infinitely","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","assets":2}
             ]
         });
         let page = ExplorerAssetDefinitionsPage::from_json(&value).expect("page");
         assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].id, "usd#sora");
+        assert_eq!(page.items[0].id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     }
 
     #[test]
     fn explorer_asset_record_decodes_payload() {
         let value = norito::json!({
-            "id": "norito:4e52543000000001",
-            "definition_id": "usd#sora",
-            "account_id": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            "definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+            "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             "value": "10.0"
         });
         let record = ExplorerAssetRecord::from_json(&value).expect("record");
-        assert_eq!(record.id, "norito:4e52543000000001");
+        assert_eq!(record.id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
         assert_eq!(
             record.account_id,
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
         assert_eq!(record.value, "10.0");
     }
@@ -8094,26 +8927,26 @@ state_tiered_cold_entries 2
         let value = norito::json!({
             "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},
             "items":[
-                {"id":"norito:4e52543000000001","definition_id":"usd#sora","account_id":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","value":"10"}
+                {"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","account_id":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","value":"10"}
             ]
         });
         let page = ExplorerAssetsPage::from_json(&value).expect("page");
         assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].definition_id, "usd#sora");
+        assert_eq!(page.items[0].definition_id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     }
 
     #[test]
     fn explorer_nft_record_decodes_payload() {
         let value = norito::json!({
             "id": "art#gallery",
-            "owned_by": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "owned_by": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             "metadata": { "uri": "ipfs://cid" }
         });
         let record = ExplorerNftRecord::from_json(&value).expect("record");
         assert_eq!(record.id, "art#gallery");
         assert_eq!(
             record.owned_by,
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
         assert_eq!(record.metadata, norito::json!({ "uri": "ipfs://cid" }));
     }
@@ -8122,13 +8955,13 @@ state_tiered_cold_entries 2
     fn explorer_nfts_page_validates_entries() {
         let value = norito::json!({
             "pagination":{"page":1,"per_page":1,"total_pages":1,"total_items":1},
-            "items":[{"id":"art#gallery","owned_by":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","metadata":{}}]
+            "items":[{"id":"art#gallery","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","metadata":{}}]
         });
         let page = ExplorerNftsPage::from_json(&value).expect("page");
         assert_eq!(page.items.len(), 1);
         assert_eq!(
             page.items[0].owned_by,
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
     }
 
@@ -8146,9 +8979,8 @@ state_tiered_cold_entries 2
             },
             "items": [
                 {
-                    "id": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                    "i105_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
-                    "i105_default_address": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                    "id": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+                    "i105_address": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
                     "network_prefix": 1,
                     "metadata": { "owned_assets": 4 },
                     "owned_domains": 0,
@@ -8193,7 +9025,7 @@ state_tiered_cold_entries 2
         };
         let body = norito::json!({
             "pagination":{"page":1,"per_page":10,"total_pages":1,"total_items":1},
-            "items":[{"id":"sora","owned_by":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","accounts":1,"assets":0,"nfts":0}]
+            "items":[{"id":"sora","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","accounts":1,"assets":0,"nfts":0}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)
@@ -8202,7 +9034,7 @@ state_tiered_cold_entries 2
                 .query_param("per_page", "10")
                 .query_param(
                     "owned_by",
-                    "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 );
             then.status(200)
                 .body(norito::json::to_string(&body).expect("serialize"));
@@ -8213,7 +9045,7 @@ state_tiered_cold_entries 2
             .fetch_explorer_domains_page(ExplorerDomainsQuery {
                 page: Some(1),
                 per_page: Some(10),
-                owned_by: Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into()),
+                owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
             })
             .await
             .expect("page");
@@ -8230,7 +9062,7 @@ state_tiered_cold_entries 2
         };
         let body = norito::json!({
             "pagination":{"page":2,"per_page":5,"total_pages":3,"total_items":12},
-            "items":[{"id":"usd#sora","mintable":"Infinitely","owned_by":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","assets":7}]
+            "items":[{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","mintable":"Infinitely","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","assets":7}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)
@@ -8240,7 +9072,7 @@ state_tiered_cold_entries 2
                 .query_param("domain", "sora")
                 .query_param(
                     "owned_by",
-                    "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 );
             then.status(200)
                 .body(norito::json::to_string(&body).expect("serialize"));
@@ -8252,13 +9084,13 @@ state_tiered_cold_entries 2
                 page: Some(2),
                 per_page: Some(5),
                 domain: Some("sora".into()),
-                owned_by: Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into()),
+                owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
             })
             .await
             .expect("page");
         mock.assert();
         assert_eq!(page.pagination.page, 2);
-        assert_eq!(page.items[0].id, "usd#sora");
+        assert_eq!(page.items[0].id, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -8268,7 +9100,7 @@ state_tiered_cold_entries 2
         };
         let body = norito::json!({
             "pagination":{"page":1,"per_page":50,"total_pages":1,"total_items":1},
-            "items":[{"id":"norito:4e52543000000001","definition_id":"usd#sora","account_id":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","value":"10"}]
+            "items":[{"id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM","account_id":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","value":"10"}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)
@@ -8277,7 +9109,7 @@ state_tiered_cold_entries 2
                 .query_param("per_page", "50")
                 .query_param(
                     "owned_by",
-                    "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 )
                 .query_param("definition", "usd#sora");
             then.status(200)
@@ -8288,7 +9120,7 @@ state_tiered_cold_entries 2
             .fetch_explorer_assets_page(ExplorerAssetsQuery {
                 page: Some(1),
                 per_page: Some(50),
-                owned_by: Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into()),
+                owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
                 definition: Some("usd#sora".into()),
             })
             .await
@@ -8297,7 +9129,7 @@ state_tiered_cold_entries 2
         assert_eq!(page.items.len(), 1);
         assert_eq!(
             page.items[0].account_id,
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9"
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"
         );
     }
 
@@ -8308,7 +9140,7 @@ state_tiered_cold_entries 2
         };
         let body = norito::json!({
             "pagination":{"page":3,"per_page":5,"total_pages":6,"total_items":25},
-            "items":[{"id":"art#gallery","owned_by":"6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9","metadata":{}}]
+            "items":[{"id":"art#gallery","owned_by":"sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D","metadata":{}}]
         });
         let mock = server.mock(|when, then| {
             when.method(GET)
@@ -8317,7 +9149,7 @@ state_tiered_cold_entries 2
                 .query_param("per_page", "5")
                 .query_param(
                     "owned_by",
-                    "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 )
                 .query_param("domain", "gallery");
             then.status(200)
@@ -8328,7 +9160,7 @@ state_tiered_cold_entries 2
             .fetch_explorer_nfts_page(ExplorerNftsQuery {
                 page: Some(3),
                 per_page: Some(5),
-                owned_by: Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into()),
+                owned_by: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
                 domain: Some("gallery".into()),
             })
             .await
@@ -8336,6 +9168,106 @@ state_tiered_cold_entries 2
         mock.assert();
         assert_eq!(page.pagination.page, 3);
         assert_eq!(page.items[0].id, "art#gallery");
+    }
+
+    #[test]
+    fn parse_pipeline_smoke_status_accepts_approved_height() {
+        let value = norito::json!({
+            "hash": "abcd",
+            "status": {
+                "kind": "Approved",
+                "block_height": 7
+            },
+            "scope": "local",
+            "resolved_from": "cache"
+        });
+        let status = parse_pipeline_smoke_status(&value)
+            .expect("status")
+            .expect("terminal status");
+        assert_eq!(status, SmokeTransactionStatus::Committed(7));
+    }
+
+    #[test]
+    fn parse_pipeline_smoke_status_reports_rejection_reason() {
+        let value = norito::json!({
+            "hash": "abcd",
+            "status": {
+                "kind": "Rejected",
+                "rejection_reason": { "Validation": "TooComplex" }
+            },
+            "scope": "local",
+            "resolved_from": "cache"
+        });
+        let status = parse_pipeline_smoke_status(&value)
+            .expect("status")
+            .expect("terminal status");
+        match status {
+            SmokeTransactionStatus::Rejected(reason) => {
+                assert!(reason.contains("TooComplex"), "reason was `{reason}`");
+            }
+            other => panic!("expected rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_smoke_transaction_status_uses_pipeline_status() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        let body = norito::json!({
+            "hash": "abcd",
+            "status": { "kind": "Committed", "block_height": 9 },
+            "scope": "local",
+            "resolved_from": "cache"
+        });
+        let mock = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/pipeline/transactions/status")
+                .query_param("hash", "abcd");
+            then.status(200)
+                .body(norito::json::to_string(&body).expect("serialize"));
+        });
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let status = client
+            .fetch_smoke_transaction_status("abcd")
+            .await
+            .expect("status")
+            .expect("terminal status");
+        mock.assert();
+        assert_eq!(status, SmokeTransactionStatus::Committed(9));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_smoke_transaction_status_falls_back_to_explorer() {
+        let Some(server) = try_start_mock_server() else {
+            return;
+        };
+        let pipeline = server.mock(|when, then| {
+            when.method(GET)
+                .path("/v1/pipeline/transactions/status")
+                .query_param("hash", "abcd");
+            then.status(404);
+        });
+        let explorer = server.mock(|when, then| {
+            when.method(GET).path("/v1/explorer/transactions/abcd");
+            then.status(200).body(
+                norito::json::to_string(&norito::json!({
+                    "hash": "abcd",
+                    "status": "Committed",
+                    "block": 12
+                }))
+                .expect("serialize"),
+            );
+        });
+        let client = ToriiClient::new(server.url("/")).expect("client");
+        let status = client
+            .fetch_smoke_transaction_status("abcd")
+            .await
+            .expect("status")
+            .expect("terminal status");
+        pipeline.assert();
+        explorer.assert();
+        assert_eq!(status, SmokeTransactionStatus::Committed(12));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -8347,7 +9279,7 @@ state_tiered_cold_entries 2
             "items": [
                 {
                     "id": "daily-airdrop",
-                    "action": { "Mint": { "asset_id": "usd#sora", "account_id": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", "value": "5" } },
+                    "action": { "Mint": { "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", "value": "5" } },
                     "metadata": { "cron": "0 0 * * *" }
                 }
             ],
@@ -8359,7 +9291,7 @@ state_tiered_cold_entries 2
                 .query_param("namespace", "core")
                 .query_param(
                     "authority",
-                    "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
                 )
                 .query_param("limit", "5")
                 .query_param("offset", "10");
@@ -8371,7 +9303,7 @@ state_tiered_cold_entries 2
         let page = client
             .list_triggers(TriggerListQuery {
                 namespace: Some(" core ".into()),
-                authority: Some("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".into()),
+                authority: Some("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".into()),
                 limit: Some(5),
                 offset: Some(10),
             })
@@ -8399,7 +9331,7 @@ state_tiered_cold_entries 2
         });
         let body = norito::json!({
             "id": "mint-hook",
-            "action": { "Register": { "Account": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9" } },
+            "action": { "Register": { "Account": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D" } },
             "metadata": {}
         });
         let found = server.mock(|when, then| {
@@ -8435,7 +9367,7 @@ state_tiered_cold_entries 2
         };
         let request = norito::json!({
             "id": "hook",
-            "action": { "Mint": { "asset_id": "usd#sora", "account_id": "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", "value": "42" } },
+            "action": { "Mint": { "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "account_id": "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", "value": "42" } },
             "metadata": { "note": "demo" }
         });
         let response = request.clone();
@@ -8488,6 +9420,76 @@ state_tiered_cold_entries 2
         assert!(
             detail.contains(&alice_literal),
             "detail `{detail}` should mention {alice_literal}"
+        );
+    }
+
+    #[test]
+    fn account_controller_replaced_summary_mentions_old_and_new_controllers() {
+        let event_box = EventBox::Data(
+            DataEvent::from(AccountEvent::ControllerReplaced(
+                AccountControllerReplaced {
+                    account: ALICE_ID.clone(),
+                    previous_account: BOB_ID.clone(),
+                    previous_controller: iroha_data_model::account::AccountController::single(
+                        BOB_KEYPAIR.public_key().clone(),
+                    ),
+                    new_controller: iroha_data_model::account::AccountController::single(
+                        ALICE_KEYPAIR.public_key().clone(),
+                    ),
+                },
+            ))
+            .into(),
+        );
+
+        let summary = EventSummary::from_event(&event_box);
+        assert_eq!(summary.label, "Account controller replaced");
+        let detail = summary.detail.expect("detail");
+        assert!(
+            detail.contains(&ALICE_ID.to_string()) && detail.contains(&BOB_ID.to_string()),
+            "detail `{detail}` should mention both account ids"
+        );
+        assert!(
+            detail.contains("previous_controller=single")
+                && detail.contains("new_controller=single"),
+            "detail `{detail}` should mention both controller summaries"
+        );
+    }
+
+    #[test]
+    fn account_recovery_policy_summary_mentions_alias_and_quorum() {
+        let alias = iroha_data_model::account::AccountAlias::domainless(
+            "primary".parse().expect("valid alias label"),
+            iroha_data_model::nexus::DataSpaceId::new(7),
+        );
+        let policy = iroha_data_model::account::AccountRecoveryPolicy::new(
+            vec![iroha_data_model::account::RecoveryGuardian::new(
+                BOB_ID.clone(),
+                1,
+            )],
+            1,
+            std::num::NonZeroU64::new(60_000).expect("non-zero timelock"),
+        )
+        .expect("valid recovery policy");
+        let event_box = EventBox::Data(
+            DataEvent::from(AccountEvent::Recovery(AccountRecoveryEvent::PolicySet(
+                AccountRecoveryPolicySet {
+                    account: ALICE_ID.clone(),
+                    alias,
+                    policy,
+                },
+            )))
+            .into(),
+        );
+
+        let summary = EventSummary::from_event(&event_box);
+        assert_eq!(summary.label, "Account recovery policy set");
+        let detail = summary.detail.expect("detail");
+        assert!(
+            detail.contains(&ALICE_ID.to_string())
+                && detail.contains("label=primary")
+                && detail.contains("quorum=1")
+                && detail.contains("timelock_ms=60000"),
+            "detail `{detail}` should summarize the recovery policy"
         );
     }
 

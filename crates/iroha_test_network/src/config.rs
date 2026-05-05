@@ -7,7 +7,7 @@ use std::{
 
 use color_eyre::{Report, eyre::eyre};
 use iroha_config::base::toml::WriteExt;
-use iroha_config::parameters::actual::Nexus as ActualNexus;
+use iroha_config::parameters::actual::{Crypto as ActualCrypto, Nexus as ActualNexus};
 use iroha_core::{
     block::ValidBlock,
     kura::Kura,
@@ -18,13 +18,16 @@ use iroha_core::{
 };
 use iroha_crypto::{KeyPair, SignatureOf};
 use iroha_data_model::{
-    ChainId,
+    ChainId, Registrable as _,
     account::{Account, AccountId},
-    asset::{AssetDefinitionId, id::AssetId},
+    asset::{AssetDefinitionId, definition::AssetDefinition, id::AssetId},
     consensus::HsmBinding,
     da::commitment::DaProofPolicyBundle,
-    domain::DomainId,
-    isi::{Grant, InstructionBox, Mint, SetParameter, register::RegisterPeerWithPop},
+    domain::{Domain, DomainId},
+    isi::{
+        Grant, InstructionBox, Mint, SetParameter,
+        register::{Register, RegisterPeerWithPop},
+    },
     metadata::Metadata,
     name::Name,
     parameter::{
@@ -33,6 +36,7 @@ use iroha_data_model::{
         system::{confidential_metadata, consensus_metadata},
     },
     peer::PeerId,
+    permission::Permission,
     prelude::{HashOf, Transfer},
     transaction::signed::TransactionResultInner,
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
@@ -47,10 +51,11 @@ use iroha_executor_data_model::permission::{
     role::CanManageRoles,
     trigger::CanRegisterTrigger,
 };
-use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry};
+use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
 use iroha_primitives::{json::Json, numeric::NumericSpec, time::TimeSource, unique_vec::UniqueVec};
 use iroha_test_samples::{
-    ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR,
+    SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
 };
 #[cfg(test)]
 use norito::json::Value;
@@ -135,6 +140,18 @@ pub fn base_iroha_config() -> Table {
         .write(["sumeragi", "debug", "rbc", "partial_chunk_mask"], 0i64)
 }
 
+#[must_use]
+pub(crate) fn manifest_crypto_from_actual(crypto: &ActualCrypto) -> ManifestCrypto {
+    ManifestCrypto {
+        sm_openssl_preview: crypto.enable_sm_openssl_preview,
+        sm_intrinsics: crypto.sm_intrinsics.as_str().to_owned(),
+        default_hash: crypto.default_hash.clone(),
+        allowed_signing: crypto.allowed_signing.clone(),
+        sm2_distid_default: crypto.sm2_distid_default.clone(),
+        allowed_curve_ids: crypto.allowed_curve_ids.clone(),
+    }
+}
+
 pub fn genesis(
     extra_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
@@ -187,6 +204,7 @@ pub fn genesis_with_keypair_and_post_topology(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -197,6 +215,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     chain_id: ChainId,
+    genesis_crypto: Option<ManifestCrypto>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     _nexus_config: Option<ActualNexus>,
     consensus_handshake_meta: Option<Parameter>,
@@ -209,6 +228,7 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         topology_entries,
         genesis_key_pair,
         chain_id,
+        genesis_crypto,
         da_proof_policies,
         _nexus_config,
         consensus_handshake_meta,
@@ -248,6 +268,7 @@ fn build_minimal_genesis(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -258,6 +279,7 @@ fn build_minimal_genesis_with_post_topology(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     chain_id: ChainId,
+    genesis_crypto: Option<ManifestCrypto>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     nexus_config: Option<ActualNexus>,
     consensus_handshake_meta: Option<Parameter>,
@@ -276,6 +298,7 @@ fn build_minimal_genesis_with_post_topology(
             topology_entries,
             genesis_key_pair,
             chain_id,
+            genesis_crypto,
             da_proof_policies,
             nexus_config.clone(),
             consensus_handshake_meta,
@@ -307,6 +330,7 @@ fn build_minimal_genesis_unexecuted(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -317,6 +341,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     topology_entries: Vec<GenesisTopologyEntry>,
     genesis_key_pair: KeyPair,
     chain_id: ChainId,
+    genesis_crypto: Option<ManifestCrypto>,
     da_proof_policies: Option<DaProofPolicyBundle>,
     _nexus_config: Option<ActualNexus>,
     consensus_handshake_meta: Option<Parameter>,
@@ -346,6 +371,8 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
     let genesis_id = sanitize_account_id(&genesis_account);
     let alice_id = sanitize_account_id(&ALICE_ID);
+    let bob_id = sanitize_account_id(&BOB_ID);
+    let carpenter_id = sanitize_account_id(&CARPENTER_ID);
     let ivm_dir = default_ivm_dir();
 
     let mut builder = if let Some(executor_path) = try_default_executor_path() {
@@ -353,6 +380,9 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     } else {
         GenesisBuilder::new_without_executor(chain.clone(), ivm_dir.clone())
     };
+    if let Some(crypto) = genesis_crypto {
+        builder = builder.with_crypto(crypto);
+    }
     if let Some(policies) = da_proof_policies {
         builder = builder.with_da_proof_policies(policies);
     }
@@ -363,41 +393,40 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     let garden_name: Name = "garden_of_live_flowers"
         .parse()
         .expect("garden_of_live_flowers domain");
-    let aid_name: Name = "aid".parse().expect("aid domain");
     let cabbage_name: Name = "cabbage".parse().expect("cabbage asset name");
     let alice_metadata = Metadata::default();
+    let universal_dataspace: Name = "universal".parse().expect("universal dataspace");
+    let wonderland_domain =
+        DomainId::try_new(&wonderland_name, &universal_dataspace).expect("wonderland domain id");
+    let garden_domain =
+        DomainId::try_new(&garden_name, &universal_dataspace).expect("garden domain id");
 
     builder = builder
-        .domain(wonderland_name.clone())
+        .domain(wonderland_domain.clone())
         .account_with_metadata(ALICE_KEYPAIR.public_key().clone(), alice_metadata)
         .account(BOB_KEYPAIR.public_key().clone())
         .asset(rose_name, NumericSpec::default())
         .asset(camomile_name, NumericSpec::default())
         .finish_domain()
-        .domain(garden_name)
+        .domain(garden_domain.clone())
         .account(CARPENTER_KEYPAIR.public_key().clone())
         .asset(cabbage_name, NumericSpec::default())
-        .finish_domain()
-        .domain(aid_name)
         .finish_domain();
 
-    let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain id");
-    let garden_domain: DomainId = "garden_of_live_flowers"
-        .parse()
+    let wonderland_domain =
+        DomainId::parse_fully_qualified("wonderland.universal").expect("wonderland domain id");
+    let garden_domain = DomainId::parse_fully_qualified("garden_of_live_flowers.universal")
         .expect("garden_of_live_flowers domain id");
-    let aid_domain: DomainId = "aid".parse().expect("aid domain id");
     let rose_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        wonderland_domain.clone(),
         "rose".parse().unwrap(),
     );
     let camomile_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        wonderland_domain.clone(),
         "camomile".parse().unwrap(),
     );
-    let cabbage_definition_id: AssetDefinitionId = AssetDefinitionId::new(
-        "garden_of_live_flowers".parse().unwrap(),
-        "cabbage".parse().unwrap(),
-    );
+    let cabbage_definition_id: AssetDefinitionId =
+        AssetDefinitionId::new(garden_domain.clone(), "cabbage".parse().unwrap());
     let rose_asset_id = AssetId::new(rose_definition_id.clone(), alice_id.clone());
     let cabbage_asset_id = AssetId::new(cabbage_definition_id.clone(), alice_id.clone());
 
@@ -406,24 +435,19 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         wonderland_domain.clone(),
         alice_id.clone(),
     ));
-    builder = builder.append_instruction(Transfer::domain(
-        genesis_id.clone(),
-        aid_domain.clone(),
-        alice_id.clone(),
-    ));
     builder = builder.append_instruction(Mint::asset_numeric(13u32, rose_asset_id));
     builder = builder.append_instruction(Mint::asset_numeric(44u32, cabbage_asset_id));
 
     builder = builder.next_transaction();
 
-    let test_domain_id: DomainId = "domain".parse().expect("domain id");
-    let and_domain_id: DomainId = "and".parse().expect("and domain id");
+    let test_domain_id = DomainId::parse_fully_qualified("domain.universal").expect("domain id");
+    let and_domain_id = DomainId::parse_fully_qualified("and.universal").expect("and domain id");
     let xor_asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        test_domain_id.clone(),
         "xor".parse().unwrap(),
     );
     let may_and_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "and".parse().unwrap(),
+        and_domain_id.clone(),
         "MAY".parse().unwrap(),
     );
 
@@ -447,12 +471,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         InstructionBox::from(Grant::account_permission(
             CanRegisterAccount {
                 domain: garden_domain.clone(),
-            },
-            alice_id.clone(),
-        )),
-        InstructionBox::from(Grant::account_permission(
-            CanRegisterAccount {
-                domain: aid_domain.clone(),
             },
             alice_id.clone(),
         )),
@@ -519,6 +537,10 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             genesis_id.clone(),
         )),
         InstructionBox::from(Grant::account_permission(
+            Permission::new("CanManageSoracloud".into(), Json::new(())),
+            alice_id.clone(),
+        )),
+        InstructionBox::from(Grant::account_permission(
             CanRegisterTrigger {
                 authority: alice_id.clone(),
             },
@@ -530,11 +552,44 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         builder = builder.append_instruction(grant);
     }
 
+    let agent_wallet_asset_definition =
+        AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
+            .expect("soracloud agent wallet asset definition id");
+    let hf_shared_lease_asset_definition =
+        AssetDefinitionId::parse_address_literal("5PeSrQmLNwwKtruJvDZrbrm9RuMw")
+            .expect("soracloud HF shared lease asset definition id");
+    // Topology entries only carry the peer BLS identity. Runtime accounts for validator
+    // processes are seeded later from the peer streaming identities in `NetworkBuilder`.
+    let soracloud_bootstrap_accounts =
+        BTreeSet::from([alice_id.clone(), bob_id.clone(), carpenter_id.clone()]);
+
+    builder = builder.next_transaction();
+    builder = builder.append_instruction(Register::asset_definition(
+        AssetDefinition::numeric(agent_wallet_asset_definition.clone())
+            .with_name("soracloud_agent_wallet".to_owned()),
+    ));
+    builder = builder.append_instruction(Register::asset_definition(
+        AssetDefinition::numeric(hf_shared_lease_asset_definition.clone())
+            .with_name("soracloud_hf_lease".to_owned()),
+    ));
+    for account_id in soracloud_bootstrap_accounts {
+        builder = builder.append_instruction(Mint::asset_numeric(
+            500_000_u32,
+            AssetId::new(agent_wallet_asset_definition.clone(), account_id.clone()),
+        ));
+        builder = builder.append_instruction(Mint::asset_numeric(
+            500_000_u32,
+            AssetId::new(hf_shared_lease_asset_definition.clone(), account_id),
+        ));
+    }
+
+    let mut vk_registry_instructions = Vec::new();
     for tx_instr in extra_transactions.into_iter() {
         if tx_instr.is_empty() {
             continue;
         }
         builder = builder.next_transaction();
+        vk_registry_instructions.extend(tx_instr.iter().cloned());
         for instruction in tx_instr {
             builder = builder.append_instruction(instruction);
         }
@@ -596,14 +651,22 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
             continue;
         }
         builder = builder.next_transaction();
+        vk_registry_instructions.extend(tx_instr.iter().cloned());
         for instruction in tx_instr {
             builder = builder.append_instruction(instruction);
         }
     }
 
+    let vk_set_hash = iroha_genesis::compute_genesis_vk_set_hash(vk_registry_instructions.iter())
+        .expect("compute genesis verifying key set hash");
+    let vk_set_hash_field = vk_set_hash.map_or(norito::json::Value::Null, |hash| {
+        norito::json::Value::String(format_hash_hex(hash))
+    });
+    let mut confidential_root = norito::json::Map::new();
+    confidential_root.insert("vk_set_hash".to_owned(), vk_set_hash_field);
     let conf_param = Parameter::Custom(CustomParameter::new(
         confidential_metadata::registry_root_id(),
-        Json::new(norito::json!({ "vk_set_hash": null })),
+        Json::new(norito::json::Value::Object(confidential_root)),
     ));
     builder = builder.append_parameter(conf_param);
     if let Some(handshake_meta) = consensus_handshake_meta {
@@ -615,6 +678,17 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .build_and_sign(&genesis_key_pair)
         .expect("build minimal genesis");
     (block, genesis_account, topology_vec, genesis_key_pair)
+}
+
+fn format_hash_hex(hash: [u8; 32]) -> String {
+    use std::fmt::Write as _;
+
+    let mut encoded = String::with_capacity(66);
+    encoded.push_str("0x");
+    for byte in hash {
+        write!(&mut encoded, "{byte:02x}").expect("write to String");
+    }
+    encoded
 }
 
 pub(crate) fn ensure_genesis_results(
@@ -686,19 +760,22 @@ fn populate_genesis_results(
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let genesis_account_entry = Account {
-        id: genesis_account.clone(),
-        metadata: Metadata::default(),
-        label: None,
-        uaid: None,
-        opaque_ids: Vec::new(),
-        linked_domains: BTreeSet::new(),
-    };
-    let world = World::with(
-        Vec::<iroha_data_model::domain::Domain>::new(),
-        vec![genesis_account_entry],
-        Vec::<iroha_data_model::asset::AssetDefinition>::new(),
-    );
+    let effective_genesis_account = block
+        .0
+        .transactions_vec()
+        .first()
+        .map(|tx| tx.authority().clone())
+        .unwrap_or_else(|| genesis_account.clone());
+    let genesis_domain =
+        Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&effective_genesis_account);
+    let genesis_account_entry =
+        Account::new(effective_genesis_account.clone()).build(&effective_genesis_account);
+    let mut world = World::with([genesis_domain], [genesis_account_entry], []);
+    let default_nexus = ActualNexus::default();
+    let dataspace_catalog = nexus_config
+        .map(|nexus| &nexus.dataspace_catalog)
+        .unwrap_or(&default_nexus.dataspace_catalog);
+    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0, dataspace_catalog);
     let mut state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
     apply_preexec_nexus_overrides(
         &mut state,
@@ -716,12 +793,6 @@ fn populate_genesis_results(
 
     let mut voting_block = None;
     let time_source = TimeSource::new_system();
-    let effective_genesis_account = block
-        .0
-        .transactions_vec()
-        .first()
-        .map(|tx| tx.authority().clone())
-        .unwrap_or_else(|| genesis_account.clone());
     let validation = ValidBlock::validate_keep_voting_block(
         block.0.clone(),
         &core_topology,
@@ -946,10 +1017,7 @@ mod tests {
     use iroha_core::state::StateReadOnly;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        Registrable,
-        asset::AssetDefinition,
-        domain::Domain,
-        isi::{offline::RegisterOfflineAllowance, register::RegisterPeerWithPop},
+        asset::AssetDefinition, domain::Domain, isi::register::RegisterPeerWithPop,
         parameter::system::SumeragiParameters,
     };
     use norito::codec::Decode;
@@ -1093,7 +1161,7 @@ mod tests {
         );
 
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "genesis_extra".parse().unwrap(),
         );
         let instructions = vec![InstructionBox::from(Register::asset_definition(
@@ -1108,426 +1176,6 @@ mod tests {
             &ChainId::from("00000000-0000-0000-0000-000000000000"),
         )
         .expect("genesis authority should be permitted to seed wonderland assets");
-    }
-
-    #[test]
-    fn genesis_executes_offline_allowance_instruction() {
-        use std::{
-            fs,
-            path::{Path, PathBuf},
-            str::FromStr,
-        };
-
-        use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-        use iroha_core::{
-            block::ValidBlock,
-            kura::Kura,
-            query::store::LiveQueryStore,
-            smartcontracts::ValidQuery,
-            state::{State, World},
-            sumeragi::network_topology::Topology as CoreTopology,
-            telemetry::StateTelemetry,
-        };
-        use iroha_crypto::{Hash, Signature};
-        use iroha_data_model::{
-            account::Account,
-            isi::InstructionBox,
-            metadata::Metadata,
-            offline::{
-                OFFLINE_ASSET_ENABLED_METADATA_KEY, OfflineAllowanceCommitment,
-                OfflineWalletCertificate, OfflineWalletPolicy,
-            },
-            query::{dsl::CompoundPredicate, offline::prelude::FindOfflineAllowances},
-        };
-        use iroha_primitives::json::Json;
-
-        fn parse_optional_hash(
-            value: Option<&norito::json::Value>,
-            path: &Path,
-            field: &'static str,
-        ) -> Option<Hash> {
-            match value {
-                None => None,
-                Some(value) if value.is_null() => None,
-                Some(value) => {
-                    let hex = value.as_str().unwrap_or_else(|| {
-                        panic!(
-                            "offline allowance fixture `{}` `{field}` must be hex string or null",
-                            path.display()
-                        )
-                    });
-                    Some(Hash::from_str(hex).unwrap_or_else(|err| {
-                        panic!(
-                            "offline allowance fixture `{}` `{field}`: {err}",
-                            path.display()
-                        )
-                    }))
-                }
-            }
-        }
-
-        fn parse_offline_certificate_fixture(
-            value: &norito::json::Value,
-            path: &Path,
-        ) -> OfflineWalletCertificate {
-            fn decode_hex_bytes(hex_literal: &str) -> Result<Vec<u8>, String> {
-                if hex_literal.len() % 2 != 0 {
-                    return Err("hex input has odd length".to_owned());
-                }
-                let mut bytes = Vec::with_capacity(hex_literal.len() / 2);
-                for index in (0..hex_literal.len()).step_by(2) {
-                    let byte = u8::from_str_radix(&hex_literal[index..index + 2], 16)
-                        .map_err(|err| format!("invalid hex at index {index}: {err}"))?;
-                    bytes.push(byte);
-                }
-                Ok(bytes)
-            }
-
-            let object = value.as_object().unwrap_or_else(|| {
-                panic!(
-                    "offline allowance fixture `{}` certificate must be a JSON object",
-                    path.display()
-                )
-            });
-
-            let controller_literal = object
-                .get("controller")
-                .and_then(norito::json::Value::as_str)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing certificate controller",
-                        path.display()
-                    )
-                });
-            let controller = AccountId::parse_encoded(controller_literal)
-                .map(|parsed| parsed.into_account_id())
-                .unwrap_or_else(|err| {
-                    panic!("failed to parse controller `{controller_literal}`: {err}")
-                });
-
-            let operator_literal = object
-                .get("operator")
-                .and_then(norito::json::Value::as_str)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing certificate operator",
-                        path.display()
-                    )
-                });
-            let operator = AccountId::parse_encoded(operator_literal)
-                .map(|parsed| parsed.into_account_id())
-                .unwrap_or_else(|err| {
-                    panic!("failed to parse operator `{operator_literal}`: {err}")
-                });
-
-            let allowance = object
-                .get("allowance")
-                .and_then(norito::json::Value::as_object)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing allowance block",
-                        path.display()
-                    )
-                });
-            let asset_literal = allowance
-                .get("asset")
-                .and_then(norito::json::Value::as_str)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing allowance asset",
-                        path.display()
-                    )
-                });
-            let asset = asset_literal.parse().unwrap_or_else(|err| {
-                panic!("failed to parse allowance asset `{asset_literal}`: {err}")
-            });
-            let amount_literal = allowance
-                .get("amount")
-                .and_then(norito::json::Value::as_str)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing allowance amount",
-                        path.display()
-                    )
-                });
-            let amount = amount_literal.parse().unwrap_or_else(|err| {
-                panic!("failed to parse allowance amount `{amount_literal}`: {err}")
-            });
-            let commitment_hex = allowance
-                .get("commitment_hex")
-                .and_then(norito::json::Value::as_str)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing allowance commitment_hex",
-                        path.display()
-                    )
-                });
-            let commitment = decode_hex_bytes(commitment_hex)
-                .unwrap_or_else(|err| panic!("commitment_hex decode: {err}"));
-
-            let spend_key_literal = object
-                .get("spend_public_key")
-                .and_then(norito::json::Value::as_str)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing spend_public_key",
-                        path.display()
-                    )
-                });
-            let spend_public_key = spend_key_literal.parse().unwrap_or_else(|err| {
-                panic!("failed to parse spend_public_key `{spend_key_literal}`: {err}")
-            });
-
-            let attestation_b64 = object
-                .get("attestation_report_b64")
-                .and_then(norito::json::Value::as_str)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing attestation_report_b64",
-                        path.display()
-                    )
-                });
-            let attestation_report = BASE64
-                .decode(attestation_b64)
-                .unwrap_or_else(|err| panic!("attestation_report_b64 decode: {err}"));
-
-            let issued_at_ms = object
-                .get("issued_at_ms")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing issued_at_ms",
-                        path.display()
-                    )
-                });
-            let expires_at_ms = object
-                .get("expires_at_ms")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing expires_at_ms",
-                        path.display()
-                    )
-                });
-
-            let policy = object
-                .get("policy")
-                .and_then(norito::json::Value::as_object)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing policy block",
-                        path.display()
-                    )
-                });
-            let policy_max_balance = policy
-                .get("max_balance")
-                .and_then(norito::json::Value::as_str)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing policy max_balance",
-                        path.display()
-                    )
-                });
-            let policy_max_tx_value = policy
-                .get("max_tx_value")
-                .and_then(norito::json::Value::as_str)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing policy max_tx_value",
-                        path.display()
-                    )
-                });
-            let policy_expires_at_ms = policy
-                .get("expires_at_ms")
-                .and_then(norito::json::Value::as_u64)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing policy expires_at_ms",
-                        path.display()
-                    )
-                });
-
-            let operator_signature_hex = object
-                .get("operator_signature_hex")
-                .and_then(norito::json::Value::as_str)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "offline allowance fixture `{}` missing operator_signature_hex",
-                        path.display()
-                    )
-                });
-            let operator_signature = Signature::from_hex(operator_signature_hex)
-                .unwrap_or_else(|err| panic!("operator_signature_hex decode: {err}"));
-
-            let metadata_value = object
-                .get("metadata")
-                .cloned()
-                .unwrap_or_else(|| norito::json::Value::Object(Default::default()));
-            let metadata: Metadata = norito::json::from_value(metadata_value)
-                .unwrap_or_else(|err| panic!("metadata parse: {err}"));
-
-            let verdict_id =
-                parse_optional_hash(object.get("verdict_id_hex"), path, "verdict_id_hex");
-            let attestation_nonce = parse_optional_hash(
-                object.get("attestation_nonce_hex"),
-                path,
-                "attestation_nonce_hex",
-            );
-            let refresh_at_ms = object
-                .get("refresh_at_ms")
-                .and_then(norito::json::Value::as_u64);
-
-            OfflineWalletCertificate {
-                controller,
-                operator,
-                allowance: OfflineAllowanceCommitment {
-                    asset,
-                    amount,
-                    commitment,
-                },
-                spend_public_key,
-                attestation_report,
-                issued_at_ms,
-                expires_at_ms,
-                policy: OfflineWalletPolicy {
-                    max_balance: policy_max_balance
-                        .parse()
-                        .unwrap_or_else(|err| panic!("policy max_balance parse: {err}")),
-                    max_tx_value: policy_max_tx_value
-                        .parse()
-                        .unwrap_or_else(|err| panic!("policy max_tx_value parse: {err}")),
-                    expires_at_ms: policy_expires_at_ms,
-                },
-                operator_signature,
-                metadata,
-                verdict_id,
-                attestation_nonce,
-                refresh_at_ms,
-            }
-        }
-
-        init_instruction_registry();
-        let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../fixtures/offline_allowance/android-demo/register_instruction.json");
-        let raw = fs::read_to_string(&fixture_path)
-            .expect("offline allowance fixture should be readable for genesis");
-        let fixture: norito::json::Value =
-            norito::json::from_str(&raw).expect("fixture should parse as JSON");
-        let certificate_value = fixture
-            .get("certificate")
-            .cloned()
-            .expect("fixture must contain `certificate` field");
-        let certificate = parse_offline_certificate_fixture(&certificate_value, &fixture_path);
-        let controller = certificate.controller.clone();
-        let controller_asset_id = certificate.allowance.asset.clone();
-        let controller_asset_amount = certificate.allowance.amount.clone();
-        let asset_definition_id = controller_asset_id.definition().clone();
-        let asset_scale = controller_asset_amount.scale();
-        let instruction = InstructionBox::from(RegisterOfflineAllowance { certificate });
-
-        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology: UniqueVec<PeerId> = [peer_id].into_iter().collect();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
-        let topology_vec: Vec<PeerId> = topology.iter().cloned().collect();
-        let block = genesis(vec![vec![instruction]], topology.clone(), vec![entry]);
-
-        let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
-        let genesis_account_entry = Account {
-            id: genesis_account.clone(),
-            metadata: Metadata::default(),
-            label: None,
-            uaid: None,
-            opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::new(),
-        };
-        let controller_account_entry = Account {
-            id: controller.clone(),
-            metadata: Metadata::default(),
-            label: None,
-            uaid: None,
-            opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::new(),
-        };
-        let asset_domain = asset_definition_id.domain().clone();
-        let controller_domain = asset_domain.clone();
-        let mut domains = vec![Domain::new(asset_domain.clone()).build(&genesis_account)];
-        if controller_domain != asset_domain {
-            domains.push(Domain::new(controller_domain).build(&genesis_account));
-        }
-        let mut asset_definition =
-            AssetDefinition::new(asset_definition_id, NumericSpec::fractional(asset_scale))
-                .with_name("Offline Allowance Asset".to_owned())
-                .build(&genesis_account);
-        asset_definition.metadata_mut().insert(
-            OFFLINE_ASSET_ENABLED_METADATA_KEY
-                .parse()
-                .expect("offline.enabled metadata key should parse"),
-            Json::new(true),
-        );
-        let controller_asset_entry =
-            iroha_data_model::asset::Asset::new(controller_asset_id, controller_asset_amount);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let world = World::with_assets(
-            domains,
-            vec![genesis_account_entry, controller_account_entry],
-            vec![asset_definition],
-            vec![controller_asset_entry],
-            [],
-        );
-        let state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
-        let chain = block
-            .0
-            .transactions_vec()
-            .first()
-            .map(|tx| tx.chain().clone())
-            .unwrap_or_else(chain_id);
-        let core_topology = CoreTopology::new(topology_vec.clone());
-        let time_source = TimeSource::new_system();
-        let mut voting_block = None;
-        let validation = ValidBlock::validate_keep_voting_block(
-            block.0.clone(),
-            &core_topology,
-            &chain,
-            &genesis_account,
-            &time_source,
-            &state,
-            &mut voting_block,
-            false,
-        )
-        .unpack(|_| {});
-        let (validated, mut state_block) =
-            validation.expect("genesis block should validate successfully");
-        let allowances_after_validation: Vec<_> =
-            ValidQuery::execute(FindOfflineAllowances, CompoundPredicate::PASS, &state_block)
-                .expect("query offline allowances from genesis state")
-                .collect();
-        assert_eq!(
-            allowances_after_validation.len(),
-            1,
-            "offline allowance from genesis fixture must be registered during genesis validation"
-        );
-
-        let committed_block = validated.commit_unchecked().unpack(|_| {});
-        let _ = state_block.apply_without_execution(&committed_block, topology_vec.clone());
-        state_block
-            .commit()
-            .expect("genesis state should commit successfully");
-
-        let view = state.view();
-        let allowances_after_commit: Vec<_> =
-            ValidQuery::execute(FindOfflineAllowances, CompoundPredicate::PASS, &view)
-                .expect("query offline allowances after committing genesis")
-                .collect();
-        assert_eq!(
-            allowances_after_commit.len(),
-            1,
-            "offline allowance must persist after committing genesis"
-        );
     }
 
     #[test]
@@ -1722,6 +1370,7 @@ mod tests {
                 vec![entry],
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
                 super::chain_id(),
+                None,
                 Some(policies),
                 None,
                 None,
@@ -1737,6 +1386,183 @@ mod tests {
         assert!(
             executed.results().all(|result| result.as_ref().is_ok()),
             "pre-executed genesis should succeed with custom lane config"
+        );
+    }
+
+    #[test]
+    fn populate_genesis_results_uses_supplied_nexus_config_for_custom_staking_genesis() {
+        use std::num::NonZeroU32;
+
+        use iroha_data_model::nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId};
+        use iroha_data_model::{
+            isi::{
+                Register,
+                staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+            },
+            prelude::Numeric,
+        };
+
+        init_instruction_registry();
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let topology = [peer_id.clone()].into_iter().collect();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+
+        let validator_key = KeyPair::random();
+        let validator_id = AccountId::new(validator_key.public_key().clone());
+        let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
+        let stake_asset_id = AssetDefinitionId::new(
+            nexus_domain.clone(),
+            "multilane_stake".parse().expect("stake asset name"),
+        );
+        let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
+        let lane_zero = LaneConfig {
+            id: LaneId::from_lane_index(0, lane_count).expect("lane 0 id"),
+            alias: "nexus".to_owned(),
+            ..LaneConfig::default()
+        };
+        let lane_one = LaneConfig {
+            id: LaneId::from_lane_index(1, lane_count).expect("lane 1 id"),
+            alias: "ds1".to_owned(),
+            dataspace_id: DataSpaceId::new(7),
+            ..LaneConfig::default()
+        };
+        let catalog = LaneCatalog::new(lane_count, vec![lane_zero, lane_one.clone()])
+            .expect("lane catalog should validate");
+        let nexus = ActualNexus {
+            enabled: true,
+            staking: iroha_config::parameters::actual::NexusStaking {
+                stake_asset_id: stake_asset_id.to_string(),
+                ..Default::default()
+            },
+            lane_catalog: catalog.clone(),
+            lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog),
+            ..Default::default()
+        };
+
+        let post_topology_transactions = vec![vec![
+            Register::domain(Domain::new(nexus_domain.clone())).into(),
+            Register::account(Account::new(validator_id.clone())).into(),
+            Register::asset_definition({
+                let __asset_definition_id = stake_asset_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .into(),
+            Mint::asset_numeric(
+                10_u32,
+                AssetId::new(stake_asset_id.clone(), validator_id.clone()),
+            )
+            .into(),
+            RegisterPublicLaneValidator::new(
+                lane_one.id,
+                validator_id.clone(),
+                peer_id.clone(),
+                validator_id.clone(),
+                Numeric::from(10_u32),
+                Metadata::default(),
+            )
+            .into(),
+            ActivatePublicLaneValidator::new(lane_one.id, validator_id.clone()).into(),
+        ]];
+
+        let (block, genesis_account, topology_vec, genesis_key_pair) =
+            super::build_minimal_genesis_unexecuted_with_post_topology(
+                Vec::new(),
+                post_topology_transactions,
+                topology,
+                vec![entry],
+                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+                super::chain_id(),
+                None,
+                None,
+                Some(nexus.clone()),
+                None,
+            );
+
+        let err = super::populate_genesis_results(
+            &block,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            None,
+        )
+        .expect_err("custom staking genesis should fail without the supplied nexus config");
+        let rendered = format!("{err:?}");
+        assert!(
+            rendered.contains("stake asset definition missing")
+                || rendered.contains("nexus.staking.stake_asset_id")
+                || rendered.contains("Find(AssetDefinition("),
+            "unexpected pre-exec error without nexus config: {err:?}"
+        );
+
+        let executed = super::populate_genesis_results(
+            &block,
+            &genesis_account,
+            &topology_vec,
+            &genesis_key_pair,
+            Some(&nexus),
+        )
+        .expect("custom staking genesis should succeed with the resolved nexus config");
+        assert!(
+            executed.results().all(|result| result.as_ref().is_ok()),
+            "pre-executed custom staking genesis should succeed when the builder threads the resolved nexus config"
+        );
+    }
+
+    #[test]
+    fn populate_genesis_results_leases_genesis_account_labels() {
+        use iroha_data_model::{
+            account::rekey::{AccountAlias, AccountAliasDomain},
+            block::SignedBlock,
+            isi::{InstructionBox, Register},
+            nexus::DataSpaceId,
+            transaction::TransactionBuilder,
+        };
+
+        init_instruction_registry();
+        let chain_id = super::chain_id();
+        let genesis_key_pair = SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone();
+        let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
+        let ivm_domain: DomainId = DomainId::try_new("ivm", "universal").expect("ivm domain");
+        let gas_label: Name = "gas".parse().expect("gas label");
+        let gas_account =
+            Account::new(AccountId::new(KeyPair::random().public_key().clone()).clone())
+                .with_label(Some(AccountAlias::new(
+                    gas_label,
+                    Some(AccountAliasDomain::new(ivm_domain.name().clone())),
+                    DataSpaceId::UNIVERSAL,
+                )));
+        let tx = TransactionBuilder::new(chain_id, genesis_account.clone())
+            .with_instructions([
+                InstructionBox::from(Register::domain(Domain::new(ivm_domain))),
+                InstructionBox::from(Register::account(gas_account)),
+            ])
+            .sign(genesis_key_pair.private_key());
+        let block = GenesisBlock(SignedBlock::genesis(
+            vec![tx],
+            genesis_key_pair.private_key(),
+            None,
+            None,
+        ));
+
+        let bls = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let topology = vec![PeerId::new(bls.public_key().clone())];
+        let executed = super::populate_genesis_results(
+            &block,
+            &genesis_account,
+            &topology,
+            &genesis_key_pair,
+            None,
+        )
+        .expect("genesis pre-execution should lease aliases used by labeled genesis accounts");
+
+        assert!(
+            executed.results().all(|result| result.as_ref().is_ok()),
+            "labeled genesis accounts should not fail SNS lease checks"
         );
     }
 
@@ -1757,7 +1583,6 @@ mod tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: BTreeSet::new(),
         };
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -1771,7 +1596,7 @@ mod tests {
         let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
         let policy0 = DaProofPolicy {
             lane_id: LaneId::from_lane_index(0, lane_count).expect("lane 0 id"),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "alpha".to_string(),
             proof_scheme: DaProofScheme::MerkleSha256,
         };
@@ -1867,6 +1692,7 @@ mod tests {
                         }
                     }
                 }
+                Executable::ContractCall(_) => {}
                 Executable::Ivm(_) => {}
                 Executable::IvmProved(_) => {}
             }
@@ -1879,6 +1705,76 @@ mod tests {
             hsm_bound, register_pop,
             "consensus peers in genesis must carry softkey HSM bindings"
         );
+    }
+
+    #[test]
+    fn genesis_with_crypto_override_embeds_manifest_metadata() {
+        use iroha_data_model::{
+            isi::SetParameter,
+            parameter::{Parameter, system::crypto_metadata},
+            transaction::Executable,
+        };
+
+        fn embedded_manifest_crypto(block: &GenesisBlock) -> ManifestCrypto {
+            for tx in block.0.transactions_vec() {
+                let Executable::Instructions(instrs) = tx.instructions() else {
+                    continue;
+                };
+                for instr in instrs {
+                    let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>() else {
+                        continue;
+                    };
+                    let Parameter::Custom(custom) = set_param.inner() else {
+                        continue;
+                    };
+                    if custom.id() == &crypto_metadata::manifest_meta_id() {
+                        return custom
+                            .payload()
+                            .try_into_any()
+                            .expect("decode embedded crypto manifest");
+                    }
+                }
+            }
+            panic!("crypto manifest metadata parameter not found in genesis");
+        }
+
+        let allowed_signing = vec![
+            Algorithm::Ed25519,
+            Algorithm::Secp256k1,
+            Algorithm::BlsNormal,
+        ];
+        let expected =
+            super::manifest_crypto_from_actual(&iroha_config::parameters::actual::Crypto {
+                allowed_curve_ids:
+                    iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(
+                        &allowed_signing,
+                    ),
+                allowed_signing,
+                ..Default::default()
+            });
+
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let topology = [PeerId::new(bls.public_key().clone())]
+            .into_iter()
+            .collect();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let block = super::genesis_with_keypair_and_post_topology_with_policies(
+            Vec::new(),
+            Vec::new(),
+            topology,
+            vec![entry],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            super::chain_id(),
+            Some(expected.clone()),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(embedded_manifest_crypto(&block), expected);
     }
 
     #[test]
@@ -1940,6 +1836,43 @@ mod tests {
     }
 
     #[test]
+    fn genesis_grants_alice_soracloud_management_permission() {
+        use iroha_data_model::{isi::GrantBox, transaction::Executable};
+
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let topology = [peer_id].into_iter().collect();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let block = genesis(Vec::new(), topology, vec![entry]);
+        let mut saw_permission = false;
+        for tx in block.0.transactions_vec() {
+            let Executable::Instructions(instrs) = tx.instructions() else {
+                continue;
+            };
+            for instr in instrs {
+                let Some(GrantBox::Permission(grant)) = instr.as_any().downcast_ref::<GrantBox>()
+                else {
+                    continue;
+                };
+                if grant.destination == *ALICE_ID && grant.object.name() == "CanManageSoracloud" {
+                    saw_permission = true;
+                    break;
+                }
+            }
+            if saw_permission {
+                break;
+            }
+        }
+        assert!(
+            saw_permission,
+            "default test-network genesis should grant ALICE_ID CanManageSoracloud"
+        );
+    }
+
+    #[test]
     fn sanitize_strings_removes_whitespace() {
         let mut v = norito::json!({"name": "foo bar"});
         super::sanitize_strings(&mut v);
@@ -1997,6 +1930,79 @@ mod tests {
             block.0.header().confidential_features().is_some(),
             "genesis block must advertise confidential feature digest"
         );
+    }
+
+    #[test]
+    fn genesis_confidential_digest_tracks_registered_verifying_keys() {
+        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let topology = [peer_id.clone()].into_iter().collect();
+        let entry = GenesisTopologyEntry::new(
+            PeerId::new(bls.public_key().clone()),
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+
+        let vk_id = iroha_data_model::proof::VerifyingKeyId::new("halo2/ipa", "offline-v2-test");
+        let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
+            1,
+            "offline-v2-test",
+            iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+            "pallas",
+            [0xAA; 32],
+            [0xBB; 32],
+        );
+        record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
+        record.gas_schedule_id = Some("halo2_default".into());
+        let register = InstructionBox::from(
+            iroha_data_model::isi::verifying_keys::RegisterVerifyingKey { id: vk_id, record },
+        );
+        let expected = iroha_genesis::compute_genesis_vk_set_hash([&register])
+            .expect("compute verifier set hash")
+            .expect("active verifier registry hash");
+
+        let (block, _, _, _) = super::build_minimal_genesis_unexecuted_with_post_topology(
+            Vec::new(),
+            vec![vec![register]],
+            topology,
+            vec![entry],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
+            super::chain_id(),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let declared_hash = block
+            .0
+            .transactions_vec()
+            .iter()
+            .find_map(|tx| {
+                use iroha_data_model::{isi::SetParameter, transaction::Executable};
+
+                let Executable::Instructions(instrs) = tx.instructions() else {
+                    return None;
+                };
+                instrs.iter().find_map(|instr| {
+                    let set_parameter = instr.as_any().downcast_ref::<SetParameter>()?;
+                    let Parameter::Custom(custom) = set_parameter.inner() else {
+                        return None;
+                    };
+                    if custom.id() != &confidential_metadata::registry_root_id() {
+                        return None;
+                    }
+                    let value: norito::json::Value = custom
+                        .payload()
+                        .try_into_any_norito()
+                        .expect("decode confidential registry root");
+                    let Some(norito::json::Value::String(hash)) = value.get("vk_set_hash") else {
+                        return None;
+                    };
+                    Some(hash.clone())
+                })
+            })
+            .expect("confidential registry root parameter");
+        assert_eq!(declared_hash, format_hash_hex(expected));
     }
 
     #[test]

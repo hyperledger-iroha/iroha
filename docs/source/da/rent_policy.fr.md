@@ -94,7 +94,7 @@ les pools de bonus par épreuve sans nécessiter de code d'orchestration sur mes
 
 ### Générer des plans de grand livre de loyers
 
-Exécutez `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+Exécutez `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc`
 pour convertir un devis de loyer persistant en transferts de grand livre exécutables. La commande
 analyse le `ledger_projection` intégré, émet les instructions Norito `Transfer`
 qui collectent le loyer de base dans le trésor, achemine la réserve/le fournisseur

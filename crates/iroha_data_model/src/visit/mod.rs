@@ -6,8 +6,34 @@ use crate::{
     isi::{
         ActivateIdentifierPolicy, ClaimIdentifier, Log, RegisterIdentifierPolicy,
         RegisterPeerWithPop, RevokeIdentifier,
+        rwa::RwaInstructionBox,
+        soracloud::{
+            AcknowledgeSoracloudAgentMessage, AdmitSoracloudPrivateCompileProfile,
+            AdvanceSoracloudRollout, AdvertiseSoracloudInrouHost, AdvertiseSoracloudModelHost,
+            AllowSoracloudAgentAutonomyArtifact, AllowSoracloudUploadedModel,
+            AppendSoracloudUploadedModelChunk, ApproveSoracloudAgentWalletSpend,
+            CheckpointSoracloudTrainingJob, ClearSoracloudInrouReplicaRuntimeState,
+            DeleteSoracloudServiceConfig, DeleteSoracloudServiceSecret,
+            DeploySoracloudAgentApartment, DeploySoracloudService, EnqueueSoracloudAgentMessage,
+            FinalizeSoracloudUploadedModelBundle, HeartbeatSoracloudModelHost,
+            JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease, MutateSoracloudState,
+            PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
+            RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
+            RecordSoracloudMailboxMessage, RecordSoracloudPrivateInferenceCheckpoint,
+            RecordSoracloudRuntimeReceipt, RegisterSoracloudModelArtifact,
+            RegisterSoracloudModelWeight, RegisterSoracloudUploadedModelBundle,
+            RenewSoracloudAgentLease, RenewSoracloudHfSharedLease,
+            ReportSoracloudServiceLeaseUsage, RequestSoracloudAgentWalletSpend,
+            RestartSoracloudAgentApartment, RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy,
+            RollbackSoracloudModelWeight, RollbackSoracloudService, RunSoracloudAgentAutonomy,
+            RunSoracloudFheJob, SetSoracloudInrouReplicaRuntimeState, SetSoracloudRuntimeState,
+            SetSoracloudServiceConfig, SetSoracloudServiceSecret, StartSoracloudPrivateInference,
+            StartSoracloudTrainingJob, UpgradeSoracloudService, WithdrawSoracloudInrouHost,
+            WithdrawSoracloudModelHost,
+        },
         staking::{
-            ActivatePublicLaneValidator, ExitPublicLaneValidator, RegisterPublicLaneValidator,
+            ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
+            RegisterPublicLaneValidator,
         },
     },
     prelude::*,
@@ -101,11 +127,16 @@ pub trait Visit {
 
     crate::query_visitors!(visit_all);
     crate::instruction_visitors!(visit_all);
+    /// Visit a grouped RWA instruction.
+    fn visit_rwa_instruction_box(&mut self, operation: &RwaInstructionBox) {
+        visit_rwa_instruction_box(self, operation);
+    }
 }
 
 /// Walk a transaction and delegate to the provided visitor.
 pub fn visit_transaction<V: Visit + ?Sized>(visitor: &mut V, transaction: &SignedTransaction) {
     match transaction.instructions() {
+        Executable::ContractCall(_) => {}
         Executable::Ivm(bytecode) => visitor.visit_ivm(bytecode),
         Executable::IvmProved(proved) => {
             // For proved execution the semantic state transition is expressed by the overlay, but

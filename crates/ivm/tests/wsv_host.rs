@@ -1,12 +1,13 @@
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use iroha_crypto::{Hash, PublicKey};
+use iroha_primitives::json::Json;
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     IVM, PointerType, VMError,
     mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken,
-        ScopedAccountId, WsvHost,
+        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, Name, PermissionToken, WsvHost,
     },
     syscalls,
 };
@@ -30,13 +31,13 @@ fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     make_tlv(PointerType::NoritoBytes as u16, &buf)
 }
 
-fn test_account(domain: DomainId, public_key: PublicKey) -> ScopedAccountId {
-    ScopedAccountId::new(domain, public_key)
+fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
+    AccountId::new(public_key)
 }
 
 #[test]
 fn test_balance_syscall_permission() {
-    let domain: DomainId = "domain".parse().unwrap();
+    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -46,7 +47,7 @@ fn test_balance_syscall_permission() {
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -56,17 +57,12 @@ fn test_balance_syscall_permission() {
     )]);
     // Bob has no permission initially
     let mut acc_map = HashMap::new();
-    acc_map.insert(1, AccountId::from(&alice));
-    acc_map.insert(2, AccountId::from(&bob));
+    acc_map.insert(1, alice.clone());
+    acc_map.insert(2, bob.clone());
     let mut asset_map = HashMap::new();
     asset_map.insert(1, asset.clone());
 
-    let host = WsvHost::new_with_subject_map(
-        wsv,
-        AccountId::from(&bob),
-        acc_map.clone(),
-        asset_map.clone(),
-    );
+    let host = WsvHost::new_with_subject_map(wsv, bob.clone(), acc_map.clone(), asset_map.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.set_register(10, 1); // account index alice
@@ -81,11 +77,8 @@ fn test_balance_syscall_permission() {
         (alice.clone(), asset.clone()),
         Numeric::from(50_u64),
     )]);
-    wsv2.grant_permission(
-        &bob,
-        PermissionToken::ReadAccountAssets(AccountId::from(&alice)),
-    );
-    let host = WsvHost::new_with_subject_map(wsv2, AccountId::from(&bob), acc_map, asset_map);
+    wsv2.grant_permission(&bob, PermissionToken::ReadAccountAssets(alice.clone()));
+    let host = WsvHost::new_with_subject_map(wsv2, bob.clone(), acc_map, asset_map);
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("balance syscall failed");
@@ -100,7 +93,7 @@ fn test_balance_syscall_permission() {
 
 #[test]
 fn test_transfer_syscall_permission() {
-    let domain: DomainId = "domain".parse().unwrap();
+    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -110,7 +103,7 @@ fn test_transfer_syscall_permission() {
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -119,17 +112,12 @@ fn test_transfer_syscall_permission() {
         ((bob.clone(), asset.clone()), Numeric::from(0_u64)),
     ]);
     let mut acc_map = HashMap::new();
-    acc_map.insert(1, AccountId::from(&alice));
-    acc_map.insert(2, AccountId::from(&bob));
+    acc_map.insert(1, alice.clone());
+    acc_map.insert(2, bob.clone());
     let mut asset_map = HashMap::new();
     asset_map.insert(1, asset.clone());
 
-    let host = WsvHost::new_with_subject_map(
-        wsv,
-        AccountId::from(&bob),
-        acc_map.clone(),
-        asset_map.clone(),
-    );
+    let host = WsvHost::new_with_subject_map(wsv, bob.clone(), acc_map.clone(), asset_map.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.set_register(10, 1); // from alice
@@ -148,7 +136,7 @@ fn test_transfer_syscall_permission() {
         ((bob.clone(), asset.clone()), Numeric::from(0_u64)),
     ]);
     wsv2.grant_permission(&bob, PermissionToken::TransferAsset(asset.clone()));
-    let host = WsvHost::new_with_subject_map(wsv2, AccountId::from(&bob), acc_map, asset_map);
+    let host = WsvHost::new_with_subject_map(wsv2, bob.clone(), acc_map, asset_map);
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("transfer syscall failed");
@@ -156,7 +144,7 @@ fn test_transfer_syscall_permission() {
 
 #[test]
 fn test_mint_syscall_permission() {
-    let domain: DomainId = "domain".parse().unwrap();
+    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -166,23 +154,18 @@ fn test_mint_syscall_permission() {
     let _alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
     let wsv =
         MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Numeric::from(0_u64))]);
     let mut acc_map = HashMap::new();
-    acc_map.insert(1, AccountId::from(&bob));
+    acc_map.insert(1, bob.clone());
     let mut asset_map = HashMap::new();
     asset_map.insert(1, asset.clone());
 
-    let host = WsvHost::new_with_subject_map(
-        wsv,
-        AccountId::from(&bob),
-        acc_map.clone(),
-        asset_map.clone(),
-    );
+    let host = WsvHost::new_with_subject_map(wsv, bob.clone(), acc_map.clone(), asset_map.clone());
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(host);
     vm.set_register(10, 1); // account index bob
@@ -198,8 +181,51 @@ fn test_mint_syscall_permission() {
     let mut wsv2 =
         MockWorldStateView::with_balances(&[((bob.clone(), asset.clone()), Numeric::from(0_u64))]);
     wsv2.grant_permission(&bob, PermissionToken::MintAsset(asset.clone()));
-    let host = WsvHost::new_with_subject_map(wsv2, AccountId::from(&bob), acc_map, asset_map);
+    let host = WsvHost::new_with_subject_map(wsv2, bob.clone(), acc_map, asset_map);
     vm.set_host(host);
     vm.load_program(&prog).unwrap();
     vm.run().expect("mint syscall failed");
+}
+
+#[test]
+fn test_json_get_numeric_reads_decimal_strings() {
+    let domain: DomainId =
+        iroha_data_model::DomainId::try_new("domain", "universal").expect("domain");
+    let public_key: PublicKey =
+        "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
+            .parse()
+            .expect("public key");
+    let scoped_subject = test_account(domain, public_key);
+    let host = WsvHost::new_with_subject(
+        MockWorldStateView::new(),
+        scoped_subject.clone(),
+        HashMap::new(),
+    );
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(host);
+
+    let json = Json::from_str_norito(r#"{"amount":"0.00001"}"#).expect("json");
+    let json_payload = norito::to_bytes(&json).expect("encode json");
+    let key_payload =
+        norito::to_bytes(&Name::from_str("amount").expect("name")).expect("encode key");
+    let json_ptr = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Json as u16, &json_payload))
+        .expect("alloc json");
+    let key_ptr = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Name as u16, &key_payload))
+        .expect("alloc key");
+
+    vm.set_register(10, json_ptr);
+    vm.set_register(11, key_ptr);
+    let prog = assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_NUMERIC as u8]);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("json_get_numeric syscall failed");
+
+    let tlv = vm
+        .memory
+        .validate_tlv(vm.register(10))
+        .expect("numeric tlv");
+    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+    let value: Numeric = norito::decode_from_bytes(tlv.payload).expect("decode numeric");
+    assert_eq!(value, "0.00001".parse::<Numeric>().expect("parse numeric"));
 }

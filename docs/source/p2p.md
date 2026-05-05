@@ -416,7 +416,7 @@ Notes
 
 - Build-time: enable `iroha_p2p/p2p_tls` to include TLS support.
 - Runtime: set `[network].tls_enabled = true` to wrap outbound P2P connections in TLS 1.3 using rustls. Identity remains authenticated at the application layer by the signed handshake (address + optional `chain_id`).
-- Runtime: `tls_fallback_to_plain` (bool; default `true`) controls whether the dialer may fall back to plain TCP when a TLS dial fails. Set `tls_fallback_to_plain=false` to enforce TLS-only outbound dials.
+- Runtime: `tls_fallback_to_plain` (bool; default `false`) controls whether the dialer may fall back to plain TCP when a TLS dial fails. Set `tls_fallback_to_plain=true` to opt into plaintext fallback for outbound dials.
 - Behavior: the dialer connects to `host:port` over TCP and upgrades to TLS; if TLS fails and `tls_fallback_to_plain=true`, it falls back to plain TCP. This helps traversing L4 TLS proxies/LBs and makes traffic resemble HTTPS.
 - Inbound: optionally enable a TLS listener via `[network].tls_listen_address`. When set (and TLS is enabled), the node accepts inbound TLS connections on that address. Plain TCP on `[network].address` remains enabled unless `[network].tls_inbound_only=true`.
   - `tls_inbound_only` (bool; default `false`): disable the plaintext listener and accept inbound P2P only via TLS-over-TCP. When enabled, TLS binds on `tls_listen_address` when set, otherwise on `[network].address`.

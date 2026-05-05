@@ -38,6 +38,337 @@ public enum OfflineNoritoError: Error, LocalizedError {
     }
 }
 
+enum OfflineNumericParseError: Error {
+    case invalid
+    case scaleTooLarge
+    case overflow
+}
+
+struct OfflineNumericComponents {
+    let isNegative: Bool
+    let scale: UInt32
+    let mantissaDigits: String
+    private let mantissa: OfflineBigInt
+
+    init(parsing value: String, maxScale: UInt32, maxBigIntBytes: Int) throws {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw OfflineNumericParseError.invalid
+        }
+
+        var digits = trimmed[...]
+        let negative = digits.first == "-"
+        if digits.first == "-" || digits.first == "+" {
+            digits.removeFirst()
+        }
+
+        var seenDot = false
+        var scale: UInt32 = 0
+        var mantissaDigits = ""
+        for scalar in digits.unicodeScalars {
+            if scalar == "." {
+                if seenDot {
+                    throw OfflineNumericParseError.invalid
+                }
+                seenDot = true
+                continue
+            }
+            guard scalar.value >= 48 && scalar.value <= 57 else {
+                throw OfflineNumericParseError.invalid
+            }
+            mantissaDigits.append(Character(scalar))
+            if seenDot {
+                scale = scale &+ 1
+            }
+        }
+
+        guard !mantissaDigits.isEmpty else {
+            throw OfflineNumericParseError.invalid
+        }
+        guard scale <= maxScale else {
+            throw OfflineNumericParseError.scaleTooLarge
+        }
+
+        var mantissa: OfflineBigInt
+        do {
+            mantissa = try OfflineBigInt(decimalDigits: mantissaDigits)
+        } catch {
+            throw OfflineNumericParseError.invalid
+        }
+        if mantissa.isZero {
+            mantissa.isNegative = false
+        } else {
+            mantissa.isNegative = negative
+        }
+
+        do {
+            _ = try mantissa.toTwosComplementBytes(maxBytes: maxBigIntBytes)
+        } catch OfflineNoritoError.numericOverflow {
+            throw OfflineNumericParseError.overflow
+        } catch {
+            throw OfflineNumericParseError.invalid
+        }
+
+        self.isNegative = mantissa.isNegative
+        self.scale = scale
+        self.mantissaDigits = mantissaDigits
+        self.mantissa = mantissa
+    }
+
+    var normalizedMantissaDigits: String {
+        var digits = mantissaDigits
+        while digits.count > 1 && digits.first == "0" {
+            digits.removeFirst()
+        }
+        return digits
+    }
+
+    var canonicalNumeric: OfflineCanonicalNumeric {
+        OfflineCanonicalNumeric(
+            isNegative: isNegative,
+            scale: scale,
+            digits: normalizedMantissaDigits
+        )
+    }
+
+    var canonicalString: String {
+        canonicalNumeric.canonicalString
+    }
+
+    func mantissaBytes(maxBytes: Int) throws -> Data {
+        do {
+            return try mantissa.toTwosComplementBytes(maxBytes: maxBytes)
+        } catch OfflineNoritoError.numericOverflow {
+            throw OfflineNumericParseError.overflow
+        } catch {
+            throw OfflineNumericParseError.invalid
+        }
+    }
+}
+
+struct OfflineCanonicalNumeric {
+    let isNegative: Bool
+    let scale: UInt32
+    let digits: String
+
+    init(isNegative: Bool, scale: UInt32, digits: String) {
+        var normalizedDigits = digits
+        while normalizedDigits.count > 1 && normalizedDigits.first == "0" {
+            normalizedDigits.removeFirst()
+        }
+        let isZero = normalizedDigits.allSatisfy { $0 == "0" }
+        self.isNegative = isZero ? false : isNegative
+        self.scale = isZero ? 0 : scale
+        self.digits = isZero ? "0" : normalizedDigits
+    }
+
+    var canonicalString: String {
+        var formattedDigits = digits
+        if scale == 0 {
+            return isNegative ? "-" + formattedDigits : formattedDigits
+        }
+        while formattedDigits.count <= Int(scale) {
+            formattedDigits.insert("0", at: formattedDigits.startIndex)
+        }
+        let splitAt = formattedDigits.index(formattedDigits.endIndex, offsetBy: -Int(scale))
+        let intPart = String(formattedDigits[..<splitAt])
+        let fracPart = String(formattedDigits[splitAt...])
+        let body = "\(intPart).\(fracPart)"
+        return isNegative ? "-" + body : body
+    }
+
+    func negated() -> OfflineCanonicalNumeric {
+        OfflineCanonicalNumeric(
+            isNegative: !isNegative && digits != "0",
+            scale: scale,
+            digits: digits
+        )
+    }
+
+    func compared(to other: OfflineCanonicalNumeric) -> ComparisonResult {
+        let targetScale = max(scale, other.scale)
+        if let lhsDigits = alignedDigitsIfWithinBounds(targetScale: targetScale),
+           let rhsDigits = other.alignedDigitsIfWithinBounds(targetScale: targetScale) {
+            let magnitudeOrder = Self.compareMagnitudeStrings(lhsDigits, rhsDigits)
+            if isNegative != other.isNegative {
+                return isNegative ? .orderedAscending : .orderedDescending
+            }
+            if isNegative {
+                switch magnitudeOrder {
+                case .orderedAscending: return .orderedDescending
+                case .orderedSame: return .orderedSame
+                case .orderedDescending: return .orderedAscending
+                }
+            }
+            return magnitudeOrder
+        }
+
+        let mantissaOrder = comparedMantissa(to: other)
+        if mantissaOrder != .orderedSame {
+            return mantissaOrder
+        }
+        if scale == other.scale {
+            return .orderedSame
+        }
+        return scale < other.scale ? .orderedAscending : .orderedDescending
+    }
+
+    func adding(
+        _ other: OfflineCanonicalNumeric,
+        maxBytes: Int
+    ) throws -> OfflineCanonicalNumeric {
+        let targetScale = max(scale, other.scale)
+        let lhsDigits = alignedDigits(targetScale: targetScale)
+        let rhsDigits = other.alignedDigits(targetScale: targetScale)
+
+        let resultDigits: String
+        let resultIsNegative: Bool
+        if isNegative == other.isNegative {
+            resultDigits = Self.addMagnitudeStrings(lhsDigits, rhsDigits)
+            resultIsNegative = isNegative
+        } else {
+            switch Self.compareMagnitudeStrings(lhsDigits, rhsDigits) {
+            case .orderedSame:
+                resultDigits = "0"
+                resultIsNegative = false
+            case .orderedDescending:
+                resultDigits = Self.subtractMagnitudeStrings(lhsDigits, rhsDigits)
+                resultIsNegative = isNegative
+            case .orderedAscending:
+                resultDigits = Self.subtractMagnitudeStrings(rhsDigits, lhsDigits)
+                resultIsNegative = other.isNegative
+            }
+        }
+
+        let result = OfflineCanonicalNumeric(
+            isNegative: resultIsNegative,
+            scale: targetScale,
+            digits: resultDigits
+        )
+        try result.validate(maxBytes: maxBytes)
+        return result
+    }
+
+    func subtracting(
+        _ other: OfflineCanonicalNumeric,
+        maxBytes: Int
+    ) throws -> OfflineCanonicalNumeric {
+        try adding(other.negated(), maxBytes: maxBytes)
+    }
+
+    private func alignedDigits(targetScale: UInt32) -> String {
+        guard targetScale > scale else { return digits }
+        return digits + String(repeating: "0", count: Int(targetScale - scale))
+    }
+
+    private func alignedDigitsIfWithinBounds(targetScale: UInt32) -> String? {
+        let aligned = alignedDigits(targetScale: targetScale)
+        var mantissa = try? OfflineBigInt(decimalDigits: aligned)
+        mantissa?.isNegative = isNegative
+        guard let mantissa, (try? mantissa.toTwosComplementBytes(maxBytes: OfflineNorito.maxBigIntBytes)) != nil else {
+            return nil
+        }
+        return aligned
+    }
+
+    private func validate(maxBytes: Int) throws {
+        var mantissa = try OfflineBigInt(decimalDigits: digits)
+        mantissa.isNegative = isNegative
+        _ = try mantissa.toTwosComplementBytes(maxBytes: maxBytes)
+    }
+
+    private func comparedMantissa(to other: OfflineCanonicalNumeric) -> ComparisonResult {
+        if isNegative != other.isNegative {
+            return isNegative ? .orderedAscending : .orderedDescending
+        }
+        let magnitudeOrder = Self.compareMagnitudeStrings(digits, other.digits)
+        if isNegative {
+            switch magnitudeOrder {
+            case .orderedAscending: return .orderedDescending
+            case .orderedSame: return .orderedSame
+            case .orderedDescending: return .orderedAscending
+            }
+        }
+        return magnitudeOrder
+    }
+
+    private static func compareMagnitudeStrings(
+        _ lhs: String,
+        _ rhs: String
+    ) -> ComparisonResult {
+        let lhs = normalizedMagnitudeString(lhs)
+        let rhs = normalizedMagnitudeString(rhs)
+        if lhs.count != rhs.count {
+            return lhs.count < rhs.count ? .orderedAscending : .orderedDescending
+        }
+        if lhs == rhs {
+            return .orderedSame
+        }
+        return lhs < rhs ? .orderedAscending : .orderedDescending
+    }
+
+    private static func normalizedMagnitudeString(_ value: String) -> String {
+        var digits = value
+        while digits.count > 1 && digits.first == "0" {
+            digits.removeFirst()
+        }
+        return digits
+    }
+
+    private static func addMagnitudeStrings(_ lhs: String, _ rhs: String) -> String {
+        let lhsDigits = Array(lhs.utf8)
+        let rhsDigits = Array(rhs.utf8)
+        var lhsIndex = lhsDigits.count - 1
+        var rhsIndex = rhsDigits.count - 1
+        var carry = 0
+        var result: [UInt8] = []
+        result.reserveCapacity(max(lhsDigits.count, rhsDigits.count) + 1)
+
+        while lhsIndex >= 0 || rhsIndex >= 0 || carry > 0 {
+            let lhsDigit = lhsIndex >= 0 ? Int(lhsDigits[lhsIndex] - 48) : 0
+            let rhsDigit = rhsIndex >= 0 ? Int(rhsDigits[rhsIndex] - 48) : 0
+            let sum = lhsDigit + rhsDigit + carry
+            result.append(UInt8(sum % 10 + 48))
+            carry = sum / 10
+            lhsIndex -= 1
+            rhsIndex -= 1
+        }
+
+        return String(bytes: result.reversed(), encoding: .utf8) ?? "0"
+    }
+
+    private static func subtractMagnitudeStrings(_ lhs: String, _ rhs: String) -> String {
+        let lhsDigits = Array(lhs.utf8)
+        let rhsDigits = Array(rhs.utf8)
+        var lhsIndex = lhsDigits.count - 1
+        var rhsIndex = rhsDigits.count - 1
+        var borrow = 0
+        var result: [UInt8] = []
+        result.reserveCapacity(lhsDigits.count)
+
+        while lhsIndex >= 0 {
+            let lhsDigit = Int(lhsDigits[lhsIndex] - 48)
+            let rhsDigit = rhsIndex >= 0 ? Int(rhsDigits[rhsIndex] - 48) : 0
+            var diff = lhsDigit - borrow - rhsDigit
+            if diff < 0 {
+                diff += 10
+                borrow = 1
+            } else {
+                borrow = 0
+            }
+            result.append(UInt8(diff + 48))
+            lhsIndex -= 1
+            rhsIndex -= 1
+        }
+
+        while result.count > 1 && result.last == 48 {
+            result.removeLast()
+        }
+
+        return String(bytes: result.reversed(), encoding: .utf8) ?? "0"
+    }
+}
+
 struct OfflineNoritoWriter {
     private(set) var data = Data()
 
@@ -74,9 +405,106 @@ struct OfflineNoritoWriter {
     }
 }
 
+struct OfflineCompactNoritoWriter {
+    private(set) var data = Data()
+
+    mutating func writeUInt8(_ value: UInt8) {
+        data.append(value)
+    }
+
+    mutating func writeUInt16LE(_ value: UInt16) {
+        var le = value.littleEndian
+        data.append(contentsOf: withUnsafeBytes(of: &le, Array.init))
+    }
+
+    mutating func writeUInt32LE(_ value: UInt32) {
+        var le = value.littleEndian
+        data.append(contentsOf: withUnsafeBytes(of: &le, Array.init))
+    }
+
+    mutating func writeUInt64LE(_ value: UInt64) {
+        var le = value.littleEndian
+        data.append(contentsOf: withUnsafeBytes(of: &le, Array.init))
+    }
+
+    mutating func writeLength(_ value: UInt64) {
+        var remaining = value
+        while remaining >= 0x80 {
+            data.append(UInt8(remaining & 0x7F) | 0x80)
+            remaining >>= 7
+        }
+        data.append(UInt8(remaining))
+    }
+
+    mutating func writeBytes(_ bytes: Data) {
+        data.append(bytes)
+    }
+
+    mutating func writeField(_ payload: Data) {
+        writeLength(UInt64(payload.count))
+        writeBytes(payload)
+    }
+}
+
+enum OfflineCompactNorito {
+    static func encodeString(_ value: String) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        let bytes = Data(value.utf8)
+        writer.writeLength(UInt64(bytes.count))
+        writer.writeBytes(bytes)
+        return writer.data
+    }
+
+    static func encodeUInt8(_ value: UInt8) -> Data {
+        Data([value])
+    }
+
+    static func encodeUInt16(_ value: UInt16) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt16LE(value)
+        return writer.data
+    }
+
+    static func encodeUInt32(_ value: UInt32) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt32LE(value)
+        return writer.data
+    }
+
+    static func encodeUInt64(_ value: UInt64) -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeUInt64LE(value)
+        return writer.data
+    }
+
+    static func encodeOption<T>(_ value: T?, encode: (T) throws -> Data) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        guard let value else {
+            writer.writeUInt8(0)
+            return writer.data
+        }
+        writer.writeUInt8(1)
+        writer.writeField(try encode(value))
+        return writer.data
+    }
+
+    static func encodeVec<T>(_ values: [T], encode: (T) throws -> Data) throws -> Data {
+        var writer = OfflineCompactNoritoWriter()
+        writer.writeLength(UInt64(values.count))
+        for value in values {
+            writer.writeField(try encode(value))
+        }
+        return writer.data
+    }
+
+    static func encodeHash(_ bytes: Data) throws -> Data {
+        try OfflineNorito.encodeHash(bytes)
+    }
+}
+
 public enum OfflineNorito {
     static let maxNumericScale: UInt32 = 28
-    private static let maxBigIntBytes = 64
+    static let maxBigIntBytes = 64
     private static let maxSafeInteger: Double = 9_007_199_254_740_992 // 2^53
     private static let defaultNetworkPrefix: UInt16 = 0x02F1
     private static let isRunningXCTest = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -197,47 +625,8 @@ public enum OfflineNorito {
     }
 
     static func encodeNumeric(_ value: String) throws -> Data {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw OfflineNoritoError.invalidNumeric(value)
-        }
-        var digits = trimmed
-        let negative = digits.first == "-"
-        if digits.first == "-" || digits.first == "+" {
-            digits.removeFirst()
-        }
-        var seenDot = false
-        var scale: UInt32 = 0
-        var mantissaDigits = ""
-        for scalar in digits.unicodeScalars {
-            if scalar == "." {
-                if seenDot {
-                    throw OfflineNoritoError.invalidNumeric(value)
-                }
-                seenDot = true
-                continue
-            }
-            guard scalar.value >= 48 && scalar.value <= 57 else {
-                throw OfflineNoritoError.invalidNumeric(value)
-            }
-            mantissaDigits.append(Character(scalar))
-            if seenDot {
-                scale = scale &+ 1
-            }
-        }
-        guard !mantissaDigits.isEmpty else {
-            throw OfflineNoritoError.invalidNumeric(value)
-        }
-        guard scale <= maxNumericScale else {
-            throw OfflineNoritoError.numericScaleTooLarge
-        }
-        var bigInt = try OfflineBigInt(decimalDigits: mantissaDigits)
-        if bigInt.isZero {
-            bigInt.isNegative = false
-        } else {
-            bigInt.isNegative = negative
-        }
-        let mantissaBytes = try bigInt.toTwosComplementBytes(maxBytes: maxBigIntBytes)
+        let numeric = try parseNumeric(value)
+        let mantissaBytes = try numeric.mantissaBytes(maxBytes: maxBigIntBytes)
         var bigintWriter = OfflineNoritoWriter()
         bigintWriter.writeUInt32LE(UInt32(mantissaBytes.count))
         bigintWriter.writeBytes(mantissaBytes)
@@ -245,8 +634,30 @@ public enum OfflineNorito {
 
         var writer = OfflineNoritoWriter()
         writer.writeField(bigintPayload)
-        writer.writeField(encodeUInt32(scale))
+        writer.writeField(encodeUInt32(numeric.scale))
         return writer.data
+    }
+
+    static func parseNumeric(_ value: String) throws -> OfflineNumericComponents {
+        do {
+            return try OfflineNumericComponents(
+                parsing: value,
+                maxScale: maxNumericScale,
+                maxBigIntBytes: maxBigIntBytes
+            )
+        } catch OfflineNumericParseError.invalid {
+            throw OfflineNoritoError.invalidNumeric(value)
+        } catch OfflineNumericParseError.scaleTooLarge {
+            throw OfflineNoritoError.numericScaleTooLarge
+        } catch OfflineNumericParseError.overflow {
+            throw OfflineNoritoError.numericOverflow
+        } catch {
+            throw OfflineNoritoError.invalidNumeric(value)
+        }
+    }
+
+    static func parseCanonicalNumeric(_ value: String) throws -> OfflineCanonicalNumeric {
+        try parseNumeric(value).canonicalNumeric
     }
 
     static func encodeMetadata(_ metadata: [String: ToriiJSONValue]) throws -> Data {
@@ -278,70 +689,12 @@ public enum OfflineNorito {
     }
 
     static func encodeAssetId(_ assetId: String) throws -> Data {
-        try decodeNoritoAssetIdLiteral(assetId)
-    }
-
-    static func encodeAssetId(assetDefinitionId: String, accountId: String) throws -> Data {
-        let literal = try assetIdLiteral(assetDefinitionId: assetDefinitionId, accountId: accountId)
-        return try encodeAssetId(literal)
-    }
-
-    static func assetIdLiteral(assetDefinitionId: String, accountId: String) throws -> String {
-        let trimmedDefinition = assetDefinitionId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedDefinition.isEmpty else {
-            throw OfflineNoritoError.invalidAssetId(assetDefinitionId)
-        }
-        if trimmedDefinition.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
-            throw OfflineNoritoError.invalidAssetId(assetDefinitionId)
-        }
-        if trimmedDefinition.contains("@") {
-            throw OfflineNoritoError.invalidAssetId(trimmedDefinition)
-        }
-
-        let canonicalAccount = try canonicalizeEncodedAccountId(accountId)
-        let bridge = NoritoNativeBridge.shared
-        if let encoded = bridge.encodeAssetIdLiteral(
-            assetDefinition: trimmedDefinition,
-            accountId: canonicalAccount
-        ) {
-            let normalized = encoded.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !normalized.isEmpty {
-                return normalized
-            }
-        }
-
-        if bridge.canEncodeAssetIdLiteral {
-            throw OfflineNoritoError.invalidAssetId(trimmedDefinition)
-        }
-
-        throw OfflineNoritoError.nativeBridgeUnavailable("connect_norito_encode_asset_id_literal")
-    }
-
-    /// Derive the deterministic `aid:<hex>` canonical literal from a human-readable alias.
-    ///
-    /// Algorithm matches Rust `AssetDefinitionId::new(domain, name)`:
-    ///   `blake3("name#domain")` → truncate to 16 bytes → force UUIDv4 bits → `"aid:<hex>"`
-    ///
-    /// - Parameter alias: Asset alias in `"name#domain"` format, e.g. `"usd#wonderland"`.
-    /// - Returns: Canonical asset definition ID, e.g. `"aid:bef53c1ccd1749e180dfbad6519bfd66"`.
-    static func assetDefinitionIdFromAlias(_ alias: String) throws -> String {
-        let trimmed = alias.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.contains("#") else {
-            throw OfflineNoritoError.invalidAssetId(alias)
-        }
-        let bridge = NoritoNativeBridge.shared
-        guard let hash = bridge.blake3Hash(data: Data(trimmed.utf8)) else {
-            throw OfflineNoritoError.nativeBridgeUnavailable("connect_norito_blake3_hash")
-        }
-        guard hash.count >= 16 else {
-            throw OfflineNoritoError.nativeBridgeUnavailable("blake3 hash too short")
-        }
-        var aidBytes = [UInt8](hash.prefix(16))
-        // Force UUIDv4 version (0100) and RFC4122 variant (10xx)
-        aidBytes[6] = (aidBytes[6] & 0x0f) | 0x40
-        aidBytes[8] = (aidBytes[8] & 0x3f) | 0x80
-        let hex = aidBytes.map { String(format: "%02x", $0) }.joined()
-        return "aid:\(hex)"
+        let parsed = try parsePublicAssetId(assetId)
+        var writer = OfflineNoritoWriter()
+        writer.writeField(try encodeAccountId(parsed.accountId))
+        writer.writeField(try encodeAssetDefinitionAddress(parsed.assetDefinitionId))
+        writer.writeField(encodeAssetBalanceScopePayload(dataspaceId: parsed.dataspaceId))
+        return writer.data
     }
 
     static func encodeAssetDefinitionId(name: String, domain: String) throws -> Data {
@@ -394,39 +747,103 @@ public enum OfflineNorito {
         }
         let address: AccountAddress
         do {
-            address = try AccountAddress.parseEncoded(trimmed, expectedPrefix: defaultNetworkPrefix)
+            address = try AccountAddress.parseEncodedSwiftOnly(
+                trimmed,
+                expectedPrefix: defaultNetworkPrefix
+            )
         } catch {
             throw OfflineNoritoError.invalidAccountId(trimmed)
         }
         return try address.toI105(networkPrefix: defaultNetworkPrefix)
     }
 
-    private static func decodeNoritoAssetIdLiteral(_ raw: String) throws -> Data {
+    static func canonicalAssetIdLiteral(_ raw: String) throws -> String {
+        let parsed = try parsePublicAssetId(raw)
+        let base = "\(parsed.assetDefinitionId)#\(parsed.accountId)"
+        guard let dataspaceId = parsed.dataspaceId else {
+            return base
+        }
+        return "\(base)#dataspace:\(dataspaceId)"
+    }
+
+    private struct ParsedPublicAssetId {
+        let assetDefinitionId: String
+        let accountId: String
+        let dataspaceId: UInt64?
+    }
+
+    private static func parsePublicAssetId(_ raw: String) throws -> ParsedPublicAssetId {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
-        if trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+        if trimmed != raw || trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
-        let lower = trimmed.lowercased()
-        guard lower.hasPrefix("norito:") else {
+        let components = trimmed.split(separator: "#", omittingEmptySubsequences: false)
+        guard components.count == 2 || components.count == 3,
+              !components[0].isEmpty,
+              !components[1].isEmpty else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
-        let hex = String(trimmed.dropFirst("norito:".count))
-        guard !hex.isEmpty,
-              hex.count.isMultiple(of: 2),
-              let decoded = Data(hexString: hex) else {
+        let assetDefinitionId = String(components[0])
+        guard let _ = AssetDefinitionAddress.decode(assetDefinitionId) else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
-        if decoded.count > 40,
-           decoded[0] == 0x4E, // N
-           decoded[1] == 0x52, // R
-           decoded[2] == 0x54, // T
-           decoded[3] == 0x30 { // 0
-            return Data(decoded.dropFirst(40))
+        let accountId: String
+        do {
+            accountId = try canonicalizeEncodedAccountId(String(components[1]))
+        } catch {
+            throw OfflineNoritoError.invalidAssetId(raw)
         }
-        return decoded
+        guard components.count <= 3 else {
+            throw OfflineNoritoError.invalidAssetId(raw)
+        }
+        var dataspaceId: UInt64?
+        if components.count == 3 {
+            let scope = String(components[2])
+            guard let rawDataspace = scope.split(
+                separator: ":",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            ).dropFirst().first,
+            scope.lowercased().hasPrefix("dataspace:"),
+            !rawDataspace.isEmpty,
+            let parsedDataspaceId = UInt64(rawDataspace) else {
+                throw OfflineNoritoError.invalidAssetId(raw)
+            }
+            dataspaceId = parsedDataspaceId
+        }
+        return ParsedPublicAssetId(
+            assetDefinitionId: assetDefinitionId,
+            accountId: accountId,
+            dataspaceId: dataspaceId
+        )
+    }
+
+    private static func encodeAssetDefinitionAddress(_ literal: String) throws -> Data {
+        guard let uuidBytes = AssetDefinitionAddress.decode(literal) else {
+            throw OfflineNoritoError.invalidAssetId(literal)
+        }
+        var writer = OfflineNoritoWriter()
+        for byte in uuidBytes {
+            writer.writeLength(1)
+            writer.writeUInt8(byte)
+        }
+        return writer.data
+    }
+
+    private static func encodeAssetBalanceScopePayload(dataspaceId: UInt64?) -> Data {
+        var writer = OfflineNoritoWriter()
+        guard let dataspaceId else {
+            writer.writeUInt32LE(0)
+            return writer.data
+        }
+        writer.writeUInt32LE(1)
+        var dataspaceWriter = OfflineNoritoWriter()
+        dataspaceWriter.writeUInt64LE(dataspaceId)
+        writer.writeField(dataspaceWriter.data)
+        return writer.data
     }
 
     private static func encodeVarint(_ value: UInt64) -> [UInt8] {
@@ -449,8 +866,22 @@ public enum OfflineNorito {
             return .ed25519
         case 0xe7:
             return .secp256k1
+        case 0xea:
+            return .blsNormal
+        case 0xeb:
+            return .blsSmall
         case 0xee:
             return .mlDsa
+        case 0x1200:
+            return .gost2012_256A
+        case 0x1201:
+            return .gost2012_256B
+        case 0x1202:
+            return .gost2012_256C
+        case 0x1203:
+            return .gost2012_512A
+        case 0x1204:
+            return .gost2012_512B
         case 0x1306:
             return .sm2
         default:
@@ -464,8 +895,22 @@ public enum OfflineNorito {
             return 0xed
         case .secp256k1:
             return 0xe7
+        case .blsNormal:
+            return 0xea
+        case .blsSmall:
+            return 0xeb
         case .mlDsa:
             return 0xee
+        case .gost2012_256A:
+            return 0x1200
+        case .gost2012_256B:
+            return 0x1201
+        case .gost2012_256C:
+            return 0x1202
+        case .gost2012_512A:
+            return 0x1203
+        case .gost2012_512B:
+            return 0x1204
         case .sm2:
             return 0x1306
         }
@@ -484,6 +929,20 @@ public enum OfflineNorito {
             return .secp256k1
         case "ml-dsa", "mldsa", "ml_dsa":
             return .mlDsa
+        case "bls_normal", "bls-normal", "blsnormal":
+            return .blsNormal
+        case "bls_small", "bls-small", "blssmall":
+            return .blsSmall
+        case "gost256a", "gost-256-a", "gost3410-2012-256-paramset-a":
+            return .gost2012_256A
+        case "gost256b", "gost-256-b", "gost3410-2012-256-paramset-b":
+            return .gost2012_256B
+        case "gost256c", "gost-256-c", "gost3410-2012-256-paramset-c":
+            return .gost2012_256C
+        case "gost512a", "gost-512-a", "gost3410-2012-512-paramset-a":
+            return .gost2012_512A
+        case "gost512b", "gost-512-b", "gost3410-2012-512-paramset-b":
+            return .gost2012_512B
         case "sm2":
             return .sm2
         default:
@@ -712,8 +1171,8 @@ struct OfflineBigInt {
     }
 }
 
-enum IrohaHash {
-    static func hash(_ data: Data) -> Data {
+public enum IrohaHash {
+    public static func hash(_ data: Data) -> Data {
         var digest = Blake2b.hash256(data)
         if let last = digest.indices.last {
             digest[last] |= 1

@@ -8,8 +8,15 @@ with Iroha nodes.
 
 This snapshot covers the offline key management façade, Norito encoding backed
 by the shared `norito-java` implementation, the Android Keystore/StrongBox
-backend (with cached attestations + deterministic software fallbacks), and
-scaffolding for network clients.
+backend (with cached attestations + explicit deterministic software providers), and
+scaffolding for network clients. The generated instruction helpers now include
+the first dedicated RWA lot builder slice alongside NFT helpers:
+`RegisterRwaInstruction`, `TransferRwaInstruction`,
+`MergeRwasInstruction`, `RedeemRwaInstruction`,
+`FreezeRwaInstruction`, `UnfreezeRwaInstruction`,
+`HoldRwaInstruction`, `ReleaseRwaInstruction`,
+`ForceTransferRwaInstruction`, `SetRwaControlsInstruction`,
+and RWA-aware metadata setters/removers.
 
 ## Gradle quickstart
 
@@ -39,8 +46,8 @@ repository with:
   -PirohaAndroidRepoDir=$PWD/../artifacts/android/maven
 ```
 
-It defaults to the local snapshot repository when it exists and falls back to
-the in-repo project dependency otherwise. Set `irohaAndroidVersion` to match the
+It uses the local snapshot repository when it exists and otherwise uses the
+in-repo project dependency. Set `irohaAndroidVersion` to match the
 published coordinates when consuming from Maven.
 
 ## Account addresses
@@ -49,15 +56,13 @@ published coordinates when consuming from Maven.
 import org.hyperledger.iroha.android.address.AccountAddress;
 
 byte[] key = new byte[32];
-AccountAddress address = AccountAddress.fromAccount("default", key, "ed25519");
+AccountAddress address = AccountAddress.fromAccount(key, "ed25519");
 System.out.println(address.canonicalHex());
-System.out.println(address.toIH58(753));
-System.out.println(address.toCompressedSora());
+System.out.println(address.toI105(753));
 
 AccountAddress.DisplayFormats formats = address.displayFormats();
-System.out.println(formats.ih58);
-System.out.println(formats.compressed);
-System.out.println(formats.compressedWarning);
+System.out.println(formats.i105);
+System.out.println(formats.i105Warning);
 ```
 
 Use `displayFormats()` whenever UI layers need to render or copy addresses so the warning text and
@@ -68,13 +73,18 @@ network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`
 ```java
 import org.hyperledger.iroha.android.multisig.MultisigProposalTtlPreview;
 import org.hyperledger.iroha.android.multisig.MultisigSpec;
+import org.hyperledger.iroha.android.address.AccountAddress;
 
+byte[] aliceKey = new byte[32];
+byte[] bobKey = new byte[32];
+String alice = AccountAddress.fromAccount(aliceKey, "ed25519").toI105(753);
+String bob = AccountAddress.fromAccount(bobKey, "ed25519").toI105(753);
 MultisigSpec spec =
     MultisigSpec.builder()
         .setQuorum(3)
         .setTransactionTtlMs(86_400_000L)
-        .addSignatory("alice@wonderland", 2)
-        .addSignatory("bob@wonderland", 1)
+        .addSignatory(alice, 2)
+        .addSignatory(bob, 1)
         .build();
 
 MultisigProposalTtlPreview preview = spec.enforceProposalTtl(90_000L, System.currentTimeMillis());
@@ -85,9 +95,9 @@ System.out.println("expires at: " + preview.expiresAtMs());
 `enforceProposalTtl` rejects TTL overrides above the policy cap (`transaction_ttl_ms`) before
 submission so apps can surface the same error Torii would return. Use
 `previewProposalExpiry` when you only need a preview (cap + expiry) without throwing.
-When registering a multisig controller, supply an explicit account id in the same domain as the
-signatories (random keys are fine—the controller must never be used for direct signing). Nodes now
-quarantine deterministically derived controller ids and will reject registration and subsequent
+When registering a multisig controller, supply an explicit canonical I105 account id for a random
+controller key (the controller must never be used for direct signing). Nodes now quarantine
+deterministically derived controller ids and will reject registration and subsequent
 propose/approve attempts that use them.
 
 ```java
@@ -126,7 +136,7 @@ plan.put("period", "month");
 SubscriptionPlanCreateResponse planResponse =
     client.createSubscriptionPlan(
             SubscriptionPlanCreateRequest.builder()
-                .authority("aws@commerce")
+                .authority("<provider_account_i105>")
                 .privateKey("<hex>")
                 .planId("aws_compute#commerce")
                 .plan(plan)
@@ -136,7 +146,7 @@ SubscriptionPlanCreateResponse planResponse =
 SubscriptionCreateResponse subscriptionResponse =
     client.createSubscription(
             SubscriptionCreateRequest.builder()
-                .authority("alice@wonderland")
+                .authority("<subscriber_account_i105>")
                 .privateKey("<hex>")
                 .subscriptionId("sub-001$subscriptions")
                 .planId("aws_compute#commerce")
@@ -146,7 +156,7 @@ SubscriptionCreateResponse subscriptionResponse =
 client.recordSubscriptionUsage(
         "sub-001$subscriptions",
         SubscriptionUsageRequest.builder()
-            .authority("aws@commerce")
+            .authority("<provider_account_i105>")
             .privateKey("<hex>")
             .unitKey("compute_ms")
             .delta("3600000")
@@ -188,11 +198,9 @@ java/iroha_android
 │   │       │   └── TransactionPayloadAdapter.java
 │   │       ├── offline
 │   │       │   ├── OfflineToriiClient.java
-│   │       │   ├── OfflineListParams.java
-│   │       │   ├── OfflineAllowanceList.java
-│   │       │   ├── OfflineTransferList.java
-│   │       │   ├── OfflineAuditLogger.java
-│   │       │   └── OfflineWallet.java
+│   │       │   ├── OfflineQrStream.java
+│   │       │   ├── OfflineJsonParser.java
+│   │       │   └── OfflineV2Readiness.java
 │   │       ├── subscriptions
 │   │       │   ├── SubscriptionPlanCreateRequest.java
 │   │       │   ├── SubscriptionCreateRequest.java
@@ -291,19 +299,16 @@ bash ci/check_android_transport_guard.sh /path/to/classes.jar
 
 ### Transport defaults and troubleshooting
 
-- Android builds default to OkHttp transports backed by a shared connection pool; JVM builds default
-  to the JDK executor shipped in the `:jvm` artefact. `PlatformHttpTransportExecutor` selects OkHttp
-  when the Android factory is on the classpath and falls back to `JavaHttpExecutorFactory`
-  otherwise. JVM callers that want an explicit JDK transport can use
-  `JavaHttpExecutorFactory.createTransport(...)`.
+- HTTP clients use a strict runtime split: Android loads `OkHttpTransportExecutorFactory`, while JVM
+  builds load `JavaHttpExecutorFactory`. Apps or services that want a custom transport should inject
+  it explicitly with the relevant builder.
 - Builders now auto-wire platform defaults: `HttpClientTransport.withDefaultExecutor(...)`,
   `ToriiEventStreamClient.builder()` (without `setTransportExecutor(...)`),
   `SorafsGatewayClient.builder()`, and `HttpSafetyDetectService.createDefault(...)` all pick the
   platform executor so Android apps land on the shared OkHttp client without extra wiring.
-- WebSockets follow the same split: `PlatformWebSocketConnector` prefers
-  `OkHttpWebSocketConnectorFactory` when present and falls back to
-  `JdkWebSocketConnectorFactory` on JVM builds. Inject `setTransportExecutor`/`setWebSocketConnector`
-  in client builders when you want to reuse a shared OkHttp client.
+- WebSockets use a strict runtime split: Android loads `OkHttpWebSocketConnectorFactory`, while JVM
+  builds load `JdkWebSocketConnectorFactory`. Inject `setTransportExecutor`/`setWebSocketConnector`
+  in client builders when you want a custom transport.
 - Android artefacts must not contain `java.net.http` bytecode. The `android-and6` workflow now runs a
   `transport-guard` job that assembles the release AAR and executes
   `ci/check_android_transport_guard.sh` (also available locally via `make android-transport-guard`)
@@ -370,15 +375,15 @@ the shell).
 
 ### Deterministic export & recovery
 
-- `SoftwareKeyProvider.exportDeterministic(...)` emits v3 bundles with per-export salt/nonce, `kdf_kind`,
-  and `kdf_work_factor`. Argon2id (64 MiB, 3 iterations, parallelism = 2) is preferred, with a
-  PBKDF2-HMAC-SHA256 fallback at 350 k iterations. Passphrases must be ≥12 characters and the importer
-  rejects all-zero salt/nonce seeds.
+- `SoftwareKeyProvider.exportDeterministic(...)` emits v4 bundles with per-export salt/nonce,
+  `kdf_kind`, and `kdf_work_factor`. Argon2id (64 MiB, 3 iterations, parallelism = 2) is the only
+  export KDF. Passphrases must be >=12 characters and the importer rejects all-zero salt/nonce
+  seeds.
 - `SoftwareKeyProvider` can persist deterministic exports by wiring a `KeyExportStore` plus
   `KeyPassphraseProvider` (for example, `FileKeyExportStore` on Android/JVM, or
   `InMemoryKeyExportStore` in tests). The provider rehydrates keys from the store before generating
   new material, keeping software-backed accounts stable across app restarts.
-- `KeyExportBundle.decode(Base64|bytes)` accepts the v3 payload only. Treat
+- `KeyExportBundle.decode(Base64|bytes)` accepts the v4 payload only. Treat
   salt/nonce/ciphertext errors as tampering and capture a fresh bundle rather than reusing an old
   export between devices.
 - Regression coverage in `DeterministicKeyExporterTests` includes wrong passphrases and tampered
@@ -504,7 +509,7 @@ checklist.
 > **Note:** Instruction lists hydrate strongly typed builders for register,
 > transfer (asset/domain/asset-definition), mint/burn asset, and
 > grant/revoke permission and role instructions
-> and fall back to key/value payloads for families that do not yet have Java
+> and use key/value payloads for families that do not yet have Java
 > bindings.
 > Additional instruction variants will be added alongside upcoming code
 > generation work.
@@ -611,7 +616,7 @@ ToriiEventStreamSubscription subscription =
 subscription.close();
 ```
 
-The helper honours server-provided retry hints and falls back to exponential
+The helper honours server-provided retry hints and uses exponential
 backoff when the stream fails before emitting one. Observers registered via
 `addObserver` receive structured lifecycle notifications (`streamOpened`,
 `streamClosed`, `streamFailure`, and `onReconnectScheduled`) so telemetry
@@ -708,21 +713,22 @@ custom `underlying` context) when surfacing the events.
 
 ### Canonical request signing
 
-Torii app endpoints accept optional `X-Iroha-Account` / `X-Iroha-Signature`
-headers. Use `CanonicalRequestSigner` when calling account-scoped helpers or
-building ad-hoc HTTP requests:
+Torii app endpoints accept optional `X-Iroha-Account`, `X-Iroha-Signature`,
+`X-Iroha-Timestamp-Ms`, and `X-Iroha-Nonce` headers. Use
+`CanonicalRequestSigner` when calling account-scoped helpers or building ad-hoc
+HTTP requests:
 
 ```java
 import java.net.URI;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 
-URI uri = URI.create("https://torii.example/v1/accounts/alice@wonderland/assets?limit=10");
+URI uri = URI.create("https://torii.example/v1/accounts/<account_i105>/assets?limit=10");
 Map<String, String> headers =
-    CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "alice@wonderland", keyPair.getPrivate());
+    CanonicalRequestSigner.buildHeaders("get", uri, new byte[0], "<account_i105>", keyPair.getPrivate());
 ```
 
-Signatures cover the canonical method/path/query/body layout, matching the Rust
-verifier Torii uses on app-facing endpoints.
+Signatures cover the canonical method/path/query/body layout plus freshness
+metadata, matching the Rust verifier Torii uses on app-facing endpoints.
 
 ### Pipeline Hashes
 
@@ -752,16 +758,33 @@ response.rejectCode().ifPresent(code -> {
 });
 ```
 
+### Resolving Account Aliases
+
+`HttpClientTransport.resolveAccountAlias(...)` posts to `/v1/aliases/resolve` and
+returns an `Optional<AccountAliasResolution>`. An `Optional.empty()` value
+indicates the node responded with HTTP 404 for an unknown alias; other failures
+complete the future exceptionally. `AccountAliasResolution.index()` is optional
+and may be `null` when the alias backend does not expose a deterministic index.
+
+```java
+Optional<AccountAliasResolution> resolved =
+    client.resolveAccountAlias("some_alias@universal").join();
+resolved.ifPresentOrElse(
+    resolution -> System.out.println("account: " + resolution.accountId()),
+    () -> System.out.println("alias not found"));
+```
+
 ### Key Manager Defaults
 
 `IrohaKeyManager.withDefaultProviders()` constructs a manager that prefers
-hardware-backed keystore providers when available and falls back to the software
-provider on emulators or desktop JVMs. Pass custom `KeyGenParameters` when you
+hardware-backed keystore providers when available and also registers a software
+provider for emulators or desktop JVMs. Pass custom `KeyGenParameters` when you
 need to enforce StrongBox-only keys or user-authentication requirements while
-retaining a deterministic software fallback for local testing.
-If your desktop JVM lacks built-in Ed25519 support, drop in BouncyCastle (the test harness ships a stub provider) so the software fallback can generate keys without the Android keystore.
-Hardware-backed keys remain non-extractable; for user-scoped accounts that must
-roam across devices, prefer `SOFTWARE_ONLY` (or `withSoftwareFallback`) and use
+retaining an explicit deterministic software provider for local testing.
+If your desktop JVM lacks built-in Ed25519 support, configure the software
+provider with BouncyCastle required.
+Hardware-backed keys remain non-extractable; for user-managed accounts that must
+roam across devices, prefer `SOFTWARE_ONLY` (or `withSoftwareProvider`) and use
 `exportDeterministicKey(...)` / `importDeterministicKey(...)` to move key
 material between devices securely. When you need fully exportable keys, build
 the software provider with BouncyCastle enforced and a persistent export store:
@@ -784,6 +807,29 @@ IrohaKeyManager manager =
     IrohaKeyManager.withExportableSoftwareKeys(store, passphraseProvider);
 ```
 
+To opt into post-quantum ML-DSA signing for transaction and offline-wallet
+flows, select the signing algorithm up front:
+
+```java
+IrohaKeyManager ed25519Manager = IrohaKeyManager.withSoftwareProvider();
+IrohaKeyManager mlDsaManager =
+    IrohaKeyManager.withSoftwareProvider(SigningAlgorithm.ML_DSA);
+IrohaKeyManager gostManager =
+    IrohaKeyManager.withSoftwareProvider(SigningAlgorithm.GOST_2012_256_A);
+
+KeyGenParameters params =
+    new KeyGenParameters.Builder()
+        .setSigningAlgorithm(SigningAlgorithm.ML_DSA)
+        .build();
+IrohaKeyManager tunedManager = IrohaKeyManager.withDefaultProviders(params);
+```
+
+`ED25519` remains the default. `SECP256K1`, `BLS_NORMAL`, `BLS_SMALL`,
+`ML_DSA`, the five `GOST_2012_*` variants, and `SM2` use the shared native
+bridge and are software-only in this pass, so `HARDWARE_*` and `STRONGBOX_*`
+preferences fail fast instead of silently falling back to an unexpected
+provider.
+
 The manager validates Ed25519 SPKI output and skips providers that return a
 different algorithm (common on emulators), falling back to the next configured
 provider.
@@ -795,9 +841,9 @@ describes the required hardware tier:
   fails if no StrongBox backend is registered or the target device cannot
   satisfy the request.
 - `STRONGBOX_PREFERRED` — StrongBox providers are tried first, then other
-  hardware-backed providers, and finally software fallbacks.
+  hardware-backed providers, and finally explicitly configured software providers.
 - `HARDWARE_REQUIRED`/`HARDWARE_PREFERRED` — retain the previous semantics for
-  “any hardware” while allowing deterministic fallback to software.
+  “any hardware” while allowing deterministic software-provider selection.
 - `SOFTWARE_ONLY` — bypass hardware providers entirely (useful for emulator or
   deterministic testing scenarios).
 
@@ -807,7 +853,7 @@ generates a new key when no provider has material for the alias. Hardware-backed
 aliases remain pinned to the provider that created them, while software
 providers are consulted only when the chosen preference allows a downgrade (for
 example, `STRONGBOX_PREFERRED` on a device without StrongBox support). When an
-alias migrates from hardware to software fallback, the manager records the
+alias is generated on a weaker route than requested, the manager records the
 software copy so future lookups remain deterministic.
 
 Call `IrohaKeyManager.providerMetadata()` to inspect the registered providers
@@ -842,20 +888,20 @@ verifier and produces a JSON summary that should be archived with each
 attestation bundle.
 
 Need fresh attestation material? Call
-`IrohaKeyManager.generateAttestation(alias, challenge)` – it walks the
-registered providers (StrongBox/TEE first) and returns a `KeyAttestation`
+`IrohaKeyManager.generateAttestation(alias, challenge)` – it uses the selected
+provider (StrongBox/TEE first) and returns a `KeyAttestation`
 bundle when the hardware can satisfy the request, storing the artefact in the
 backing provider for subsequent verification. Pass a non-empty `challenge` to
 force fresh material (cache entries are keyed by `(alias, challenge)`), and set
 `KeyGenParameters.Builder.setAttestationChallenge(...)` when generating keys if
 you need the challenge embedded at creation time. StrongBox preferences are
 propagated to keystore parameters (`STRONGBOX_REQUIRED` forces StrongBox,
-`STRONGBOX_PREFERRED` attempts StrongBox then falls back to TEE), and hardware
-fallbacks are surfaced via telemetry so apps can respond accordingly.
+`STRONGBOX_PREFERRED` requests StrongBox), and generation errors are surfaced
+directly.
 
 To exercise CUDA acceleration on capable devices, launch the JVM with
 `-Diroha.cuda.enableNative=true` and ensure `libconnect_norito_bridge` is
-available on `java.library.path`. Without the flag the Java fallback remains
+available on `java.library.path`. Without the flag the deterministic Java path remains
 active and no native library is loaded (avoiding security warnings in CI).
 
 Kotlin callers should use `CudaAcceleratorsKotlin.*OrNull` helpers to receive
@@ -865,12 +911,11 @@ operator guide for native setup and the manual smoke harness
 bridge on CUDA-capable devices when `IROHA_CUDA_SELFTEST=1` is set.
 
 `SoftwareKeyProvider.exportDeterministic(...)` emits a versioned, AES-GCM
-wrapped export bundle (v3) using per-export salt/nonce. The bundle records
-`kdf_kind` and work factor; v3 prefers Argon2id (64 MiB, 3 iterations,
-parallelism 2) and falls back to PBKDF2-HMAC-SHA256 when Argon2 is unavailable.
-A minimum 12 character passphrase is enforced for v3 exports/imports, and only
-the v3 payload is accepted. Salt/nonce reuse is rejected and decode guards fail
-fast on tampered lengths.
+wrapped export bundle (v4) using per-export salt/nonce. The bundle records the
+signing algorithm alongside `kdf_kind` and work factor; v4 uses Argon2id
+(64 MiB, 3 iterations, parallelism 2). A minimum 12 character passphrase is
+enforced for deterministic exports/imports. Salt/nonce reuse is rejected and
+decode guards fail fast on tampered lengths.
 The companion `importDeterministic(...)` helper restores the key pair while
 validating the export's public key and authentication tag, ensuring passphrase
 mismatches or tampering are rejected.
@@ -895,7 +940,7 @@ after passphrase verification. When hardware attestation is required, call
 
 Applications can provide a `PendingTransactionQueue` (the default implementation
 `FilePendingTransactionQueue` persists base64-encoded
-`OfflineSigningEnvelope` Norito blobs for forward compatibility) via
+`OfflineSigningEnvelope` Norito blobs for forward schema versioning) via
 `ClientConfig`. When Torii submissions exhaust their retry budget, the
 transport persists the signed payloads for later replay and automatically
 drains the queue before sending new transactions. This keeps the mobile client
@@ -1002,189 +1047,31 @@ manifest together.
 
 Licensed under the Apache License, Version 2.0. See `LICENSE` for details.
 
-## Offline allowances, transfers, and auditing
+## Offline V2 readiness and auditing
 
-The SDK now exposes a lightweight `OfflineToriiClient` plus the model types
-required to consume `/v1/offline/allowances` and `/v1/offline/transfers`. The
-client reuses the existing `ClientConfig` headers/observers and can be created
-from any `HttpClientTransport`:
+The SDK exposes a lightweight `OfflineToriiClient` for the maintained Offline V2
+Torii surface. Torii now publishes only `GET /v1/offline/v2/readiness`; note issuance,
+redemption, and audit payloads are submitted as transaction instructions.
 
-```java
-OfflineListParams params = OfflineListParams.builder()
-    .limit(10L)
-    .filter("{\"op\":\"eq\",\"args\":[\"controller_id\",\"merchant@wonderland\"]}")
-    .build();
-
-transport.offlineToriiClient().listAllowances(params)
-    .thenAccept(list -> {
-        for (OfflineAllowanceList.OfflineAllowanceItem item : list.items()) {
-            System.out.println(item.certificateIdHex());
-        }
-    });
-
-OfflineQueryEnvelope query = OfflineQueryEnvelope.builder()
-    .filterJson("{\"op\":\"eq\",\"args\":[\"receiver_id\",\"merchant@wonderland\"]}")
-    .setLimit(25L)
-    .build();
-
-transport.offlineToriiClient().queryTransfers(query)
-    .thenAccept(list -> System.out.println("Fetched " + list.total() + " transfers"));
-```
-
-Register signed certificates on-ledger by posting them to the offline allowances endpoint:
-
-```java
-OfflineWalletCertificate certificate =
-    new OfflineWalletCertificate(
-        controllerId,
-        controllerId,
-        allowanceCommitment,
-        spendPublicKeyHex,
-        attestationReportBytes,
-        issuedAtMs,
-        expiresAtMs,
-        policy,
-        operatorSignatureHex,
-        metadata,
-        verdictIdHex,
-        attestationNonceHex,
-        refreshAtMs);
-
-transport.offlineToriiClient().registerAllowance(certificate, authorityId, authorityPrivateKeyHex);
-```
-
-If you want to issue and register in one call, use the top-up helpers:
-
-```java
-OfflineWalletCertificateDraft draft = /* build draft certificate */;
-
-transport
-    .offlineToriiClient()
-    .topUpAllowance(draft, authorityId, authorityPrivateKeyHex)
-    .thenAccept(topUp -> System.out.println(topUp.registration().certificateIdHex()));
-
-transport
-    .offlineToriiClient()
-    .topUpAllowanceRenewal(existingCertificateIdHex, draft, authorityId, authorityPrivateKeyHex);
-```
-
-If you need Torii to sign a receipt build claim directly (for example before
-submitting settlement), call `issueBuildClaim`:
-
-```java
-OfflineBuildClaimIssueRequest buildClaimRequest =
-    OfflineBuildClaimIssueRequest.builder()
-        .certificateIdHex(existingCertificateIdHex)
-        .txIdHex(receiptTxIdHex)
-        .platform("apple") // or "android"
-        .appId("com.example.ios")
-        .buildNumber(77L)
-        .build();
-
-transport
-    .offlineToriiClient()
-    .issueBuildClaim(buildClaimRequest)
-    .thenAccept(
-        response -> {
-          System.out.println(response.claimIdHex());
-          System.out.println(response.typedBuildClaim().platform()); // Apple / Android
-        });
-```
-
-When settling offline bundles, you can optionally request per-receipt build-claim
-overrides (for example, Android multi-package certificates) and repair existing claims:
-
-```java
-OfflineSettlementBuildClaimOverride claimOverride =
-    OfflineSettlementBuildClaimOverride.builder()
-        .txIdHex("ab".repeat(32))
-        .appId("com.example.android")
-        .buildNumber(77L)
-        .build();
-
-transport
-    .offlineToriiClient()
-    .submitSettlement(
-        transferPayload,
-        authorityId,
-        authorityPrivateKeyHex,
-        List.of(claimOverride),
-        true);
-```
-
-For operational debugging, use `submitSettlementAndWait(...)` so settlement submission and
-pipeline-status polling happen together, and inspect structured error details when Torii rejects:
+The client reuses the existing `ClientConfig` headers/observers and can be
+created from any `HttpClientTransport`:
 
 ```java
 transport
     .offlineToriiClient()
-    .submitSettlementAndWait(
-        transferPayload,
-        authorityId,
-        authorityPrivateKeyHex,
-        transport,
-        PipelineStatusOptions.builder().intervalMillis(250L).maxAttempts(40).build())
-    .whenComplete(
-        (settlement, error) -> {
-          if (error == null) {
-            System.out.println("bundle=" + settlement.bundleIdHex());
-            System.out.println("tx_hash=" + settlement.transactionHashHex());
-            return;
-          }
-          Throwable cause = error instanceof java.util.concurrent.CompletionException
-              ? error.getCause()
-              : error;
-          if (cause instanceof OfflineToriiException offline) {
-            offline.statusCode().ifPresent(code -> System.err.println("status=" + code));
-            offline.rejectCode().ifPresent(code -> System.err.println("reject_code=" + code));
-            offline.responseBody().ifPresent(body -> System.err.println("body=" + body));
-          } else if (cause instanceof TransactionStatusHttpException txHttp) {
-            System.err.println("status=" + txHttp.statusCode());
-            txHttp.rejectCode().ifPresent(code -> System.err.println("reject_code=" + code));
-            txHttp.responseBody().ifPresent(body -> System.err.println("body=" + body));
-          } else if (cause instanceof TransactionStatusException tx) {
-            tx.rejectionReason().ifPresent(reason -> System.err.println("reason=" + reason));
-          }
-        });
+    .getOfflineV2Readiness()
+    .thenAccept(readiness -> System.out.println(readiness.offlineNoteV2()));
 ```
 
-For jurisdictions that require offline spend logs, use the shared audit logger
-and facade:
+Non-V2 offline HTTP routes were removed from the public offline client surface so callers cannot
+accidentally target Torii routes that now return 404.
 
-```java
-OfflineWallet offlineWallet =
-    transport.offlineWallet(context.getFilesDir().toPath().resolve("offline_audit.json"), true);
-
-offlineWallet.recordAuditEntry(
-    txId,
-    senderAccountId,
-    receiverAccountId,
-    assetId,
-    amountDecimalString);
-
-byte[] auditJson = offlineWallet.exportAuditJson(); // forward to regulators when requested
-byte[] verdictJournalJson =
-    offlineWallet.exportVerdictJournalJson(); // include certificate countdown evidence
-
-// Fetch transfers and automatically append each bundle to the audit log
-offlineWallet.fetchTransfersWithAudit(params)
-    .thenAccept(list -> {
-        System.out.println("Fetched " + list.items().size() + " transfers");
-    });
+Use `OfflineToriiClient#getOfflineV2Readiness()` to check whether Torii exposes the V2 note
+capabilities before showing offline receive or payment-token UI.
 ```
 
-`OfflineTransferList.OfflineTransferItem.toJsonMap()` exposes a JSON-ready representation of the
-transfer item; encode it with `JsonEncoder.encode(...)` when caching transfer lists locally. The
-snapshot payload is included via `PlatformTokenSnapshot.toJsonMap()` when present.
-
-The Android logger mirrors the Swift implementation: logging can be toggled at runtime, entries
-use `{tx_id,sender_id,receiver_id,asset_id,amount,timestamp_ms}` fields, and
-exports produce deterministic JSON arrays so compliance tooling can compare
-SHA-256 or BLAKE3 digests across devices, and the verdict journal export emits the per-certificate
-metadata (`refresh_at_ms`, policy countdowns, Safety Detect snapshots) required by OA5 to prove
-when allowances were last refreshed. When long-lived audit history is required, use
-`OfflineJournal` (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournal.java`)
+Use `OfflineJournal` (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineJournal.java`)
 to persist pending bundles with the shared `[kind|timestamp|len|tx_id|payload|chain|hmac]` layout used
 by Rust and Swift. The helper exposes append/commit APIs, enforces the hash chain (`BLAKE2b-256` over
 the previous chain and `tx_id`), authenticates each record with `HMAC-SHA256`, and exposes pending
-entries for replay tooling so OA2’s WAL requirements are satisfied on Android as well.
+entries for replay tooling.

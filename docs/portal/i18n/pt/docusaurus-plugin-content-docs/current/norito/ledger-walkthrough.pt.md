@@ -30,8 +30,8 @@ conta que você planeja usar. O pacote padrão já inclui duas contas derivadas 
 chaves de demonstração:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Confirme os valores listados como primeiras contas:
@@ -50,7 +50,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dentro de wonderland (substitua --limit por um numero maior se necessario)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions que ja existem
@@ -66,7 +66,7 @@ Crie um novo ativo infinitamente mintable chamado `coffee` dentro do domínio
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 O CLI imprime o hash da transação enviada (por exemplo, `0x5f...`). Guarde-o para
@@ -75,7 +75,7 @@ consultar o status mais tarde.
 ## 3. Minte unidades na conta do operador
 
 As quantidades de ativos vivem sob o par `(asset definition, account)`. Mente 250
-unidades de `coffee#wonderland` em `$ADMIN_ACCOUNT`:
+unidades de `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` em `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

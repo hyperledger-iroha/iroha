@@ -26,8 +26,8 @@ slug: /norito/ledger-walkthrough
 طوال الدليل، استبدل `$ADMIN_ACCOUNT` و `$RECEIVER_ACCOUNT` بمعرفات الحساب التي تخطط لاستخدامها. يتضمن الـ bundle الافتراضي بالفعل حسابين مشتقين من مفاتيح العرض:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 اكد القيم عبر سرد اولى الحسابات:
@@ -46,7 +46,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts داخل wonderland (استبدل --limit بعدد اكبر عند الحاجة)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions الموجودة مسبقا
@@ -61,14 +61,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 يطبع CLI hash المعاملة المقدمة (مثلا `0x5f…`). احفظه كي تستعلم عن الحالة لاحقا.
 
 ## 3. سك وحدات في حساب المشغل
 
-توجد كميات الاصول تحت الزوج `(asset definition, account)`. اسك 250 وحدة من `coffee#wonderland` في `$ADMIN_ACCOUNT`:
+توجد كميات الاصول تحت الزوج `(asset definition, account)`. اسك 250 وحدة من `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` في `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

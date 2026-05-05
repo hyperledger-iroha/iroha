@@ -35,7 +35,7 @@ El analizador requiere la siguiente fila de encabezado (el orden es flexible):| 
 | `suffix_id` | Si | Identificador numérico de sufijo (decimal o `0x` hexadecimal). |
 | `owner` | Si | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Si | Entero `1..=255`. |
-| `payment_asset_id` | Si | Activo de liquidación (por ejemplo `xor#sora`). |
+| `payment_asset_id` | Si | Activo de liquidación (por ejemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Si | Enteros sin signo que representan unidades nativas del activo. |
 | `settlement_tx` | Si | Valor JSON o cadena literal que describe la transacción de pago o hash. |
 | `payment_payer` | Si | AccountId que autorizo ​​el pago. |
@@ -72,18 +72,18 @@ En caso de éxito el guión escribe un manifiesto agregado:
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -109,7 +109,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -127,10 +127,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```- El ayudante emite un `POST /v1/sns/registrations` por solicitud y aborta ante el
+```- El ayudante emite un `POST /v1/sns/names` por solicitud y aborta ante el
   error de cebado HTTP. Las respuestas se anexan a la ruta del log como registros
   NDJSON.
-- `--poll-status` vuelve a consultar `/v1/sns/registrations/{selector}` despues de
+- `--poll-status` vuelve a consultar `/v1/sns/names/{namespace}/{literal}` despues de
   cada envío (hasta `--poll-attempts`, predeterminado 5) para confirmar que el registro
   es visible. Proporción `--suffix-map` (JSON de `suffix_id` a valores "suffix")
   para que la herramienta derive literales `{label}.{suffix}` al hacer polling.
@@ -215,7 +215,7 @@ serie:
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -237,7 +237,7 @@ corrida de CSV.
   referencias a archivos se resuelven relativa a la ubicación del CSV. Metadatos
   que ningún objeto sea produce un error de validación.
 - **Controladores:** celdas en blanco respetan `--default-controllers`. proporción
-  listas de controlador explícitas (por ejemplo `i105...;i105...`) al delegar a
+  listas de controlador explícitas (por ejemplo `<i105-account-id>;<i105-account-id>`) al delegar a
   actores sin dueño.
 
 Los fallos se reportan con numeros de fila contextuales (por ejemplo

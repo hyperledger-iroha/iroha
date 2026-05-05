@@ -108,15 +108,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | Конечная точка | Метод | Полезная нагрузка | Описание |
 |----------|---------|---------|-------------|
-| `/v1/sns/registrations` | ПОСТ | `RegisterNameRequestV1` | Зарегистрируйтесь или укажите номер. Resout le tier de prix, valide les preuves de payement/goovernance, emet des Evenements de Registration. |
-| `/v1/sns/registrations/{selector}/renew` | ПОСТ | `RenewNameRequestV1` | Продлите срок. Аппликация «Les Fenetres de Grace/Redemption depuis la Politique». |
-| `/v1/sns/registrations/{selector}/transfer` | ПОСТ | `TransferNameRequestV1` | Передайте право собственности на одобрения совместного управления. |
-| `/v1/sns/registrations/{selector}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | Заменить ансамбль контроллеров; действительны адреса счетов подписантов. |
-| `/v1/sns/registrations/{selector}/freeze` | ПОСТ | `FreezeNameRequestV1` | Заморозить опекуна/совета. Найдите хранителя билетов и справку по государственному досье. |
-| `/v1/sns/registrations/{selector}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | Разморозить после восстановления; Убедитесь, что отметка совета зарегистрирована. |
+| `/v1/sns/names` | ПОСТ | `RegisterNameRequestV1` | Зарегистрируйтесь или укажите номер. Resout le tier de prix, valide les preuves de payement/goovernance, emet des Evenements de Registration. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | ПОСТ | `RenewNameRequestV1` | Продлите срок. Аппликация «Les Fenetres de Grace/Redemption depuis la Politique». |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | ПОСТ | `TransferNameRequestV1` | Передайте право собственности на одобрения совместного управления. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | Заменить ансамбль контроллеров; действительны адреса счетов подписантов. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | ПОСТ | `FreezeNameRequestV1` | Заморозить опекуна/совета. Найдите хранителя билетов и справку по государственному досье. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | Разморозить после восстановления; Убедитесь, что отметка совета зарегистрирована. |
 | `/v1/sns/reserved/{selector}` | ПОСТ | `ReservedAssignmentRequestV1` | Влияние на имя оставляет за собой номинал управляющего/совета. |
 | `/v1/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | Восстановите текущий файл `SuffixPolicyV1` (кэшируемый). |
-| `/v1/sns/registrations/{selector}` | ПОЛУЧИТЬ | -- | Возврат le `NameRecordV1` courant + etat effectif (Active, Grace и т. д.). |**Кодировка селектора:** сегмент `{selector}` принимает I105, сжимает или шестнадцатеричный канонический набор ADDR-5; Torii нормализуется через `NameSelectorV1`.
+| `/v1/sns/names/{namespace}/{literal}` | ПОЛУЧИТЬ | -- | Возврат le `NameRecordV1` courant + etat effectif (Active, Grace и т. д.). |**Кодировка селектора:** сегмент `{selector}` принимает i105, сжимает или шестнадцатеричный канонический набор ADDR-5; Torii нормализуется через `NameSelectorV1`.
 
 **Модель ошибки:** все конечные точки возвращаются Norito JSON с `code`, `message`, `details`. Коды включают `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -129,7 +129,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -154,7 +154,7 @@ Voir `crates/iroha_cli/src/commands/sns.rs` для реализации; Ком�
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -162,7 +162,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -177,7 +177,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` содержит действительную регистрацию `GovernanceHookV1` (идентификатор предложения, хэши голосов, подписи распорядителя/опекуна). Команда Reflete Simple l'endpoint `/v1/sns/registrations/{selector}/...` соответствует тем, которые операторы бета-версии могут повторять требования к поверхностям Torii, которые называются SDK.
+`--governance-json` содержит действительную регистрацию `GovernanceHookV1` (идентификатор предложения, хэши голосов, подписи распорядителя/опекуна). Команда Reflete Simple l'endpoint `/v1/sns/names/{namespace}/{literal}/...` соответствует тем, которые операторы бета-версии могут повторять требования к поверхностям Torii, которые называются SDK.
 
 ## 4. Служба gRPC
 
@@ -222,7 +222,7 @@ Torii проверьте предварительные условия пров�
 
 1. Опрос клиента `/v1/sns/policies/{suffix_id}` для восстановления призов, благодати и других доступных уровней.
 2. Конструируем клиент `RegisterNameRequestV1`:
-   - `selector` получить метку I105 (предпочтительно) или сжать (второй выбор).
+   - `selector` получить метку i105 (предпочтительно) или сжать (второй выбор).
    - `term_years` в пределах политики.
    - `payment` референтант le Transfert du Splitter tresorerie/steward.
 3. Torii действительно:
@@ -247,7 +247,7 @@ Torii проверьте предварительные условия пров�
 
 1. Guardian имеет номер `FreezeNameRequestV1` с указанием билета, указывающего на инцидент.
 2. Torii замените запись в `NameStatus::Frozen`, добавьте `NameFrozen`.
-3. После исправления совет должен отменить решение; l'operateur envoie DELETE `/v1/sns/registrations/{selector}/freeze` с `GovernanceHookV1`.
+3. После исправления совет должен отменить решение; l'operateur envoie DELETE `/v1/sns/names/{namespace}/{literal}/freeze` с `GovernanceHookV1`.
 4. Torii действителен для переопределения, используйте `NameUnfrozen`.
 
 ## 7. Проверка и коды ошибок

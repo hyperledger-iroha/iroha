@@ -1,20 +1,26 @@
 import Foundation
 
 public enum ConfidentialKeyDerivationError: Error, Sendable {
+    case missingSeed
     case invalidSpendKeyLength
     case invalidKeyLength(label: String, expected: Int, actual: Int)
     case invalidHexEncoding(field: String)
+    case invalidBase64Encoding(field: String)
 }
 
 extension ConfidentialKeyDerivationError: LocalizedError {
     public var errorDescription: String? {
         switch self {
+        case .missingSeed:
+            return "Provide either seedHex or seedBase64."
         case .invalidSpendKeyLength:
             return "Invalid spend key length; expected 32 bytes."
         case let .invalidKeyLength(label, expected, actual):
             return "Invalid \(label) length; expected \(expected) bytes but got \(actual)."
         case let .invalidHexEncoding(field):
             return "Invalid hex encoding for \(field)."
+        case let .invalidBase64Encoding(field):
+            return "Invalid base64 encoding for \(field)."
         }
     }
 }
@@ -81,6 +87,22 @@ public struct ConfidentialKeyset: Equatable, Sendable {
             outgoingViewKey: ovk,
             fullViewKey: fvk
         )
+    }
+
+    public static func derive(seedHex: String? = nil, seedBase64: String? = nil) throws -> ConfidentialKeyset {
+        if let seedHex, !seedHex.isEmpty {
+            guard let spendKey = Data(hexString: seedHex) else {
+                throw ConfidentialKeyDerivationError.invalidHexEncoding(field: "seed_hex")
+            }
+            return try derive(from: spendKey)
+        }
+        if let seedBase64, !seedBase64.isEmpty {
+            guard let spendKey = Data(base64Encoded: seedBase64) else {
+                throw ConfidentialKeyDerivationError.invalidBase64Encoding(field: "seed_b64")
+            }
+            return try derive(from: spendKey)
+        }
+        throw ConfidentialKeyDerivationError.missingSeed
     }
 }
 

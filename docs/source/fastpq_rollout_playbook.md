@@ -41,6 +41,16 @@ to the release/upgrade ticket and keep the bundle in
 > scheme (`<stamp>/<fleet>/<lane>`) and the required evidence files. The
 > `<stamp>` folder must encode `YYYYMMDDThhmmZ` so artefacts stay sortable
 > without consulting tickets.
+>
+> When Release Engineering archives a validated bundle with
+> `scripts/run_release_pipeline.py --fastpq-rollout-bundle ...`, the pipeline
+> now writes `fastpq_rollout_summary.json` and `fastpq_rollout_summary.md`
+> beside each copied `fastpq_bench_manifest.json`. Those summaries are derived
+> from the signed manifest plus the archived wrapped bench files and surface the
+> selected `operation_filter`, any `matrix_operation_filters`, device labels,
+> and resolved bench filenames for fast reviewer scans. The same archive step
+> now records the copied bundle root, summary paths, and optional Grafana export
+> under `release_manifest.json.evidence.fastpq`.
 
 ## Evidence Generation Checklist
 
@@ -170,9 +180,12 @@ the same evidence collectors used during the default-on rollout.
   `scripts/run_release_pipeline.py`; the helper reruns
   `ci/check_fastpq_rollout.sh` (unless `--skip-fastpq-rollout-check` is set) and
   copies the directory tree into `artifacts/releases/<version>/fastpq_rollouts/…`.
-  As part of this gate the script enforces the Stage 7 queue-depth and zero-fill
-  budgets by reading `benchmarks.metal_dispatch_queue` and
-  `benchmarks.zero_fill_hotspots` out of each `metal` bench JSON.
+  It also emits `fastpq_rollout_summary.{json,md}` beside each archived
+  manifest so release approvers can inspect filter scope and device labels
+  without reopening the signed JSON by hand. As part of this gate the script
+  enforces the Stage 7 queue-depth and zero-fill budgets by reading
+  `benchmarks.metal_dispatch_queue` and `benchmarks.zero_fill_hotspots` out of
+  each `metal` bench JSON.
 
 By following this playbook we can demonstrate deterministic adoption, provide a
 single evidence bundle per rollout, and keep rollback drills audited alongside

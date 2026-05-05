@@ -37,7 +37,7 @@ registrars גדולים נוטים להכין מראש מאות רישומים �
 | `suffix_id` | כן | מזהה סיומת מספרי (עשרוני או `0x` hex). |
 | `owner` | כן | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | כן | מספר שלם `1..=255`. |
-| `payment_asset_id` | כן | נכס settlement (לדוגמה `xor#sora`). |
+| `payment_asset_id` | כן | נכס settlement (לדוגמה `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | כן | מספרים שלמים ללא סימן המייצגים יחידות נכס טבעיות. |
 | `settlement_tx` | כן | ערך JSON או מחרוזת מילולית המתארת את טרנזקציית התשלום או hash. |
 | `payment_payer` | כן | AccountId שאישר את התשלום. |
@@ -76,18 +76,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -112,7 +112,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -132,9 +132,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- העוזר שולח `POST /v1/sns/registrations` לכל בקשה ומפסיק בשגיאת HTTP הראשונה.
+- העוזר שולח `POST /v1/sns/names` לכל בקשה ומפסיק בשגיאת HTTP הראשונה.
   התגובות נצמדות ללוג כרשומות NDJSON.
-- `--poll-status` מבצע שאילתה חוזרת ל-`/v1/sns/registrations/{selector}` אחרי כל
+- `--poll-status` מבצע שאילתה חוזרת ל-`/v1/sns/names/{namespace}/{literal}` אחרי כל
   שליחה (עד `--poll-attempts`, ברירת מחדל 5) כדי לאשר שהרשומה נראית. ספקו
   `--suffix-map` (JSON ממפה `suffix_id` לערכי "suffix") כדי שהכלי יגזור
   ליטרלים `{label}.{suffix}` לצורך polling.
@@ -217,7 +217,7 @@ Workflows מאחסנים את תיקיית השחרור כארטיפקט יחי�
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -236,7 +236,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - **Parsing של metadata או governance:** JSON inline מפוענח ישירות; הפניות לקבצים
   נפתרות יחסית למיקום ה-CSV. metadata שאינו אובייקט מייצר שגיאת ולידציה.
 - **Controllers:** תאים ריקים מכבדים את `--default-controllers`. ספקו רשימות
-  controller מפורשות (למשל `i105...;i105...`) בעת האצלה לגורמים שאינם owner.
+  controller מפורשות (למשל `<i105-account-id>;<i105-account-id>`) בעת האצלה לגורמים שאינם owner.
 
 כשלונות מדווחים עם מספרי שורה הקשריים (למשל
 `error: row 12 term_years must be between 1 and 255`). הסקריפט יוצא עם קוד `1`

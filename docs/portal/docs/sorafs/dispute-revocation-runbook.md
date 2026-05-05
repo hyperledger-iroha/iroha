@@ -58,7 +58,7 @@ This runbook guides governance operators through filing SoraFS capacity disputes
      --base64-out=dispute.b64 \
      --json-out=dispute_summary.json \
      --request-out=dispute_request.json \
-     --authority=i105... \
+     --authority=<i105-account-id> \
      --private-key=ed25519:<key>
    ```
 

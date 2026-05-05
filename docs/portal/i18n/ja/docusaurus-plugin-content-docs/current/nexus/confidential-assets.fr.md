@@ -89,7 +89,7 @@ ci-dessous afin que leswalls は avec Rust と同期します。## コンセン�
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -237,7 +237,7 @@ Documentez は、Runbook の操作で locaux をオーバーライドします�
 - 勘定科目ごとの派生階層:
   - `sk_spend` -> `nk` (無効化キー)、`ivk` (受信表示キー)、`ovk` (送信表示キー)、`fvk`。
 - ECDH の共有キー導出における AEAD の有効なペイロードの記録。監査のオプションと監査のオプションを表示し、政治活動の補助出力を提供します。
-- CLI の調整: `confidential create-keys`、`confidential send`、`confidential export-view-key`、監査ツールのメモの作成、およびヘルパー `iroha app zk envelope` の製造/検査の封筒 Norito オフライン。 Torii は、`POST /v1/confidential/derive-keyset` 経由で派生したファイル ミーム フラックスを公開します。16 進法および Base64 形式の戻り値は、財布、プログラムの階層構造を提供します。
+- CLI の調整: `confidential create-keys`、`confidential send`、`confidential export-view-key`、監査ツールのメモの作成、およびヘルパー `iroha app zk envelope` の製造/検査の封筒 Norito オフライン。
 
 ## ガス、制限、および DoS の制御
 - ガスのスケジュールを決定します:

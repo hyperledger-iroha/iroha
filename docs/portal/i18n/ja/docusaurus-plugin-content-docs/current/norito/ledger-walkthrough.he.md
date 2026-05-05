@@ -32,8 +32,8 @@ slug: /norito/ledger-walkthrough
 ガイド全体で `$ADMIN_ACCOUNT` と `$RECEIVER_ACCOUNT` を使用するアカウント ID に置き換えてください。デフォルトの bundle にはデモ鍵由来の 2 つのアカウントが含まれています:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 最初のアカウントを一覧して値を確認します:
@@ -52,7 +52,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # wonderland 内の accounts (必要なら --limit を増やす)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # 既に存在する asset definitions
@@ -67,14 +67,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI は送信されたトランザクションハッシュ (例: `0x5f…`) を表示します。後で状態を確認できるよう保存しておきます。
 
 ## 3. オペレーターアカウントにミントする
 
-資産数量は `(asset definition, account)` の組み合わせに紐づきます。`coffee#wonderland` を 250 単位 `$ADMIN_ACCOUNT` にミントします:
+資産数量は `(asset definition, account)` の組み合わせに紐づきます。`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` を 250 単位 `$ADMIN_ACCOUNT` にミントします:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

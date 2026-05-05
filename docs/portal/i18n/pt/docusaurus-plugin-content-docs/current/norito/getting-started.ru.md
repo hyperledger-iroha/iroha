@@ -71,7 +71,7 @@ Para que você possa usar o contrato, instale-o na CLI. Use uma conta-autorizada
 
 ```sh
 iroha_cli app contracts deploy \
-  --authority i105... \
+  --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
 ```

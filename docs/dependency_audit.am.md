@@ -36,7 +36,7 @@ translator: machine-google-reviewed
 - AEAD/Symmetric: I18NI0000019X, `chacha20poly1305`, `aead` ባህርያት (RustCrypto) - ቀኖናዊ.
 - ፊርማዎች / ECC: `ed25519-dalek`, `x25519-dalek` (ዳሌክ ፕሮጀክት), `k256` (RustCrypto), `secp256k1` (libsecp bindings) - ሁሉም ህጋዊ; የወለል ስፋትን ለመቀነስ ነጠላ ሴፕ256k1 ቁልል (`k256` ለንፁህ Rust ወይም I18NI0000027X ለ libsecp) እመርጣለሁ።
 - BLS12-381/ZK: `blstrs`, `halo2_*` - በምርት ZK ስነ-ምህዳሮች ውስጥ በስፋት ጥቅም ላይ ይውላል; ህጋዊ.
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` - ሕጋዊ የማጣቀሻ ሳጥኖች.
+- PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` - ሕጋዊ የማጣቀሻ ሳጥኖች.
 - TLS: `rustls`, `tokio-rustls`, I18NI0000034X - ቀኖናዊ ዘመናዊ የዝገት TLS ቁልል.
 - ጫጫታ: `snow` - ቀኖናዊ ትግበራ.
 - ተከታታይነት፡ I18NI0000036X ለ SCALE ቀኖናዊ ነው። ሰርዴ በስራ ቦታው ላይ ከምርት ጥገኛ ተወግዷል; Norito እያንዳንዱን የሩጫ መንገድ ይሸፍናል/ጸሐፊዎች። ማንኛውም ቀሪ የሰርዴ ማጣቀሻዎች በታሪካዊ ሰነዶች፣ በጠባቂ ስክሪፕቶች ወይም በሙከራ-ብቻ የፈቃድ ዝርዝሮች ይኖራሉ።

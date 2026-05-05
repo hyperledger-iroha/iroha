@@ -22,12 +22,13 @@ fn nft_lifecycle_scenarios() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
+    let wonderland = DomainId::try_new("wonderland", "universal")?;
 
     // transfer_nft
     {
         let alice_id = ALICE_ID.clone();
         let bob_id = BOB_ID.clone();
-        let nft_id: NftId = "nft_transfer$wonderland".parse()?;
+        let nft_id = NftId::new(wonderland.clone(), "nft_transfer".parse()?);
 
         client.submit_blocking(Register::nft(Nft::new(nft_id.clone(), Metadata::default())))?;
 
@@ -52,7 +53,7 @@ fn nft_lifecycle_scenarios() -> Result<()> {
 
     // client_register_nft_second_time_should_fail
     {
-        let nft_id: NftId = "nft_register_twice$wonderland".parse()?;
+        let nft_id = NftId::new(wonderland.clone(), "nft_register_twice".parse()?);
         let mut metadata = Metadata::default();
         metadata.insert("key".parse()?, 1u32);
         let register_nft = Register::nft(Nft::new(nft_id.clone(), metadata.clone()));
@@ -72,7 +73,7 @@ fn nft_lifecycle_scenarios() -> Result<()> {
 
     // unregister_nft_should_remove_nft_from_account
     {
-        let nft_id: NftId = "nft_unregister$wonderland".parse()?;
+        let nft_id = NftId::new(wonderland.clone(), "nft_unregister".parse()?);
         let register_nft = Register::nft(Nft::new(nft_id.clone(), Metadata::default()));
         let unregister_nft = Unregister::nft(nft_id.clone());
 
@@ -98,11 +99,9 @@ fn nft_lifecycle_scenarios() -> Result<()> {
     // nft_owner_cant_modify_nft
     {
         let (account_id, account_keypair) = gen_account_in("wonderland");
-        let wonderland: DomainId = "wonderland".parse()?;
-        let nft_id: NftId = "nft_owner_modify$wonderland".parse()?;
+        let nft_id = NftId::new(wonderland.clone(), "nft_owner_modify".parse()?);
 
-        let create_account =
-            Register::account(Account::new(account_id.to_account_id(wonderland.clone())));
+        let create_account = Register::account(Account::new(account_id.clone()));
         client.submit_blocking(create_account)?;
 
         let register_nft = Register::nft(Nft::new(nft_id.clone(), Metadata::default()));
@@ -127,11 +126,9 @@ fn nft_lifecycle_scenarios() -> Result<()> {
     // nft_owner_can_transfer_nft
     {
         let (account_id, account_keypair) = gen_account_in("wonderland");
-        let wonderland: DomainId = "wonderland".parse()?;
-        let nft_id: NftId = "nft_owner_transfer$wonderland".parse()?;
+        let nft_id = NftId::new(wonderland.clone(), "nft_owner_transfer".parse()?);
 
-        let create_account =
-            Register::account(Account::new(account_id.to_account_id(wonderland.clone())));
+        let create_account = Register::account(Account::new(account_id.clone()));
         client.submit_blocking(create_account)?;
 
         let register_nft = Register::nft(Nft::new(nft_id.clone(), Metadata::default()));

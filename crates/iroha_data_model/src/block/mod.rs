@@ -4,7 +4,6 @@
 
 use std::{
     borrow::Cow,
-    boxed::Box,
     collections::{BTreeMap, BTreeSet},
     convert::TryInto,
     fmt, format,
@@ -18,7 +17,7 @@ use iroha_crypto::Hash;
 use iroha_crypto::{HashOf, MerkleTree, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
-use iroha_version::{UnsupportedVersion, Version};
+use iroha_version::Version;
 use norito::{
     codec::{Decode, Encode},
     core::{
@@ -54,11 +53,14 @@ fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
 pub mod builder;
 #[doc = "Consensus message types shared by Sumeragi implementations."]
 pub mod consensus;
+#[doc = "Durable execution context committed by block headers."]
+pub mod execution_context;
 #[doc = "Block header structures and helpers."]
 pub mod header;
 #[doc = "Payload container types shared between block variants."]
 pub mod payload;
 
+pub use execution_context::{BlockExecutionContextBundle, ExternalExecutionContext};
 pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
 pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
 
@@ -82,6 +84,7 @@ mod model {
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
+    #[norito(decode_from_slice)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct SignedBlock {
         /// Signatures of validators who approved this block.
@@ -114,6 +117,8 @@ impl SignedBlock {
             payload: BlockPayload {
                 header,
                 transactions,
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -139,6 +144,8 @@ impl SignedBlock {
             payload: BlockPayload {
                 header,
                 transactions,
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -193,11 +200,9 @@ impl SignedBlock {
         let merkle = MerkleTree::from_iter(hashes.to_owned());
 
         // Ensure the consensus merkle root covering only external transactions remains intact.
-        let external_hashes = self
-            .payload
-            .transactions
-            .iter()
-            .map(SignedTransaction::hash_as_entrypoint);
+        let external_entrypoints: Vec<TransactionEntrypoint> =
+            self.external_entrypoints_cloned().collect();
+        let external_hashes = external_entrypoints.iter().map(TransactionEntrypoint::hash);
         let external_merkle: MerkleTree<TransactionEntrypoint> =
             external_hashes.collect::<MerkleTree<_>>();
         let external_root = external_merkle.root();
@@ -217,6 +222,7 @@ impl SignedBlock {
         let axt_policy_snapshot =
             axt_policy_snapshot.map(crate::nexus::AxtPolicySnapshot::with_computed_version);
         self.result = Some(BlockResult {
+            external_entrypoints,
             time_triggers,
             merkle,
             result_merkle,
@@ -266,7 +272,7 @@ impl SignedBlock {
         let entry_merkle_proof = result_state.merkle.get_proof(idx_u32)?;
         let entry_proof = BlockReceiptProof::new(*entry_hash, entry_merkle_proof);
 
-        let external_count = self.external_transactions().len();
+        let external_count = self.external_entrypoint_count();
         let entry_root = if idx < external_count {
             self.payload.header.merkle_root?
         } else {
@@ -432,7 +438,7 @@ impl SignedBlock {
         let proof_policies = da_proof_policies.unwrap_or_else(|| {
             DaProofPolicyBundle::new(vec![DaProofPolicy {
                 lane_id: crate::nexus::LaneId::SINGLE,
-                dataspace_id: crate::nexus::DataSpaceId::GLOBAL,
+                dataspace_id: crate::nexus::DataSpaceId::UNIVERSAL,
                 alias: "default".to_string(),
                 proof_scheme: DaProofScheme::MerkleSha256,
             }])
@@ -448,15 +454,24 @@ impl SignedBlock {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            execution_context_hash: None,
             creation_time_ms,
             view_change_index: 0,
             confidential_features,
+            sccp_commitment_root: None,
         };
 
         let signature = BlockSignature::new(0, SignatureOf::from_hash(private_key, header.hash()));
+        let external_entrypoints: Vec<TransactionEntrypoint> = transactions
+            .iter()
+            .cloned()
+            .map(TransactionEntrypoint::from)
+            .collect();
         let payload = BlockPayload {
             header,
             transactions,
+            external_entrypoints: external_entrypoints.clone(),
+            execution_context: None,
             da_commitments: None,
             da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
@@ -464,6 +479,7 @@ impl SignedBlock {
         };
 
         let result = BlockResult {
+            external_entrypoints,
             time_triggers: Vec::new(),
             merkle: entry_merkle,
             result_merkle,
@@ -1180,28 +1196,6 @@ pub fn decode_framed_signed_block(
     decode_versioned_signed_block_inner(deframed.bare_versioned.as_ref(), deframed.bytes.as_ref())
 }
 
-struct RootGuard;
-
-impl Drop for RootGuard {
-    fn drop(&mut self) {
-        norito::core::clear_decode_root();
-    }
-}
-
-type VersionError = iroha_version::error::Error;
-
-fn decode_signed_block_exact(bytes: &[u8]) -> Result<SignedBlock, iroha_version::error::Error> {
-    norito::core::set_decode_root(bytes);
-    let _root_guard = RootGuard;
-    let (block, used) = <SignedBlock as norito::core::DecodeFromSlice>::decode_from_slice(bytes)
-        .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
-    let remaining = bytes.len().saturating_sub(used);
-    if remaining != 0 {
-        return Err(VersionError::ExtraBytesLeft(remaining as u64));
-    }
-    Ok(block)
-}
-
 fn encode_signed_block_payload(block: &SignedBlock) -> Vec<u8> {
     norito::core::reset_decode_state();
     norito::codec::encode_adaptive(block)
@@ -1211,23 +1205,7 @@ fn decode_versioned_signed_block_inner(
     bare_versioned: &[u8],
     raw_for_error: &[u8],
 ) -> Result<SignedBlock, iroha_version::error::Error> {
-    use iroha_version::error::Error as VersionError;
-
-    if bare_versioned.is_empty() {
-        return Err(VersionError::NotVersioned);
-    }
-
-    let version = bare_versioned[0];
-    let payload = &bare_versioned[1..];
-    match version {
-        1 => decode_signed_block_exact(payload),
-        other => Err(VersionError::UnsupportedVersion(Box::new(
-            UnsupportedVersion::new(
-                other,
-                iroha_version::RawVersioned::NoritoBytes(raw_for_error.to_vec()),
-            ),
-        ))),
-    }
+    iroha_version::codec::decode_exact_versioned_with_raw(bare_versioned, raw_for_error)
 }
 
 pub mod prelude {
@@ -1241,9 +1219,10 @@ mod tests {
 
     use iroha_crypto::{Hash, HashOf, Signature};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
-    use norito::codec::Encode;
+    use norito::codec::{DecodeAll as _, Encode};
 
     use super::*;
+    use crate::consensus::PreviousRosterEvidence;
     // Bring commonly used types referenced in transparent API tests.
     #[cfg(feature = "transparent_api")]
     use crate::ValidationFail;
@@ -1293,6 +1272,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1305,12 +1286,52 @@ mod tests {
     }
 
     #[test]
+    fn block_payload_decodes_legacy_payload_without_execution_context() {
+        #[derive(norito::codec::Encode)]
+        struct LegacyBlockPayload {
+            header: BlockHeader,
+            transactions: Vec<SignedTransaction>,
+            external_entrypoints: Vec<TransactionEntrypoint>,
+            da_commitments: Option<DaCommitmentBundle>,
+            da_proof_policies: Option<DaProofPolicyBundle>,
+            da_pin_intents: Option<DaPinIntentBundle>,
+            previous_roster_evidence: Option<PreviousRosterEvidence>,
+        }
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 10, 0);
+        let legacy = LegacyBlockPayload {
+            header,
+            transactions: Vec::new(),
+            external_entrypoints: Vec::new(),
+            da_commitments: None,
+            da_proof_policies: None,
+            da_pin_intents: None,
+            previous_roster_evidence: None,
+        };
+        let bytes = legacy.encode();
+        let mut cursor = bytes.as_slice();
+        let decoded =
+            BlockPayload::decode_all(&mut cursor).expect("decode legacy BlockPayload payload");
+
+        assert_eq!(decoded.header, header);
+        assert!(decoded.transactions.is_empty());
+        assert!(decoded.external_entrypoints.is_empty());
+        assert_eq!(decoded.execution_context, None);
+        assert_eq!(decoded.da_commitments, None);
+        assert_eq!(decoded.da_proof_policies, None);
+        assert_eq!(decoded.da_pin_intents, None);
+        assert_eq!(decoded.previous_roster_evidence, None);
+    }
+
+    #[test]
     #[cfg(feature = "transparent_api")]
     fn presigned_with_payload_preserves_payload_and_signature() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let payload = BlockPayload {
             header,
             transactions: Vec::new(),
+            external_entrypoints: Vec::new(),
+            execution_context: None,
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
@@ -1357,6 +1378,7 @@ mod tests {
             .add(crate::transaction::signed::TransactionResult::hash_from_inner(&result_inner));
 
         let result = BlockResult {
+            external_entrypoints: Vec::new(),
             time_triggers: vec![entrypoint],
             merkle: entry_merkle,
             result_merkle,
@@ -1373,6 +1395,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1392,6 +1416,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1413,6 +1439,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1455,6 +1483,8 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            execution_context_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms: 123_456_789_000,
             view_change_index: 123,
             confidential_features: None,
@@ -1483,7 +1513,7 @@ mod tests {
 
         let chain: ChainId = "genesis-default-conf-digest".parse().expect("chain id");
         let keypair = KeyPair::random();
-        let _domain: DomainId = "genesis".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority).sign(keypair.private_key());
         let block = SignedBlock::genesis(vec![tx], keypair.private_key(), None, None);
@@ -1503,6 +1533,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1521,6 +1553,76 @@ mod tests {
     }
 
     #[test]
+    fn versioned_block_roundtrip_preserves_instruction_order() {
+        use crate::{
+            ChainId,
+            account::AccountId,
+            parameter::{Parameter, system::SumeragiParameter},
+            transaction::{Executable, signed::TransactionBuilder},
+        };
+
+        let key_pair = iroha_crypto::KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let chain: ChainId = "test-chain".parse().expect("chain id");
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+
+        let ordered = vec![
+            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::CommitTimeMs(667),
+            ))),
+            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::MinFinalityMs(100),
+            ))),
+            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::BlockTimeMs(333),
+            ))),
+            crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Block(
+                crate::parameter::BlockParameter::MaxTransactions(NonZeroU64::new(10_000).unwrap()),
+            ))),
+        ];
+
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions(ordered.clone())
+            .sign(key_pair.private_key());
+        let block = SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                transactions: vec![tx.clone()],
+                external_entrypoints: vec![TransactionEntrypoint::from(tx.clone())],
+                execution_context: None,
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+                previous_roster_evidence: None,
+            },
+            result: None,
+        };
+
+        let versioned = block.encode_versioned();
+        let decoded_versioned =
+            SignedBlock::decode_all_versioned(&versioned).expect("decode versioned block");
+        let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame versioned block");
+        let decoded_framed = decode_framed_signed_block(&framed).expect("decode framed block");
+
+        for decoded in [&decoded_versioned, &decoded_framed] {
+            let tx = decoded
+                .transactions_vec()
+                .first()
+                .expect("block must contain one transaction");
+            let Executable::Instructions(actual) = tx.instructions() else {
+                panic!("expected instruction executable after block roundtrip");
+            };
+            let actual = actual.iter().cloned().collect::<Vec<_>>();
+
+            assert_eq!(
+                actual, ordered,
+                "instruction order must survive signed block roundtrip"
+            );
+        }
+    }
+
+    #[test]
     fn deframe_rejects_payload_exceeding_max_len() {
         use nonzero_ext::nonzero;
         const LENGTH_OFFSET: usize = 1 + 4 + 1 + 1 + 16 + 1;
@@ -1531,6 +1633,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1575,6 +1679,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1612,6 +1718,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1646,6 +1754,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1678,7 +1788,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "genesis-canonical-wire".parse().expect("chain id");
-        let _domain: DomainId = "genesis".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority)
             .with_instructions(core::iter::empty::<crate::isi::InstructionBox>())
@@ -1709,6 +1819,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1755,7 +1867,7 @@ mod tests {
         let chain: ChainId = "genesis-versioned-roundtrip"
             .parse()
             .expect("chain id must parse");
-        let _domain: DomainId = "genesis".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
@@ -1792,6 +1904,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1823,6 +1937,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1849,6 +1965,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1882,6 +2000,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -1957,6 +2077,8 @@ mod tests {
             payload: BlockPayload {
                 header,
                 transactions: Vec::new(),
+                external_entrypoints: Vec::new(),
+                execution_context: None,
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
@@ -2002,7 +2124,7 @@ mod tests {
         let chain: ChainId = "genesis-da-commitments"
             .parse()
             .expect("chain id must parse");
-        let _domain: DomainId = "genesis".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority)
             .with_instructions(core::iter::empty::<InstructionBox>())
@@ -2034,14 +2156,14 @@ mod tests {
         let chain: ChainId = "genesis-da-proof-policies"
             .parse()
             .expect("chain id must parse");
-        let _domain: DomainId = "genesis".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(chain, authority)
             .with_instructions(core::iter::empty::<InstructionBox>())
             .sign(keypair.private_key());
         let bundle = DaProofPolicyBundle::new(vec![DaProofPolicy {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "custom".to_string(),
             proof_scheme: DaProofScheme::KzgBls12_381,
         }]);
@@ -2114,11 +2236,11 @@ mod tests {
         );
         let mut block = SignedBlock::presigned(signature, header, Vec::new());
 
-        let domain: DomainId = "test".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("test", "universal").expect("domain id");
         let from = fixture_account(&domain);
         let to = fixture_account(&domain);
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "test".parse().unwrap(),
+            DomainId::try_new("test", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
 
@@ -2177,7 +2299,8 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "chain".parse().expect("chain id");
-        let _authority_domain: DomainId = "chain".parse().expect("chain domain id");
+        let _authority_domain: DomainId =
+            DomainId::try_new("chain", "universal").expect("chain domain id");
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let tx =
             TransactionBuilder::new(chain.clone(), authority.clone()).sign(keypair.private_key());
@@ -2190,7 +2313,7 @@ mod tests {
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
 
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "chain".parse().unwrap(),
+            DomainId::try_new("chain", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let delta = TransferDeltaTranscript {
@@ -2293,7 +2416,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "test-chain".parse().expect("chain id");
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
@@ -2357,7 +2480,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "proof-block".parse().expect("chain id");
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
@@ -2435,7 +2558,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "time-proof-block".parse().expect("chain id");
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
@@ -2512,7 +2635,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "proof-miss".parse().expect("chain id");
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
@@ -2550,7 +2673,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "test-chain".parse().expect("chain id");
-        let _domain_id: DomainId = "genesis".parse().expect("domain id");
+        let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let transaction =
@@ -2584,7 +2707,7 @@ mod tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "stale-flags".parse().expect("chain id");
-        let _domain_id: DomainId = "genesis".parse().expect("domain id");
+        let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let transaction =

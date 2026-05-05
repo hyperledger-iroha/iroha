@@ -1,16 +1,19 @@
 {
   "bls_domain": "bls-iroha2:npos-sumeragi:v1",
   "chain": "00000000-0000-0000-0000-000000000000",
+  "chain_discriminant": 753,
   "consensus_fingerprint": "0xfed0dd949356d73782acd30f024f9a1a72a64344417c96ff195f19362812fe62",
   "consensus_mode": "Npos",
   "crypto": {
     "allowed_curve_ids": [
       1,
+      3,
       4
     ],
     "allowed_signing": [
       "ed25519",
-      "secp256k1"
+      "secp256k1",
+      "bls_normal"
     ],
     "default_hash": "blake2b-256",
     "sm2_distid_default": "1234567812345678",
@@ -25,7 +28,7 @@
         {
           "Register": {
             "Domain": {
-              "id": "wonderland",
+              "id": "wonderland.universal",
               "logo": null,
               "metadata": {
                 "key": "value"
@@ -36,7 +39,7 @@
         {
           "Register": {
             "Account": {
-              "id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "label": null,
               "metadata": {
                 "key": "value"
@@ -55,37 +58,32 @@
                 "poseidon_params_id": null,
                 "vk_set_hash": null
               },
-              "id": "rose#wonderland",
+              "id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "logo": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
-              }
+              },
+              "name": "rose"
             }
           }
         },
         {
           "Register": {
             "Domain": {
-              "id": "garden_of_live_flowers",
+              "id": "garden_of_live_flowers.universal",
               "logo": null,
-              "metadata": {
-                
-              }
+              "metadata": {}
             }
           }
         },
         {
           "Register": {
             "Account": {
-              "id": "34mSYmj74pAZ6nNwwEsmGKGrHErCPMWtqeBwWhHkT9WcsndXbe2FjCNWFYCn5FiW5fdUcsbQD",
+              "id": "sorauﾛ1PyXﾉspjg6gnvｴ1ﾒﾑLﾈｵBﾄEwtﾃD8Rｸﾇgｦﾎｾﾚｶ7ｴvWUJA5A",
               "label": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "uaid": null
             }
           }
@@ -100,22 +98,19 @@
                 "poseidon_params_id": null,
                 "vk_set_hash": null
               },
-              "id": "cabbage#garden_of_live_flowers",
+              "id": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M",
               "logo": null,
-              "metadata": {
-                
-              },
+              "metadata": {},
               "mintable": "Infinitely",
               "spec": {
                 "scale": null
-              }
+              },
+              "name": "cabbage"
             }
           }
         }
       ],
-      "ivm_triggers": [
-        
-      ],
+      "ivm_triggers": [],
       "parameters": {
         "block": {
           "max_transactions": 512
@@ -196,16 +191,14 @@
           "require_sequence": false
         }
       },
-      "topology": [
-        
-      ]
+      "topology": []
     },
     {
       "instructions": [
         {
           "Mint": {
             "Asset": {
-              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c400000000000000ddd7a4b694c2dd9000810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033330000000000000017000000000000000f00000000000000070000000000000064656661756c740c000000000000000400000000000000726f7365",
+              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "13"
             }
           }
@@ -213,7 +206,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200d6000000000000004b9fa464dfc100ea00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323043453746413436433944434537454134423132354532453336424442363345413333303733453735393041433932383136414531453836314237303438423033450000000000000026000000000000001e00000000000000160000000000000067617264656e5f6f665f6c6976655f666c6f776572730f00000000000000070000000000000063616262616765",
+              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": "44"
             }
           }
@@ -221,16 +214,16 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-              "object": "rose#wonderland",
-              "source": "34mSYmtx2t7jKZDQcTrSU7yorGf7KNpNpWoBsunpaw15xULDLeEEtcehDJrgChTacL4HyMruA"
+              "destination": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+              "source": "sorauﾛ1Nﾉﾏ2ｽﾍﾈdmcLfDBwoｽﾘｼoF5sHeｶdｶQbﾈxGVヰ8tCﾎ4P4KX7"
             }
           }
         },
         {
           "Grant": {
             "Permission": {
-              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "destination": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -240,7 +233,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "destination": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": {
                 "name": "CanRegisterDomain"
               }
@@ -250,7 +243,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+              "destination": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
               "object": {
                 "name": "CanRegisterAccount"
               }
@@ -258,15 +251,11 @@
           }
         }
       ],
-      "ivm_triggers": [
-        
-      ],
-      "topology": [
-        
-      ]
+      "ivm_triggers": [],
+      "topology": []
     }
   ],
   "wire_proto_versions": [
-    1
+    2
   ]
 }

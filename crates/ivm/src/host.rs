@@ -10,6 +10,7 @@ use std::{
     any::Any,
     collections::{BTreeMap, HashSet},
     num::NonZeroU16,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use iroha_crypto::{Sm2PublicKey, Sm2Signature, Sm3Digest, Sm4Key};
@@ -30,6 +31,8 @@ use crate::{
     axt::{self, AssetHandle, ProofBlob, RemoteSpendIntent, TouchManifest},
     error::VMError,
     ivm::IVM,
+    memory::Memory,
+    metadata::{CONTRACT_INTERFACE_SECTION_MAGIC, LITERAL_SECTION_MAGIC},
     parallel::{StateAccessSet, StateKey, StateUpdate},
     pointer_abi::{self, PointerType},
     syscalls,
@@ -320,6 +323,151 @@ impl DefaultHost {
         self.sm_enabled = enabled;
     }
 
+    fn expected_zk_verify_label(number: u32) -> Option<&'static str> {
+        match number {
+            syscalls::SYSCALL_ZK_VERIFY_TRANSFER => Some(LABEL_TRANSFER),
+            syscalls::SYSCALL_ZK_VERIFY_UNSHIELD => Some(LABEL_UNSHIELD),
+            syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT => Some(LABEL_VOTE_BALLOT),
+            syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => Some(LABEL_VOTE_TALLY),
+            _ => None,
+        }
+    }
+
+    fn zk_curve_allowed(&self, curve: iroha_zkp_halo2::ZkCurveId) -> bool {
+        match self.zk_cfg.curve {
+            ZkCurve::Pallas | ZkCurve::Pasta => matches!(
+                curve,
+                iroha_zkp_halo2::ZkCurveId::Pallas | iroha_zkp_halo2::ZkCurveId::Pasta
+            ),
+            ZkCurve::Goldilocks => curve == iroha_zkp_halo2::ZkCurveId::Goldilocks,
+            ZkCurve::Bn254 => curve == iroha_zkp_halo2::ZkCurveId::Bn254,
+        }
+    }
+
+    fn map_zk_open_error(error: &iroha_zkp_halo2::Error) -> u64 {
+        match error {
+            iroha_zkp_halo2::Error::CurveMismatch { .. } => ERR_CURVE,
+            iroha_zkp_halo2::Error::EnvelopeLimitExceeded { limit: "max_k", .. } => ERR_K,
+            iroha_zkp_halo2::Error::EnvelopeLimitExceeded {
+                limit: "transcript_label_len",
+                ..
+            } => ERR_TRANSCRIPT_LABEL,
+            iroha_zkp_halo2::Error::UnsupportedBackend { .. } => ERR_BACKEND,
+            iroha_zkp_halo2::Error::VerificationFailed => ERR_VERIFY,
+            _ => ERR_DECODE,
+        }
+    }
+
+    fn verify_zk_open_envelope(&self, number: u32, payload: &[u8]) -> Result<bool, u64> {
+        use iroha_zkp_halo2::{
+            OpenVerifyEnvelope, OpenVerifyLimits, Transcript,
+            backend::{bn254, pallas},
+            norito_helpers::{self as nh, DecodedEnvelope},
+        };
+
+        if payload.len() > self.zk_cfg.max_envelope_bytes {
+            return Err(ERR_ENVELOPE_SIZE);
+        }
+        if !self.zk_cfg.enabled {
+            return Err(ERR_DISABLED);
+        }
+        if self.zk_cfg.backend != ZkHalo2Backend::Ipa {
+            return Err(ERR_BACKEND);
+        }
+
+        let env: OpenVerifyEnvelope = decode_from_bytes(payload).map_err(|_| ERR_DECODE)?;
+        if env.transcript_label.len() > self.zk_cfg.max_transcript_label_len {
+            return Err(ERR_TRANSCRIPT_LABEL);
+        }
+        if self.zk_cfg.enforce_transcript_label_ascii && !env.transcript_label.is_ascii() {
+            return Err(ERR_TRANSCRIPT_LABEL);
+        }
+        let expected_label = Self::expected_zk_verify_label(number).ok_or(ERR_DECODE)?;
+        if env.transcript_label != expected_label {
+            return Err(ERR_TRANSCRIPT_LABEL);
+        }
+
+        let proof_bytes = norito::to_bytes(&env.proof).map_err(|_| ERR_DECODE)?;
+        if proof_bytes.len() > self.zk_cfg.max_proof_bytes {
+            return Err(ERR_PROOF_LEN);
+        }
+
+        let curve = iroha_zkp_halo2::ZkCurveId::from_u16(env.params.curve_id);
+        if env.params.curve_id != env.public.curve_id || !self.zk_curve_allowed(curve) {
+            return Err(ERR_CURVE);
+        }
+
+        let decoded = nh::decode_envelope_with_limits(
+            &env,
+            OpenVerifyLimits {
+                max_k: Some(self.zk_cfg.max_k),
+                max_transcript_label_len: Some(self.zk_cfg.max_transcript_label_len),
+            },
+        )
+        .map_err(|error| Self::map_zk_open_error(&error))?;
+
+        let mut transcript = Transcript::new(&env.transcript_label);
+        let metadata = env.transcript_metadata();
+        let result = match decoded {
+            DecodedEnvelope::Pallas {
+                params,
+                proof,
+                z,
+                t,
+                p_g,
+            } => pallas::Polynomial::verify_open_with_metadata(
+                params.as_ref(),
+                &mut transcript,
+                z,
+                p_g,
+                t,
+                proof.as_ref(),
+                metadata,
+            ),
+            DecodedEnvelope::Bn254 {
+                params,
+                proof,
+                z,
+                t,
+                p_g,
+            } => bn254::Polynomial::verify_open_with_metadata(
+                params.as_ref(),
+                &mut transcript,
+                z,
+                p_g,
+                t,
+                proof.as_ref(),
+                metadata,
+            ),
+            #[cfg(feature = "goldilocks_backend")]
+            DecodedEnvelope::Goldilocks {
+                params,
+                proof,
+                z,
+                t,
+                p_g,
+            } => iroha_zkp_halo2::backend::goldilocks::Polynomial::verify_open_with_metadata(
+                params.as_ref(),
+                &mut transcript,
+                z,
+                p_g,
+                t,
+                proof.as_ref(),
+                metadata,
+            ),
+            #[cfg(not(feature = "goldilocks_backend"))]
+            DecodedEnvelope::Goldilocks => {
+                return Err(ERR_BACKEND);
+            }
+        };
+
+        match result {
+            Ok(()) => Ok(true),
+            Err(iroha_zkp_halo2::Error::VerificationFailed) => Ok(false),
+            Err(error) => Err(Self::map_zk_open_error(&error)),
+        }
+    }
+
     fn begin_fastpq_batch(&mut self) -> Result<u64, VMError> {
         if self.fastpq_batch_active {
             return Err(VMError::PermissionDenied);
@@ -382,15 +530,7 @@ impl DefaultHost {
 
     /// Validate a TLV pointer in register `reg` has the expected `PointerType`.
     fn expect_tlv(vm: &IVM, reg: usize, ty: PointerType) -> Result<(), VMError> {
-        let addr = vm.register(reg);
-        // Fast header check first
-        let hdr = vm.memory.load_region(addr, 7)?;
-        let raw_type = u16::from_be_bytes([hdr[0], hdr[1]]);
-        if raw_type != ty as u16 {
-            return Err(VMError::NoritoInvalid);
-        }
-        // Full TLV validation (bounds + hash) and type confirm
-        let tlv = vm.memory.validate_tlv(addr)?;
+        let tlv = Self::decode_any_tlv(vm, vm.register(reg))?;
         if tlv.type_id as u16 != ty as u16 {
             return Err(VMError::NoritoInvalid);
         }
@@ -402,6 +542,185 @@ impl DefaultHost {
             });
         }
         Ok(())
+    }
+
+    fn load_u64(vm: &IVM, addr: usize) -> Option<u64> {
+        let slice = vm.memory.load_region(addr as u64, 8).ok()?;
+        Some(u64::from_le_bytes(slice.try_into().ok()?))
+    }
+
+    fn literal_table_info(vm: &IVM) -> Option<(usize, usize, usize, usize, usize)> {
+        let limit = vm.pc() as usize;
+        let prefix = vm.memory.load_region(0, limit as u64).ok()?;
+        let mut literal_start = 0usize;
+        if vm.metadata().version_minor == 1
+            && limit >= 8
+            && prefix[0..4] == CONTRACT_INTERFACE_SECTION_MAGIC
+        {
+            let contract_payload_len = u32::from_le_bytes(prefix[4..8].try_into().ok()?) as usize;
+            let contract_section_len = 8usize.checked_add(contract_payload_len)?;
+            literal_start = contract_section_len;
+        }
+        if literal_start + 16 > limit
+            || prefix[literal_start..literal_start + 4] != LITERAL_SECTION_MAGIC
+        {
+            if crate::dev_env::decode_trace_enabled() {
+                eprintln!("[DefaultHost] literal table not found (limit=0x{limit:08x})");
+            }
+            return None;
+        }
+        let literal_count = u32::from_le_bytes(
+            prefix[literal_start + 4..literal_start + 8]
+                .try_into()
+                .ok()?,
+        ) as usize;
+        let post_pad = u32::from_le_bytes(
+            prefix[literal_start + 8..literal_start + 12]
+                .try_into()
+                .ok()?,
+        ) as usize;
+        let data_len = u32::from_le_bytes(
+            prefix[literal_start + 12..literal_start + 16]
+                .try_into()
+                .ok()?,
+        ) as usize;
+        let offsets_start = literal_start + 16;
+        let lits_bytes = literal_count.checked_mul(8)?;
+        let data_start = offsets_start.checked_add(lits_bytes)?;
+        let data_end = data_start.checked_add(data_len)?.checked_add(post_pad)?;
+        if data_end > limit {
+            return None;
+        }
+        if crate::dev_env::decode_trace_enabled() {
+            eprintln!(
+                "[DefaultHost] literal table start=0x{literal_start:08x} offsets=0x{offsets_start:08x} data=0x{data_start:08x}..0x{data_end:08x} count={literal_count}"
+            );
+        }
+        Some((
+            literal_start,
+            offsets_start,
+            data_start,
+            data_end,
+            literal_count,
+        ))
+    }
+
+    fn resolve_literal_pointer(vm: &IVM, src: usize) -> Option<usize> {
+        let (start, offsets_start, data_start, data_end, count) = Self::literal_table_info(vm)?;
+        if crate::dev_env::decode_trace_enabled() {
+            eprintln!(
+                "[DefaultHost] resolve literal src=0x{src:08x} start=0x{start:08x} offsets=0x{offsets_start:08x} data=0x{data_start:08x}..0x{data_end:08x} count={count}"
+            );
+        }
+        if src >= data_start && src < data_end {
+            return Some(src);
+        }
+        if count == 0 {
+            return None;
+        }
+        if src >= offsets_start && src < data_start {
+            let idx = (src - offsets_start) / 8;
+            if idx >= count {
+                return None;
+            }
+            let offset = Self::load_u64(vm, offsets_start + idx * 8)? as usize;
+            let target = start.checked_add(offset)?;
+            return (target >= data_start && target < data_end).then_some(target);
+        }
+        if src < offsets_start {
+            let rel = start.checked_add(src)?;
+            if rel >= data_start && rel < data_end {
+                return Some(rel);
+            }
+            let offset = Self::load_u64(vm, offsets_start)? as usize;
+            let target = start.checked_add(offset)?;
+            return (target >= data_start && target < data_end).then_some(target);
+        }
+        None
+    }
+
+    fn resolve_code_tlv_addr(vm: &IVM, addr: u64) -> u64 {
+        let input_lo = Memory::INPUT_START;
+        let input_hi = Memory::INPUT_START + Memory::INPUT_SIZE;
+        if addr >= input_lo && addr < input_hi {
+            return addr;
+        }
+        Self::resolve_literal_pointer(vm, addr as usize)
+            .map(|resolved| resolved as u64)
+            .unwrap_or(addr)
+    }
+
+    fn decode_any_tlv<'a>(vm: &'a IVM, ptr: u64) -> Result<pointer_abi::Tlv<'a>, VMError> {
+        let resolved = Self::resolve_code_tlv_addr(vm, ptr);
+        if crate::dev_env::decode_trace_enabled() {
+            eprintln!("[DefaultHost] decode_any_tlv ptr=0x{ptr:08x} resolved=0x{resolved:08x}");
+        }
+        match Self::decode_tlv_from_memory(vm, resolved) {
+            Ok(tlv) => return Ok(tlv),
+            Err(err @ VMError::AbiTypeNotAllowed { .. }) => return Err(err),
+            Err(_) => {}
+        }
+        let code_len = vm.memory.code_len();
+        if resolved >= code_len || resolved + 7 > code_len {
+            return Err(VMError::NoritoInvalid);
+        }
+        let mut hdr = [0u8; 7];
+        vm.memory
+            .load_bytes(resolved, &mut hdr)
+            .map_err(|_| VMError::NoritoInvalid)?;
+        if hdr[2] != 1 {
+            return Err(VMError::NoritoInvalid);
+        }
+        let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
+        let total = 7usize
+            .checked_add(len)
+            .and_then(|x| x.checked_add(iroha_crypto::Hash::LENGTH))
+            .ok_or(VMError::NoritoInvalid)?;
+        if resolved as usize + total > code_len as usize {
+            return Err(VMError::NoritoInvalid);
+        }
+        let envelope = vm
+            .memory
+            .load_region(resolved, total as u64)
+            .map_err(|_| VMError::NoritoInvalid)?;
+        let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
+        Self::enforce_pointer_policy(vm, tlv)
+    }
+
+    fn decode_tlv_from_memory<'a>(vm: &'a IVM, addr: u64) -> Result<pointer_abi::Tlv<'a>, VMError> {
+        let hdr = vm
+            .memory
+            .load_region(addr, 7)
+            .map_err(|_| VMError::NoritoInvalid)?;
+        if hdr[2] != 1 {
+            return Err(VMError::NoritoInvalid);
+        }
+        let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
+        let total = 7usize
+            .checked_add(len)
+            .and_then(|x| x.checked_add(iroha_crypto::Hash::LENGTH))
+            .ok_or(VMError::NoritoInvalid)?;
+        let envelope = vm
+            .memory
+            .load_region(addr, total as u64)
+            .map_err(|_| VMError::NoritoInvalid)?;
+        let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
+        Self::enforce_pointer_policy(vm, tlv)
+    }
+
+    fn enforce_pointer_policy<'a>(
+        vm: &IVM,
+        tlv: pointer_abi::Tlv<'a>,
+    ) -> Result<pointer_abi::Tlv<'a>, VMError> {
+        let (policy, abi_version) = pointer_abi::current_policy()
+            .unwrap_or_else(|| (vm.syscall_policy(), vm.abi_version()));
+        if abi_version != 1 || !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+            return Err(VMError::AbiTypeNotAllowed {
+                abi: abi_version,
+                type_id: tlv.type_id as u16,
+            });
+        }
+        Ok(tlv)
     }
 
     fn alloc_blob_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
@@ -439,35 +758,7 @@ impl DefaultHost {
     }
 
     fn decode_numeric(vm: &IVM, ptr: u64) -> Result<Numeric, VMError> {
-        let tlv = match vm.memory.validate_tlv(ptr) {
-            Ok(tlv) => tlv,
-            Err(_) => {
-                let code_len = vm.memory.code_len();
-                if ptr >= code_len || ptr + 7 > code_len {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let mut hdr = [0u8; 7];
-                vm.memory
-                    .load_bytes(ptr, &mut hdr)
-                    .map_err(|_| VMError::NoritoInvalid)?;
-                if hdr[2] != 1 {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
-                let total = 7usize
-                    .checked_add(len)
-                    .and_then(|x| x.checked_add(iroha_crypto::Hash::LENGTH))
-                    .ok_or(VMError::NoritoInvalid)?;
-                if ptr as usize + total > code_len as usize {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let envelope = vm
-                    .memory
-                    .load_region(ptr, total as u64)
-                    .map_err(|_| VMError::NoritoInvalid)?;
-                pointer_abi::validate_tlv_bytes(envelope)?
-            }
-        };
+        let tlv = Self::decode_any_tlv(vm, ptr)?;
         if tlv.type_id != PointerType::NoritoBytes {
             return Err(VMError::NoritoInvalid);
         }
@@ -650,6 +941,7 @@ impl Default for DefaultHost {
 
 impl IVMHost for DefaultHost {
     fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
+        let number = crate::syscalls::canonical_helper_syscall(number);
         match number {
             crate::syscalls::SYSCALL_DEBUG_PRINT => {
                 let value = vm.register(10);
@@ -669,12 +961,21 @@ impl IVMHost for DefaultHost {
                 vm.request_abort();
                 Ok(0)
             }
+            crate::syscalls::SYSCALL_CURRENT_TIME_MS => {
+                let now_ms = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|_| VMError::DecodeError)?
+                    .as_millis();
+                let clamped = now_ms.min(u128::from(u64::MAX)) as u64;
+                vm.set_register(10, clamped);
+                Ok(0)
+            }
             crate::syscalls::SYSCALL_DEBUG_LOG => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
                     return Ok(0);
                 }
-                let tlv = vm.memory.validate_tlv(ptr)?;
+                let tlv = Self::decode_any_tlv(vm, ptr)?;
                 let policy = vm.syscall_policy();
                 if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
                     return Err(VMError::AbiTypeNotAllowed {
@@ -707,19 +1008,19 @@ impl IVMHost for DefaultHost {
             }
             // Basic pointer‑ABI validations to mirror core host behavior in tests
             crate::syscalls::SYSCALL_ADD_SIGNATORY => {
-                // r10=&ScopedAccountId, r11=&Json
+                // r10=&AccountId, r11=&Json
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::Json)?;
                 Ok(0)
             }
             crate::syscalls::SYSCALL_REMOVE_SIGNATORY => {
-                // r10=&ScopedAccountId, r11=&Json
+                // r10=&AccountId, r11=&Json
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::Json)?;
                 Ok(0)
             }
             crate::syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
-                // r10=&ScopedAccountId, r11=quorum:u64
+                // r10=&AccountId, r11=quorum:u64
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 let quorum_raw = vm.register(11);
                 let quorum_u16 = u16::try_from(quorum_raw).map_err(|_| VMError::DecodeError)?;
@@ -727,20 +1028,20 @@ impl IVMHost for DefaultHost {
                 Ok(0)
             }
             crate::syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
-                // r10=&ScopedAccountId, r11=&Name, r12=&Json
+                // r10=&AccountId, r11=&Name, r12=&Json
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::Name)?;
                 Self::expect_tlv(vm, 12, PointerType::Json)?;
                 Ok(0)
             }
             crate::syscalls::SYSCALL_NFT_MINT_ASSET => {
-                // r10=&NftId, r11=&ScopedAccountId
+                // r10=&NftId, r11=&AccountId
                 Self::expect_tlv(vm, 10, PointerType::NftId)?;
                 Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                 Ok(0)
             }
             crate::syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
-                // r10=&ScopedAccountId(from), r11=&NftId, r12=&ScopedAccountId(to)
+                // r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)
                 Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                 Self::expect_tlv(vm, 11, PointerType::NftId)?;
                 Self::expect_tlv(vm, 12, PointerType::AccountId)?;
@@ -750,7 +1051,7 @@ impl IVMHost for DefaultHost {
                 if self.fastpq_batch_active {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    // r10=&ScopedAccountId(from), r11=&ScopedAccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)
+                    // r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)
                     Self::expect_tlv(vm, 10, PointerType::AccountId)?;
                     Self::expect_tlv(vm, 11, PointerType::AccountId)?;
                     Self::expect_tlv(vm, 12, PointerType::AssetDefinitionId)?;
@@ -1342,7 +1643,22 @@ impl IVMHost for DefaultHost {
                 Err(VMError::NotImplemented { syscall: number })
             }
             crate::syscalls::SYSCALL_VERIFY_SIGNATURE => {
-                // r10 = &Blob message TLV, r11 = &Blob signature TLV, r12 = &Blob public key TLV, r13 = scheme code
+                // r10 = &message TLV, r11 = &Blob signature TLV, r12 = &Blob public key TLV, r13 = scheme code
+                let decode_message = |vm: &IVM, reg: usize| -> Result<Vec<u8>, VMError> {
+                    let ptr = vm.register(reg);
+                    let tlv = vm.memory.validate_tlv(ptr)?;
+                    match tlv.type_id {
+                        PointerType::Blob | PointerType::NoritoBytes => Ok(tlv.payload.to_vec()),
+                        PointerType::Json => {
+                            let json: Json =
+                                decode_from_bytes(tlv.payload).map_err(|_| VMError::DecodeError)?;
+                            let value = norito::json::parse_value(json.get())
+                                .map_err(|_| VMError::DecodeError)?;
+                            norito::json::to_vec(&value).map_err(|_| VMError::DecodeError)
+                        }
+                        _ => Err(VMError::NoritoInvalid),
+                    }
+                };
                 let decode_blob = |vm: &IVM, reg: usize| -> Result<Vec<u8>, VMError> {
                     let ptr = vm.register(reg);
                     let tlv = vm.memory.validate_tlv(ptr)?;
@@ -1351,7 +1667,7 @@ impl IVMHost for DefaultHost {
                     }
                     Ok(tlv.payload.to_vec())
                 };
-                let msg = decode_blob(vm, 10)?;
+                let msg = decode_message(vm, 10)?;
                 let sig = decode_blob(vm, 11)?;
                 let pk = decode_blob(vm, 12)?;
                 let scheme_code = vm.register(13) as u8;
@@ -1684,7 +2000,7 @@ impl IVMHost for DefaultHost {
             }
             crate::syscalls::SYSCALL_INPUT_PUBLISH_TLV => {
                 // Mirror a TLV into INPUT (no-op if already INPUT); validate envelope/policy.
-                let src = vm.register(10);
+                let mut src = vm.register(10);
                 if src == 0 {
                     vm.set_register(10, 0);
                     return Ok(0);
@@ -1702,6 +2018,9 @@ impl IVMHost for DefaultHost {
                         });
                     }
                     return Ok(0);
+                }
+                if let Some(resolved) = Self::resolve_literal_pointer(vm, src as usize) {
+                    src = resolved as u64;
                 }
                 // Read header to determine total length
                 let hdr = vm
@@ -1825,20 +2144,28 @@ impl IVMHost for DefaultHost {
             | crate::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | crate::syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY => {
-                // ZK proof verification is implemented by the node host (CoreHost). The
-                // standalone IVM host only reports the syscall as disabled.
+                // The standalone IVM host supports direct Halo2 opening verification for
+                // single-envelope syscalls so tests can exercise the real gating surface
+                // without a full node host.
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
                 if tlv.type_id != PointerType::NoritoBytes {
                     return Err(VMError::NoritoInvalid);
                 }
-                if tlv.payload.len() > self.zk_cfg.max_envelope_bytes {
-                    vm.set_register(10, 0);
-                    vm.set_register(11, ERR_ENVELOPE_SIZE);
-                    return Ok(0);
+                match self.verify_zk_open_envelope(number, tlv.payload) {
+                    Ok(true) => {
+                        vm.set_register(10, 1);
+                        vm.set_register(11, 0);
+                    }
+                    Ok(false) => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, ERR_VERIFY);
+                    }
+                    Err(status) => {
+                        vm.set_register(10, 0);
+                        vm.set_register(11, status);
+                    }
                 }
-                vm.set_register(10, 0);
-                vm.set_register(11, ERR_DISABLED);
                 Ok(0)
             }
             crate::syscalls::SYSCALL_ZK_ROOTS_GET | crate::syscalls::SYSCALL_ZK_VOTE_GET_TALLY => {
@@ -1970,6 +2297,42 @@ mod tests {
     fn downcast_default_host() {
         let mut host: Box<dyn IVMHost + Send> = Box::new(DefaultHost::new());
         assert!(host.as_any().downcast_mut::<DefaultHost>().is_some());
+    }
+
+    #[test]
+    fn zk_verify_label_mapping_covers_single_envelope_syscalls() {
+        assert_eq!(
+            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VERIFY_TRANSFER),
+            Some(LABEL_TRANSFER)
+        );
+        assert_eq!(
+            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VERIFY_UNSHIELD),
+            Some(LABEL_UNSHIELD)
+        );
+        assert_eq!(
+            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT),
+            Some(LABEL_VOTE_BALLOT)
+        );
+        assert_eq!(
+            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VOTE_VERIFY_TALLY),
+            Some(LABEL_VOTE_TALLY)
+        );
+        assert_eq!(
+            DefaultHost::expected_zk_verify_label(syscalls::SYSCALL_ZK_VERIFY_BATCH),
+            None
+        );
+    }
+
+    #[test]
+    fn zk_curve_allowlist_tracks_host_curve_family() {
+        let pallas_host = DefaultHost::new();
+        assert!(pallas_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Pallas));
+        assert!(pallas_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Pasta));
+        assert!(!pallas_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Bn254));
+
+        let bn254_host = DefaultHost::new().with_zk_curve_str("bn254");
+        assert!(bn254_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Bn254));
+        assert!(!bn254_host.zk_curve_allowed(iroha_zkp_halo2::ZkCurveId::Pallas));
     }
 
     #[test]

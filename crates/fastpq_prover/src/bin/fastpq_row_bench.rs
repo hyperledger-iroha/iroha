@@ -23,7 +23,6 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use norito::json::{self, Map, Value, to_writer, to_writer_pretty};
 use norito::to_bytes;
-use std::str::FromStr;
 
 const DEFAULT_TRANSFER_ROWS: usize = 2048;
 const DEFAULT_MINT_ROWS: usize = 64;
@@ -347,7 +346,7 @@ struct RowGenerator {
 
 impl RowGenerator {
     fn new(seed: u64) -> Self {
-        let domain = DomainId::from_str("lane").expect("domain id");
+        let domain = DomainId::try_new("lane", "universal").expect("domain id");
         let mut sender_accounts = Vec::with_capacity(ACCOUNT_POOL_SIZE);
         let mut receiver_accounts = Vec::with_capacity(ACCOUNT_POOL_SIZE);
         for idx in 0..ACCOUNT_POOL_SIZE {
@@ -600,16 +599,24 @@ mod tests {
     }
 
     #[test]
-    fn transfer_keys_use_canonical_aid_literals() {
+    fn transfer_keys_use_canonical_asset_definition_addresses() {
         let mut generator = RowGenerator::new(7);
         let (_, sender, receiver) = generator.next_transfer_pair(false);
 
         let sender_key = String::from_utf8(sender.key).expect("sender key utf8");
         let receiver_key = String::from_utf8(receiver.key).expect("receiver key utf8");
+        let sender_definition = sender_key
+            .strip_prefix("asset/")
+            .and_then(|value| value.split('/').next())
+            .expect("sender asset key");
+        let receiver_definition = receiver_key
+            .strip_prefix("asset/")
+            .and_then(|value| value.split('/').next())
+            .expect("receiver asset key");
 
-        assert!(sender_key.starts_with("asset/aid:"));
-        assert!(receiver_key.starts_with("asset/aid:"));
-        assert!(!sender_key.contains('#'));
-        assert!(!receiver_key.contains('#'));
+        assert!(AssetDefinitionId::parse_address_literal(sender_definition).is_ok());
+        assert!(AssetDefinitionId::parse_address_literal(receiver_definition).is_ok());
+        assert!(!sender_definition.contains('#'));
+        assert!(!receiver_definition.contains('#'));
     }
 }

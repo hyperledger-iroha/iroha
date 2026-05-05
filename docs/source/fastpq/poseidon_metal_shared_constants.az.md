@@ -25,9 +25,9 @@ kod generasiyası.
 
 | Yol | Məqsəd | SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`-dən yaradılan kanonik şəkil; GPU qurmaları üçün həqiqət mənbəyi. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Swift vahid testləri və XCFramework tüstü kəməri Metal ləpələrinin gözlədiyi eyni sabitləri yükləyərək kanonik görüntünü əks etdirir. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin qurğuları paritet və seriallaşdırma testləri üçün eyni manifest paylaşır. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`-dən yaradılan kanonik şəkil; GPU qurmaları üçün həqiqət mənbəyi. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Swift vahid testləri və XCFramework tüstü kəməri Metal ləpələrinin gözlədiyi eyni sabitləri yükləyərək kanonik görüntünü əks etdirir. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Android/Kotlin qurğuları paritet və seriallaşdırma testləri üçün eyni manifest paylaşır. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 Hər bir istehlakçı sabitləri GPU-ya köçürməzdən əvvəl hashı yoxlamalıdır
 boru kəməri. Manifest dəyişdikdə (yeni parametrlər dəsti və ya profil), SHA və
@@ -39,7 +39,7 @@ Manifest `xtask` işlətməklə Rust mənbələrindən yaradılıb.
 köməkçi. Komanda həm kanonik faylı, həm də SDK güzgülərini yazır:
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 Təyinatları ləğv etmək üçün `--constants <path>`/`--vectors <path>` istifadə edin və ya

@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b066f95804af834930008b4a7c654778f32f6467bcecbdee47d09997cbd35122
-source_last_modified: "2025-11-09T11:46:26.108135+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 0541f1f5775744c518f4f102326e725d73043b1756bb62a979f8eed4cc9472e6
+source_last_modified: "2026-04-08T09:19:38.795296+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os r
 
 - Pre-financie Alice com o ativo alvo (por exemplo via o trecho `register and mint` ou os fluxos de quickstart do SDK).
 - Execute o entrypoint `do_transfer` para mover 10 unidades de Alice para Bob, atendendo a permissao `AssetTransferRole`.
-- Consulte saldos (`FindAccountAssets`, `iroha_cli ledger assets list`) ou assine eventos do pipeline para observar o resultado da transferencia.
+- Consulte saldos (`FindAccountAssets`, `iroha ledger asset list all --verbose`) ou assine eventos do pipeline para observar o resultado da transferencia.
 
 ## Guias de SDK relacionados
 
@@ -36,12 +36,12 @@ Fluxo direto de transferencia de ativos que espelha os quickstarts do SDK e os r
 // Transfer example: uses typed pointer constructors and transfer_asset syscall
 
 seiyaku TransferDemo {
-  // Public entrypoint to transfer 10 units of rose#wonderland from alice to bob
+  // Public entrypoint to transfer 10 units of 62Fk4FPcMuLvW5QjDGNF2a4jAmjM from alice to bob
   kotoage fn do_transfer() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
-      asset_definition!("rose#wonderland"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
   }

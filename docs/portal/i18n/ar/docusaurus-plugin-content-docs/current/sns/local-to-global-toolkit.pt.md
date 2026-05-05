@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` مغلف بـ CLI `iroha` للمنتج:
   - `audit.json`--مؤسسة البناء `iroha tools address audit --format json`.
-  - `normalized.txt` - حرف I105 (مفضل) / مضغوط (`sora`) (أفضل خيار ثاني) محول لكل محدد نطاق محلي.
+  - `normalized.txt` - حرف i105 (مفضل) / مضغوط (`sora`) (أفضل خيار ثاني) محول لكل محدد نطاق محلي.
 - الجمع بين البرنامج النصي ولوحة التحكم في إدخال enderecos (`dashboards/grafana/address_ingest.json`)
   كما يتم إصلاح Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) للتأكد من قطع Local-8 /
   محلي-12 وآمن. راقب آلام القولون Local-8 و Local-12 والتنبيهات
@@ -33,7 +33,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 Opcoes:
 
-- `--format I105` لـ صيدا `sora...` em vez de I105.
+- `--format i105` لـ صيدا `sora...` em vez de i105.
 - `domainless output (default)` لإصدار أدبي بدون ملكية.
 - `--audit-only` لبدء المحادثة.
 - `--allow-errors` لمواصلة التباين عند ظهور تشوهات الخطوط (مثل سلوك CLI).يستخرج البرنامج النصي طريقتين من الأعمال الفنية في نهاية التنفيذ. Anexe os dois arquivos ao

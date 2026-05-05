@@ -55,7 +55,7 @@ legitimacy اور “main crate” assessment (اہم نکات):
   `secp256k1` + libsecp) پر converge کیا جائے، تاکہ surface area کم رہے۔
 - BLS12‑381/ZK: `blstrs`, `halo2_*` family — مختلف ZK پروڈکشن
   ecosystem میں عام، اور legitimate۔
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — معتبر reference crates۔
+- PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` — معتبر reference crates۔
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — Rust میں جدید اور
   canonical TLS stack۔
 - Noise: `snow` — canonical Noise implementation۔

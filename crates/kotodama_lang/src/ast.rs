@@ -8,6 +8,16 @@ pub struct Program {
     pub items: Vec<Item>,
     /// Optional contract-level metadata captured from a `seiyaku` container.
     pub contract_meta: Option<ContractMeta>,
+    /// Optional standalone test-file target declaration.
+    pub test_target: Option<TestTargetDecl>,
+    /// Optional local test fixtures available to `#[test(...)]` functions.
+    pub fixtures: Vec<FixtureDecl>,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy, Eq)]
+pub struct SourceLocation {
+    pub line: usize,
+    pub column: usize,
 }
 
 /// Visibility of a function when exposed to the host/runtime.
@@ -32,6 +42,8 @@ pub enum FunctionKind {
     Hajimari,
     /// Contract upgrade hook (`kaizen`).
     Kaizen,
+    /// Read-only public query entrypoint (`view fn`).
+    View,
 }
 
 /// Parsed modifiers associated with a function.
@@ -44,6 +56,10 @@ pub struct FunctionModifiers {
     pub access_reads: Vec<String>,
     /// Optional explicit write access hints for this function.
     pub access_writes: Vec<String>,
+    /// Marks a function as a local-only Kotodama test.
+    pub is_test: bool,
+    /// Optional fixture bound to a Kotodama test function.
+    pub test_fixture: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -51,9 +67,10 @@ pub enum Item {
     Function(Function),
     /// User-defined product type with named fields.
     Struct(StructDef),
-    /// Contract-level durable state declaration. For now, the compiler lowers
-    /// these to ephemeral allocations per run; durable host-backed storage is
-    /// pending and tracked in the roadmap/docs.
+    /// Contract-level constant declaration.
+    Const(ConstDecl),
+    /// Contract-level durable state declaration lowered to host-backed state
+    /// paths, including flattened singleton struct/tuple children.
     State(StateDecl),
     /// Contract-level trigger declaration (manifest-only metadata).
     Trigger(TriggerDecl),
@@ -101,6 +118,8 @@ pub enum TypeExpr {
 pub struct Param {
     pub ty: Option<TypeExpr>,
     pub name: String,
+    /// Whether this parameter is a durable state handle (`state Map<...>`).
+    pub is_state: bool,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -110,6 +129,7 @@ pub struct Function {
     pub ret_ty: Option<TypeExpr>,
     pub body: Block,
     pub modifiers: FunctionModifiers,
+    pub location: SourceLocation,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -124,11 +144,40 @@ pub struct StructDef {
     pub fields: Vec<(String, TypeExpr)>,
 }
 
+/// A contract-level `const` declaration: `const NAME: Type = expr;`.
+#[derive(Debug, PartialEq, Clone)]
+pub struct ConstDecl {
+    pub name: String,
+    pub ty: Option<TypeExpr>,
+    pub value: Expr,
+}
+
 /// A contract-level `state` declaration: `state Type name;`.
 #[derive(Debug, PartialEq, Clone)]
 pub struct StateDecl {
     pub name: String,
     pub ty: TypeExpr,
+}
+
+/// Standalone Kotodama test-file declaration identifying the contract under test.
+#[derive(Debug, PartialEq, Clone)]
+pub struct TestTargetDecl {
+    pub target: String,
+}
+
+/// Declarative local fixture used by `koto_test`.
+#[derive(Debug, PartialEq, Clone)]
+pub struct FixtureDecl {
+    pub name: String,
+    pub actions: Vec<FixtureAction>,
+}
+
+/// One fixture action expressed as a function-style command, for example
+/// `caller(account("alice@wonderland"))`.
+#[derive(Debug, PartialEq, Clone)]
+pub struct FixtureAction {
+    pub name: String,
+    pub args: Vec<Expr>,
 }
 
 /// Contract-level trigger declaration.
@@ -162,6 +211,45 @@ pub enum TriggerFilter {
 #[derive(Debug, PartialEq, Clone)]
 pub enum TriggerDataFilter {
     Any,
+    Structured(TriggerStructuredDataFilter),
+}
+
+/// Structured data trigger filter block.
+#[derive(Debug, PartialEq, Clone)]
+pub struct TriggerStructuredDataFilter {
+    pub family: TriggerDataFamily,
+    pub event: TriggerDataEventKind,
+    pub matchers: Vec<TriggerDataMatcher>,
+}
+
+/// Supported data-event families for contract trigger declarations.
+#[derive(Debug, PartialEq, Clone, Copy, Eq)]
+pub enum TriggerDataFamily {
+    Peer,
+    Domain,
+    Account,
+    Asset,
+    AssetDefinition,
+    Nft,
+    Rwa,
+    Trigger,
+    Role,
+    Configuration,
+    Executor,
+}
+
+/// Event kind selector inside a structured data trigger.
+#[derive(Debug, PartialEq, Clone)]
+pub enum TriggerDataEventKind {
+    Any,
+    Named(String),
+}
+
+/// Matcher entry inside a structured data trigger block.
+#[derive(Debug, PartialEq, Clone)]
+pub struct TriggerDataMatcher {
+    pub key: String,
+    pub value: String,
 }
 
 /// Pipeline trigger filter variants.
@@ -352,4 +440,23 @@ pub enum BinaryOp {
 pub enum UnaryOp {
     Neg,
     Not,
+}
+
+impl Program {
+    #[must_use]
+    pub fn stripped_for_production(&self) -> Self {
+        Self {
+            items: self
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    Item::Function(func) if func.modifiers.is_test => None,
+                    _ => Some(item.clone()),
+                })
+                .collect(),
+            contract_meta: self.contract_meta.clone(),
+            test_target: None,
+            fixtures: Vec::new(),
+        }
+    }
 }

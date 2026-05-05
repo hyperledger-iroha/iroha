@@ -25,9 +25,9 @@ translator: machine-google-reviewed
 
 | راستہ | مقصد | SHA-256 |
 | ------ | --------- | --------- |
-| `artifacts/offline_poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` سے تیار کردہ کیننیکل اسنیپ شاٹ ؛ جی پی یو کی تعمیر کے لئے سچائی کا ذریعہ۔ | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | کیننیکل اسنیپ شاٹ کو آئینہ دار کرتا ہے لہذا سوئفٹ یونٹ ٹیسٹ اور ایکس سی فریم ورک دھواں ہارنیس کو دھات کے دانا کی توقع کے مطابق اسی طرح کے مستقل طور پر بوجھ پڑتا ہے۔ | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | android/کوٹلن فکسچر برابری اور سیریلائزیشن ٹیسٹوں کے لئے ایک جیسی منشور کا اشتراک کرتے ہیں۔ | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}` سے تیار کردہ کیننیکل اسنیپ شاٹ ؛ جی پی یو کی تعمیر کے لئے سچائی کا ذریعہ۔ | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | کیننیکل اسنیپ شاٹ کو آئینہ دار کرتا ہے لہذا سوئفٹ یونٹ ٹیسٹ اور ایکس سی فریم ورک دھواں ہارنیس کو دھات کے دانا کی توقع کے مطابق اسی طرح کے مستقل طور پر بوجھ پڑتا ہے۔ | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | android/کوٹلن فکسچر برابری اور سیریلائزیشن ٹیسٹوں کے لئے ایک جیسی منشور کا اشتراک کرتے ہیں۔ | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 ہر صارف کو لازمی طور پر ہیش کی تصدیق کرنی ہوگی اس سے پہلے کہ مستقل کو جی پی یو میں وائرنگ کریں
 پائپ لائن جب ظاہر ہوتا ہے (نیا پیرامیٹر سیٹ یا پروفائل) ، SHA اور
@@ -39,7 +39,7 @@ translator: machine-google-reviewed
 مددگار کمانڈ دونوں کیننیکل فائل اور ایس ڈی کے آئینے دونوں لکھتی ہے:
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 مقامات کو اوور رائڈ کرنے کے لئے یا

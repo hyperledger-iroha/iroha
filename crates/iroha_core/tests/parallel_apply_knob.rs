@@ -21,17 +21,17 @@ fn build_world() -> (
 ) {
     let chain_id = ChainId::from("chain");
     let (alice_id, alice_kp) = iroha_test_samples::gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
         NumericSpec::default(),
     )
     .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone().to_account_id(domain_id)).build(&alice_id);
+    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
@@ -55,7 +55,7 @@ fn make_block(
     // Two simple instructions to ensure a non-empty overlay
     let asset = AssetId::of(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
         alice_id.clone(),

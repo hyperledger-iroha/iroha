@@ -6,7 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
-    sync::Once,
+    sync::{Mutex, MutexGuard, Once},
     time::Duration,
 };
 
@@ -18,20 +18,21 @@ use iroha_config::parameters::user::ParseError;
 use iroha_config::parameters::{
     actual::{
         BlockSync, DaManifestPolicy, DataspaceGossip, DataspaceGossipFallback, FraudRiskBand,
-        LaneProfile, NexusStorage, OfflineProofMode, OperatorAuthLockout, OperatorTokenFallback,
-        OperatorTokenSource, OracleChangeThresholds, OracleEconomics, OracleGovernance,
-        OracleTwitterBinding, Queue, Root as Config, SoranetVpn, Streaming,
-        StreamingSoranetAccessKind, StreamingSoravpn, StreamingSync, ToriiOperatorAuth,
-        TransactionGossiper,
+        LaneProfile, NexusStorage, OperatorAuthLockout, OperatorTokenFallback, OperatorTokenSource,
+        OracleChangeThresholds, OracleEconomics, OracleGovernance, OracleTwitterBinding, Queue,
+        RbcRs16InitialFanout, Root as Config, SoranetVpn, Streaming, StreamingSoranetAccessKind,
+        StreamingSoravpn, StreamingSync, SumeragiResilience, SumeragiResilienceProfile,
+        ToriiOperatorAuth, TransactionGossiper,
     },
     defaults,
     user::{Root as UserConfig, ToriiSoranetPrivacyIngest},
 };
 use iroha_config_base::{env::MockEnv, read::ConfigReader};
 use iroha_crypto::{Algorithm, PublicKey};
-use iroha_data_model::{account::AccountId, identifier::IdentifierPolicyId, name::Name};
+use iroha_data_model::{account::AccountId, name::Name};
 use soranet_pq::MlKemSuite;
 use thiserror::Error;
+use toml::Value as TomlValue;
 use url::Url;
 
 fn fixtures_dir() -> PathBuf {
@@ -88,13 +89,19 @@ fn strip_ansi_codes(input: &str) -> String {
 struct AddressRuntimeGuard {
     default_domain_label: std::sync::Arc<str>,
     chain_discriminant: u16,
+    _lock: MutexGuard<'static, ()>,
 }
 
 impl AddressRuntimeGuard {
     fn capture() -> Self {
+        static ADDRESS_RUNTIME_LOCK: Mutex<()> = Mutex::new(());
+        let lock = ADDRESS_RUNTIME_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self {
             default_domain_label: iroha_data_model::account::address::default_domain_name(),
             chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+            _lock: lock,
         }
     }
 }
@@ -286,7 +293,7 @@ fn minimal_config_snapshot() {
                     },
                 },
                 default_account_domain_label: WithOrigin {
-                    value: "default",
+                    value: "default.universal",
                     origin: Default {
                         id: ParameterId(default_account_domain_label),
                     },
@@ -369,6 +376,7 @@ fn minimal_config_snapshot() {
                     dns_push_interval: 90s,
                     exit_class: "standard",
                     meter_family: "soranet.vpn.standard",
+                    helper_ticket_secret: None,
                 },
                 lane_profile: Core,
                 require_sm_handshake_match: true,
@@ -385,6 +393,8 @@ fn minimal_config_snapshot() {
                 trust_penalty_bad_gossip: 5,
                 trust_penalty_unknown_peer: 3,
                 trust_min_score: -20,
+                debug_packet_loss_inbound_percent: 0,
+                debug_packet_loss_outbound_percent: 0,
                 dns_refresh_interval: None,
                 dns_refresh_ttl: None,
                 p2p_proxy: None,
@@ -404,7 +414,7 @@ fn minimal_config_snapshot() {
                     routes: {},
                 },
                 tls_enabled: false,
-                tls_fallback_to_plain: true,
+                tls_fallback_to_plain: false,
                 tls_listen_address: None,
                 tls_inbound_only: false,
                 prefer_ws_fallback: false,
@@ -514,11 +524,10 @@ fn minimal_config_snapshot() {
                     1893456000,
                 ),
                 max_content_len: Bytes(
-                    16777216,
+                    64000000,
                 ),
                 data_dir: "./storage/torii",
                 receipt_signer: None,
-                identifier_resolver: None,
                 query_rate_per_authority_per_sec: Some(
                     25,
                 ),
@@ -536,6 +545,26 @@ fn minimal_config_snapshot() {
                 ),
                 deploy_burst_per_origin: Some(
                     8,
+                ),
+                soracloud_public_rate_per_ip_per_sec: Some(
+                    5,
+                ),
+                soracloud_public_burst_per_ip: Some(
+                    10,
+                ),
+                soracloud_public_max_inflight: 32,
+                soracloud_mutation_rate_per_account_origin_per_sec: Some(
+                    8,
+                ),
+                soracloud_mutation_burst_per_account_origin: Some(
+                    16,
+                ),
+                soracloud_mutation_max_inflight: 64,
+                soracloud_mutation_max_body_bytes: Bytes(
+                    8388608,
+                ),
+                soracloud_upload_max_body_bytes: Bytes(
+                    67108864,
                 ),
                 require_api_token: false,
                 api_tokens: [],
@@ -564,6 +593,10 @@ fn minimal_config_snapshot() {
                 operator_auth: ToriiOperatorAuth {
                     enabled: false,
                     require_mtls: false,
+                    mtls_trusted_proxy_cidrs: [
+                        "127.0.0.0/8",
+                        "::1/128",
+                    ],
                     token_fallback: Bootstrap,
                     token_source: OperatorTokens,
                     tokens: [],
@@ -610,6 +643,8 @@ fn minimal_config_snapshot() {
                 api_high_load_subscription_threshold: None,
                 events_buffer_capacity: 10000,
                 ws_message_timeout: 10s,
+                webhooks_enabled: false,
+                zk_attachments_enabled: false,
                 attachments_ttl_secs: 604800,
                 attachments_max_bytes: 4194304,
                 attachments_per_tenant_max_count: 128,
@@ -654,7 +689,7 @@ fn minimal_config_snapshot() {
                     dedupe_cap: 8192,
                     relay_enabled: true,
                     relay_strategy: "broadcast",
-                    p2p_ttl_hops: 0,
+                    p2p_ttl_hops: 8,
                 },
                 iso_bridge: IsoBridge {
                     enabled: false,
@@ -685,6 +720,8 @@ fn minimal_config_snapshot() {
                     replay_cache_max_sequence_lag: 4096,
                     replay_cache_store_dir: "./storage/da_replay",
                     manifest_store_dir: "./storage/da_manifests",
+                    spool_queue_capacity: 1024,
+                    spool_batch_max: 32,
                     governance_metadata_key: None,
                     governance_metadata_key_label: None,
                     taikai_anchor: None,
@@ -799,7 +836,7 @@ fn minimal_config_snapshot() {
                         availability: "hot",
                         max_latency_ms: 500,
                         topics: [
-                            "sorafs.sf1.primary:global",
+                            "sorafs.sf1.primary:universal",
                         ],
                     },
                     metering_smoothing: SorafsMeteringSmoothing {
@@ -911,6 +948,10 @@ fn minimal_config_snapshot() {
                     },
                     denylist: SorafsGatewayDenylist {
                         path: None,
+                        catalog_path: None,
+                        opt_out_packs: [],
+                        extra_packs: [],
+                        jurisdiction: None,
                         standard_ttl: 15552000s,
                         emergency_ttl: 2592000s,
                         emergency_review_window: 604800s,
@@ -920,6 +961,15 @@ fn minimal_config_snapshot() {
                     anonymity_policy: Some(
                         GuardPq,
                     ),
+                    untrusted_hosting: SorafsGatewayUntrustedHosting {
+                        enabled: false,
+                        cid_host_suffixes: SorafsGatewayCidHostSuffixes {
+                            live: "sorafs.sora.org",
+                            taira: "sorafs.taira.sora.org",
+                        },
+                        path_gateway_redirect: true,
+                        redirect_html_only: true,
+                    },
                     acme: SorafsGatewayAcme {
                         enabled: false,
                         account_email: None,
@@ -945,9 +995,14 @@ fn minimal_config_snapshot() {
                     randomness_seed: None,
                 },
                 transport: ToriiTransport {
+                    trusted_proxy_cidrs: [],
                     norito_rpc: NoritoRpcTransport {
                         enabled: true,
                         require_mtls: false,
+                        mtls_trusted_proxy_cidrs: [
+                            "127.0.0.0/8",
+                            "::1/128",
+                        ],
                         allowed_clients: [],
                         stage: Disabled,
                     },
@@ -956,7 +1011,7 @@ fn minimal_config_snapshot() {
                     enabled: false,
                     max_request_bytes: 1048576,
                     max_tools_per_list: 500,
-                    profile: "read_only",
+                    profile: ReadOnly,
                     expose_operator_routes: false,
                     allow_tool_prefixes: [],
                     deny_tool_prefixes: [],
@@ -991,12 +1046,18 @@ fn minimal_config_snapshot() {
                     retry_after: 1s,
                 },
                 onboarding: None,
+                faucet: None,
                 offline_issuer: None,
+                ram_lfe: None,
+                tx_history: None,
                 app_api: AppApi {
                     default_list_limit: 100,
                     max_list_limit: 500,
                     max_fetch_size: 500,
                     rate_limit_cost_per_row: 1,
+                    request_signature_max_clock_skew: 60s,
+                    request_signature_nonce_ttl: 300s,
+                    request_signature_replay_cache_capacity: 10000,
                 },
                 webhook: Webhook {
                     queue_capacity: 10000,
@@ -1027,6 +1088,68 @@ fn minimal_config_snapshot() {
                     apns_auth_token: None,
                 },
             },
+            soracloud_runtime: SoracloudRuntime {
+                production_mode: false,
+                state_dir: "./storage/soracloud_runtime",
+                reconcile_interval: 5s,
+                hydration_concurrency: 4,
+                cache_budgets: SoracloudRuntimeCacheBudgets {
+                    bundle_bytes: 536870912,
+                    static_asset_bytes: 536870912,
+                    journal_bytes: 536870912,
+                    checkpoint_bytes: 536870912,
+                    model_artifact_bytes: 1073741824,
+                    model_weight_bytes: 4294967296,
+                },
+                inrou: SoracloudRuntimeInrou {
+                    max_concurrent_vms: 8,
+                    proxy_only: false,
+                    start_grace: 30s,
+                    stop_grace: 10s,
+                },
+                egress: SoracloudRuntimeEgress {
+                    default_allow: false,
+                    allowed_hosts: [],
+                    rate_per_minute: None,
+                    max_bytes_per_minute: None,
+                },
+                hf: SoracloudRuntimeHuggingFace {
+                    hub_base_url: "https://huggingface.co",
+                    api_base_url: "https://huggingface.co/api",
+                    inference_base_url: "https://router.huggingface.co/hf-inference/models",
+                    request_timeout: 15s,
+                    local_execution_enabled: true,
+                    local_runner_program: "python3",
+                    local_runner_timeout: 120s,
+                    model_host_heartbeat_ttl: 30s,
+                    allow_inference_bridge_fallback: false,
+                    import_max_files: 32,
+                    import_max_file_bytes: 268435456,
+                    import_max_total_bytes: 2147483648,
+                    import_file_allowlist: [
+                        "*.gguf",
+                        "*.safetensors",
+                        "*.safetensors.index.json",
+                        "chat_template.jinja",
+                        "config.json",
+                        "generation_config.json",
+                        "merges.txt",
+                        "preprocessor_config.json",
+                        "processor_config.json",
+                        "pytorch_model.bin",
+                        "pytorch_model.bin.index.json",
+                        "rust_model.ot",
+                        "sentencepiece.bpe.model",
+                        "special_tokens_map.json",
+                        "tokenizer.json",
+                        "tokenizer.model",
+                        "tokenizer_config.json",
+                        "vocab.json",
+                        "vocab.txt",
+                    ],
+                    inference_token: None,
+                },
+            },
             kura: Kura {
                 init_mode: Strict,
                 store_dir: WithOrigin {
@@ -1036,11 +1159,12 @@ fn minimal_config_snapshot() {
                     },
                 },
                 max_disk_usage_bytes: Bytes(
-                    82463372085,
+                    0,
                 ),
                 blocks_in_memory: 1024,
                 block_sync_roster_retention: 7200,
                 roster_sidecar_retention: 512,
+                eviction_required_replicas: 3,
                 debug_output_new_blocks: false,
                 merge_ledger_cache_capacity: 256,
                 fsync_mode: Batched,
@@ -1108,9 +1232,16 @@ fn minimal_config_snapshot() {
                     min_factor_bps: 10000,
                     max_factor_bps: 20000,
                 },
+                resilience: SumeragiResilience {
+                    enabled: true,
+                    profile: Balanced,
+                    max_redundant_send_r: 13,
+                    max_parallel_topology_fanout: 8,
+                    status_query_reserved_capacity: 1024,
+                },
                 da: SumeragiDa {
                     enabled: true,
-                    quorum_timeout_multiplier: 3,
+                    quorum_timeout_multiplier: 2,
                     availability_timeout_multiplier: 2,
                     availability_timeout_floor: 100ms,
                     max_commitments_per_block: 16,
@@ -1161,7 +1292,11 @@ fn minimal_config_snapshot() {
                 },
                 rbc: SumeragiRbc {
                     chunk_max_bytes: 262144,
+                    encoding: Plain,
+                    data_shards: 4,
+                    parity_shards: 2,
                     chunk_fanout: None,
+                    rs16_initial_fanout: Full,
                     pending_max_chunks: 1024,
                     pending_max_bytes: 16777216,
                     pending_session_limit: 256,
@@ -1301,6 +1436,8 @@ fn minimal_config_snapshot() {
                     max_disk_usage_bytes: Bytes(
                         274877906944,
                     ),
+                    budget_source: Unset,
+                    auto_default: None,
                     budget_enforce_interval_blocks: 10,
                     max_wsv_memory_bytes: Bytes(
                         8589934592,
@@ -1322,19 +1459,52 @@ fn minimal_config_snapshot() {
                     withdraw_grace: 0ns,
                     max_slash_bps: 10000,
                     reward_dust_threshold: 0,
-                    stake_asset_id: "xor#nexus",
-                    stake_escrow_account_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                    slash_sink_account_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                    stake_asset_id: "5tTiKE1CkjJoGHhmf5FxQoSg5hMt",
+                    stake_escrow_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                    slash_sink_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
                 },
                 fees: NexusFees {
-                    fee_asset_id: "xor#nexus",
-                    fee_sink_account_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
-                    base_fee: 0,
-                    per_byte_fee: 0,
-                    per_instruction_fee: 0,
-                    per_gas_unit_fee: 0,
+                    fee_asset_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+                    fee_sink_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                    base_fee: Numeric {
+                        mantissa: 0,
+                        scale: 0,
+                    },
+                    per_byte_fee: Numeric {
+                        mantissa: 0,
+                        scale: 0,
+                    },
+                    per_instruction_fee: Numeric {
+                        mantissa: 1,
+                        scale: 3,
+                    },
+                    per_gas_unit_fee: Numeric {
+                        mantissa: 5,
+                        scale: 5,
+                    },
                     sponsorship_enabled: false,
-                    sponsor_max_fee: 0,
+                    sponsor_max_fee: Numeric {
+                        mantissa: 0,
+                        scale: 0,
+                    },
+                    external_settlement_enabled: false,
+                    burn_from_unix_timestamp_ms: 18446744073709551615,
+                    successful_claim_fee_exempt_authorities: [],
+                },
+                hf_shared_leases: NexusHfSharedLeases {
+                    drain_grace: 5s,
+                    warmup_no_show_slash_bps: 500,
+                    assigned_heartbeat_miss_slash_bps: 250,
+                    assigned_heartbeat_miss_strike_threshold: 3,
+                    advert_contradiction_slash_bps: 1000,
+                },
+                uploaded_models: NexusUploadedModels {
+                    chunk_plaintext_bytes: 4194304,
+                    max_plaintext_bytes_per_model: 68719476736,
+                    max_chunk_count_per_model: 16384,
+                    max_active_private_sessions_per_apartment: 4,
+                    max_session_token_budget: 16384,
+                    max_session_image_budget: 8,
                 },
                 endorsement: NexusEndorsement {
                     committee_keys: [],
@@ -1350,6 +1520,7 @@ fn minimal_config_snapshot() {
                     enabled: false,
                     multisig_threshold: 3,
                     multisig_members: 5,
+                    max_ttl_blocks: 20,
                 },
                 lane_catalog: LaneCatalog {
                     lane_count: 1,
@@ -1551,7 +1722,7 @@ fn minimal_config_snapshot() {
                 overlay_max_bytes: 0,
                 overlay_chunk_instructions: 256,
                 gas: Gas {
-                    tech_account_id: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+                    tech_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
                     accepted_assets: [],
                     units_per_gas: [],
                 },
@@ -1583,7 +1754,7 @@ fn minimal_config_snapshot() {
                 da_store_root: None,
                 max_snapshots: 2,
                 max_cold_bytes: Bytes(
-                    54975581388,
+                    0,
                 ),
             },
             compute: Compute {
@@ -1738,7 +1909,7 @@ fn minimal_config_snapshot() {
                 },
             },
             oracle: Oracle {
-                history_depth: 64,
+                history_depth: 2048,
                 governance: OracleGovernance {
                     intake_sla_blocks: 12,
                     rules_sla_blocks: 24,
@@ -1837,6 +2008,7 @@ fn minimal_config_snapshot() {
                 },
                 stark: Stark {
                     enabled: false,
+                    max_envelope_bytes: 1048576,
                     max_proof_bytes: 1048576,
                 },
                 root_history_cap: 2048,
@@ -1885,13 +2057,53 @@ fn minimal_config_snapshot() {
             gov: Governance {
                 vk_ballot: None,
                 vk_tally: None,
-                voting_asset_id: xor#sora,
-                citizenship_asset_id: xor#sora,
+                voting_asset_id: AssetDefinitionId {
+                    aid_bytes: [
+                        59,
+                        45,
+                        238,
+                        246,
+                        130,
+                        60,
+                        72,
+                        205,
+                        167,
+                        236,
+                        51,
+                        224,
+                        2,
+                        182,
+                        29,
+                        55,
+                    ],
+                    projection: None,
+                },
+                citizenship_asset_id: AssetDefinitionId {
+                    aid_bytes: [
+                        59,
+                        45,
+                        238,
+                        246,
+                        130,
+                        60,
+                        72,
+                        205,
+                        167,
+                        236,
+                        51,
+                        224,
+                        2,
+                        182,
+                        29,
+                        55,
+                    ],
+                    projection: None,
+                },
                 citizenship_bond_amount: 150,
-                citizenship_escrow_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
+                citizenship_escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                 min_bond_amount: 150,
-                bond_escrow_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
-                slash_receiver_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
+                bond_escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                slash_receiver_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                 slash_double_vote_bps: 2500,
                 slash_invalid_proof_bps: 5000,
                 slash_ineligible_proof_bps: 1500,
@@ -1918,9 +2130,29 @@ fn minimal_config_snapshot() {
                     role_bond_multipliers: {},
                 },
                 viral_incentives: ViralIncentives {
-                    incentive_pool_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
-                    escrow_account: 6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn,
-                    reward_asset_definition_id: xor#sora,
+                    incentive_pool_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                    escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                    reward_asset_definition_id: AssetDefinitionId {
+                        aid_bytes: [
+                            59,
+                            45,
+                            238,
+                            246,
+                            130,
+                            60,
+                            72,
+                            205,
+                            167,
+                            236,
+                            51,
+                            224,
+                            2,
+                            182,
+                            29,
+                            55,
+                        ],
+                        projection: None,
+                    },
                     follow_reward_amount: Numeric {
                         mantissa: 1,
                         scale: 0,
@@ -2018,13 +2250,11 @@ fn minimal_config_snapshot() {
                     max_penalty_nano: 1000000000,
                 },
                 sorafs_telemetry: SorafsTelemetryPolicy {
-                    require_submitter: true,
+                    require_submitter: false,
                     require_nonce: true,
                     max_window_gap: 21600s,
                     reject_zero_capacity: true,
-                    submitters: [
-                        34mSYn6ySFTASoiVzNGuyBkedDcPUhgmtD5UQyEPKXz7u1A1NpZLuc7sms8sFTrvTXHfgsaLr,
-                    ],
+                    submitters: [],
                     per_provider_submitters: {},
                 },
                 sorafs_provider_owners: {},
@@ -2039,7 +2269,27 @@ fn minimal_config_snapshot() {
                 parliament_committee_size: 21,
                 parliament_term_blocks: 43200,
                 parliament_min_stake: 1,
-                parliament_eligibility_asset_id: SORA#stake,
+                parliament_eligibility_asset_id: AssetDefinitionId {
+                    aid_bytes: [
+                        131,
+                        79,
+                        23,
+                        127,
+                        21,
+                        66,
+                        77,
+                        153,
+                        151,
+                        206,
+                        138,
+                        177,
+                        49,
+                        158,
+                        123,
+                        238,
+                    ],
+                    projection: None,
+                },
                 parliament_alternate_size: None,
                 parliament_quorum_bps: 6667,
                 rules_committee_size: 7,
@@ -2146,14 +2396,8 @@ fn minimal_config_snapshot() {
                     archive_batch_size: 128,
                     cold_retention_blocks: 0,
                     prune_batch_size: 128,
-                    proof_mode: Optional,
-                    max_receipt_age: 86400s,
                     escrow_required: false,
                     escrow_accounts: {},
-                    android_trust_anchors: [],
-                    skip_platform_attestation: false,
-                    skip_build_claim_verification: false,
-                    apple_app_attest_strict_signature: false,
                 },
                 router: Router {
                     twap_window: 60s,
@@ -2192,7 +2436,7 @@ fn minimal_config_snapshot() {
                     channel_salt: "iroha.soranet.channel.seed.v1",
                     provision_spool_dir: "./storage/streaming/soranet_routes",
                     provision_spool_max_bytes: Bytes(
-                        13743895347,
+                        0,
                     ),
                     provision_window_segments: 4,
                     provision_queue_capacity: 256,
@@ -2200,7 +2444,7 @@ fn minimal_config_snapshot() {
                 soravpn: StreamingSoravpn {
                     provision_spool_dir: "./storage/streaming/soravpn_routes",
                     provision_spool_max_bytes: Bytes(
-                        13743895347,
+                        0,
                     ),
                 },
                 sync: StreamingSync {
@@ -2240,21 +2484,20 @@ fn torii_receipt_signer_parses() {
 }
 
 #[test]
-fn torii_identifier_resolver_parses() {
-    let config = load_config_from_fixtures("torii_identifier_resolver.toml")
-        .expect("config should be valid");
-    let resolver = config
+fn torii_ram_lfe_parses() {
+    let config = load_config_from_fixtures("torii_ram_lfe.toml").expect("config should be valid");
+    let runtime = config
         .torii
-        .identifier_resolver
-        .expect("identifier resolver should be configured");
-    assert_eq!(resolver.policies.len(), 1);
+        .ram_lfe
+        .expect("RAM-LFE runtime should be configured");
+    assert_eq!(runtime.programs.len(), 1);
 
-    let policy = &resolver.policies[0];
-    let expected_policy_id: IdentifierPolicyId = "phone#retail".parse().expect("policy id");
-    assert_eq!(policy.policy_id, expected_policy_id);
-    assert_eq!(policy.secret, vec![0x01, 0x02, 0x03, 0x04]);
+    let program = &runtime.programs[0];
+    let expected_program_id = "phone_retail".parse().expect("program id");
+    assert_eq!(program.program_id, expected_program_id);
+    assert_eq!(program.secret, vec![0x01, 0x02, 0x03, 0x04]);
     assert_eq!(
-        policy.receipt_ttl,
+        program.receipt_ttl,
         Some(Duration::from_millis(30_000)),
         "receipt ttl should parse as milliseconds"
     );
@@ -2267,6 +2510,18 @@ fn ivm_banner_defaults_enabled() {
 
     assert!(config.ivm.banner.show, "banner should default to on");
     assert!(config.ivm.banner.beep, "beep should default to on");
+}
+
+#[test]
+fn torii_max_content_len_defaults_to_sixty_four_megabytes() {
+    let config = load_config_from_fixtures("minimal_with_trusted_peers.toml")
+        .expect("config should be valid");
+
+    assert_eq!(
+        config.torii.max_content_len.0,
+        defaults::torii::MAX_CONTENT_LEN.0,
+        "minimal configs should inherit the runtime Torii body-cap default"
+    );
 }
 
 #[test]
@@ -2552,6 +2807,7 @@ fn nexus_lane_relay_emergency_rejects_zero_threshold() {
             enabled: true,
             multisig_threshold: 0,
             multisig_members: 5,
+            max_ttl_blocks: 20,
         },
         ..Nexus::default()
     };
@@ -2588,6 +2844,7 @@ fn nexus_lane_relay_emergency_rejects_threshold_above_members() {
             enabled: true,
             multisig_threshold: 6,
             multisig_members: 5,
+            max_ttl_blocks: 20,
         },
         ..Nexus::default()
     };
@@ -2903,7 +3160,7 @@ fn routing_policy_dataspace_resolution() {
     assert_eq!(parsed.routing_policy.default_dataspace, DataSpaceId::new(1));
     assert_eq!(
         parsed.routing_policy.rules[0].dataspace,
-        Some(DataSpaceId::GLOBAL)
+        Some(DataSpaceId::UNIVERSAL)
     );
 }
 
@@ -3128,7 +3385,7 @@ fn config_with_genesis() {
 }
 
 #[test]
-fn parse_applies_default_account_domain_override_and_restores_globals() {
+fn parse_applies_default_account_domain_override_during_config_parse() {
     let _runtime_guard = AddressRuntimeGuard::capture();
 
     iroha_data_model::account::address::set_default_domain_name("sora")
@@ -3143,31 +3400,17 @@ fn parse_applies_default_account_domain_override_and_restores_globals() {
         "wonderland"
     );
     assert_eq!(*config.common.chain_discriminant.value(), 777);
-    let expected_domain: iroha_data_model::domain::DomainId =
-        "wonderland".parse().expect("valid expected domain");
     assert_eq!(
-        config
-            .gov
-            .bond_escrow_account
-            .to_account_id(expected_domain.clone())
-            .domain(),
-        &expected_domain
+        config.gov.bond_escrow_account,
+        defaults::governance::bond_escrow_account_id()
     );
     assert_eq!(
-        config
-            .gov
-            .citizenship_escrow_account
-            .to_account_id(expected_domain.clone())
-            .domain(),
-        &expected_domain
+        config.gov.citizenship_escrow_account,
+        defaults::governance::citizenship_escrow_account_id()
     );
     assert_eq!(
-        config
-            .gov
-            .slash_receiver_account
-            .to_account_id(expected_domain.clone())
-            .domain(),
-        &expected_domain
+        config.gov.slash_receiver_account,
+        defaults::governance::slash_receiver_account_id()
     );
     assert_eq!(
         iroha_data_model::account::address::default_domain_name().as_ref(),
@@ -3245,7 +3488,7 @@ fn sorafs_penalty_and_telemetry_roundtrip() {
     assert_eq!(penalty.cooldown_window_secs(1_800), 5_400);
 
     let telemetry = &config.gov.sorafs_telemetry;
-    assert!(telemetry.require_submitter);
+    assert!(!telemetry.require_submitter);
     assert!(telemetry.require_nonce);
     assert!(telemetry.reject_zero_capacity);
     assert_eq!(telemetry.max_window_gap, Duration::from_secs(7_200));
@@ -3374,6 +3617,58 @@ fn full_config_parses_fine() {
             "sorafs.sf1.primary:global".to_string(),
             "sorafs.sf1.backup:eu".to_string()
         ]
+    );
+}
+
+#[test]
+fn taira_config_enables_untrusted_cid_hosting() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+        .join("configs/soranexus/taira/config.toml");
+
+    let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
+    let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
+
+    let untrusted = doc
+        .get("sorafs")
+        .and_then(TomlValue::as_table)
+        .and_then(|sorafs| sorafs.get("gateway"))
+        .and_then(TomlValue::as_table)
+        .and_then(|gateway| gateway.get("untrusted_hosting"))
+        .and_then(TomlValue::as_table)
+        .expect("sorafs.gateway.untrusted_hosting should be configured");
+
+    assert_eq!(
+        untrusted.get("enabled").and_then(TomlValue::as_bool),
+        Some(true),
+        "Taira profile should enable CID-host routing"
+    );
+    assert_eq!(
+        untrusted
+            .get("path_gateway_redirect")
+            .and_then(TomlValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        untrusted
+            .get("redirect_html_only")
+            .and_then(TomlValue::as_bool),
+        Some(true)
+    );
+
+    let suffixes = untrusted
+        .get("cid_host_suffixes")
+        .and_then(TomlValue::as_table)
+        .expect("CID host suffixes should be configured");
+    assert_eq!(
+        suffixes.get("live").and_then(TomlValue::as_str),
+        Some("sorafs.sora.org")
+    );
+    assert_eq!(
+        suffixes.get("taira").and_then(TomlValue::as_str),
+        Some("sorafs.taira.sora.org")
     );
 }
 
@@ -3592,6 +3887,45 @@ fn logger_level_env_accepts_lowercase() {
         .expect("actual config with lowercase log level env");
 
     assert_eq!(cfg.logger.level, Level::INFO);
+}
+
+#[test]
+fn tls_fallback_defaults_to_tls_only() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::read::ConfigReader;
+
+    let cfg: Actual = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config")
+        .parse()
+        .expect("actual config");
+
+    assert!(!cfg.network.tls_enabled);
+    assert!(
+        !cfg.network.tls_fallback_to_plain,
+        "plaintext fallback must stay opt-in when TLS-over-TCP is enabled"
+    );
+}
+
+#[test]
+fn torii_transport_trusted_proxy_cidrs_default_to_empty() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::read::ConfigReader;
+
+    let cfg: Actual = ConfigReader::new()
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("user config")
+        .parse()
+        .expect("actual config");
+
+    assert!(
+        cfg.torii.transport.trusted_proxy_cidrs.is_empty(),
+        "trusted proxy CIDRs should default to empty until operators opt in"
+    );
 }
 
 #[test]

@@ -41,7 +41,7 @@ MOCHI ወደ CLI ሁለትዮሾች ይወጣል። በአካባቢ ተለዋዋ
 ከማከማቻ ስር፡-
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 ይህ ትዕዛዝ ሁለቱንም `mochi-core` እና egui frontend ይገነባል። ሊሰራጭ የሚችል ጥቅል ለማምረት፣ ያሂዱ፡-
@@ -57,7 +57,7 @@ cargo xtask mochi-bundle
 UI ን በቀጥታ ከጭነት ያሂዱ፡-
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 በነባሪ MOCHI በጊዜያዊ የውሂብ ማውጫ ውስጥ የአንድ-አቻ ቅድመ-ቅምጥን ይፈጥራል፡-
@@ -69,7 +69,7 @@ cargo run -p mochi-ui-egui
 ሲጀመር ነባሪዎችን ለመሻር የCLI ባንዲራዎችን ይጠቀሙ፡-
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ SoraFS ፒን ይገለጣል፣ እና የአስተዳደር እርምጃዎች
 ./ci/check_mochi.sh
 ```
 
-ረዳቱ `cargo check`/`cargo test` ለ `mochi-core`፣ `mochi-ui-egui` እና
+ረዳቱ `cargo check`/`cargo test` ለ `mochi-core`፣ `mochi-ui` እና
 `mochi-integration`፣ የቋሚ ተንሸራታች (ቀኖናዊ ብሎክ/የዝግጅት ቀረጻ) እና egui መታጠቂያ የሚይዝ
 በአንድ ምት ውስጥ regressions. ስክሪፕቱ የቆዩ መጫዎቻዎችን ሪፖርት ካደረገ፣ ችላ የተባሉትን የማደስ ሙከራዎችን እንደገና ያካሂዱ፣
 ለምሳሌ፡-

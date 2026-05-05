@@ -10,9 +10,10 @@ pub mod quic {
     //! QUIC transport integration (feature-gated, optional).
     //!
     //! This module provides a QUIC dialer that can be reused across many
-    //! outbound dials. Peer authentication remains at the application
-    //! layer (signed handshake), so certificate verification is intentionally
-    //! permissive and ALPN is fixed.
+    //! outbound dials. Certificate verification remains permissive because
+    //! peer authentication is enforced by the signed handshake, which is
+    //! bound to the presented server certificate fingerprint for the active
+    //! session. ALPN is fixed.
 
     use std::{io, sync::Arc, time::Duration};
 
@@ -208,13 +209,79 @@ pub type QuicConnection = quinn::Connection;
 #[cfg(not(feature = "quic"))]
 pub type QuicConnection = ();
 
+/// Compute the stable certificate fingerprint used for transport channel binding.
+#[must_use]
+pub fn certificate_fingerprint(cert_der: &[u8]) -> crate::peer::TransportBinding {
+    iroha_crypto::Hash::new(cert_der).into()
+}
+
+/// Extract the peer certificate fingerprint from an established TLS client session.
+///
+/// # Errors
+///
+/// Returns an error when the peer does not present a certificate or when the
+/// certificate chain is empty.
+#[cfg(feature = "p2p_tls")]
+pub fn tls_peer_certificate_fingerprint<S>(
+    tls: &tokio_rustls::client::TlsStream<S>,
+) -> std::io::Result<crate::peer::TransportBinding> {
+    let (_, session) = tls.get_ref();
+    let certs = session.peer_certificates().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "tls peer did not present a certificate",
+        )
+    })?;
+    let cert = certs.first().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "tls peer certificate chain is empty",
+        )
+    })?;
+    Ok(certificate_fingerprint(cert.as_ref()))
+}
+
+/// Extract the peer certificate fingerprint from an established QUIC session.
+///
+/// # Errors
+///
+/// Returns an error when the peer does not present an identity, when the
+/// identity is not encoded as a certificate chain, or when the chain is empty.
+#[cfg(feature = "quic")]
+pub fn quic_peer_certificate_fingerprint(
+    connection: &quinn::Connection,
+) -> std::io::Result<crate::peer::TransportBinding> {
+    let identity = connection.peer_identity().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "quic peer did not present an identity",
+        )
+    })?;
+    let certs = identity
+        .downcast::<Vec<rustls::pki_types::CertificateDer<'static>>>()
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unexpected quic peer identity type",
+            )
+        })?;
+    let cert = certs.first().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "quic peer certificate chain is empty",
+        )
+    })?;
+    Ok(certificate_fingerprint(cert.as_ref()))
+}
+
 #[cfg(feature = "p2p_tls")]
 pub mod tls {
     //! TLS-over-TCP transport (feature-gated, optional).
     //!
     //! Wraps a TCP stream with TLS 1.3 using rustls. Certificate verification is
-    //! intentionally permissive for P2P; peer authentication is enforced at the
-    //! application layer by the signed handshake.
+    //! intentionally permissive for P2P, but peer authentication is enforced at
+    //! the application layer by the signed handshake bound to the presented
+    //! server certificate fingerprint.
 
     use std::sync::Arc;
 

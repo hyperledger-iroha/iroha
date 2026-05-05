@@ -30,8 +30,8 @@ translation_last_reviewed: 2026-02-07
 إصدار العناصر التجريبية :
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 قم بتأكيد القيم في قائمة الحسابات الأولى:
@@ -48,7 +48,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dans wonderland (remplacez --limit par un nombre plus eleve si besoin)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions qui existent deja
@@ -65,7 +65,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 يعرض CLI تجزئة المعاملة الواردة (على سبيل المثال، `0x5f...`). كونسيرفيز لو
@@ -74,7 +74,7 @@ iroha --config defaults/client.toml asset definition register \
 ## 3.Minter des Units sur le compteoperator
 
 الكميات النشطة تعيش داخل الزوج `(asset definition, account)`. مينتز 250
-يوحد `coffee#wonderland` في `$ADMIN_ACCOUNT` :
+يوحد `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` في `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \

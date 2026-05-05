@@ -9,6 +9,7 @@ pub mod definition;
 pub mod id;
 pub mod instructions;
 pub mod policy;
+pub mod transfer_control;
 pub mod value;
 
 pub use alias::AssetDefinitionAlias;
@@ -17,6 +18,10 @@ pub use id::{AssetBalanceScope, AssetDefinitionId, AssetId};
 pub use policy::{
     ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, AssetIssuerUsagePolicyV1, AssetSubjectBindingV1,
     DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY, DomainAssetUsagePolicyV1,
+};
+pub use transfer_control::{
+    ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetTransferControlRecord, AssetTransferControlStoreV1,
+    AssetTransferControlWindow, AssetTransferLimit, AssetTransferUsageBucket,
 };
 pub use value::{Asset, AssetEntry, AssetValue};
 
@@ -33,6 +38,11 @@ pub mod prelude {
             ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, AssetIssuerUsagePolicyV1,
             AssetSubjectBindingV1, DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY,
             DomainAssetUsagePolicyV1,
+        },
+        transfer_control::{
+            ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetTransferControlRecord,
+            AssetTransferControlStoreV1, AssetTransferControlWindow, AssetTransferLimit,
+            AssetTransferUsageBucket,
         },
         value::Asset,
     };

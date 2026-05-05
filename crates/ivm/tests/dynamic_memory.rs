@@ -7,6 +7,9 @@ const HALT: [u8; 4] = encoding::wide::encode_halt().to_le_bytes();
 #[test]
 fn test_heap_growth_allocation() {
     let mut vm = IVM::new(u64::MAX);
+    vm.memory
+        .set_heap_limit(0x10_000)
+        .expect("shrink heap for growth test");
     vm.set_register(10, 0x20_000); // grow by 128 KB
     vm.set_register(11, 0x14_000); // allocation size 80 KB
     vm.set_register(2, 0xDEAD_BEEF);
@@ -41,7 +44,7 @@ fn test_heap_growth_allocation() {
     let res = vm.run();
     assert!(res.is_ok());
     assert_eq!(vm.register(3), 0xDEAD_BEEF);
-    assert!(vm.memory.heap_limit() >= Memory::HEAP_SIZE + 0x20_000);
+    assert_eq!(vm.memory.heap_limit(), 0x30_000);
 }
 
 #[test]
@@ -112,4 +115,23 @@ fn test_heap_alloc_oob() {
     vm.load_program(&prog).unwrap();
     let res = vm.run();
     assert!(matches!(res, Err(ivm::VMError::OutOfMemory)));
+}
+
+#[test]
+fn test_default_heap_supports_large_alloc_without_growth() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_register(10, 0x14_000); // 80 KiB, larger than the historical 64 KiB default heap.
+    let mut prog = Vec::new();
+    prog.extend_from_slice(
+        &encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            syscalls::SYSCALL_ALLOC as u8,
+        )
+        .to_le_bytes(),
+    );
+    prog.extend_from_slice(&HALT);
+    let prog = assemble(&prog);
+    vm.load_program(&prog).unwrap();
+    vm.run().expect("large default-heap alloc");
+    assert_eq!(vm.register(10), Memory::HEAP_START);
 }

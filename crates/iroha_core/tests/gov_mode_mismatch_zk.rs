@@ -13,6 +13,7 @@ use iroha_core::{
 };
 use iroha_data_model::{
     Registrable,
+    domain::DomainId,
     prelude::{Account, Domain},
 };
 use iroha_primitives::json::Json;
@@ -20,6 +21,16 @@ use mv::storage::StorageReadOnly;
 
 fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
+}
+
+fn proposal_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &iroha_test_samples::ALICE_ID,
+        0,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+    )
+    .expect("proposal contract address")
 }
 
 #[test]
@@ -39,9 +50,10 @@ fn zk_ballot_rejected_on_plain_referendum() {
 
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-    let account: Account = Account::new(ALICE_ID.clone().to_account_id(domain_id)).build(&ALICE_ID);
+    let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [account], []);
     let mut state = State::new_for_testing(world, kura, query_handle);
     let bundle = zk_testkit::tiny_add_bundle();
@@ -74,7 +86,7 @@ fn zk_ballot_rejected_on_plain_referendum() {
     let mut stx = sblock.transaction();
     // Grant permissions to ALICE to propose and submit ballots
     let p1: Permission = CanProposeContractDeployment {
-        contract_id: "demo.contract".to_string(),
+        contract_address: proposal_contract_address(),
     }
     .into();
     Grant::account_permission(p1, ALICE_ID.clone())
@@ -99,8 +111,7 @@ fn zk_ballot_rejected_on_plain_referendum() {
     .expect("register vk");
     // Propose a Plain-mode referendum; record any created rid
     let prop = ProposeDeployContract {
-        namespace: "apps".to_string(),
-        contract_id: "demo.contract".to_string(),
+        contract_address: proposal_contract_address(),
         code_hash_hex: "aa".repeat(32),
         abi_hash_hex: canonical_abi_hex(),
         abi_version: "1".to_string(),

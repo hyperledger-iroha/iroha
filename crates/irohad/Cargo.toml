@@ -23,6 +23,7 @@ workspace = true
 default = ["telemetry", "schema-endpoint", "build-i3"]
 build-i2 = []
 build-i3 = []
+embedded-soracloud-runtime = []
 fastpq-gpu = ["fastpq_prover/fastpq-gpu"]
 zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark"]
 sm = [
@@ -90,6 +91,7 @@ iroha_p2p = { workspace = true }
 mv = { workspace = true }
 fastpq_prover = { path = "../fastpq_prover" }
 parking_lot = { workspace = true }
+sorafs_node = { path = "../sorafs_node" }
 
 # Optional deps for recovery diagnostics (feature: dag-recovery-verify)
 sha2 = { version = "0.10.9", optional = true, default-features = false }
@@ -105,14 +107,25 @@ supports-color = { workspace = true }
 toml = { workspace = true }
 norito = {workspace = true}
 iroha_i18n = { workspace = true }
+reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
+rand = { workspace = true }
+x25519-dalek = { version = "2.0.1", default-features = false, features = ["static_secrets"] }
+blake3 = { workspace = true }
 
 [dev-dependencies]
+iroha_core = { workspace = true, features = ["iroha-core-tests"] }
 serial_test = "3.2.0"
 tempfile = { workspace = true }
 path-absolutize = { workspace = true }
 assertables = { workspace = true }
 iroha_config_base = { workspace = true }
 iroha_test_samples = { workspace = true }
+sorafs_car = { workspace = true, features = ["manifest"] }
+sorafs_chunker = { path = "../sorafs_chunker" }
+sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [build-dependencies]
 build-support = { path = "../build-support", default-features = false }

@@ -41,7 +41,10 @@ fn mint_asset_rejects_assetid_tlv_instead_of_assetdefinitionid() {
 
     // Build AssetId TLV for r11 where AssetDefinitionId is expected (type mismatch)
     let asset_id: AssetId = AssetId::of(
-        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap()),
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        ),
         authority.clone(),
     );
     let asset_id_payload = norito::to_bytes(&asset_id).expect("encode asset id");
@@ -84,7 +87,10 @@ fn mint_asset_rejects_corrupted_accountid_hash() {
     let p_acct = Memory::INPUT_START;
 
     // Valid AssetDefinitionId for r11
-    let asset_def = AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+    let asset_def = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+        "rose".parse().unwrap(),
+    );
     let assetdef_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
     let assetdef_tlv = build_tlv(0x0002, 1, &assetdef_payload, false);
     let off = 64;
@@ -125,7 +131,7 @@ fn mint_asset_rejects_unknown_typeid() {
 
     // Unknown type id (e.g., 0x00AA) for r11
     let payload = norito::to_bytes(&AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     ))
     .expect("encode asset definition");

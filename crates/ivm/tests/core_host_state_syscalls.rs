@@ -15,6 +15,11 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
     v
 }
 
+fn saturate_input(vm: &mut IVM) {
+    let filler = make_tlv(PointerType::Blob, b"");
+    while vm.alloc_input_tlv(&filler).is_ok() {}
+}
+
 #[test]
 fn core_host_state_set_get_del_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
@@ -104,6 +109,40 @@ fn core_host_state_syscalls_require_pointers() {
     vm.load_program(&del_prog).expect("load del");
     let err = vm.run().expect_err("state del without path should fail");
     assert!(matches!(err, VMError::NoritoInvalid));
+}
+
+#[test]
+fn core_host_state_get_spills_to_heap_when_input_bump_is_full() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(CoreHost::new());
+
+    let path_tlv = make_tlv(PointerType::Name, b"spill");
+    let expected = vec![0xAB; 64];
+    let val_tlv = make_tlv(PointerType::NoritoBytes, &expected);
+    let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
+    let p_val = vm.alloc_input_tlv(&val_tlv).expect("alloc value");
+
+    let set_prog = common::assemble_syscalls(&[syscalls::SYSCALL_STATE_SET as u8]);
+    vm.set_register(10, p_path);
+    vm.set_register(11, p_val);
+    vm.load_program(&set_prog).expect("load set");
+    vm.run().expect("state set");
+
+    saturate_input(&mut vm);
+
+    let get_prog = common::assemble_syscalls(&[syscalls::SYSCALL_STATE_GET as u8]);
+    vm.set_register(10, p_path);
+    vm.load_program(&get_prog).expect("load get");
+    vm.run().expect("state get");
+
+    let p_out = vm.register(10);
+    assert!(
+        (Memory::HEAP_START..Memory::INPUT_START).contains(&p_out),
+        "state_get should spill large host return into heap when input is exhausted"
+    );
+    let tlv = vm.validate_tlv(p_out).expect("validate spilled output");
+    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+    assert_eq!(tlv.payload, &expected[..]);
 }
 
 #[test]

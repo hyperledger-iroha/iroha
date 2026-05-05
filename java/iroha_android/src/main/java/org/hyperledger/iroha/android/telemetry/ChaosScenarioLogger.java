@@ -63,11 +63,11 @@ public final class ChaosScenarioLogger {
             "device_profile", deviceProfile));
   }
 
-  private static String normalise(final String value, final String fallback) {
+  private static String normalise(final String value, final String defaultValue) {
     if (value == null) {
-      return fallback;
+      return defaultValue;
     }
     final String trimmed = value.trim();
-    return trimmed.isEmpty() ? fallback : trimmed.toLowerCase(Locale.ROOT);
+    return trimmed.isEmpty() ? defaultValue : trimmed.toLowerCase(Locale.ROOT);
   }
 }

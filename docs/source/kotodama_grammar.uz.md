@@ -117,7 +117,7 @@ seiyaku Name {
 Semantika
 - `meta { ... }` maydonlari chiqarilgan IVM sarlavhasi uchun kompilyator sukutini bekor qiladi: `abi_version`, `vector_length` (0 o'rnatilmagan degan ma'noni anglatadi), `max_cycles` (`max_cycles`) (`max_cycles`), Kotodama uchun kompilyator standarti030 xususiyat bitlari (ZK tracing, vektor e'lon qilish). Kompilyator `max_cycles: 0` ni “standart foydalanish” deb hisoblaydi va qabul talablarini qondirish uchun sozlangan noldan farqli standartni chiqaradi. Qo'llab-quvvatlanmaydigan xususiyatlar ogohlantirish bilan e'tiborga olinmaydi. `meta {}` o'tkazib yuborilsa, kompilyator `abi_version = 1` ni chiqaradi va qolgan sarlavha maydonlari uchun standart parametrlardan foydalanadi.
 - `features: ["zk", "simd"]` (taxalluslar: `"vector"`) mos keladigan sarlavha bitlarini aniq so'raydi. Noma'lum xususiyatlar qatorlari endi e'tiborga olinmaslik o'rniga tahlil qilish xatosini keltirib chiqaradi.
-- `state` uzoq muddatli shartnoma o'zgaruvchilarini e'lon qiladi. Kompilyator `STATE_GET/STATE_SET/STATE_DEL` tizimli qoʻngʻiroqlariga kirishni pasaytiradi va xost ularni har bir tranzaksiyaning qoplamasida bosqichma-bosqich (nazorat punkti/qayta tiklash, WSV-ga oʻchirishda) bosqichma-bosqich qoʻyadi. Kirish bo'yicha maslahatlar literal holat yo'llari uchun chiqariladi; dinamik kalitlar xarita darajasidagi ziddiyatli kalitlarga qaytadi. Xost tomonidan qo'llab-quvvatlanadigan aniq o'qish/yozish uchun `state_get/state_set/state_del` va `get_or_insert_default` xarita yordamchilaridan foydalaning; bu marshrutni Norito TLVs orqali o'tkazing va nomlar/maydon tartibini barqaror saqlang.
+- `state` uzoq muddatli shartnoma o'zgaruvchilarini e'lon qiladi. Kompilyator `STATE_GET/STATE_SET/STATE_DEL` tizimli qoʻngʻiroqlariga kirishni pasaytiradi va xost ularni har bir tranzaksiyaning qoplamasida bosqichma-bosqich (nazorat punkti/qayta tiklash, WSV-ga oʻchirishda) bosqichma-bosqich qoʻyadi. Kirish bo'yicha maslahatlar literal holat yo'llari uchun chiqariladi; dinamik kalitlar xarita darajasidagi ziddiyatli kalitlarga qaytadi. Xost tomonidan qo'llab-quvvatlanadigan aniq o'qish/yozish uchun `state_get/state_set/state_del` va `map.ensure(...)` xarita yordamchilaridan foydalaning; bu marshrutni Norito TLVs orqali o'tkazing va nomlar/maydon tartibini barqaror saqlang.
 - davlat identifikatorlari zahiraga qo'yilgan; parametrlarda `state` nomini soya qilish yoki `let` bog'lash rad etiladi (`E_STATE_SHADOWED`).
 - Davlat xaritasi qiymatlari birinchi darajali emas: xarita operatsiyalari va iteratsiya uchun davlat identifikatoridan bevosita foydalaning. Davlat xaritalarini foydalanuvchi tomonidan belgilangan funksiyalarga ulash yoki uzatish rad etiladi (`E_STATE_MAP_ALIAS`).
 - Bardoshli holat xaritalari hozirda faqat `int` va pointer-ABI kalit turlarini qo'llab-quvvatlaydi; boshqa kalit turlari kompilyatsiya vaqtida rad etiladi.
@@ -146,7 +146,7 @@ register_trigger wake {
   call run;
   on time pre_commit;
   repeats 2;
-  authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+  authority "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
   metadata { tag: "alpha"; count: 1; enabled: true; }
 }
 ```
@@ -227,8 +227,8 @@ Pointer konstruktorlari (INPUT ga Norito TLV chiqaring va yozilgan ko'rsatgichni
 - `axt_descriptor(string|0xhex) -> AxtDescriptor*`
 - `asset_handle(string|0xhex) -> AssetHandle*`
 - `proof_blob(string|0xhex) -> ProofBlob*`Prelude makroslari ushbu konstruktorlar uchun qisqaroq taxalluslar va inline tekshiruvini ta'minlaydi:
-- `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
+- `account!("<i105-account-id>")`, `account_id!("<i105-account-id>")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` yoki tuzilgan harflar, masalan, `json!{ hello: "world" }`

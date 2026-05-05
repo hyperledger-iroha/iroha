@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
 
-import { AccountAddress, ToriiClient } from "../src/index.js";
+import {
+  AccountAddress,
+  ToriiClient,
+  canonicalRequestSignatureMessage,
+  generateKeyPair,
+  verifyEd25519,
+} from "../src/index.js";
 
 function ed25519PublicKeyBytes() {
   const { publicKey } = generateKeyPairSync("ed25519");
@@ -11,13 +17,13 @@ function ed25519PublicKeyBytes() {
   return new Uint8Array(der.subarray(der.length - 32));
 }
 
-function demoAccountId(domain) {
-  const address = AccountAddress.fromAccount({ domain, publicKey: ed25519PublicKeyBytes() });
+function demoAccountId() {
+  const address = AccountAddress.fromAccount({ publicKey: ed25519PublicKeyBytes() });
   return address.toI105();
 }
 
-const VALID_ACCOUNT_ID = demoAccountId("wonderland");
-const ALT_ACCOUNT_ID = demoAccountId("uk");
+const VALID_ACCOUNT_ID = demoAccountId();
+const ALT_ACCOUNT_ID = demoAccountId();
 
 function jsonResponse(status, body) {
   return new Response(body == null ? null : JSON.stringify(body), {
@@ -97,6 +103,43 @@ test("resolveAlias normalises IBAN input and parses alias responses", async () =
   assert.equal(lastRequest.init.headers["Content-Type"], "application/json");
 });
 
+test("resolveAlias attaches canonical auth when provided", async () => {
+  const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 12) });
+  const signerAccountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  let lastRequest = null;
+  const fetchImpl = async (input, init) => {
+    lastRequest = { input, init };
+    return jsonResponse(200, {
+      alias: "tidal-river-4160@mibank.bpng",
+      account_id: VALID_ACCOUNT_ID,
+      source: "runtime",
+    });
+  };
+  fetchImpl.__irohaSupportsRawUtf8Headers = true;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl,
+  });
+
+  const result = await client.resolveAlias("tidal-river-4160@mibank.bpng", {
+    canonicalAuth: { accountId: signerAccountId, privateKey },
+  });
+
+  assert.equal(result.account_id, ToriiClient._requireAccountId(VALID_ACCOUNT_ID));
+  assert.equal(lastRequest.init.headers["X-Iroha-Account"], signerAccountId);
+  const url = new URL(lastRequest.input);
+  const timestampMs = Number(lastRequest.init.headers["X-Iroha-Timestamp-Ms"]);
+  const nonce = lastRequest.init.headers["X-Iroha-Nonce"];
+  const message = canonicalRequestSignatureMessage({
+    method: lastRequest.init.method,
+    path: url.pathname,
+    body: lastRequest.init.body,
+    timestampMs,
+    nonce,
+  });
+  const signature = Buffer.from(lastRequest.init.headers["X-Iroha-Signature"], "base64");
+  assert.equal(verifyEd25519(message, signature, publicKey), true);
+});
+
 test("resolveAlias returns null for missing aliases and rejects when runtime is disabled", async () => {
   const client = new ToriiClient("https://example.test", {
     fetchImpl: async (_input, init) => {
@@ -158,4 +201,72 @@ test("resolveAliasByIndex forwards service errors", async () => {
     () => client.resolveAliasByIndex(9),
     /ISO bridge runtime is disabled/,
   );
+});
+
+test("lookupAliasesByAccount posts canonical account ids with optional filters", async () => {
+  let lastRequest = null;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async (input, init) => {
+      lastRequest = { input, init };
+      const parsed = JSON.parse(init.body);
+      assert.equal(parsed.account_id, ToriiClient._requireAccountId(VALID_ACCOUNT_ID));
+      assert.equal(parsed.dataspace, "centralbank");
+      assert.equal(parsed.domain, "banka");
+      return jsonResponse(200, {
+        account_id: VALID_ACCOUNT_ID,
+        total: "1",
+        items: [
+          {
+            alias: "merchant@banka.centralbank",
+            dataspace: "centralbank",
+            domain: "banka",
+            is_primary: true,
+          },
+        ],
+      });
+    },
+  });
+
+  const result = await client.lookupAliasesByAccount(VALID_ACCOUNT_ID, {
+    dataspace: "centralbank",
+    domain: "banka",
+  });
+  assert.equal(result.account_id, ToriiClient._requireAccountId(VALID_ACCOUNT_ID));
+  assert.equal(result.total, 1);
+  assert.deepEqual(result.items, [
+    {
+      alias: "merchant@banka.centralbank",
+      dataspace: "centralbank",
+      domain: "banka",
+      is_primary: true,
+    },
+  ]);
+  const url = new URL(lastRequest.input);
+  assert.equal(url.pathname, "/v1/aliases/by_account");
+  assert.equal(lastRequest.init.method, "POST");
+});
+
+test("lookupAliasesByAccount returns null for missing accounts", async () => {
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () => jsonResponse(404, {}),
+  });
+
+  const result = await client.lookupAliasesByAccount(ALT_ACCOUNT_ID);
+  assert.equal(result, null);
+});
+
+test("lookupAliasesByAccount validates options before issuing requests", async () => {
+  let fetchCalls = 0;
+  const client = new ToriiClient("https://example.test", {
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      return jsonResponse(200, {});
+    },
+  });
+
+  await assert.rejects(
+    () => client.lookupAliasesByAccount(VALID_ACCOUNT_ID, { unexpected: true }),
+    /unsupported/i,
+  );
+  assert.equal(fetchCalls, 0);
 });

@@ -32,28 +32,34 @@ use iroha_data_model::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode, RemoveSmartContractBytes,
         },
+        zk,
     },
     nexus::UniversalAccountId,
+    proof::{ProofAttachment, ProofBox},
     query::error::FindError,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::{error::TransactionLimitError, signed::TransactionSignatureError},
+    zk::OpenVerifyEnvelope,
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
 use iroha_primitives::time::TimeSource;
+use iroha_schema::Ident;
 use mv::storage::StorageReadOnly;
 
 use crate::{
     compliance::{LaneComplianceContext, LaneComplianceEvaluation},
+    gas as isi_gas,
     governance::manifest::{GovernanceRules, LaneManifestRegistryHandle},
     interlane::verify_lane_privacy_proofs,
     nexus::space_directory::{
         LaneIdentityMetadataError,
+        extract_authority_domains as extract_directory_authority_domains,
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
-    queue::evaluate_policy_with_catalog,
-    smartcontracts::ivm::cache::IvmCache,
+    queue::evaluate_policy_with_catalog_and_world,
+    smartcontracts::{Execute, code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
 
@@ -95,36 +101,29 @@ static CONTRACT_MANIFEST_METADATA_NAME: LazyLock<iroha_data_model::name::Name> =
         iroha_data_model::name::Name::from_str(MANIFEST_METADATA_KEY)
             .expect("static contract manifest metadata key")
     });
-static GOV_NAMESPACE_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("gov_namespace").expect("static governance metadata key")
-});
-static GOV_CONTRACT_ID_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("gov_contract_id")
-        .expect("static governance metadata key")
-});
+static GOV_CONTRACT_ADDRESS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
+    LazyLock::new(|| {
+        iroha_data_model::name::Name::from_str("gov_contract_address")
+            .expect("static governance metadata key")
+    });
 static GOV_APPROVERS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("gov_manifest_approvers")
         .expect("static governance metadata key")
 });
-static CONTRACT_NAMESPACE_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
+static CONTRACT_ADDRESS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
     LazyLock::new(|| {
-        iroha_data_model::name::Name::from_str("contract_namespace")
-            .expect("static contract namespace metadata key")
+        iroha_data_model::name::Name::from_str("contract_address")
+            .expect("static contract address metadata key")
     });
-static CONTRACT_ID_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("contract_id").expect("static contract id metadata key")
-});
 static HEARTBEAT_METADATA_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("sumeragi_heartbeat")
         .expect("static heartbeat metadata key")
 });
-#[cfg(test)]
 static HEARTBEAT_EXPIRES_AT_HEIGHT_NAME: LazyLock<iroha_data_model::name::Name> =
     LazyLock::new(|| {
         iroha_data_model::name::Name::from_str("expires_at_height")
             .expect("static heartbeat expires_at_height metadata key")
     });
-#[cfg(test)]
 static HEARTBEAT_TX_SEQUENCE_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("tx_sequence")
         .expect("static heartbeat tx_sequence metadata key")
@@ -140,7 +139,7 @@ use iroha_data_model::{metadata::Metadata as TelemetryMetadata, name::Name as Te
 /// `AcceptedTransaction` — a transaction accepted by Iroha peer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[repr(transparent)]
-pub struct AcceptedTransaction<'tx>(Cow<'tx, SignedTransaction>);
+pub struct AcceptedTransaction<'tx>(Cow<'tx, TransactionEntrypoint>);
 
 /// Accepted transaction that has been verified to be absent from the blockchain.
 ///
@@ -255,6 +254,99 @@ fn ensure_metadata_depth(
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct PrivateKaigiFeeBinding {
+    action_hash_hex: String,
+    chain_id: String,
+    asset_definition_id: String,
+    fee_amount: Numeric,
+}
+
+fn json_object_string(
+    map: &norito::json::Map,
+    key: &str,
+    context: &str,
+) -> Result<String, TransactionRejectionReason> {
+    map.get(key)
+        .and_then(norito::json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                "{context} must include non-empty `{key}`"
+            )))
+        })
+}
+
+fn decode_private_kaigi_fee_binding(
+    proof_bytes: &[u8],
+) -> Result<PrivateKaigiFeeBinding, TransactionRejectionReason> {
+    let envelope: OpenVerifyEnvelope = norito::decode_from_bytes(proof_bytes).map_err(|_| {
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "private Kaigi fee spend proof must use OpenVerifyEnvelope payload".into(),
+        ))
+    })?;
+    if envelope.aux.is_empty() {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(
+                "private Kaigi fee spend proof is missing binding metadata".into(),
+            ),
+        ));
+    }
+    let aux = std::str::from_utf8(&envelope.aux).map_err(|_| {
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "private Kaigi fee spend aux payload must be valid UTF-8 JSON".into(),
+        ))
+    })?;
+    let aux_value: norito::json::Value = norito::json::from_str(aux).map_err(|_| {
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+            "private Kaigi fee spend aux payload must be valid JSON".into(),
+        ))
+    })?;
+    let norito::json::Value::Object(map) = aux_value else {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(
+                "private Kaigi fee spend aux payload must be a JSON object".into(),
+            ),
+        ));
+    };
+    let schema = json_object_string(&map, "schema", "private Kaigi fee spend aux payload")?;
+    if schema != "iroha.private_kaigi.fee.v1" {
+        return Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted(
+                "private Kaigi fee spend aux payload has unsupported schema".into(),
+            ),
+        ));
+    }
+    let fee_amount = Numeric::from_str(&json_object_string(
+        &map,
+        "fee_amount",
+        "private Kaigi fee spend aux payload",
+    )?)
+    .map_err(|err| {
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+            "private Kaigi fee amount is invalid: {err}"
+        )))
+    })?
+    .trim_trailing_zeros();
+
+    Ok(PrivateKaigiFeeBinding {
+        action_hash_hex: json_object_string(
+            &map,
+            "action_hash_hex",
+            "private Kaigi fee spend aux payload",
+        )?,
+        chain_id: json_object_string(&map, "chain_id", "private Kaigi fee spend aux payload")?,
+        asset_definition_id: json_object_string(
+            &map,
+            "asset_definition_id",
+            "private Kaigi fee spend aux payload",
+        )?,
+        fee_amount,
+    })
 }
 
 /// Verification failed of some signature due to following reason
@@ -439,9 +531,9 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         let trigger = &register.object;
         return is_time_sensitive_executable(trigger.action().executable());
     }
-    any.is::<iroha_data_model::isi::offline::RegisterOfflineAllowance>()
-        || any.is::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>()
-        || any.is::<iroha_data_model::isi::offline::RegisterOfflineVerdictRevocation>()
+    any.is::<iroha_data_model::isi::offline::IssueOfflineNoteV2>()
+        || any.is::<iroha_data_model::isi::offline::RedeemOfflineNoteV2>()
+        || any.is::<iroha_data_model::isi::offline::AuditOfflineNoteV2>()
         || any.is::<iroha_data_model::isi::oracle::RecordTwitterBinding>()
         || any.is::<iroha_data_model::isi::social::ClaimTwitterFollowReward>()
         || any.is::<iroha_data_model::isi::social::SendToTwitter>()
@@ -458,6 +550,7 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         || any.is::<iroha_data_model::isi::governance::ApproveGovernanceProposal>()
         || any.is::<iroha_data_model::isi::governance::EnactReferendum>()
         || any.is::<iroha_data_model::isi::governance::FinalizeReferendum>()
+        || any.is::<iroha_data_model::isi::ministry::SubmitAgendaProposal>()
 }
 
 fn is_time_sensitive_executable(executable: &Executable) -> bool {
@@ -465,25 +558,70 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
         Executable::Instructions(instructions) => {
             instructions.iter().any(is_time_sensitive_instruction)
         }
+        Executable::ContractCall(_) => true,
         Executable::IvmProved(proved) => proved.overlay.iter().any(is_time_sensitive_instruction),
         Executable::Ivm(_) => true,
     }
 }
 
-fn allows_unregistered_authority(executable: &Executable) -> bool {
+fn instruction_self_registers_authority(
+    instruction: &InstructionBox,
+    authority: &AccountId,
+) -> bool {
+    let maybe_registration = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::Register<Account>>()
+        .map(|register| register.object())
+        .or_else(|| {
+            instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+                .and_then(|register| match register {
+                    iroha_data_model::isi::RegisterBox::Account(register) => {
+                        Some(register.object())
+                    }
+                    _ => None,
+                })
+        });
+
+    let Some(registration) = maybe_registration else {
+        return false;
+    };
+
+    registration.clone().build(authority).id == *authority
+}
+
+pub(crate) fn allows_unregistered_authority(
+    executable: &Executable,
+    authority: &AccountId,
+) -> bool {
     match executable {
         Executable::Instructions(instructions) => {
-            !instructions.is_empty()
-                && instructions.iter().all(|instruction| {
-                    matches!(
-                        MultisigInstructionBox::try_from(instruction),
-                        Ok(MultisigInstructionBox::Propose(_))
-                            | Ok(MultisigInstructionBox::Approve(_))
-                    )
-                })
+            let Some((first, _rest)) = instructions.split_first() else {
+                return false;
+            };
+
+            if instruction_self_registers_authority(first, authority) {
+                return true;
+            }
+
+            instructions_allow_multisig_envelope_authority(instructions)
         }
-        Executable::IvmProved(_) | Executable::Ivm(_) => false,
+        Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => false,
     }
+}
+
+pub(crate) fn instructions_allow_multisig_envelope_authority(
+    instructions: &[InstructionBox],
+) -> bool {
+    instructions.iter().all(|instruction| {
+        matches!(
+            MultisigInstructionBox::try_from(instruction),
+            Ok(MultisigInstructionBox::Propose(_))
+                | Ok(MultisigInstructionBox::Approve(_))
+                | Ok(MultisigInstructionBox::Cancel(_))
+        )
+    })
 }
 
 fn format_nts_health_reason(status: &crate::time::NetworkTimeStatus) -> String {
@@ -555,7 +693,6 @@ pub(crate) fn is_heartbeat_transaction(tx: &SignedTransaction) -> bool {
 }
 
 /// Build a Sumeragi heartbeat transaction using the provided time source.
-#[cfg(test)]
 pub(crate) fn build_heartbeat_transaction_with_time_source(
     chain_id: ChainId,
     signer: &KeyPair,
@@ -584,6 +721,12 @@ pub(crate) fn build_heartbeat_transaction_with_time_source(
 }
 
 impl<'tx> AcceptedTransaction<'tx> {
+    fn compat_signed_hash(
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> HashOf<SignedTransaction> {
+        HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash))
+    }
+
     fn validate_common(
         tx: &SignedTransaction,
         expected_chain_id: &ChainId,
@@ -739,6 +882,301 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> Result<CheckedTransaction<'tx>, (AcceptedTransaction<'tx>, TransactionAlreadyCommitted)>
     {
         CheckedTransaction::new(self, state)
+    }
+
+    fn validate_private_kaigi_with_now(
+        tx: &PrivateKaigiTransaction,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        now: Duration,
+    ) -> Result<(), AcceptTransactionFail> {
+        if tx.chain != *expected_chain_id {
+            return Err(AcceptTransactionFail::ChainIdMismatch(Mismatch {
+                expected: expected_chain_id.clone(),
+                actual: tx.chain.clone(),
+            }));
+        }
+
+        let creation_time = tx.creation_time();
+        if creation_time.saturating_sub(now) > max_clock_drift {
+            return Err(AcceptTransactionFail::TransactionInTheFuture);
+        }
+
+        let entrypoint = TransactionEntrypoint::PrivateKaigi(tx.clone());
+        let tx_encoded_len = norito::to_bytes(&entrypoint)
+            .map(|bytes| bytes.len())
+            .map_err(|err| {
+                AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                    reason: format!("Failed to encode private Kaigi transaction: {err}"),
+                })
+            })?;
+        let tx_encoded_len = u64::try_from(tx_encoded_len).unwrap_or(u64::MAX);
+        let max_tx_bytes = limits.max_tx_bytes().get();
+        if tx_encoded_len > max_tx_bytes {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: format!(
+                        "Transaction size {tx_encoded_len} bytes exceeds limit {max_tx_bytes} bytes"
+                    ),
+                },
+            ));
+        }
+
+        let decompressed_len = tx
+            .artifacts
+            .proof
+            .len()
+            .saturating_add(tx.fee_spend.proof.len())
+            .saturating_add(
+                tx.fee_spend
+                    .encrypted_change_payloads
+                    .iter()
+                    .map(Vec::len)
+                    .sum::<usize>(),
+            );
+        let decompressed_len = u64::try_from(decompressed_len).unwrap_or(u64::MAX);
+        let max_decompressed_bytes = limits.max_decompressed_bytes().get();
+        if decompressed_len > max_decompressed_bytes {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: format!(
+                        "Private Kaigi artifacts expand to {decompressed_len} bytes which exceeds limit {max_decompressed_bytes} bytes"
+                    ),
+                },
+            ));
+        }
+
+        let max_metadata_depth = usize::from(limits.max_metadata_depth().get());
+        ensure_metadata_depth(&tx.metadata, max_metadata_depth)
+            .map_err(AcceptTransactionFail::TransactionLimit)?;
+
+        if tx.artifacts.proof.is_empty() {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "private Kaigi proof payload must be non-empty".into(),
+                },
+            ));
+        }
+        if tx.fee_spend.proof.is_empty() {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "private Kaigi fee spend proof must be non-empty".into(),
+                },
+            ));
+        }
+        if tx.fee_spend.nullifiers.is_empty() {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "private Kaigi fee spend must consume at least one nullifier".into(),
+                },
+            ));
+        }
+        if tx.fee_spend.output_commitments.len() != tx.fee_spend.encrypted_change_payloads.len() {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason:
+                        "private Kaigi fee spend outputs must match encrypted change payload count"
+                            .into(),
+                },
+            ));
+        }
+        if tx.fee_spend.asset_definition_id.to_string() != "xor#universal" {
+            return Err(AcceptTransactionFail::TransactionLimit(
+                TransactionLimitError {
+                    reason: "private Kaigi fee spend asset must be xor#universal".into(),
+                },
+            ));
+        }
+
+        match &tx.action {
+            PrivateKaigiAction::Create(create) => {
+                if create.call.privacy_mode != iroha_data_model::kaigi::KaigiPrivacyMode::ZkRosterV1
+                {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: "private Kaigi create must use ZkRosterV1 privacy mode".into(),
+                        },
+                    ));
+                }
+            }
+            PrivateKaigiAction::Join(_) | PrivateKaigiAction::End(_) => {}
+        }
+
+        Ok(())
+    }
+
+    fn private_fee_numeric_add(
+        lhs: Numeric,
+        rhs: Numeric,
+        context: &'static str,
+    ) -> Result<Numeric, TransactionRejectionReason> {
+        lhs.checked_add(rhs).ok_or_else(|| {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                "{context} exceeds supported numeric bounds"
+            )))
+        })
+    }
+
+    fn private_fee_numeric_mul_u64(
+        value: &Numeric,
+        multiplier: u64,
+        context: &'static str,
+    ) -> Result<Numeric, TransactionRejectionReason> {
+        value
+            .clone()
+            .checked_mul(Numeric::from(multiplier), NumericSpec::unconstrained())
+            .ok_or_else(|| {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                    "{context} exceeds supported numeric bounds"
+                )))
+            })
+    }
+
+    fn private_kaigi_instruction_gas(
+        tx: &PrivateKaigiTransaction,
+    ) -> Result<u64, TransactionRejectionReason> {
+        let instruction =
+            crate::smartcontracts::isi::kaigi::private_instruction_box(tx).map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
+            })?;
+        Ok(isi_gas::meter_instruction(&instruction))
+    }
+
+    fn compute_private_kaigi_fee_amount(
+        tx: &PrivateKaigiTransaction,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Numeric, TransactionRejectionReason> {
+        if !state_transaction.nexus.enabled {
+            return Ok(Numeric::zero());
+        }
+
+        let cfg = state_transaction.nexus.fees.clone();
+        let entrypoint = TransactionEntrypoint::PrivateKaigi(tx.clone());
+        let tx_bytes_len = norito::to_bytes(&entrypoint)
+            .map(|bytes| bytes.len())
+            .map_err(|err| {
+                TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
+                    "failed to encode private Kaigi transaction for fee metering: {err}"
+                )))
+            })?;
+        let tx_bytes_len = u64::try_from(tx_bytes_len).unwrap_or(u64::MAX);
+        let gas_used = Self::private_kaigi_instruction_gas(tx)?;
+
+        let mut fee = cfg.base_fee.clone();
+        fee = Self::private_fee_numeric_add(
+            fee,
+            Self::private_fee_numeric_mul_u64(&cfg.per_byte_fee, tx_bytes_len, "fee amount")?,
+            "fee amount",
+        )?;
+        fee = Self::private_fee_numeric_add(
+            fee,
+            Self::private_fee_numeric_mul_u64(&cfg.per_instruction_fee, 1, "fee amount")?,
+            "fee amount",
+        )?;
+        fee = Self::private_fee_numeric_add(
+            fee,
+            Self::private_fee_numeric_mul_u64(&cfg.per_gas_unit_fee, gas_used, "fee amount")?,
+            "fee amount",
+        )?;
+        Ok(fee.trim_trailing_zeros())
+    }
+
+    fn execute_private_kaigi_fee_spend(
+        tx: &PrivateKaigiTransaction,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), TransactionRejectionReason> {
+        let binding = decode_private_kaigi_fee_binding(&tx.fee_spend.proof)?;
+        let expected_action_hash = hex::encode(tx.action_hash().as_ref());
+        if binding.action_hash_hex != expected_action_hash {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "private Kaigi fee spend proof is not bound to this action hash".into(),
+                ),
+            ));
+        }
+        if binding.chain_id != tx.chain.to_string() {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "private Kaigi fee spend proof is not bound to this chain id".into(),
+                ),
+            ));
+        }
+        if binding.asset_definition_id != tx.fee_spend.asset_definition_id.to_string() {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "private Kaigi fee spend proof is not bound to xor#universal".into(),
+                ),
+            ));
+        }
+
+        let expected_fee = Self::compute_private_kaigi_fee_amount(tx, state_transaction)?;
+        if binding.fee_amount != expected_fee {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(format!(
+                    "private Kaigi fee spend amount mismatch: expected {expected_fee}, observed {}",
+                    binding.fee_amount
+                )),
+            ));
+        }
+
+        let zk_asset = state_transaction
+            .world
+            .zk_assets
+            .get(&tx.fee_spend.asset_definition_id)
+            .cloned()
+            .ok_or_else(|| {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                    "private Kaigi fee asset is not configured for confidential transfers".into(),
+                ))
+            })?;
+        let Some(vk_binding) = zk_asset.vk_transfer.clone() else {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "private Kaigi fee asset is missing a confidential transfer verifier".into(),
+                ),
+            ));
+        };
+        let backend_ident = Ident::from_str(vk_binding.id.backend.as_str()).map_err(|_| {
+            TransactionRejectionReason::Validation(ValidationFail::InternalError(
+                "invalid transfer verifier backend identifier".into(),
+            ))
+        })?;
+        let mut attachment = ProofAttachment::new_ref(
+            backend_ident.clone(),
+            ProofBox::new(backend_ident, tx.fee_spend.proof.clone()),
+            vk_binding.id,
+        );
+        attachment.vk_commitment = Some(vk_binding.commitment);
+
+        let transfer = zk::ZkTransfer::new(
+            tx.fee_spend.asset_definition_id.clone(),
+            tx.fee_spend.nullifiers.clone(),
+            tx.fee_spend.output_commitments.clone(),
+            attachment,
+            Some(tx.fee_spend.anchor_root.into()),
+        );
+
+        let fee_payer = crate::smartcontracts::isi::kaigi::private_instruction_box(tx)
+            .ok()
+            .and_then(|_| {
+                let digest = iroha_crypto::Hash::new(tx.action_hash().as_ref());
+                PublicKey::from_bytes(Algorithm::Ed25519, digest.as_ref())
+                    .ok()
+                    .map(AccountId::new)
+            })
+            .unwrap_or_else(|| {
+                let digest = iroha_crypto::Hash::new(tx.action_hash().as_ref());
+                let public_key = PublicKey::from_bytes(Algorithm::Ed25519, digest.as_ref())
+                    .expect("32-byte digest must form an Ed25519 public key");
+                AccountId::new(public_key)
+            });
+
+        transfer
+            .execute(&fee_payer, state_transaction)
+            .map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
+            })
     }
 
     /// Like [`Self::accept_genesis`], but without wrapping.
@@ -991,28 +1429,21 @@ impl<'tx> AcceptedTransaction<'tx> {
                     ));
                 }
             }
+            Executable::ContractCall(_) => {
+                iroha_data_model::transaction::require_transaction_gas_limit(tx.metadata())
+                    .map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: err.to_string(),
+                        })
+                    })?;
+            }
             Executable::IvmProved(proved) => {
-                let gas_limit_key = iroha_data_model::name::Name::from_str("gas_limit")
-                    .expect("static gas_limit key");
-                let Some(raw_gas_limit) = tx.metadata().get(&gas_limit_key) else {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "missing gas_limit in transaction metadata".into(),
-                        },
-                    ));
-                };
-                let gas_limit = raw_gas_limit.try_into_any_norito::<u64>().map_err(|err| {
-                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                        reason: format!("invalid gas_limit metadata: {err}"),
-                    })
-                })?;
-                if gas_limit == 0 {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "gas_limit must be positive".into(),
-                        },
-                    ));
-                }
+                iroha_data_model::transaction::require_transaction_gas_limit(tx.metadata())
+                    .map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: err.to_string(),
+                        })
+                    })?;
 
                 let instruction_limit = limits.max_instructions().get();
                 let instruction_count = u64::try_from(proved.overlay.len()).unwrap_or(u64::MAX);
@@ -1088,27 +1519,12 @@ impl<'tx> AcceptedTransaction<'tx> {
                 }
             }
             Executable::Ivm(smart_contract) => {
-                let gas_limit_key = iroha_data_model::name::Name::from_str("gas_limit")
-                    .expect("static gas_limit key");
-                let Some(raw_gas_limit) = tx.metadata().get(&gas_limit_key) else {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "missing gas_limit in transaction metadata".into(),
-                        },
-                    ));
-                };
-                let gas_limit = raw_gas_limit.try_into_any_norito::<u64>().map_err(|err| {
-                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                        reason: format!("invalid gas_limit metadata: {err}"),
-                    })
-                })?;
-                if gas_limit == 0 {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "gas_limit must be positive".into(),
-                        },
-                    ));
-                }
+                iroha_data_model::transaction::require_transaction_gas_limit(tx.metadata())
+                    .map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: err.to_string(),
+                        })
+                    })?;
 
                 let ivm_bytecode_size_limit = limits.ivm_bytecode_size().get();
                 let bytecode_size = u64::try_from(smart_contract.size_bytes()).unwrap_or(u64::MAX);
@@ -1359,6 +1775,13 @@ impl<'tx> AcceptedTransaction<'tx> {
                     ));
                 }
             }
+            Executable::ContractCall(_) => {
+                return Err(AcceptTransactionFail::TransactionLimit(
+                    TransactionLimitError {
+                        reason: "Heartbeat transaction must not include contract calls".into(),
+                    },
+                ));
+            }
             Executable::IvmProved(_) => {
                 return Err(AcceptTransactionFail::TransactionLimit(
                     TransactionLimitError {
@@ -1378,21 +1801,80 @@ impl<'tx> AcceptedTransaction<'tx> {
         Ok(())
     }
 
-    /// Create [`Self`] assuming the transaction is acceptable.
+    /// Create [`Self`] assuming the signed transaction is acceptable.
     pub fn new_unchecked(tx: impl Into<Cow<'tx, SignedTransaction>>) -> Self {
+        let tx = tx.into();
+        let entrypoint = match tx {
+            Cow::Borrowed(signed) => Cow::Owned(TransactionEntrypoint::External(signed.clone())),
+            Cow::Owned(signed) => Cow::Owned(TransactionEntrypoint::External(signed)),
+        };
+        Self(entrypoint)
+    }
+
+    /// Create [`Self`] assuming the entrypoint is acceptable.
+    pub fn new_unchecked_entrypoint(tx: impl Into<Cow<'tx, TransactionEntrypoint>>) -> Self {
         Self(tx.into())
+    }
+
+    /// Borrow the underlying entrypoint.
+    #[must_use]
+    pub fn entrypoint(&self) -> &TransactionEntrypoint {
+        self.0.as_ref()
+    }
+
+    /// Borrow the wrapped signed transaction when present.
+    #[must_use]
+    pub fn external(&self) -> Option<&SignedTransaction> {
+        match self.entrypoint() {
+            TransactionEntrypoint::External(entrypoint) => Some(entrypoint),
+            TransactionEntrypoint::PrivateKaigi(_) | TransactionEntrypoint::Time(_) => None,
+        }
     }
 
     /// Return the canonical hash of the wrapped transaction.
     #[must_use]
     pub fn hash(&self) -> HashOf<SignedTransaction> {
-        self.as_ref().hash()
+        Self::compat_signed_hash(self.hash_as_entrypoint())
+    }
+
+    /// Return the canonical entrypoint hash of the wrapped transaction.
+    #[must_use]
+    pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
+        self.entrypoint().hash()
+    }
+
+    /// Borrow the transaction authority account identifier when present.
+    #[must_use]
+    pub fn authority_opt(&self) -> Option<&AccountId> {
+        self.entrypoint().authority_opt()
     }
 
     /// Borrow the transaction authority account identifier.
     #[must_use]
     pub fn authority(&self) -> &AccountId {
-        self.as_ref().authority()
+        self.entrypoint().authority()
+    }
+
+    /// Entry-point metadata when present.
+    #[must_use]
+    pub fn metadata(&self) -> Option<&Metadata> {
+        self.entrypoint().metadata()
+    }
+
+    /// Creation timestamp for queue expiry and projections.
+    #[must_use]
+    pub fn creation_time(&self) -> Duration {
+        match self.entrypoint() {
+            TransactionEntrypoint::External(entrypoint) => entrypoint.creation_time(),
+            TransactionEntrypoint::PrivateKaigi(entrypoint) => entrypoint.creation_time(),
+            TransactionEntrypoint::Time(_) => Duration::ZERO,
+        }
+    }
+
+    /// Entry-point TTL when one exists.
+    #[must_use]
+    pub fn time_to_live(&self) -> Option<Duration> {
+        self.external().and_then(SignedTransaction::time_to_live)
     }
 }
 
@@ -1416,7 +1898,7 @@ impl AcceptedTransaction<'static> {
             genesis_account,
             crypto,
         )
-        .map(|()| Self(Cow::Owned(tx)))
+        .map(|()| Self(Cow::Owned(TransactionEntrypoint::External(tx))))
     }
 
     /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
@@ -1432,7 +1914,7 @@ impl AcceptedTransaction<'static> {
         crypto: &iroha_config::parameters::actual::Crypto,
     ) -> Result<Self, AcceptTransactionFail> {
         Self::validate(&tx, expected_chain_id, max_clock_drift, limits, crypto)
-            .map(|()| Self(Cow::Owned(tx)))
+            .map(|()| Self(Cow::Owned(TransactionEntrypoint::External(tx))))
     }
 
     /// Accept transaction using a caller-provided [`TimeSource`] for admission-time checks.
@@ -1451,25 +1933,79 @@ impl AcceptedTransaction<'static> {
         let now = time_source.get_unix_time();
         Self::validate_with_now(&tx, expected_chain_id, max_clock_drift, limits, crypto, now)?;
         enforce_nts_health_for_time_sensitive(&tx)?;
+        Ok(Self(Cow::Owned(TransactionEntrypoint::External(tx))))
+    }
+
+    /// Accept any directly submitted transaction entrypoint.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
+    pub fn accept_entrypoint(
+        tx: TransactionEntrypoint,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+    ) -> Result<Self, AcceptTransactionFail> {
+        let now = current_unix_time();
+        match &tx {
+            TransactionEntrypoint::External(signed) => {
+                Self::validate_with_now(
+                    signed,
+                    expected_chain_id,
+                    max_clock_drift,
+                    limits,
+                    crypto,
+                    now,
+                )?;
+                enforce_nts_health_for_time_sensitive(signed)?;
+            }
+            TransactionEntrypoint::PrivateKaigi(private) => {
+                Self::validate_private_kaigi_with_now(
+                    private,
+                    expected_chain_id,
+                    max_clock_drift,
+                    limits,
+                    now,
+                )?;
+            }
+            TransactionEntrypoint::Time(_) => {
+                return Err(AcceptTransactionFail::TransactionLimit(
+                    TransactionLimitError {
+                        reason: "direct time entrypoints are not accepted on ingress".into(),
+                    },
+                ));
+            }
+        }
         Ok(Self(Cow::Owned(tx)))
     }
 }
 
 impl<'tx> From<AcceptedTransaction<'tx>> for SignedTransaction {
     fn from(source: AcceptedTransaction<'tx>) -> Self {
-        source.0.into_owned()
+        match source.0.into_owned() {
+            TransactionEntrypoint::External(entrypoint) => entrypoint,
+            TransactionEntrypoint::PrivateKaigi(_) => {
+                panic!("private Kaigi entrypoints are not signed transactions")
+            }
+            TransactionEntrypoint::Time(_) => {
+                panic!("time entrypoints are not signed transactions")
+            }
+        }
     }
 }
 
 impl<'tx> From<AcceptedTransaction<'tx>> for (AccountId, Executable) {
     fn from(source: AcceptedTransaction<'tx>) -> Self {
-        source.0.into_owned().into()
+        SignedTransaction::from(source).into()
     }
 }
 
 impl AsRef<SignedTransaction> for AcceptedTransaction<'_> {
     fn as_ref(&self) -> &SignedTransaction {
-        self.0.as_ref()
+        self.external()
+            .expect("private Kaigi entrypoints do not expose SignedTransaction access")
     }
 }
 
@@ -1546,12 +2082,23 @@ impl StateBlock<'_> {
         state_transaction: &mut StateTransaction<'_, '_>,
         ivm_cache: &mut IvmCache,
     ) -> TransactionResultInner {
+        if let TransactionEntrypoint::PrivateKaigi(private_tx) = tx.entrypoint() {
+            return Self::validate_private_kaigi_transaction(private_tx, state_transaction);
+        }
+        if matches!(tx.entrypoint(), TransactionEntrypoint::Time(_)) {
+            return Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(
+                    "time entrypoints cannot be executed via transaction admission".into(),
+                ),
+            ));
+        }
+
         let authority = tx.as_ref().authority().clone();
         let is_heartbeat = is_heartbeat_transaction(tx.as_ref());
         let authority_exists = state_transaction.world.accounts.get(&authority).is_some();
         let allow_unregistered_authority = !is_heartbeat
             && !authority_exists
-            && allows_unregistered_authority(tx.as_ref().instructions());
+            && allows_unregistered_authority(tx.as_ref().instructions(), &authority);
 
         // Heartbeat transactions may be signed by ephemeral identities.
         // Multisig propose/approve envelopes are also allowed from unregistered authorities,
@@ -1647,17 +2194,35 @@ impl StateBlock<'_> {
         #[cfg(not(feature = "telemetry"))]
         let telemetry_handle: Option<&StateTelemetry> = None;
 
-        if state_transaction.world.accounts.get(&authority).is_some() {
+        if let Ok(account) = state_transaction.world.account(&authority) {
             let has_multisig_state = state_transaction
                 .world
                 .smart_contract_state
                 .get(&crate::smartcontracts::isi::multisig::multisig_account_state_key(&authority))
                 .is_some();
+            let has_multisig_metadata = account
+                .metadata()
+                .get(&crate::smartcontracts::isi::multisig::spec_key())
+                .is_some();
+            let has_multisig_controller = authority.multisig_policy().is_some();
             let has_multisig_role = state_transaction
                 .world
                 .account_roles_iter(&authority)
                 .any(|role| role.name().as_ref().starts_with("MULTISIG_SIGNATORY/"));
-            if has_multisig_role || has_multisig_state {
+            let allows_multisig_envelope_authority = match tx.as_ref().instructions() {
+                Executable::Instructions(instructions) => {
+                    instructions_allow_multisig_envelope_authority(instructions)
+                }
+                Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => {
+                    false
+                }
+            };
+            if (has_multisig_role
+                || has_multisig_state
+                || has_multisig_metadata
+                || has_multisig_controller)
+                && !allows_multisig_envelope_authority
+            {
                 warn!(
                     authority = %authority,
                     "multisig accounts cannot sign transactions directly"
@@ -1672,11 +2237,12 @@ impl StateBlock<'_> {
             }
         }
 
-        let routing_decision = evaluate_policy_with_catalog(
+        let routing_decision = evaluate_policy_with_catalog_and_world(
             &state_transaction.nexus.routing_policy,
             &state_transaction.nexus.lane_catalog,
             &state_transaction.nexus.dataspace_catalog,
             &tx,
+            &state_transaction.world,
         )
         .map_err(|err| {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
@@ -1706,45 +2272,68 @@ impl StateBlock<'_> {
             .get(&*CONTRACT_MANIFEST_METADATA_NAME)
             .and_then(|json| json.clone().try_into_any_norito::<ContractManifest>().ok());
 
-        // Extract optional governance deployment metadata for protected-namespaces gating
-        let (ns_meta, cid_meta) = {
-            use core::str::FromStr as _;
-            let md = tx.as_ref().metadata();
-            let ns_key = iroha_data_model::name::Name::from_str("gov_namespace");
-            let cid_key = iroha_data_model::name::Name::from_str("gov_contract_id");
-            let ns = ns_key
-                .ok()
-                .and_then(|k| md.get(&k))
-                .and_then(|j| j.try_into_any_norito::<String>().ok())
-                .map(|raw| raw.trim().to_owned())
-                .filter(|raw| !raw.is_empty());
-            let cid = cid_key
-                .ok()
-                .and_then(|k| md.get(&k))
-                .and_then(|j| j.try_into_any_norito::<String>().ok())
-                .map(|raw| raw.trim().to_owned())
-                .filter(|raw| !raw.is_empty());
-            (ns, cid)
-        };
+        // Extract optional governance deployment metadata for protected-contract gating.
+        let contract_address_meta = tx
+            .as_ref()
+            .metadata()
+            .get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY)
+            .and_then(|json| json.clone().try_into_any_norito::<String>().ok())
+            .and_then(|raw| {
+                raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
+                    .ok()
+            });
 
-        if let Executable::Ivm(bytes) = tx.as_ref().instructions() {
-            let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
-                .map_err(TransactionRejectionReason::Validation)?;
-            if gas_limit.is_none() {
-                return Err(TransactionRejectionReason::Validation(
-                    ValidationFail::NotPermitted(
-                        "missing gas_limit in transaction metadata".to_owned(),
-                    ),
-                ));
+        match tx.as_ref().instructions() {
+            Executable::ContractCall(call) => {
+                let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
+                    .map_err(TransactionRejectionReason::Validation)?;
+                if gas_limit.is_none() {
+                    return Err(TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted(
+                            "missing gas_limit in transaction metadata".to_owned(),
+                        ),
+                    ));
+                }
+                let record =
+                    code::fetch_bound_contract_record(state_transaction, &call.contract_address)
+                        .ok_or_else(|| {
+                            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                                format!(
+                                    "contract instance `{}` not found in WSV",
+                                    call.contract_address
+                                ),
+                            ))
+                        })?;
+                let contract_address = Some(call.contract_address.clone());
+                Self::validate_ivm(
+                    authority.clone(),
+                    state_transaction,
+                    IvmBytecode::from_compiled(record.code_bytes),
+                    None,
+                    contract_address,
+                    ivm_cache,
+                )?;
             }
-            Self::validate_ivm(
-                authority.clone(),
-                state_transaction,
-                bytes.clone(),
-                manifest_metadata.clone(),
-                ns_meta.clone().zip(cid_meta.clone()),
-                ivm_cache,
-            )?;
+            Executable::Ivm(bytes) => {
+                let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
+                    .map_err(TransactionRejectionReason::Validation)?;
+                if gas_limit.is_none() {
+                    return Err(TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted(
+                            "missing gas_limit in transaction metadata".to_owned(),
+                        ),
+                    ));
+                }
+                Self::validate_ivm(
+                    authority.clone(),
+                    state_transaction,
+                    bytes.clone(),
+                    manifest_metadata.clone(),
+                    contract_address_meta.clone(),
+                    ivm_cache,
+                )?;
+            }
+            _ => {}
         }
 
         debug!(tx=%tx.as_ref().hash(), "Validating transaction");
@@ -1780,13 +2369,28 @@ impl StateBlock<'_> {
         Ok(trigger_sequence)
     }
 
+    fn validate_private_kaigi_transaction(
+        tx: &PrivateKaigiTransaction,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> TransactionResultInner {
+        state_transaction.tx_call_hash = Some(tx.action_hash());
+        AcceptedTransaction::execute_private_kaigi_fee_spend(tx, state_transaction)?;
+        state_transaction.last_tx_gas_used =
+            AcceptedTransaction::private_kaigi_instruction_gas(tx)?;
+        crate::smartcontracts::isi::kaigi::execute_private_transaction(tx, state_transaction)
+            .map_err(|error| {
+                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(error))
+            })?;
+        Ok(DataTriggerSequence::default())
+    }
+
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     fn validate_ivm(
         authority: AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
         contract: IvmBytecode,
         manifest_metadata: Option<ContractManifest>,
-        deploy_target: Option<(String, String)>,
+        deploy_target: Option<iroha_data_model::smart_contract::ContractAddress>,
         ivm_cache: &mut IvmCache,
     ) -> Result<(), TransactionRejectionReason> {
         use ivm::ivm_mode as mode;
@@ -2061,7 +2665,7 @@ impl StateBlock<'_> {
         }
 
         // Protected namespaces admission (governance gating)
-        if let Some((ns, cid)) = deploy_target {
+        if let Some(contract_address) = deploy_target {
             // Read protected namespaces from on-chain custom parameter `gov_protected_namespaces`
             let mut protected: Vec<String> = Vec::new();
             if let Ok(name) = core::str::FromStr::from_str("gov_protected_namespaces") {
@@ -2073,8 +2677,8 @@ impl StateBlock<'_> {
                     protected = v;
                 }
             }
-            if protected.iter().any(|p| p == &ns) {
-                // Require an enacted proposal matching (ns, cid, code_hash, abi_hash)
+            if !protected.is_empty() {
+                // Require an enacted proposal matching the governed contract address and hashes.
                 let want_code = hex::encode(<[u8; 32]>::from(code_hash));
                 let want_abi = hex::encode(<[u8; 32]>::from(abi_hash));
                 let mut ok = false;
@@ -2082,8 +2686,7 @@ impl StateBlock<'_> {
                     let Some(payload) = rec.as_deploy_contract() else {
                         continue;
                     };
-                    if payload.namespace == ns
-                        && payload.contract_id == cid
+                    if payload.contract_address == contract_address
                         && payload.code_hash_hex.to_hex() == want_code
                         && payload.abi_hash_hex.to_hex() == want_abi
                         && matches!(rec.status, crate::state::GovernanceProposalStatus::Enacted)
@@ -2099,7 +2702,7 @@ impl StateBlock<'_> {
                         .record_protected_namespace_enforcement("rejected");
                     return Err(TransactionRejectionReason::Validation(
                         ValidationFail::NotPermitted(
-                            "deployment into protected namespace requires enacted governance proposal"
+                            "deployment into governed contract address requires enacted governance proposal"
                                 .to_owned(),
                         ),
                     ));
@@ -2217,6 +2820,11 @@ fn enforce_manifest_quorum(
     rules: &GovernanceRules,
     tx: &SignedTransaction,
 ) -> Result<(), TransactionRejectionReason> {
+    if let Executable::Instructions(instructions) = tx.instructions()
+        && instructions_allow_multisig_envelope_authority(instructions)
+    {
+        return Ok(());
+    }
     let Some(quorum) = rules.quorum else {
         return Ok(());
     };
@@ -2305,6 +2913,76 @@ fn canonical_manifest_validators(
     Ok(validators)
 }
 
+fn tx_contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
+    let Executable::Instructions(instructions) = tx.instructions() else {
+        return false;
+    };
+    instructions.iter().any(|instruction| {
+        instruction
+            .as_any()
+            .downcast_ref::<ProposeRuntimeUpgrade>()
+            .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<ActivateRuntimeUpgrade>()
+                .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<CancelRuntimeUpgrade>()
+                .is_some()
+    })
+}
+
+fn tx_touches_manifest_protected_namespace_surface(tx: &SignedTransaction) -> bool {
+    let metadata = tx.metadata();
+    let has_governance_contract_address =
+        metadata.get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY).is_some();
+    let has_contract_address_hint = metadata.get(&*CONTRACT_ADDRESS_METADATA_KEY).is_some();
+
+    let mut contract_targets_seen = false;
+    let mut register_code_seen = false;
+    match tx.instructions() {
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                if instruction
+                    .as_any()
+                    .downcast_ref::<ActivateContractInstance>()
+                    .is_some()
+                    || instruction
+                        .as_any()
+                        .downcast_ref::<DeactivateContractInstance>()
+                        .is_some()
+                {
+                    contract_targets_seen = true;
+                } else {
+                    let any = instruction.as_any();
+                    if any.is::<RegisterSmartContractCode>()
+                        || any.is::<RegisterSmartContractBytes>()
+                        || any.is::<RemoveSmartContractBytes>()
+                    {
+                        register_code_seen = true;
+                    }
+                }
+            }
+        }
+        Executable::ContractCall(_) => {
+            contract_targets_seen = true;
+        }
+        Executable::Ivm(_) | Executable::IvmProved(_) => {}
+    }
+
+    let ivm_with_contract_metadata = matches!(tx.instructions(), Executable::Ivm(_))
+        && (has_governance_contract_address || has_contract_address_hint);
+
+    register_code_seen || contract_targets_seen || ivm_with_contract_metadata
+}
+
+fn tx_requires_manifest_validator_gating(rules: &GovernanceRules, tx: &SignedTransaction) -> bool {
+    tx_contains_runtime_upgrade_instruction(tx)
+        || (!rules.protected_namespaces.is_empty()
+            && tx_touches_manifest_protected_namespace_surface(tx))
+}
+
 #[allow(clippy::too_many_lines)]
 fn enforce_manifest_protected_namespaces(
     alias: &str,
@@ -2317,272 +2995,137 @@ fn enforce_manifest_protected_namespaces(
     }
 
     let metadata = tx.metadata();
-    let metadata_namespace = metadata
-        .get(&*GOV_NAMESPACE_METADATA_KEY)
+    let metadata_governance_contract_address = metadata
+        .get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY)
         .map(|value| {
             let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                reject_lane_policy(alias, "`gov_namespace` metadata must be a string value")
+                reject_lane_policy(
+                    alias,
+                    "`gov_contract_address` metadata must be a string value",
+                )
             })?;
             let trimmed = raw.trim();
             if trimmed.is_empty() {
                 return Err(reject_lane_policy(
                     alias,
-                    "`gov_namespace` metadata must not be blank",
+                    "`gov_contract_address` metadata must not be blank",
                 ));
             }
-            Name::from_str(trimmed).map_err(|err| {
+            trimmed.parse::<iroha_data_model::smart_contract::ContractAddress>().map_err(|err| {
                 reject_lane_policy(
                     alias,
-                    format!("`gov_namespace` metadata `{trimmed}` is not a valid Name: {err}"),
+                    format!(
+                        "`gov_contract_address` metadata `{trimmed}` is not a valid ContractAddress: {err}"
+                    ),
                 )
             })
         })
         .transpose()?;
 
-    let metadata_contract_id = metadata
-        .get(&*GOV_CONTRACT_ID_METADATA_KEY)
+    let metadata_contract_address_hint = metadata
+        .get(&*CONTRACT_ADDRESS_METADATA_KEY)
         .map(|value| {
             let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                reject_lane_policy(alias, "`gov_contract_id` metadata must be a string value")
+                reject_lane_policy(alias, "`contract_address` metadata must be a string value")
             })?;
             let trimmed = raw.trim();
             if trimmed.is_empty() {
                 return Err(reject_lane_policy(
                     alias,
-                    "`gov_contract_id` metadata must not be blank",
+                    "`contract_address` metadata must not be blank",
                 ));
             }
-            Ok(trimmed.to_string())
-        })
-        .transpose()?;
-
-    let metadata_contract_namespace = metadata
-        .get(&*CONTRACT_NAMESPACE_METADATA_KEY)
-        .map(|value| {
-            let raw = value.try_into_any_norito::<String>().map_err(|_| {
+            trimmed.parse::<iroha_data_model::smart_contract::ContractAddress>().map_err(|err| {
                 reject_lane_policy(
                     alias,
-                    "`contract_namespace` metadata must be a string value",
-                )
-            })?;
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return Err(reject_lane_policy(
-                    alias,
-                    "`contract_namespace` metadata must not be blank",
-                ));
-            }
-            Name::from_str(trimmed).map_err(|err| {
-                reject_lane_policy(
-                    alias,
-                    format!("`contract_namespace` metadata `{trimmed}` is not a valid Name: {err}"),
+                    format!(
+                        "`contract_address` metadata `{trimmed}` is not a valid ContractAddress: {err}"
+                    ),
                 )
             })
         })
         .transpose()?;
 
-    let metadata_contract_id_hint = metadata
-        .get(&*CONTRACT_ID_METADATA_KEY)
-        .map(|value| {
-            let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                reject_lane_policy(alias, "`contract_id` metadata must be a string value")
-            })?;
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return Err(reject_lane_policy(
-                    alias,
-                    "`contract_id` metadata must not be blank",
-                ));
-            }
-            Ok(trimmed.to_string())
-        })
-        .transpose()?;
-
-    let mut namespaces_from_instructions = BTreeSet::new();
-    let mut contract_bindings = BTreeSet::new();
+    let mut contract_targets = BTreeSet::new();
     let mut register_code_seen = false;
-    if let Executable::Instructions(instructions) = tx.instructions() {
-        for instruction in instructions {
-            if let Some(activate) = instruction
-                .as_any()
-                .downcast_ref::<ActivateContractInstance>()
-            {
-                let ns = Name::from_str(activate.namespace.trim()).map_err(|err| {
-                    reject_lane_policy(
-                        alias,
-                        format!(
-                            "instruction namespace `{}` is not valid: {err}",
-                            activate.namespace
-                        ),
-                    )
-                })?;
-                namespaces_from_instructions.insert(ns.clone());
-                let contract_id = activate.contract_id.trim();
-                if contract_id.is_empty() {
-                    return Err(reject_lane_policy(
-                        alias,
-                        "contract_id in ActivateContractInstance must not be blank",
-                    ));
-                }
-                contract_bindings.insert((ns, contract_id.to_string()));
-            } else if let Some(deactivate) = instruction
-                .as_any()
-                .downcast_ref::<DeactivateContractInstance>()
-            {
-                let ns = Name::from_str(deactivate.namespace.trim()).map_err(|err| {
-                    reject_lane_policy(
-                        alias,
-                        format!(
-                            "instruction namespace `{}` is not valid: {err}",
-                            deactivate.namespace
-                        ),
-                    )
-                })?;
-                namespaces_from_instructions.insert(ns.clone());
-                let contract_id = deactivate.contract_id.trim();
-                if contract_id.is_empty() {
-                    return Err(reject_lane_policy(
-                        alias,
-                        "contract_id in DeactivateContractInstance must not be blank",
-                    ));
-                }
-                contract_bindings.insert((ns, contract_id.to_string()));
-            } else {
-                let modifies_contract_code = {
-                    let any = instruction.as_any();
-                    any.is::<RegisterSmartContractCode>()
-                        || any.is::<RegisterSmartContractBytes>()
-                        || any.is::<RemoveSmartContractBytes>()
-                };
-                if modifies_contract_code {
-                    register_code_seen = true;
+    match tx.instructions() {
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                if let Some(activate) = instruction
+                    .as_any()
+                    .downcast_ref::<ActivateContractInstance>()
+                {
+                    contract_targets.insert(activate.contract_address().clone());
+                } else if let Some(deactivate) = instruction
+                    .as_any()
+                    .downcast_ref::<DeactivateContractInstance>()
+                {
+                    contract_targets.insert(deactivate.contract_address().clone());
+                } else {
+                    let modifies_contract_code = {
+                        let any = instruction.as_any();
+                        any.is::<RegisterSmartContractCode>()
+                            || any.is::<RegisterSmartContractBytes>()
+                            || any.is::<RemoveSmartContractBytes>()
+                    };
+                    if modifies_contract_code {
+                        register_code_seen = true;
+                    }
                 }
             }
         }
+        Executable::ContractCall(call) => {
+            contract_targets.insert(call.contract_address.clone());
+        }
+        Executable::Ivm(_) | Executable::IvmProved(_) => {}
     }
 
-    if let Some(ns) = metadata_namespace.clone() {
-        if let Some(cid) = metadata_contract_id
-            .clone()
-            .or_else(|| metadata_contract_id_hint.clone())
-        {
-            namespaces_from_instructions.insert(ns.clone());
-            contract_bindings.insert((ns, cid));
-        }
-    } else if let Some(ns) = metadata_contract_namespace.clone() {
-        if let Some(cid) = metadata_contract_id_hint.clone() {
-            namespaces_from_instructions.insert(ns.clone());
-            contract_bindings.insert((ns, cid));
-        }
+    if let Some(contract_address) = metadata_governance_contract_address.clone() {
+        contract_targets.insert(contract_address);
     }
 
     let ivm_with_contract_metadata = matches!(tx.instructions(), Executable::Ivm(_))
-        && (metadata_namespace.is_some()
-            || metadata_contract_namespace.is_some()
-            || metadata_contract_id_hint.is_some());
+        && (metadata_governance_contract_address.is_some()
+            || metadata_contract_address_hint.is_some());
 
     let contract_instr_seen =
-        register_code_seen || !contract_bindings.is_empty() || ivm_with_contract_metadata;
+        register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
 
-    if contract_instr_seen && metadata_namespace.is_none() {
+    if contract_instr_seen
+        && metadata_governance_contract_address.is_none()
+        && !matches!(tx.instructions(), Executable::ContractCall(_))
+    {
         return Err(reject_lane_policy(
             alias,
-            "transactions with contract namespace operations must set `gov_namespace` metadata when lane governance protects namespaces",
+            "transactions with contract operations must set `gov_contract_address` metadata when lane governance protects namespaces",
         ));
     }
 
-    if (contract_instr_seen || metadata_namespace.is_some()) && metadata_contract_id.is_none() {
-        return Err(reject_lane_policy(
-            alias,
-            "metadata key `gov_contract_id` is required when `gov_namespace` is provided",
-        ));
-    }
-
-    if let (Some(ns_hint), Some(ns_meta)) = (
-        metadata_contract_namespace.as_ref(),
-        metadata_namespace.as_ref(),
+    if let (Some(hint), Some(meta)) = (
+        metadata_contract_address_hint.as_ref(),
+        metadata_governance_contract_address.as_ref(),
     ) {
-        if ns_hint != ns_meta {
+        if hint != meta {
             return Err(reject_lane_policy(
                 alias,
-                "`contract_namespace` metadata must match `gov_namespace` for protected operations",
+                "`contract_address` metadata must match `gov_contract_address` for protected operations",
             ));
         }
     }
 
-    if let (Some(cid_hint), Some(cid_meta)) = (
-        metadata_contract_id_hint.as_ref(),
-        metadata_contract_id.as_ref(),
-    ) {
-        if cid_hint != cid_meta {
-            return Err(reject_lane_policy(
-                alias,
-                "`contract_id` metadata must match `gov_contract_id` for protected operations",
-            ));
-        }
-    }
-
-    if let Some(meta_cid) = metadata_contract_id.as_ref()
-        && let Some(target_ns) = metadata_namespace
-            .clone()
-            .or_else(|| namespaces_from_instructions.iter().next().cloned())
-    {
-        let cross_namespace = world
-            .contract_instances()
+    if let Some(meta_contract_address) = metadata_governance_contract_address.as_ref()
+        && !contract_targets.is_empty()
+        && contract_targets
             .iter()
-            .filter(|((_ns, cid), _)| cid == meta_cid)
-            .filter_map(|((ns, _), _)| Name::from_str(ns).ok())
-            .any(|existing_ns| existing_ns != target_ns);
-        if cross_namespace {
-            return Err(reject_lane_policy(
-                alias,
-                format!(
-                    "contract `{meta_cid}` is already bound to a different namespace; cross-namespace rebinding is not allowed"
-                ),
-            ));
-        }
-    }
-
-    let mut namespaces_to_check = namespaces_from_instructions.clone();
-    if let Some(ns) = metadata_namespace.clone() {
-        namespaces_to_check.insert(ns);
-    }
-    if let Some(ns) = metadata_contract_namespace.clone() {
-        namespaces_to_check.insert(ns);
-    }
-
-    for namespace in &namespaces_to_check {
-        if !rules.protected_namespaces.contains(namespace) {
-            return Err(reject_lane_policy(
-                alias,
-                format!("namespace `{namespace}` is not declared in lane governance protected set"),
-            ));
-        }
-    }
-
-    if let Some(ns) = metadata_namespace
-        && !namespaces_from_instructions.is_empty()
-        && namespaces_from_instructions
-            .iter()
-            .any(|other| other != &ns)
+            .any(|contract_address| contract_address != meta_contract_address)
     {
         return Err(reject_lane_policy(
             alias,
-            "`gov_namespace` metadata does not match namespaces referenced by contract instructions",
+            "`gov_contract_address` metadata does not match contract addresses referenced by contract instructions",
         ));
     }
 
-    if let Some(meta_contract_id) = metadata_contract_id
-        && !contract_bindings.is_empty()
-        && contract_bindings
-            .iter()
-            .any(|(_, cid)| cid != &meta_contract_id)
-    {
-        return Err(reject_lane_policy(
-            alias,
-            "`gov_contract_id` metadata does not match contract ids referenced by contract instructions",
-        ));
-    }
+    let _ = world;
 
     Ok(())
 }
@@ -2713,7 +3256,7 @@ fn enforce_runtime_upgrade_dataspace_policy(
             "runtime upgrade policy requires a governance module".to_string(),
         ));
     };
-    if dataspace_id == NexusDataSpaceId::GLOBAL
+    if dataspace_id == NexusDataSpaceId::UNIVERSAL
         && !matches!(module_kind, RuntimeUpgradeModuleKind::Parliament)
     {
         return Err(reject_lane_policy(
@@ -2733,6 +3276,15 @@ fn extract_lane_identity_metadata(
 ) -> Result<(Option<UniversalAccountId>, Vec<String>), TransactionRejectionReason> {
     extract_directory_lane_identity_metadata(world, authority, dataspace_id).map_err(
         |err| match err {
+            LaneIdentityMetadataError::MissingDataspaceBinding { uaid, dataspace } => {
+                reject_lane_policy(
+                    lane_alias,
+                    format!(
+                        "UAID {uaid} is not bound to dataspace {}",
+                        dataspace.as_u64()
+                    ),
+                )
+            }
             LaneIdentityMetadataError::InactiveManifest { uaid, dataspace } => reject_lane_policy(
                 lane_alias,
                 format!(
@@ -2742,6 +3294,35 @@ fn extract_lane_identity_metadata(
             ),
         },
     )
+}
+
+fn extract_lane_authority_domains(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    lane_alias: &str,
+) -> Result<Vec<iroha_data_model::domain::DomainId>, TransactionRejectionReason> {
+    extract_directory_authority_domains(world, authority).map_err(|err| {
+        reject_lane_policy(
+            lane_alias,
+            format!("authority alias domain resolution failed: {err}"),
+        )
+    })
+}
+
+fn publishes_only_space_directory_manifests(tx: &SignedTransaction) -> bool {
+    match tx.instructions() {
+        Executable::Instructions(instructions) if !instructions.is_empty() => {
+            instructions.iter().all(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<
+                        iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest,
+                    >()
+                    .is_some()
+            })
+        }
+        _ => false,
+    }
 }
 
 fn enforce_lane_policies(
@@ -2762,29 +3343,37 @@ fn enforce_lane_policies(
         || format!("lane-{}", lane_id.as_u32()),
         |status| status.alias.clone(),
     );
+    let allows_multisig_envelope_authority = match tx.instructions() {
+        Executable::Instructions(instructions) => {
+            instructions_allow_multisig_envelope_authority(instructions)
+        }
+        Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => false,
+    };
 
     let mut runtime_upgrade_present = false;
     if let Some(status) = manifest_status.as_ref() {
         if let Some(rules) = status.rules() {
-            if !rules.validators.is_empty()
-                && !rules
-                    .validators
-                    .iter()
-                    .any(|validator| validator == tx.authority())
-            {
-                return Err(reject_lane_policy(
-                    &lane_alias,
-                    "authority not part of lane validator set".to_string(),
-                ));
-            }
+            let governance_sensitive = tx_requires_manifest_validator_gating(rules, tx);
+            if governance_sensitive {
+                if !rules.validators.is_empty()
+                    && !allows_multisig_envelope_authority
+                    && !rules
+                        .validators
+                        .iter()
+                        .any(|validator| validator == tx.authority())
+                {
+                    return Err(reject_lane_policy(
+                        &lane_alias,
+                        "authority not part of lane validator set".to_string(),
+                    ));
+                }
 
-            let quorum_required =
-                rules.quorum.unwrap_or(0).saturating_sub(1) > 0 && !rules.validators.is_empty();
-            let quorum_result = enforce_manifest_quorum(&lane_alias, rules, tx);
-            if quorum_required {
-                quorum_result?;
-            } else if let Err(err) = quorum_result {
-                return Err(err);
+                let quorum_required = !allows_multisig_envelope_authority
+                    && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
+                    && !rules.validators.is_empty();
+                if quorum_required {
+                    enforce_manifest_quorum(&lane_alias, rules, tx)?;
+                }
             }
 
             enforce_manifest_protected_namespaces(
@@ -2833,19 +3422,29 @@ fn enforce_lane_policies(
         Some(state_transaction.lane_privacy_registry.clone())
     };
 
-    let lane_identity = extract_lane_identity_metadata(
-        &state_transaction.world,
-        tx.authority(),
-        dataspace_id,
-        &lane_alias,
-    )?;
+    let publishes_space_directory_manifest = publishes_only_space_directory_manifests(tx);
+    let lane_identity = if publishes_space_directory_manifest {
+        (None, Vec::new())
+    } else {
+        extract_lane_identity_metadata(
+            &state_transaction.world,
+            tx.authority(),
+            dataspace_id,
+            &lane_alias,
+        )?
+    };
 
-    if let Some(engine) = state_transaction.lane_compliance.as_ref() {
+    if !publishes_space_directory_manifest
+        && let Some(engine) = state_transaction.lane_compliance.as_ref()
+    {
         let (uaid_value, capability_tags) = lane_identity;
+        let authority_domains =
+            extract_lane_authority_domains(&state_transaction.world, tx.authority(), &lane_alias)?;
         let ctx = LaneComplianceContext {
             lane_id,
             dataspace_id,
             authority: tx.authority(),
+            authority_domains: authority_domains.as_slice(),
             uaid: uaid_value.as_ref(),
             capability_tags: capability_tags.as_slice(),
             lane_privacy_registry,
@@ -3698,7 +4297,9 @@ pub mod tests {
             GovernanceRules, LaneManifestRegistry, LaneManifestStatus, RuntimeUpgradeHook,
         },
         kura::Kura,
-        nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
+        nexus::space_directory::{
+            SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
+        },
         query::store::LiveQueryStore,
         smartcontracts::ivm::cache::IvmCache,
         state::{State, StateBlock, StateReadOnly, World},
@@ -3707,21 +4308,21 @@ pub mod tests {
     fn single_lane_assignment(catalog: &DataSpaceCatalog) -> super::LaneAssignment<'_> {
         super::LaneAssignment {
             lane_id: TestLaneId::SINGLE,
-            dataspace_id: TestDataSpaceId::GLOBAL,
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
             dataspace_catalog: catalog,
         }
     }
 
     fn new_account_in_domain(
         account_id: &AccountId,
-        domain_id: &DomainId,
+        _domain_id: &DomainId,
     ) -> iroha_data_model::account::NewAccount {
-        Account::new(account_id.clone().to_account_id(domain_id.clone()))
+        Account::new(account_id.clone())
     }
 
     fn world_with_authority(domain: &str) -> (World, AccountId, KeyPair) {
         let (authority_id, key_pair) = gen_account_in(domain);
-        let domain_id: DomainId = domain.parse().expect("domain id");
+        let domain_id = DomainId::try_new(domain, "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority_id);
         let account = new_account_in_domain(&authority_id, &domain_id).build(&authority_id);
         (World::with([domain], [account], []), authority_id, key_pair)
@@ -3734,7 +4335,7 @@ pub mod tests {
         manifest_active: bool,
     ) -> (World, AccountId) {
         let (authority, _) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = new_account_in_domain(&authority, &domain_id)
             .with_uaid(Some(uaid))
@@ -3760,23 +4361,100 @@ pub mod tests {
             let mut set = SpaceDirectoryManifestSet::default();
             set.upsert(record);
             world.space_directory_manifests.insert(uaid, set);
+            if manifest_active {
+                let mut bindings = UaidDataspaceBindings::default();
+                bindings.bind_account(dataspace, authority.clone());
+                world.uaid_dataspaces.insert(uaid, bindings);
+            }
         }
 
         (world, authority)
     }
 
     #[test]
-    fn lane_identity_allows_global_uaid_without_dataspace_manifest() {
+    fn lane_identity_rejects_uaid_without_dataspace_binding() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"tx::uaid-no-manifest"));
         let dataspace = TestDataSpaceId::new(7);
         let (world, authority) = world_with_uaid_account(uaid, dataspace, false, true);
         let world_view = world.view();
 
-        let (observed, tags) =
+        let err =
             super::extract_lane_identity_metadata(&world_view, &authority, dataspace, "lane-x")
-                .expect("global UAID routing should not require dataspace manifest");
-        assert_eq!(observed, Some(uaid));
-        assert!(tags.is_empty(), "no manifest tags expected");
+                .expect_err("UAID routing must require a dataspace binding");
+        match err {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
+                assert!(
+                    msg.contains("not bound to dataspace"),
+                    "expected missing binding rejection message, got {msg}"
+                );
+            }
+            other => panic!("expected NotPermitted rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lane_policy_allows_space_directory_manifest_publish_before_uaid_binding_exists() {
+        let chain: ChainId = "space-directory-publish".parse().unwrap();
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"tx::publish-manifest"));
+        let dataspace = TestDataSpaceId::new(10);
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = new_account_in_domain(&authority, &domain_id)
+            .with_uaid(Some(uaid))
+            .build(&authority);
+        let world = World::with([domain], [account], []);
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain.clone(),
+        );
+        let policy = LaneCompliancePolicy {
+            id: LaneCompliancePolicyId::new(Hash::prehashed([0xBC; 32])),
+            version: 1,
+            lane_id: TestLaneId::SINGLE,
+            dataspace_id: dataspace,
+            jurisdiction: JurisdictionSet::default(),
+            deny: vec![LaneComplianceRule {
+                selector: ParticipantSelector {
+                    account: Some(authority.clone()),
+                    ..ParticipantSelector::default()
+                },
+                reason_code: Some("unbound uaid".to_string()),
+                jurisdiction_override: JurisdictionSet::default(),
+            }],
+            allow: Vec::new(),
+            transfer_limits: Vec::new(),
+            audit_controls: AuditControls::default(),
+            metadata: Metadata::default(),
+        };
+        let engine = LaneComplianceEngine::from_policies(vec![policy], false).expect("engine");
+        state.install_lane_compliance_engine(Some(Arc::new(engine)));
+
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 1,
+            activation_epoch: 0,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let tx = TransactionBuilder::new(chain, authority.clone())
+            .with_instructions([PublishSpaceDirectoryManifest { manifest }])
+            .sign(keypair.private_key());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let stx = block.transaction();
+        let assignment = super::LaneAssignment {
+            lane_id: TestLaneId::SINGLE,
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
+            dataspace_catalog: &stx.nexus.dataspace_catalog,
+        };
+
+        super::enforce_lane_policies(&tx, &stx, &assignment)
+            .expect("manifest publication creates the UAID dataspace binding");
     }
 
     #[test]
@@ -4065,7 +4743,7 @@ pub mod tests {
         use iroha_data_model::domain::DomainId;
 
         let chain: ChainId = "multisig-direct".parse().unwrap();
-        let domain_id: DomainId = "multisig".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("multisig", "universal").unwrap();
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = AccountId::new(signer1.public_key().clone());
@@ -4133,7 +4811,7 @@ pub mod tests {
         use iroha_data_model::domain::DomainId;
 
         let chain: ChainId = "multisig-role-only".parse().unwrap();
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let (authority_id, keypair) = gen_account_in("wonderland");
 
         let domain = Domain::new(domain_id.clone()).build(&authority_id);
@@ -4191,6 +4869,271 @@ pub mod tests {
     }
 
     #[test]
+    fn multisig_signatory_role_can_submit_multisig_propose_envelope() {
+        use iroha_data_model::domain::DomainId;
+        use iroha_executor_data_model::isi::multisig::MultisigPropose;
+
+        let chain: ChainId = "multisig-propose-role-allowed".parse().unwrap();
+        let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
+        let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
+
+        let signer1 = KeyPair::random();
+        let signer2 = KeyPair::random();
+        let signer1_id = AccountId::new(signer1.public_key().clone());
+        let signer2_id = AccountId::new(signer2.public_key().clone());
+        let multisig_key = KeyPair::random();
+        let multisig_id = AccountId::new(multisig_key.public_key().clone());
+        let retail_key = KeyPair::random();
+        let retail_id = AccountId::new(retail_key.public_key().clone());
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
+            quorum: NonZeroU16::new(2).expect("nonzero quorum"),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
+                .expect("nonzero multisig ttl"),
+        };
+        let mut multisig_metadata = Metadata::default();
+        multisig_metadata.insert(
+            crate::smartcontracts::isi::multisig::spec_key(),
+            Json::new(spec),
+        );
+
+        let home = Domain::new(home_domain.clone()).build(&signer1_id);
+        let target = Domain::new(target_domain.clone()).build(&signer1_id);
+        let signer1_account = new_account_in_domain(&signer1_id, &home_domain).build(&signer1_id);
+        let signer2_account = new_account_in_domain(&signer2_id, &home_domain).build(&signer2_id);
+        let multisig_account = new_account_in_domain(&multisig_id, &home_domain)
+            .with_metadata(multisig_metadata)
+            .build(&multisig_id);
+        let mut world = World::with(
+            [home, target],
+            [signer1_account, signer2_account, multisig_account],
+            [],
+        );
+
+        let role_id: RoleId = "MULTISIG_SIGNATORY/banka/test-envelope"
+            .parse()
+            .expect("static multisig role must parse");
+        let role = Role {
+            id: role_id.clone(),
+            permissions: Permissions::new(),
+            permission_epochs: BTreeMap::new(),
+        };
+        world.roles.insert(role_id.clone(), role);
+        world.account_roles.insert(
+            crate::role::RoleIdWithOwner::new(signer1_id.clone(), role_id),
+            (),
+        );
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
+        let tx = TransactionBuilder::new(chain.clone(), signer1_id.clone())
+            .with_instructions([InstructionBox::from(MultisigPropose::new(
+                multisig_id,
+                vec![registration.into()],
+                None,
+            ))])
+            .sign(signer1.private_key());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("admission must accept the signature shape");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        assert!(
+            result.is_ok(),
+            "multisig propose envelope should bypass direct-sign rejection for signatory roles: {result:?}"
+        );
+    }
+
+    #[test]
+    fn lane_validator_gating_allows_multisig_propose_envelope_from_live_signer() {
+        use iroha_data_model::domain::DomainId;
+        use iroha_executor_data_model::isi::multisig::MultisigPropose;
+
+        let chain: ChainId = "multisig-propose-lane-validator-bypass".parse().unwrap();
+        let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
+        let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
+
+        let signer1 = KeyPair::random();
+        let signer2 = KeyPair::random();
+        let validator = KeyPair::random();
+        let signer1_id = AccountId::new(signer1.public_key().clone());
+        let signer2_id = AccountId::new(signer2.public_key().clone());
+        let validator_id = AccountId::new(validator.public_key().clone());
+        let multisig_key = KeyPair::random();
+        let multisig_id = AccountId::new(multisig_key.public_key().clone());
+        let retail_key = KeyPair::random();
+        let retail_id = AccountId::new(retail_key.public_key().clone());
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
+            quorum: NonZeroU16::new(2).expect("nonzero quorum"),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
+                .expect("nonzero multisig ttl"),
+        };
+        let mut multisig_metadata = Metadata::default();
+        multisig_metadata.insert(
+            crate::smartcontracts::isi::multisig::spec_key(),
+            Json::new(spec),
+        );
+
+        let home = Domain::new(home_domain.clone()).build(&signer1_id);
+        let target = Domain::new(target_domain.clone()).build(&signer1_id);
+        let signer1_account = new_account_in_domain(&signer1_id, &home_domain).build(&signer1_id);
+        let signer2_account = new_account_in_domain(&signer2_id, &home_domain).build(&signer2_id);
+        let validator_account =
+            new_account_in_domain(&validator_id, &home_domain).build(&validator_id);
+        let multisig_account = new_account_in_domain(&multisig_id, &home_domain)
+            .with_metadata(multisig_metadata)
+            .build(&multisig_id);
+        let mut world = World::with(
+            [home, target],
+            [
+                signer1_account,
+                signer2_account,
+                validator_account,
+                multisig_account,
+            ],
+            [],
+        );
+
+        let role_id: RoleId = "MULTISIG_SIGNATORY/banka/lane-bypass"
+            .parse()
+            .expect("static multisig role must parse");
+        let role = Role {
+            id: role_id.clone(),
+            permissions: Permissions::new(),
+            permission_epochs: BTreeMap::new(),
+        };
+        world.roles.insert(role_id.clone(), role);
+        world.account_roles.insert(
+            crate::role::RoleIdWithOwner::new(signer1_id.clone(), role_id),
+            (),
+        );
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            TestLaneId::SINGLE,
+            LaneManifestStatus {
+                lane: TestLaneId::SINGLE,
+                alias: "centralbank".to_string(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: Some("parliament".to_string()),
+                manifest_path: Some(std::path::PathBuf::from("/tmp/centralbank.manifest.json")),
+                governance_rules: Some(GovernanceRules {
+                    validators: vec![validator_id.clone()],
+                    ..GovernanceRules::default()
+                }),
+                privacy_commitments: Vec::new(),
+            },
+        );
+        let registry = std::sync::Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        state.install_lane_manifests(&registry);
+
+        let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
+        let tx = TransactionBuilder::new(chain.clone(), signer1_id.clone())
+            .with_instructions([InstructionBox::from(MultisigPropose::new(
+                multisig_id,
+                vec![registration.into()],
+                None,
+            ))])
+            .sign(signer1.private_key());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("admission must accept the signature shape");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        assert!(
+            result.is_ok(),
+            "lane validator gating should not reject multisig propose envelopes from live signers: {result:?}"
+        );
+    }
+
+    #[test]
+    fn lane_validator_gating_ignores_non_governance_transactions() {
+        let chain: ChainId = "lane-validator-gating-plain-transfer".parse().unwrap();
+        let (authority, authority_keypair) = gen_account_in("wonderland");
+        let (validator_a, _) = gen_account_in("wonderland");
+        let (validator_b, _) = gen_account_in("wonderland");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let authority_account = new_account_in_domain(&authority, &domain_id).build(&authority);
+        let validator_a_account =
+            new_account_in_domain(&validator_a, &domain_id).build(&validator_a);
+        let validator_b_account =
+            new_account_in_domain(&validator_b, &domain_id).build(&validator_b);
+        let world = World::with(
+            [domain],
+            [authority_account, validator_a_account, validator_b_account],
+            [],
+        );
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut statuses = BTreeMap::new();
+        statuses.insert(
+            TestLaneId::SINGLE,
+            LaneManifestStatus {
+                lane: TestLaneId::SINGLE,
+                alias: "paynet".to_string(),
+                dataspace: TestDataSpaceId::UNIVERSAL,
+                visibility: LaneVisibility::Public,
+                storage: LaneStorageProfile::FullReplica,
+                governance: Some("parliament".to_string()),
+                manifest_path: Some(std::path::PathBuf::from("/tmp/paynet.manifest.json")),
+                governance_rules: Some(GovernanceRules {
+                    validators: vec![validator_a.clone(), validator_b.clone()],
+                    quorum: Some(2),
+                    ..GovernanceRules::default()
+                }),
+                privacy_commitments: Vec::new(),
+            },
+        );
+        let registry = std::sync::Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        state.install_lane_manifests(&registry);
+
+        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "retail transfer".into())])
+            .sign(authority_keypair.private_key());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("admission should accept transaction shape");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        assert!(
+            result.is_ok(),
+            "lane validator gating should ignore plain transactions that do not touch governance surfaces: {result:?}"
+        );
+    }
+
+    #[test]
     fn missing_authority_rejected_for_non_multisig_transaction() {
         let chain: ChainId = "missing-authority-regular".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
@@ -4219,6 +5162,72 @@ pub mod tests {
             }
             other => panic!("expected AccountDoesNotExist rejection, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn missing_authority_self_register_allows_transaction() {
+        let chain: ChainId = "missing-authority-self-register".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let world = World::new();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([
+                InstructionBox::from(Register::account(Account::new(authority.clone()))),
+                InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
+            ])
+            .sign(keypair.private_key());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("admission should accept transaction shape");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        assert!(result.is_ok(), "self-register flow should pass: {result:?}");
+        assert!(
+            block.world.accounts.get(&authority).is_some(),
+            "authority account should be created by the first transaction"
+        );
+    }
+
+    #[test]
+    fn existing_authority_self_register_is_idempotent() {
+        let chain: ChainId = "existing-authority-self-register".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let existing = Account::new(authority.clone()).build(&authority);
+        let world = World::with([], [existing], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+
+        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([
+                InstructionBox::from(Register::account(Account::new(authority.clone()))),
+                InstructionBox::from(Log::new(Level::INFO, "self-register-again".into())),
+            ])
+            .sign(keypair.private_key());
+
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let accepted = AcceptedTransaction::accept(tx, &chain, Duration::ZERO, limits, &crypto_cfg)
+            .expect("admission should accept transaction shape");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut ivm_cache = IvmCache::new();
+        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+
+        assert!(
+            result.is_ok(),
+            "duplicate self-register should remain a no-op: {result:?}"
+        );
     }
 
     #[test]
@@ -4505,14 +5514,14 @@ pub mod tests {
             "repo-1".parse().expect("repo id");
         let cash_leg = iroha_data_model::repo::RepoCashLeg {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1u32.into(),
         };
         let collateral_leg = iroha_data_model::repo::RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
             1u32.into(),
@@ -4584,7 +5593,7 @@ pub mod tests {
             settlement_id.clone(),
             iroha_data_model::isi::settlement::SettlementLeg::new(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 ),
                 1u32.into(),
@@ -4593,7 +5602,7 @@ pub mod tests {
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
                 1u32.into(),
@@ -4609,7 +5618,7 @@ pub mod tests {
             settlement_id,
             iroha_data_model::isi::settlement::SettlementLeg::new(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "eur".parse().unwrap(),
                 ),
                 1u32.into(),
@@ -4618,7 +5627,7 @@ pub mod tests {
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
                 1u32.into(),
@@ -5735,9 +6744,14 @@ pub mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
-        // Program issues SCALL 0xAB (not mapped by the ABI policy) then HALT; admission should
-        // reject before the VM runs.
-        let prog = minimal_ivm_program_with_syscall(1, 0xAB);
+        let syscall = (0u8..=u8::MAX)
+            .find(|number| {
+                !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, u32::from(*number))
+            })
+            .expect("ABI v1 should leave at least one u8 syscall number unmapped");
+
+        // Program issues an unmapped SCALL then HALT; admission should reject before the VM runs.
+        let prog = minimal_ivm_program_with_syscall(1, syscall);
         let tx = TransactionBuilder::new(chain, authority_id.clone())
             .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
@@ -5748,8 +6762,9 @@ pub mod tests {
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
+                let expected = format!("unknown syscall number 0x{syscall:02x}");
                 assert!(
-                    msg.contains("unknown syscall number 0xab") && msg.contains("abi_version 1"),
+                    msg.contains(&expected) && msg.contains("abi_version 1"),
                     "expected UnknownSyscall rejection to surface via NotPermitted, got {msg}"
                 );
             }
@@ -5947,6 +6962,80 @@ pub mod tests {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
                     limit.reason.contains("gas_limit must be positive"),
+                    "unexpected reason: {}",
+                    limit.reason
+                );
+            }
+            other => panic!("Expected TransactionLimit failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ivm_proved_missing_gas_limit_rejected_at_admission() {
+        use std::time::Duration;
+
+        use iroha_data_model::transaction::{Executable, IvmProved, TransactionBuilder};
+
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
+        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: IvmBytecode::from_compiled(prog),
+                overlay: Vec::<InstructionBox>::new().into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            }))
+            .sign(kp.private_key());
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let limits = TransactionParameters::default();
+        let err =
+            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
+                .expect_err("missing gas_limit should be rejected");
+
+        match err {
+            AcceptTransactionFail::TransactionLimit(limit) => {
+                assert!(
+                    limit.reason.contains("missing gas_limit"),
+                    "unexpected reason: {}",
+                    limit.reason
+                );
+            }
+            other => panic!("Expected TransactionLimit failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn contract_call_missing_gas_limit_rejected_at_admission() {
+        use std::time::Duration;
+
+        use iroha_data_model::transaction::{
+            Executable, TransactionBuilder, executable::ContractInvocation,
+        };
+
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+            .with_executable(Executable::ContractCall(ContractInvocation {
+                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                    .parse()
+                    .expect("contract address"),
+                entrypoint: "call".to_owned(),
+                payload: None,
+            }))
+            .sign(kp.private_key());
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let limits = TransactionParameters::default();
+        let err =
+            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
+                .expect_err("missing gas_limit should be rejected");
+
+        match err {
+            AcceptTransactionFail::TransactionLimit(limit) => {
+                assert!(
+                    limit.reason.contains("missing gas_limit"),
                     "unexpected reason: {}",
                     limit.reason
                 );
@@ -7116,9 +8205,15 @@ pub mod tests {
             .protected_namespaces
             .insert(Name::from_str("apps").expect("namespace"));
 
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
         let instruction = iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
-            namespace: "apps".to_string(),
-            contract_id: "calc".to_string(),
+            contract_address,
             code_hash: Hash::prehashed([0_u8; 32]),
         };
         let tx = TransactionBuilder::new(chain, authority)
@@ -7132,8 +8227,8 @@ pub mod tests {
         match err {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
                 assert!(
-                    msg.contains("gov_namespace"),
-                    "expected gov_namespace rejection, got {msg}"
+                    msg.contains("gov_contract_address"),
+                    "expected gov_contract_address rejection, got {msg}"
                 );
             }
             other => panic!("expected NotPermitted rejection, got {other:?}"),
@@ -7195,7 +8290,7 @@ pub mod tests {
             id: LaneCompliancePolicyId::new(Hash::prehashed([0xAA; 32])),
             version: 1,
             lane_id: TestLaneId::SINGLE,
-            dataspace_id: TestDataSpaceId::GLOBAL,
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
             jurisdiction: JurisdictionSet::default(),
             deny: vec![LaneComplianceRule {
                 selector: ParticipantSelector {
@@ -7225,7 +8320,7 @@ pub mod tests {
         let stx = block.transaction();
         let assignment = super::LaneAssignment {
             lane_id: TestLaneId::SINGLE,
-            dataspace_id: TestDataSpaceId::GLOBAL,
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
             dataspace_catalog: &stx.nexus.dataspace_catalog,
         };
 
@@ -7257,7 +8352,7 @@ pub mod tests {
         let status = LaneManifestStatus {
             lane: TestLaneId::SINGLE,
             alias: "private".to_string(),
-            dataspace: TestDataSpaceId::GLOBAL,
+            dataspace: TestDataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::CommitmentOnly,
             governance: None,
@@ -7314,7 +8409,8 @@ pub mod tests {
     /// Asset definition name used by the sandbox.
     pub const ASSET_STR: &str = "rose";
     /// Pre-parsed domain identifier for the sandbox domain.
-    pub static DOMAIN: LazyLock<DomainId> = LazyLock::new(|| DOMAIN_STR.parse().unwrap());
+    pub static DOMAIN: LazyLock<DomainId> =
+        LazyLock::new(|| DomainId::try_new(DOMAIN_STR, "universal").unwrap());
     /// Pre-parsed asset definition identifier for the sandbox asset.
     pub static ASSET: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
         AssetDefinitionId::new(
@@ -7558,8 +8654,12 @@ pub mod tests {
             || format!("{}@{}", account.signatory(), DOMAIN_STR),
             |alias| format!("{alias}@{DOMAIN_STR}"),
         );
-        if asset_id.definition().domain() == &*DOMAIN {
-            format!("{}##{}", asset_id.definition().name(), account_str)
+        if asset_id.definition().try_domain() == Some(&*DOMAIN) {
+            let name = asset_id
+                .definition()
+                .try_name()
+                .expect("matching domain projection must include a name");
+            format!("{name}##{account_str}")
         } else {
             format!("{}#{}", asset_id.definition(), account_str)
         }
@@ -7693,10 +8793,7 @@ pub mod tests {
                     .clone()
                     .into_iter()
                     .chain([("genesis", GENESIS_ACCOUNT.clone())])
-                    .map(|(_name, cred)| {
-                        Account::new(cred.id.clone().to_account_id(DOMAIN.clone()))
-                            .build(&GENESIS_ACCOUNT.id)
-                    });
+                    .map(|(_name, cred)| Account::new(cred.id.clone()).build(&GENESIS_ACCOUNT.id));
                 let assets = INIT_BALANCE
                     .iter()
                     .map(|(name, num)| Asset::new(asset(name), *num));

@@ -29,8 +29,8 @@ translation_last_reviewed: 2026-02-07
 ID は。バンドルを使用して、デモ版をバンドルします:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Подтвердите значения, выведя первые аккаунты:
@@ -49,7 +49,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts внутри wonderland (увеличьте --limit при необходимости)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions, которые уже существуют
@@ -65,7 +65,7 @@ SDK を使用してください。
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI は отправленной транзакции (например、`0x5f…`) を実行します。 Сохраните его, чтобы
@@ -74,7 +74,7 @@ CLI は отправленной транзакции (например、`0x5f�
 ## 3. Замитьте единицы на операторский аккаунт
 
 Количество актива живет под парой `(asset definition, account)`. Замитьте 250
-`coffee#wonderland` または `$ADMIN_ACCOUNT`:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` または `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

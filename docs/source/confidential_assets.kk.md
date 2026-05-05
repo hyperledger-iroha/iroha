@@ -89,7 +89,7 @@ Swift SDK енді арнайы JSON желімінсіз қалқан нұсқ�
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ Swift SDK енді арнайы JSON желімінсіз қалқан нұсқ�
 - Әр шот бойынша кілттерді шығару иерархиясы:
   - `sk_spend` → `nk` (нөлдік кілт), `ivk` (кіріс қарау кілті), `ovk` (шығыс қарау кілті), `fvk`.
 - Шифрланған жазбаның пайдалы жүктемелері ECDH-дан алынған ортақ кілттермен AEAD пайдаланады; қосымша аудиторлық көрініс кілттері әр актив саясатының шығыстарына тіркелуі мүмкін.
-- CLI толықтырулары: `confidential create-keys`, `confidential send`, `confidential export-view-key`, жазбалардың шифрын шешуге арналған аудитор құралы және Grafana желіден тыс конверттерін шығару/тексеру үшін `iroha app zk envelope` көмекшісі. Torii `POST /v1/confidential/derive-keyset` арқылы бірдей туынды ағынын көрсетеді, он алтылық және базалық64 пішіндерді қайтарады, осылайша әмияндар негізгі иерархияларды бағдарламалық жолмен ала алады.
+- CLI толықтырулары: `confidential create-keys`, `confidential send`, `confidential export-view-key`, жазбалардың шифрын шешуге арналған аудитор құралы және Grafana желіден тыс конверттерін шығару/тексеру үшін `iroha app zk envelope` көмекшісі.
 
 ## Газ, шектеулер және DoS басқару элементтері
 - Газдың анықтау кестесі:
@@ -391,7 +391,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -423,8 +423,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -455,7 +455,7 @@ Grafana сымын қоспас бұрын метрикаларды жергіл
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Жаңа міндеттемелермен тереңдік өсетінін растау үшін оны `rg 'iroha_confidential_tree_depth'` құрылғысымен жұптаңыз, ал көшіру есептегіштері жазбаларды кесу журналы тарылғанда ғана артады. Бұл мәндер сіз басқару дәлелдері бумаларына тіркейтін Grafana бақылау тақтасының экспортына сәйкес келуі керек.

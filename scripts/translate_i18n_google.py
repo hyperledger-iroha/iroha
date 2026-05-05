@@ -94,9 +94,11 @@ class Candidate:
     source: Path
     source_last_modified: str
     source_body: str
+    source_frontmatter: str | None
     preamble: str
     frontmatter: str
     source_hash: str
+    translation_cache_hash: str
     kind: str  # "md" | "org"
 
 
@@ -188,6 +190,89 @@ def update_frontmatter(frontmatter: str, updates: dict[str, str]) -> str:
             lines.append(f"{key}: {value}")
 
     return "\n".join(lines).rstrip("\n")
+
+
+def frontmatter_lines(frontmatter: str | None) -> list[str]:
+    if not frontmatter:
+        return []
+    return [line for line in frontmatter.splitlines() if line.strip()]
+
+
+def render_frontmatter(frontmatter: str | None) -> str:
+    lines = frontmatter_lines(frontmatter)
+    if not lines:
+        return ""
+    return f"---\n{chr(10).join(lines)}\n---"
+
+
+def merge_frontmatter_blocks(primary_frontmatter: str, extra_frontmatter: str | None) -> str:
+    primary_lines = frontmatter_lines(primary_frontmatter)
+    extra_lines = frontmatter_lines(extra_frontmatter)
+    lines = primary_lines + extra_lines
+    return f"---\n{chr(10).join(lines)}\n---"
+
+
+def should_translate_frontmatter_key(key: str) -> bool:
+    return key in {"title", "description", "sidebar_label"}
+
+
+def translate_frontmatter_value(
+    value: str,
+    source_lang: str,
+    target_lang: str,
+    max_chars: int,
+    cache: dict[str, str],
+) -> str:
+    normalized = normalize_frontmatter_value(value)
+    if not normalized or source_lang == target_lang:
+        return normalized
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    cache_key = f"fm::{source_lang}::{digest}::{target_lang}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    translated = translate_markdown(normalized, source_lang, target_lang, max_chars)
+    ok, reason = validate_translation(normalized, translated)
+    if not ok:
+        raise ValueError(f"frontmatter validation failed: {reason}")
+    cache[cache_key] = translated
+    return translated
+
+
+def translate_source_frontmatter(
+    frontmatter: str | None,
+    source_lang: str,
+    target_lang: str,
+    max_chars: int,
+    cache: dict[str, str],
+) -> str | None:
+    if not frontmatter:
+        return frontmatter
+    out_lines: list[str] = []
+    for line in frontmatter.splitlines():
+        if ":" not in line or line.startswith((" ", "\t")):
+            out_lines.append(line)
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if should_translate_frontmatter_key(key):
+            translated = translate_frontmatter_value(
+                value.strip(), source_lang, target_lang, max_chars, cache
+            )
+            out_lines.append(f"{key}: {translated}")
+        else:
+            out_lines.append(line)
+    return "\n".join(out_lines).rstrip("\n")
+
+
+def is_portal_docs_sibling_translation(path: Path) -> bool:
+    rel = path.relative_to(ROOT).as_posix()
+    return rel.startswith("docs/portal/docs/")
+
+
+def is_portal_i18n_translation(path: Path) -> bool:
+    rel = path.relative_to(ROOT).as_posix()
+    return rel.startswith("docs/portal/i18n/")
 
 
 def mask_markdown(text: str) -> tuple[str, dict[str, str]]:
@@ -676,7 +761,10 @@ def translate_task(task: TranslationTask, max_chars: int) -> tuple[str, str | No
 
 
 def discover_candidates(
-    only_changed: bool, refresh_mode: str, path_globs: list[str] | None
+    only_changed: bool,
+    refresh_mode: str,
+    path_globs: list[str] | None,
+    status_filter: str,
 ) -> list[Candidate]:
     candidates: list[Candidate] = []
     all_paths: list[Path] = []
@@ -732,7 +820,10 @@ def discover_candidates(
             meta = parse_frontmatter_map(fm)
             lang = meta.get("lang")
             source_rel = meta.get("source")
+            status = normalize_frontmatter_value(meta.get("status", ""))
             if not lang or not source_rel or lang == "en":
+                continue
+            if status_filter != "any" and status != status_filter:
                 continue
             source = (ROOT / source_rel).resolve()
             if not source.exists():
@@ -742,7 +833,8 @@ def discover_candidates(
             if source_fm is not None:
                 source_meta = parse_frontmatter_map(source_fm)
                 source_lang = source_meta.get("lang", "en")
-            source_hash = hashlib.sha256(source_body.encode("utf-8")).hexdigest()
+            source_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+            translation_cache_hash = source_hash
             source_last_modified = source_last_modified_iso(source)
             source_identical = body.lstrip("\n") == source_body.lstrip("\n")
             stale = (
@@ -764,12 +856,16 @@ def discover_candidates(
                 continue
             lang = m_lang.group(1).strip()
             source_rel = m_source.group(1).strip()
+            status = normalize_frontmatter_value(m_status.group(1))
+            if status_filter != "any" and status != status_filter:
+                continue
             source = (ROOT / source_rel).resolve()
             if not source.exists():
                 continue
             source_text = source.read_text(encoding="utf-8", errors="ignore")
             source_body = source_text
             source_hash = hashlib.sha256(source_body.encode("utf-8")).hexdigest()
+            translation_cache_hash = source_hash
             source_last_modified = source_last_modified_iso(source)
             m_source_lang = re.search(r"^#\+LANGUAGE:\s*(.*)$", source_text, flags=re.MULTILINE)
             if m_source_lang:
@@ -805,7 +901,6 @@ def discover_candidates(
         assert source_body is not None
         if not source_last_modified:
             source_last_modified = source_last_modified_iso(source)
-        source_hash = hashlib.sha256(source_body.encode("utf-8")).hexdigest()
         candidates.append(
             Candidate(
                 path=path.resolve(),
@@ -814,9 +909,11 @@ def discover_candidates(
                 source=source,
                 source_last_modified=source_last_modified,
                 source_body=source_body,
+                source_frontmatter=source_fm if kind == "md" else None,
                 preamble=preamble,
                 frontmatter=frontmatter,
                 source_hash=source_hash,
+                translation_cache_hash=translation_cache_hash,
                 kind=kind,
             )
         )
@@ -902,6 +999,12 @@ def main() -> int:
             "'docs/source/data_model.*.md'."
         ),
     )
+    parser.add_argument(
+        "--status-filter",
+        choices=("any", "needs-translation", "complete"),
+        default="any",
+        help="Restrict markdown/org candidates by translation status metadata.",
+    )
     args = parser.parse_args()
 
     cache_path = Path(args.cache).resolve()
@@ -910,6 +1013,7 @@ def main() -> int:
         only_changed=args.only_changed,
         refresh_mode=args.refresh_mode,
         path_globs=args.path_glob or None,
+        status_filter=args.status_filter,
     )
     if args.from_index > 0:
         candidates = candidates[args.from_index :]
@@ -926,7 +1030,9 @@ def main() -> int:
     for idx, candidate in enumerate(candidates, start=1):
         source_lang = LANG_CODE_MAP.get(candidate.source_lang, candidate.source_lang)
         target_lang = LANG_CODE_MAP.get(candidate.lang, candidate.lang)
-        cache_key = f"{candidate.kind}::{source_lang}::{candidate.source_hash}::{target_lang}"
+        cache_key = (
+            f"{candidate.kind}::{source_lang}::{candidate.translation_cache_hash}::{target_lang}"
+        )
         legacy_key = f"{candidate.kind}::{candidate.source_hash}::{target_lang}"
         if source_lang == "en" and cache_key not in cache and legacy_key in cache:
             cache[cache_key] = cache[legacy_key]
@@ -992,7 +1098,9 @@ def main() -> int:
         source_lang = LANG_CODE_MAP.get(candidate.source_lang, candidate.source_lang)
         target_lang = LANG_CODE_MAP.get(candidate.lang, candidate.lang)
         rel_path = candidate.path.relative_to(ROOT)
-        cache_key = f"{candidate.kind}::{source_lang}::{candidate.source_hash}::{target_lang}"
+        cache_key = (
+            f"{candidate.kind}::{source_lang}::{candidate.translation_cache_hash}::{target_lang}"
+        )
         legacy_key = f"{candidate.kind}::{candidate.source_hash}::{target_lang}"
         if cache_key in failed_keys:
             failed += 1
@@ -1010,6 +1118,13 @@ def main() -> int:
             continue
 
         if candidate.kind == "md":
+            translated_source_frontmatter = translate_source_frontmatter(
+                candidate.source_frontmatter,
+                source_lang,
+                target_lang,
+                args.max_chars,
+                cache,
+            )
             new_frontmatter = update_frontmatter(
                 candidate.frontmatter,
                 {
@@ -1020,10 +1135,24 @@ def main() -> int:
                     "translation_last_reviewed": str(date.today()),
                 },
             )
-            new_text = (
-                f"{candidate.preamble}---\n{new_frontmatter}\n---\n\n"
-                f"{translated_body.lstrip(chr(10))}"
-            )
+            translated_body_text = translated_body.lstrip(chr(10))
+            if is_portal_i18n_translation(candidate.path):
+                merged_frontmatter = merge_frontmatter_blocks(
+                    new_frontmatter,
+                    translated_source_frontmatter,
+                )
+                new_text = f"{candidate.preamble}{merged_frontmatter}\n\n{translated_body_text}"
+            elif is_portal_docs_sibling_translation(candidate.path) and translated_source_frontmatter:
+                new_text = (
+                    f"{candidate.preamble}---\n{new_frontmatter}\n---\n\n"
+                    f"{render_frontmatter(translated_source_frontmatter)}\n\n"
+                    f"{translated_body_text}"
+                )
+            else:
+                new_text = (
+                    f"{candidate.preamble}---\n{new_frontmatter}\n---\n\n"
+                    f"{translated_body_text}"
+                )
         else:
             lines = candidate.frontmatter.splitlines()
             out_lines: list[str] = []

@@ -47,7 +47,7 @@ Torii немесе CLI. Көмекші алдыңғы қатардағы әрб�
 | `suffix_id` | Иә | Сандық жұрнақ идентификаторы (ондық немесе `0x` он алтылық). |
 | `owner` | Иә | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Иә | `1..=255` бүтін сан. |
-| `payment_asset_id` | Иә | Есеп айырысу активі (мысалы, `xor#sora`). |
+| `payment_asset_id` | Иә | Есеп айырысу активі (мысалы, `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Иә | Активтің төл бірліктерін көрсететін таңбасыз бүтін сандар. |
 | `settlement_tx` | Иә | JSON мәні немесе төлем транзакциясын немесе хэшті сипаттайтын әріптік жол. |
 | `payment_payer` | Иә | Төлемге рұқсат берген AccountId. |
@@ -86,18 +86,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -143,10 +143,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Көмекші сұрауға бір `POST /v1/sns/registrations` шығарады және оны тоқтатады
+- Көмекші сұрауға бір `POST /v1/sns/names` шығарады және оны тоқтатады
   бірінші HTTP қатесі. Жауаптар журнал жолына NDJSON ретінде қосылады
   жазбалар.
-- `--poll-status` әр сұраудан кейін `/v1/sns/registrations/{selector}` қайта сұрайды
+- `--poll-status` әр сұраудан кейін `/v1/sns/names/{namespace}/{literal}` қайта сұрайды
   жазба екенін растау үшін жіберу (`--poll-attempts` дейін, әдепкі 5)
   көрінетін. `--suffix-map` (`suffix_id` және `"suffix"` мәндерінің JSON) қамтамасыз етіңіз, осылайша
   құрал сұрауға арналған `{label}.{suffix}` литералдарын шығара алады.
@@ -233,7 +233,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -256,7 +256,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   сілтемелер CSV орнына қатысты шешіледі. Объекті емес метадеректер
   тексеру қатесін тудырады.
 - **Контроллерлер:** бос ұяшықтар `--default-controllers` құрметіне ие. Нақты көрсетіңіз
-  контроллер тізімдері (мысалы, `i105...;i105...`) иеленбейтіндерге өкілеттік беру кезінде
+  контроллер тізімдері (мысалы, `<i105-account-id>;<i105-account-id>`) иеленбейтіндерге өкілеттік беру кезінде
   актерлер.
 
 Қателіктер мәтінмәндік жол нөмірлерімен хабарланады (мысалы

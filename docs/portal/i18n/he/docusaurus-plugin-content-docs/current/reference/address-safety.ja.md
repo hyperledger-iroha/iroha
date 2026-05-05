@@ -1,57 +1,73 @@
 ---
-lang: ja
-direction: ltr
-source: docs/portal/i18n/he/docusaurus-plugin-content-docs/current/reference/address-safety.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 6803259683af9bce36faf01d93b8d881d501173031a90fdbed471ae1ba669e64
-source_last_modified: "2026-01-28T17:58:57+00:00"
-translation_last_reviewed: 2026-01-30
+title: Address Safety & Accessibility
+description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
 ---
 
----
-lang: he
-direction: rtl
-source: docs/portal/docs/reference/address-safety.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
----
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
----
-title: בטיחות ונגישות כתובות
-description: דרישות UX להצגה ושיתוף בטוח של כתובות Iroha (ADDR-6c).
----
+## Safe sharing flows
 
-דף זה מסכם את מסמך ADDR-6c. החילו את המגבלות האלה על ארנקים, explorers, כלי SDK וכל משטח בפורטל שמציג או מקבל כתובות מוכוונות אדם. מודל הנתונים הקנוני נמצא ב-`docs/account_structure.md`; הצ'ק-ליסט למטה מסביר איך לחשוף את הפורמטים הללו בלי לפגוע בבטיחות או בנגישות.
+- Default every copy/share action to the canonical I105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-## זרימות שיתוף בטוחות
+## IME & input safeguards
 
-- ברירת המחדל לכל פעולת העתקה/שיתוף היא כתובת I105. הציגו את הדומיין המפורש כהקשר תומך כך שמחרוזת ה-checksum תישאר במרכז.
-- הציעו פעולה “Share” שמאגדת את הכתובת בטקסט מלא ואת ה-QR שמופק מאותו payload. אפשרו למשתמשים לבדוק את שניהם לפני אישור.
-- כאשר המקום דורש קיצור (כרטיסים קטנים, התראות), שמרו על הקידומת הקריאה, הציגו אליפסות, והשאירו את 4–6 התווים האחרונים כדי לשמור על עוגן ה-checksum. ספקו הקשה/קיצור מקלדת להעתקת המחרוזת המלאה ללא קיצור.
-- מנעו חוסר סנכרון של ה-clipboard באמצעות toast אישור שמציג את מחרוזת ה-I105 המדויקת שנעתקה. כאשר קיימת telemetry, ספרו ניסיונות העתקה מול פעולות שיתוף כדי לזהות רגרסיות UX במהירות.
+- Validate account-id fields as canonical I105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-## IME והגנות קלט
+## Assistive technology expectations
 
-- דחו קלט שאינו ASCII בשדות כתובת. כאשר מופיעים artefacts של IME (full width, Kana, סימני טון), הציגו אזהרה inline שמסבירה כיצד לעבור לקלט לטיני לפני ניסיון מחדש.
-- ספקו אזור הדבקה בטקסט פשוט שמסיר סימנים משלבים ומחליף רווחים לרווחי ASCII לפני אימות. כך המשתמשים לא מאבדים התקדמות כאשר הם מכבים IME באמצע התהליך.
-- הקשיחו את האימות מול zero-width joiners, variation selectors ונקודות קוד Unicode חמקניות אחרות. רשמו את קטגוריית נקודת הקוד שנדחתה כדי שחבילות fuzzing יוכלו לייבא את ה-telemetry.
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## ציפיות לטכנולוגיות מסייעות
+## Single-format policy
 
-- ציינו כל בלוק כתובת עם `aria-label` או `aria-describedby` שמאיית את הקידומת הקריאה ומחלק את ה-payload לקבוצות של 4–8 תווים (“ih dash b three two …”). כך קוראי מסך לא יפיקו רצף בלתי מובן של תווים.
-- הכריזו על אירועי העתקה/שיתוף מוצלחים באמצעות עדכון live region מנומס. כללו את היעד (clipboard, share sheet, QR) כדי שהמשתמש ידע שהפעולה הושלמה בלי להזיז פוקוס.
-- ספקו טקסט `alt` תיאורי עבור תצוגות QR (למשל “I105 address for `<account>` on chain `0x1234`”). הציעו fallback “Copy address as text” ליד קנבס ה-QR עבור משתמשים עם לקות ראייה.
+- Keep canonical I105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
-## כתובות דחוסות Sora-only
+## Quality gates
 
-- Gating: הסתירו את המחרוזת הדחוסה `i105` מאחורי אישור מפורש. האישור חייב להדגיש שהפורמט עובד רק ברשתות Sora Nexus.
-- Labelling: כל הופעה חייבת לכלול תגית “Sora-only” גלויה ו-tooltip שמסביר מדוע רשתות אחרות דורשות את פורמט I105.
-- Guardrails: אם המבחין של השרשרת הפעילה אינו הקצאת Nexus, סרבו לייצר את הכתובת הדחוסה והפנו חזרה ל-I105.
-- Telemetry: רשמו באיזו תדירות הפורמט הדחוס מתבקש ומועתק כדי שה-playbook של תקריות יזהה קפיצות שיתוף בטעות.
-
-## שערי איכות
-
-- הרחיבו בדיקות UI אוטומטיות (או storybook a11y suites) כדי לוודא שרכיבי הכתובת חושפים את מטא-דאטה ARIA הנדרש ושמסרי דחיית IME מופיעים.
-- כללו תרחישי QA ידניים עבור קלט IME (kana, pinyin), מעבר קורא מסך (VoiceOver/NVDA) והעתקת QR בערכות נושא בקונטרסט גבוה לפני release.
-- הביאו את הבדיקות הללו לצ'ק-ליסטים של release לצד בדיקות תאימות I105 כדי שרגרסיות יישארו חסומות עד לתיקון.
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

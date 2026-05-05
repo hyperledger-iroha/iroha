@@ -46,7 +46,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
         vec![
             LaneConfigMetadata {
                 id: LaneId::new(0),
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "core".to_owned(),
                 description: Some("Primary execution lane".to_owned()),
                 visibility: LaneVisibility::Public,
@@ -89,7 +89,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
 
     let dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata {
-            id: DataSpaceId::GLOBAL,
+            id: DataSpaceId::UNIVERSAL,
             alias: "universal".to_owned(),
             description: Some("Single-lane data space".to_owned()),
             fault_tolerance: 1,
@@ -111,7 +111,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
 
     let policy = LaneRoutingPolicy {
         default_lane: LaneId::new(0),
-        default_dataspace: DataSpaceId::GLOBAL,
+        default_dataspace: DataSpaceId::UNIVERSAL,
         rules: vec![
             LaneRoutingRule {
                 lane: LaneId::new(1),
@@ -183,6 +183,8 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
         roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+        eviction_required_replicas:
+            iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
     };
 
     let (kura, block_count) = Kura::new(&kura_cfg, &lane_config)?;
@@ -224,7 +226,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         &authority,
         &keypair,
         vec![InstructionBox::from(Register::domain(Domain::new(
-            "gov".parse()?,
+            DomainId::try_new("gov", "universal")?,
         )))],
     );
     let zk_tx = build_tx(
@@ -234,7 +236,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         vec![InstructionBox::from(Mint::asset_numeric(
             1_u32,
             AssetId::new(
-                AssetDefinitionId::new("nexus".parse()?, "xor".parse()?),
+                AssetDefinitionId::new(DomainId::try_new("nexus", "universal")?, "xor".parse()?),
                 authority.clone(),
             ),
         ))],
@@ -244,7 +246,10 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         &authority,
         &keypair,
         vec![InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(AssetDefinitionId::new("nexus".parse()?, "xor".parse()?)),
+            AssetDefinition::numeric(AssetDefinitionId::new(
+                DomainId::try_new("nexus", "universal")?,
+                "xor".parse()?,
+            )),
         ))],
     );
 
@@ -258,7 +263,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
 
     let decision = router.route(&default_tx);
     assert_eq!(decision.lane_id, LaneId::new(0));
-    assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
+    assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
 
     drop(kura);
     Ok(())

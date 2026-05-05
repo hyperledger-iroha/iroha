@@ -17,7 +17,7 @@ use axum::{
     Json,
     body::{Body, Bytes},
     extract::{ConnectInfo, Path, Query, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
 use base64::{
@@ -29,17 +29,20 @@ use futures::StreamExt;
 use hex::{ToHex, encode};
 use http::header::{AGE, CACHE_CONTROL, HeaderName, RETRY_AFTER, WARNING};
 use hyper::body::Body as HyperBody;
-use iroha_core::state::StateReadOnly;
+use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     ChainId,
     block::BlockHeader,
     da::{ingest::DaStripeLayout, manifest::ChunkRole},
+    soracloud::SoraRouteVisibilityV1,
 };
 use iroha_logger::{debug, error, warn};
+use mv::storage::StorageReadOnly;
+use norito::derive::JsonDeserialize;
 use norito::json::{self, Map, Number, Value};
 use sorafs_car::{
-    CarBuildPlan, CarChunk, CarWriter, FilePlan,
+    CarBuildPlan, CarChunk, CarWriter, FileEntry, FilePlan,
     fetch_plan::chunk_fetch_specs_to_json,
     por_json::sample_to_map,
     verifier::{CarVerifier, CarVerifyError},
@@ -83,8 +86,9 @@ use crate::{
         },
         encode_token_base64,
         gateway::{
-            ClientFingerprint, DenylistKind, PerceptualMatchBasis, PerceptualObservation,
-            PolicyViolation, RateLimitError, RequestContext, SORA_TLS_STATE_HEADER,
+            ClientFingerprint, DenylistHit, DenylistKind, DenylistPolicyTier, PerceptualMatchBasis,
+            PerceptualObservation, PolicyViolation, RateLimitError, RequestContext,
+            SORA_TLS_STATE_HEADER,
         },
         pin::PinAuthError,
         registry::{
@@ -92,6 +96,10 @@ use crate::{
             PinRegistrySnapshot, RegistryAlias, RegistryError, RegistryManifest,
             RegistryReplicationOrder, collect_pin_registry, collect_snapshot, lineage_to_json,
             record_pin_registry_metrics,
+        },
+        site::{
+            content_type_for_path, decode_content_cid, encode_content_cid, find_site_binding,
+            load_site_bindings_from_env, normalize_host_header, path_components_for_request,
         },
     },
     utils::extractors::{ExtractAccept, JsonOnly, NoritoJson},
@@ -127,6 +135,8 @@ const HEADER_SORA_POTR_RECEIPT: &str = "sora-potr-receipt";
 const HEADER_SORA_POTR_STATUS: &str = "sora-potr-status";
 const HEADER_SORA_PERCEPTUAL_HASH: &str = "x-sorafs-perceptual-hash";
 const HEADER_SORA_PERCEPTUAL_EMBEDDING: &str = "x-sorafs-perceptual-embedding";
+const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
+const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
 const MIME_CAR: &str = "application/vnd.ipld.car";
 const MIME_OCTET_STREAM: &str = "application/octet-stream";
 const TELEMETRY_ENDPOINT_CAR_RANGE: &str = "/v1/sorafs/storage/car/range";
@@ -1380,10 +1390,29 @@ pub struct StoragePinRequestDto {
     pub manifest_b64: String,
     /// Base64-encoded payload matching the manifest contents.
     pub payload_b64: String,
+    /// Optional file descriptors for directory-style payloads.
+    pub files: Option<Vec<StorageFileEntryDto>>,
     /// Optional erasure-layout metadata to persist alongside the manifest.
     pub stripe_layout: Option<DaStripeLayout>,
     /// Optional per-chunk role annotations (data/parity + group id).
     pub chunk_roles: Option<Vec<ChunkRoleDto>>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    PartialEq,
+    Eq,
+)]
+/// File entry describing how a logical dataset file maps into the concatenated payload.
+pub struct StorageFileEntryDto {
+    /// Relative path components from the dataset root.
+    pub path: Vec<String>,
+    /// File size in bytes.
+    pub size: u64,
 }
 
 #[cfg(feature = "app_api")]
@@ -1596,6 +1625,24 @@ pub struct StorageManifestResponseDto {
     pub chunk_profile_handle: String,
     /// Timestamp (seconds since UNIX epoch) when the manifest was stored.
     pub stored_at_unix_secs: u64,
+    /// Stored file layout descriptors for directory payloads.
+    pub files: Vec<StorageStoredFileDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// File layout descriptor returned for stored manifests.
+pub struct StorageStoredFileDto {
+    /// Relative path components from the dataset root.
+    pub path: Vec<String>,
+    /// Byte offset within the concatenated payload.
+    pub offset: u64,
+    /// File size in bytes.
+    pub size: u64,
+    /// First chunk index covering the file.
+    pub first_chunk: u64,
+    /// Number of chunks covering the file.
+    pub chunk_count: u64,
 }
 
 const DEFAULT_LIST_LIMIT: usize = 50;
@@ -2109,6 +2156,17 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
         chunk_count: stored.chunk_count() as u64,
         chunk_profile_handle: stored.chunk_profile_handle().to_owned(),
         stored_at_unix_secs: stored.stored_at_unix_secs(),
+        files: stored
+            .files()
+            .iter()
+            .map(|file| StorageStoredFileDto {
+                path: file.path.clone(),
+                offset: file.offset,
+                size: file.size,
+                first_chunk: file.first_chunk as u64,
+                chunk_count: file.chunk_count as u64,
+            })
+            .collect(),
     };
 
     let value = match norito::json::to_value(&response) {
@@ -2196,6 +2254,27 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
     plan_map.insert(
         "chunk_profile_handle".into(),
         Value::String(stored.chunk_profile_handle().to_owned()),
+    );
+    plan_map.insert(
+        "files".into(),
+        Value::Array(
+            stored
+                .files()
+                .iter()
+                .map(|file| {
+                    let mut obj = Map::new();
+                    obj.insert(
+                        "path".into(),
+                        Value::Array(file.path.iter().cloned().map(Value::String).collect()),
+                    );
+                    obj.insert("offset".into(), Value::from(file.offset));
+                    obj.insert("size".into(), Value::from(file.size));
+                    obj.insert("first_chunk".into(), Value::from(file.first_chunk as u64));
+                    obj.insert("chunk_count".into(), Value::from(file.chunk_count as u64));
+                    Value::Object(obj)
+                })
+                .collect(),
+        ),
     );
     plan_map.insert("chunk_digests_blake3".into(), Value::Array(chunk_digests));
     plan_map.insert("chunks".into(), chunks_value);
@@ -2697,6 +2776,1427 @@ pub(crate) async fn handle_get_sorafs_replication_orders(
     crate::utils::respond_value_with_format(response, format)
 }
 
+fn build_plan_for_storage_pin_request(
+    payload: &[u8],
+    profile: ChunkProfile,
+    files: Option<&[StorageFileEntryDto]>,
+) -> Result<CarBuildPlan, String> {
+    let Some(files) = files else {
+        return CarBuildPlan::single_file_with_profile(payload, profile)
+            .map_err(|err| format!("failed to derive chunk plan: {err}"));
+    };
+
+    if files.is_empty() {
+        return Err("files must not be empty when provided".to_string());
+    }
+
+    let mut cursor = 0usize;
+    let mut entries = Vec::with_capacity(files.len());
+    for file in files {
+        let size = usize::try_from(file.size)
+            .map_err(|_| format!("file `{}` exceeds host limits", file.path.join("/")))?;
+        let end = cursor
+            .checked_add(size)
+            .ok_or_else(|| format!("file `{}` overflows payload bounds", file.path.join("/")))?;
+        if end > payload.len() {
+            return Err(format!(
+                "file `{}` exceeds payload length",
+                file.path.join("/")
+            ));
+        }
+        entries.push(FileEntry {
+            path: file.path.clone(),
+            data: payload[cursor..end].to_vec(),
+        });
+        cursor = end;
+    }
+
+    if cursor != payload.len() {
+        return Err(format!(
+            "file sizes total {} but payload length is {}",
+            cursor,
+            payload.len()
+        ));
+    }
+
+    let (plan, rebuilt_payload) = CarBuildPlan::from_files_with_profile(entries, profile)
+        .map_err(|err| format!("failed to derive chunk plan: {err}"))?;
+    debug_assert_eq!(rebuilt_payload, payload);
+    Ok(plan)
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedSiteHost {
+    hostname: String,
+    index_document: String,
+    spa_fallback: bool,
+    stored: StoredManifest,
+}
+
+fn normalized_site_request_host(headers: &HeaderMap) -> Result<String, Response> {
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Err(json_error(StatusCode::BAD_REQUEST, "missing Host header"));
+    };
+
+    normalize_host_header(host)
+        .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid Host header"))
+}
+
+fn extract_cid_from_untrusted_host(
+    host: &str,
+    config: &iroha_config::parameters::actual::SorafsGatewayUntrustedHosting,
+) -> Result<Option<String>, Response> {
+    if !config.enabled {
+        return Ok(None);
+    }
+
+    for suffix in [
+        config.cid_host_suffixes.live.as_str(),
+        config.cid_host_suffixes.taira.as_str(),
+    ] {
+        if suffix.is_empty() {
+            continue;
+        }
+
+        let marker = format!(".{suffix}");
+        let Some(cid_label) = host.strip_suffix(&marker) else {
+            continue;
+        };
+        if cid_label.is_empty() || cid_label.contains('.') {
+            continue;
+        }
+
+        if decode_content_cid(cid_label).is_none() {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "invalid content CID host",
+            ));
+        }
+
+        return Ok(Some(cid_label.to_owned()));
+    }
+
+    Ok(None)
+}
+
+#[derive(Clone, Debug, JsonDeserialize)]
+struct AuthoritativeAppStaticSiteBindingV1 {
+    schema_version: u16,
+    hostname: String,
+    mount_path: String,
+    index_document: String,
+    spa_fallback: bool,
+    manifest_digest_hex: String,
+}
+
+fn resolve_site_host_from_authoritative_app(
+    state: &SharedAppState,
+    host: &str,
+) -> Result<Option<ResolvedSiteHost>, Response> {
+    let state_view = state.state.view();
+    let world = state_view.world();
+    let mut best_candidate = None;
+
+    for (service_id, deployment) in world.soracloud_service_deployments().iter() {
+        let service_name = service_id.to_string();
+        let Some(bundle) = world.soracloud_service_revisions().get(&(
+            service_name.clone(),
+            deployment.current_service_version.clone(),
+        )) else {
+            continue;
+        };
+        let Some(route) = bundle.service.route.as_ref() else {
+            continue;
+        };
+        if route.visibility != SoraRouteVisibilityV1::Public {
+            continue;
+        }
+        if !route.host.eq_ignore_ascii_case(host) {
+            continue;
+        }
+        let Some(config_entry) = deployment.service_configs.get(APP_STATIC_SITE_CONFIG_NAME) else {
+            continue;
+        };
+        let replace = best_candidate.as_ref().is_none_or(
+            |(best_sequence, best_service_name, _best_config): &(
+                u64,
+                String,
+                iroha_data_model::soracloud::SoraServiceConfigEntryV1,
+            )| {
+                config_entry.last_update_sequence > *best_sequence
+                    || (config_entry.last_update_sequence == *best_sequence
+                        && service_name < *best_service_name)
+            },
+        );
+        if replace {
+            best_candidate = Some((
+                config_entry.last_update_sequence,
+                service_name,
+                config_entry.clone(),
+            ));
+        }
+    }
+
+    let Some((_sequence, service_name, config_entry)) = best_candidate else {
+        return Ok(None);
+    };
+    let binding = config_entry
+        .value_json
+        .try_into_any_norito::<AuthoritativeAppStaticSiteBindingV1>()
+        .map_err(|err| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "authoritative static site binding for service `{service_name}` could not be decoded: {err}"
+                ),
+            )
+        })?;
+    if binding.schema_version != APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1 {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "authoritative static site binding for service `{service_name}` has unsupported schema_version `{}`",
+                binding.schema_version
+            ),
+        ));
+    }
+    if !binding.hostname.eq_ignore_ascii_case(host) {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "authoritative static site binding for service `{service_name}` points at host `{}` but request host was `{host}`",
+                binding.hostname
+            ),
+        ));
+    }
+    if binding.mount_path != "/" {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "authoritative static site binding for service `{service_name}` uses unsupported mount_path `{}`",
+                binding.mount_path
+            ),
+        ));
+    }
+
+    let manifest_digest = parse_hex_fixed::<32>(
+        &binding.manifest_digest_hex,
+        "manifest_digest_hex",
+    )
+    .map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "authoritative static site binding for service `{service_name}` is invalid: {err}"
+            ),
+        )
+    })?;
+    let stored = state
+        .sorafs_node
+        .manifest_metadata_by_digest(&manifest_digest)
+        .map_err(node_storage_error_response)?;
+    enforce_site_denylist(state, &stored)?;
+
+    Ok(Some(ResolvedSiteHost {
+        hostname: binding.hostname,
+        index_document: binding.index_document,
+        spa_fallback: binding.spa_fallback,
+        stored,
+    }))
+}
+
+async fn resolve_site_host(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+) -> Result<ResolvedSiteHost, Response> {
+    if !state.sorafs_node.is_enabled() {
+        return Err(storage_disabled_response());
+    }
+
+    let host = normalized_site_request_host(headers)?;
+
+    if let Some(cid) =
+        extract_cid_from_untrusted_host(&host, &state.sorafs_gateway_config.untrusted_hosting)?
+    {
+        let stored = resolve_site_manifest_by_cid(state, &cid).await?;
+        return Ok(ResolvedSiteHost {
+            hostname: host,
+            index_document: "index.html".to_owned(),
+            spa_fallback: true,
+            stored,
+        });
+    }
+
+    if let Some(resolved) = resolve_site_host_from_authoritative_app(state, &host)? {
+        return Ok(resolved);
+    }
+
+    let bindings = match load_site_bindings_from_env() {
+        Ok(Some(document)) => document,
+        Ok(None) => return Err(StatusCode::NOT_FOUND.into_response()),
+        Err(err) => return Err(json_error(StatusCode::INTERNAL_SERVER_ERROR, err)),
+    };
+
+    let Some(binding) = find_site_binding(&bindings, &host).cloned() else {
+        return Err(StatusCode::NOT_FOUND.into_response());
+    };
+
+    let manifest_digest =
+        match parse_hex_fixed::<32>(&binding.manifest_digest_hex, "manifest_digest_hex") {
+            Ok(value) => value,
+            Err(err) => return Err(json_error(StatusCode::BAD_REQUEST, err)),
+        };
+
+    let stored = match state
+        .sorafs_node
+        .manifest_metadata_by_digest(&manifest_digest)
+    {
+        Ok(manifest) => manifest,
+        Err(err) => return Err(node_storage_error_response(err)),
+    };
+
+    enforce_site_denylist(state, &stored)?;
+
+    let hostname = binding.hostname.clone();
+    let index_document = binding.index_document().to_owned();
+    let spa_fallback = binding.spa_fallback_enabled();
+    Ok(ResolvedSiteHost {
+        hostname,
+        index_document,
+        spa_fallback,
+        stored,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct RemoteCidSource {
+    manifest_digest_hex: String,
+    provider_id_hex: String,
+    torii_base_url: reqwest::Url,
+}
+
+struct RemoteSiteBundle {
+    manifest: ManifestV1,
+    payload: Vec<u8>,
+    files: Option<Vec<StorageFileEntryDto>>,
+}
+
+fn find_local_site_manifest_by_cid(
+    state: &SharedAppState,
+    cid_bytes: &[u8],
+) -> Result<Option<StoredManifest>, Response> {
+    if !state.sorafs_node.is_enabled() {
+        return Err(storage_disabled_response());
+    }
+
+    let manifests = state
+        .sorafs_node
+        .stored_manifests()
+        .map_err(node_storage_error_response)?;
+    Ok(manifests
+        .into_iter()
+        .filter(|manifest| manifest.manifest_cid() == cid_bytes)
+        .max_by_key(|manifest| {
+            let files = manifest.files();
+            let has_index_document = files
+                .iter()
+                .any(|file| file.path.len() == 1 && file.path[0] == "index.html");
+            (has_index_document, files.len())
+        }))
+}
+
+fn normalize_provider_torii_base_url(host_pattern: &str) -> Result<reqwest::Url, String> {
+    let trimmed = host_pattern.trim();
+    if trimmed.is_empty() {
+        return Err("provider advert endpoint host pattern must not be empty".to_string());
+    }
+
+    let with_scheme = if trimmed.contains("://") {
+        trimmed.to_owned()
+    } else {
+        let lower = trimmed.to_ascii_lowercase();
+        let scheme = if lower.starts_with("localhost")
+            || lower.starts_with("127.")
+            || lower.starts_with("[::1]")
+            || lower.starts_with("::1")
+        {
+            "http"
+        } else {
+            "https"
+        };
+        format!("{scheme}://{trimmed}")
+    };
+
+    let mut url = reqwest::Url::parse(&with_scheme)
+        .map_err(|err| format!("invalid provider advert endpoint `{trimmed}`: {err}"))?;
+    if !url.path().ends_with('/') {
+        let normalized = format!("{}/", url.path());
+        url.set_path(&normalized);
+    }
+    Ok(url)
+}
+
+fn storage_file_entries_from_manifest_response(
+    files: &[StorageStoredFileDto],
+) -> Result<Option<Vec<StorageFileEntryDto>>, String> {
+    if files.is_empty() {
+        return Ok(None);
+    }
+
+    let mut cursor = 0_u64;
+    let mut entries = Vec::with_capacity(files.len());
+    for file in files {
+        if file.offset != cursor {
+            return Err(format!(
+                "remote manifest layout is non-contiguous at `{}`: expected offset {cursor}, found {}",
+                file.path.join("/"),
+                file.offset,
+            ));
+        }
+        entries.push(StorageFileEntryDto {
+            path: file.path.clone(),
+            size: file.size,
+        });
+        cursor = cursor.saturating_add(file.size);
+    }
+
+    Ok(Some(entries))
+}
+
+async fn resolve_remote_cid_sources(
+    state: &SharedAppState,
+    cid_bytes: &[u8],
+) -> Result<Option<Vec<RemoteCidSource>>, Response> {
+    let snapshot = match pin_snapshot_with_attestation(state) {
+        Ok((_, snapshot)) => snapshot,
+        Err(err) => return Err(err.into_response()),
+    };
+
+    let mut provider_specs = Vec::<(String, String)>::new();
+    for prefer_completed in [true, false] {
+        for order in &snapshot.replication_orders {
+            if order.manifest_cid() != cid_bytes {
+                continue;
+            }
+            if order.is_expired() {
+                continue;
+            }
+            if prefer_completed != order.completion_epoch().is_some() {
+                continue;
+            }
+            let Some(manifest) = snapshot.manifest_by_digest(order.manifest_digest_hex()) else {
+                continue;
+            };
+            if manifest.status_label() != "approved" {
+                continue;
+            }
+            for provider_id_hex in order.providers() {
+                if provider_specs.iter().any(|existing| {
+                    existing.0 == order.manifest_digest_hex() && existing.1 == *provider_id_hex
+                }) {
+                    continue;
+                }
+                provider_specs.push((
+                    order.manifest_digest_hex().to_owned(),
+                    provider_id_hex.clone(),
+                ));
+            }
+        }
+    }
+
+    if provider_specs.is_empty() {
+        return Ok(None);
+    }
+
+    let Some(cache) = state.sorafs_cache.clone() else {
+        return Err(json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "SoraFS discovery cache is not available for CID gateway fetch",
+        ));
+    };
+    let cache = cache.read().await;
+
+    let mut sources = Vec::new();
+    for (manifest_digest_hex, provider_id_hex) in provider_specs {
+        let provider_id = match decode_hex_32(&provider_id_hex) {
+            Ok(bytes) => bytes,
+            Err(_) => continue,
+        };
+        let Some(record) = cache.record_by_provider(&provider_id) else {
+            continue;
+        };
+        let Some(endpoint) = record
+            .advert()
+            .body
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.kind == EndpointKind::Torii)
+        else {
+            continue;
+        };
+        let torii_base_url = match normalize_provider_torii_base_url(&endpoint.host_pattern) {
+            Ok(url) => url,
+            Err(err) => {
+                warn!(
+                    provider_id_hex = %provider_id_hex,
+                    manifest_digest_hex = %manifest_digest_hex,
+                    %err,
+                    "ignoring invalid Torii endpoint advertised for CID gateway fetch"
+                );
+                continue;
+            }
+        };
+        sources.push(RemoteCidSource {
+            manifest_digest_hex,
+            provider_id_hex,
+            torii_base_url,
+        });
+    }
+
+    if sources.is_empty() {
+        return Err(json_error(
+            StatusCode::BAD_GATEWAY,
+            "no SoraFS Torii provider routes are available for the requested CID",
+        ));
+    }
+
+    Ok(Some(sources))
+}
+
+async fn fetch_remote_site_bundle_from_source(
+    client: &reqwest::Client,
+    source: &RemoteCidSource,
+    cid_bytes: &[u8],
+) -> Result<RemoteSiteBundle, String> {
+    let manifest_url = source
+        .torii_base_url
+        .join(&format!(
+            "v1/sorafs/storage/manifest/{}",
+            source.manifest_digest_hex
+        ))
+        .map_err(|err| format!("failed to build remote manifest URL: {err}"))?;
+    let manifest_response = client
+        .get(manifest_url)
+        .send()
+        .await
+        .map_err(|err| format!("failed to fetch remote manifest metadata: {err}"))?;
+    let manifest_status = manifest_response.status();
+    let manifest_body = manifest_response
+        .bytes()
+        .await
+        .map_err(|err| format!("failed to read remote manifest metadata: {err}"))?;
+    if !manifest_status.is_success() {
+        let details = String::from_utf8_lossy(&manifest_body);
+        return Err(format!(
+            "remote manifest endpoint returned {manifest_status}: {}",
+            details.trim()
+        ));
+    }
+    let manifest_response = norito::json::from_slice::<StorageManifestResponseDto>(&manifest_body)
+        .map_err(|err| format!("failed to decode remote manifest metadata response: {err}"))?;
+    if manifest_response.manifest_digest_hex != source.manifest_digest_hex {
+        return Err(format!(
+            "remote manifest digest mismatch: expected {}, found {}",
+            source.manifest_digest_hex, manifest_response.manifest_digest_hex
+        ));
+    }
+
+    let manifest_bytes = BASE64_STANDARD
+        .decode(manifest_response.manifest_b64.as_bytes())
+        .map_err(|err| format!("failed to decode remote manifest payload: {err}"))?;
+    let manifest: ManifestV1 = norito::decode_from_bytes(&manifest_bytes)
+        .map_err(|err| format!("failed to decode remote manifest bytes: {err}"))?;
+    if manifest.root_cid != cid_bytes {
+        return Err("remote manifest CID does not match requested CID".to_string());
+    }
+    let manifest_digest = manifest.digest().map_err(|err| err.to_string())?;
+    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
+    if manifest_digest_hex != source.manifest_digest_hex {
+        return Err(format!(
+            "decoded remote manifest digest mismatch: expected {}, found {manifest_digest_hex}",
+            source.manifest_digest_hex
+        ));
+    }
+    if manifest_response.content_length > usize::MAX as u64 {
+        return Err("remote payload exceeds host limits".to_string());
+    }
+
+    let fetch_body = norito::json::to_vec(&StorageFetchRequestDto {
+        manifest_id_hex: manifest_response.manifest_id_hex.clone(),
+        offset: 0,
+        length: manifest_response.content_length,
+        provider_id_hex: Some(source.provider_id_hex.clone()),
+    })
+    .map_err(|err| format!("failed to encode remote fetch request: {err}"))?;
+    let fetch_url = source
+        .torii_base_url
+        .join("v1/sorafs/storage/fetch")
+        .map_err(|err| format!("failed to build remote payload URL: {err}"))?;
+    let fetch_response = client
+        .post(fetch_url)
+        .header(header::CONTENT_TYPE.as_str(), "application/json")
+        .header(HEADER_SORA_MANIFEST_ENVELOPE, "cid-gateway-fetch")
+        .body(fetch_body)
+        .send()
+        .await
+        .map_err(|err| format!("failed to fetch remote site payload: {err}"))?;
+    let fetch_status = fetch_response.status();
+    let fetch_body = fetch_response
+        .bytes()
+        .await
+        .map_err(|err| format!("failed to read remote site payload response: {err}"))?;
+    if !fetch_status.is_success() {
+        let details = String::from_utf8_lossy(&fetch_body);
+        return Err(format!(
+            "remote payload endpoint returned {fetch_status}: {}",
+            details.trim()
+        ));
+    }
+    let fetch_response = norito::json::from_slice::<StorageFetchResponseDto>(&fetch_body)
+        .map_err(|err| format!("failed to decode remote site payload response: {err}"))?;
+    let payload = BASE64_STANDARD
+        .decode(fetch_response.data_b64.as_bytes())
+        .map_err(|err| format!("failed to decode remote site payload bytes: {err}"))?;
+    if payload.len() as u64 != manifest_response.content_length {
+        return Err(format!(
+            "remote payload length mismatch: expected {}, found {}",
+            manifest_response.content_length,
+            payload.len()
+        ));
+    }
+
+    let files = storage_file_entries_from_manifest_response(&manifest_response.files)?;
+    Ok(RemoteSiteBundle {
+        manifest,
+        payload,
+        files,
+    })
+}
+
+async fn fetch_remote_site_bundle(
+    state: &SharedAppState,
+    cid_bytes: &[u8],
+) -> Result<Option<RemoteSiteBundle>, Response> {
+    let Some(sources) = resolve_remote_cid_sources(state, cid_bytes).await? else {
+        return Ok(None);
+    };
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|err| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("failed to build CID gateway fetch client: {err}"),
+            )
+        })?;
+
+    let mut last_error = None;
+    for source in &sources {
+        match fetch_remote_site_bundle_from_source(&client, source, cid_bytes).await {
+            Ok(bundle) => return Ok(Some(bundle)),
+            Err(err) => {
+                warn!(
+                    provider_id_hex = %source.provider_id_hex,
+                    manifest_digest_hex = %source.manifest_digest_hex,
+                    %err,
+                    "failed to hydrate CID gateway cache from remote provider"
+                );
+                last_error = Some(err);
+            }
+        }
+    }
+
+    Err(json_error(
+        StatusCode::BAD_GATEWAY,
+        format!(
+            "failed to fetch the requested CID from remote SoraFS providers{}",
+            last_error
+                .as_deref()
+                .map(|err| format!(": {err}"))
+                .unwrap_or_default()
+        ),
+    ))
+}
+
+fn cache_remote_site_bundle(
+    state: &SharedAppState,
+    bundle: RemoteSiteBundle,
+) -> Result<StoredManifest, Response> {
+    let profile =
+        chunk_profile_for_manifest(&bundle.manifest).map_err(ResponseError::into_response)?;
+    let plan =
+        build_plan_for_storage_pin_request(&bundle.payload, profile, bundle.files.as_deref())
+            .map_err(|err| json_error(StatusCode::BAD_GATEWAY, err))?;
+    let manifest_digest: [u8; 32] = bundle
+        .manifest
+        .digest()
+        .map_err(|err| {
+            json_error(
+                StatusCode::BAD_GATEWAY,
+                format!("failed to digest remote manifest: {err}"),
+            )
+        })?
+        .into();
+
+    let mut reader = bundle.payload.as_slice();
+    match state
+        .sorafs_node
+        .ingest_manifest(&bundle.manifest, &plan, &mut reader)
+    {
+        Ok(_) => {}
+        Err(NodeStorageError::Storage(StorageBackendError::ManifestExists { .. })) => {}
+        Err(err) => return Err(node_storage_error_response(err)),
+    }
+
+    state
+        .sorafs_node
+        .manifest_metadata_by_digest(&manifest_digest)
+        .map_err(node_storage_error_response)
+}
+
+pub(crate) async fn resolve_site_manifest_by_cid_unchecked(
+    state: &SharedAppState,
+    cid: &str,
+) -> Result<StoredManifest, Response> {
+    let cid_bytes = decode_content_cid(cid)
+        .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid content CID"))?;
+    let stored = if let Some(stored) = find_local_site_manifest_by_cid(state, &cid_bytes)? {
+        stored
+    } else if let Some(bundle) = fetch_remote_site_bundle(state, &cid_bytes).await? {
+        cache_remote_site_bundle(state, bundle)?
+    } else {
+        return Err(StatusCode::NOT_FOUND.into_response());
+    };
+
+    Ok(stored)
+}
+
+async fn resolve_site_manifest_by_cid(
+    state: &SharedAppState,
+    cid: &str,
+) -> Result<StoredManifest, Response> {
+    let stored = resolve_site_manifest_by_cid_unchecked(state, cid).await?;
+    enforce_site_denylist(state, &stored)?;
+    Ok(stored)
+}
+
+fn enforce_site_denylist(state: &SharedAppState, stored: &StoredManifest) -> Result<(), Response> {
+    let Some(denylist) = &state.sorafs_gateway_denylist else {
+        return Ok(());
+    };
+    let now = SystemTime::now();
+    let hit = denylist
+        .check_manifest_digest(stored.manifest_digest(), now)
+        .or_else(|| denylist.check_cid(stored.manifest_cid(), now));
+
+    if let Some(hit) = hit {
+        return Err(gateway_policy_violation_response(
+            PolicyViolation::Denylisted(Box::new(hit)),
+            None,
+        ));
+    }
+
+    Ok(())
+}
+
+fn file_listing_json(stored: &StoredManifest) -> Value {
+    Value::Array(
+        stored
+            .files()
+            .iter()
+            .map(|file| {
+                let mut obj = Map::new();
+                obj.insert(
+                    "path".into(),
+                    Value::Array(file.path.iter().cloned().map(Value::String).collect()),
+                );
+                obj.insert("offset".into(), Value::from(file.offset));
+                obj.insert("size".into(), Value::from(file.size));
+                obj.insert("first_chunk".into(), Value::from(file.first_chunk as u64));
+                obj.insert("chunk_count".into(), Value::from(file.chunk_count as u64));
+                Value::Object(obj)
+            })
+            .collect(),
+    )
+}
+
+fn optional_str_json(value: Option<&str>) -> Value {
+    value.map_or(Value::Null, Value::from)
+}
+
+fn optional_time_json(value: Option<SystemTime>) -> Value {
+    value
+        .and_then(format_system_time)
+        .map_or(Value::Null, Value::from)
+}
+
+fn denylist_policy_tier_label(tier: DenylistPolicyTier) -> &'static str {
+    match tier {
+        DenylistPolicyTier::Standard => "standard",
+        DenylistPolicyTier::Emergency => "emergency",
+        DenylistPolicyTier::Permanent => "permanent",
+    }
+}
+
+fn cid_lookup_moderation_match_json(match_kind: &'static str, hit: &DenylistHit) -> Value {
+    let entry = hit.entry();
+    let scope = if entry.is_governance_backed() {
+        "global"
+    } else {
+        "local"
+    };
+
+    json_object(vec![
+        json_entry("scope", Value::from(scope)),
+        json_entry("match_kind", Value::from(match_kind)),
+        json_entry("pack_id", optional_str_json(entry.source_pack_id())),
+        json_entry(
+            "policy_tier",
+            Value::from(denylist_policy_tier_label(entry.policy_tier())),
+        ),
+        json_entry("reason", optional_str_json(entry.reason())),
+        json_entry("jurisdiction", optional_str_json(entry.jurisdiction())),
+        json_entry("issued_at", optional_time_json(entry.issued_at())),
+        json_entry("expires_at", optional_time_json(entry.expires_at())),
+        json_entry("review_due_at", optional_time_json(entry.review_deadline())),
+        json_entry(
+            "issued_by_proposal_id",
+            optional_str_json(entry.issued_by_proposal_id()),
+        ),
+        json_entry(
+            "review_reference",
+            optional_str_json(entry.review_reference()),
+        ),
+        json_entry(
+            "governance_reference",
+            optional_str_json(entry.governance_reference()),
+        ),
+        json_entry(
+            "pack_manifest_cid",
+            optional_str_json(entry.source_pack_manifest_cid()),
+        ),
+        json_entry(
+            "merkle_root",
+            optional_str_json(entry.source_pack_merkle_root()),
+        ),
+    ])
+}
+
+fn cid_lookup_moderation_json(state: &SharedAppState, stored: &StoredManifest) -> Value {
+    let Some(denylist) = &state.sorafs_gateway_denylist else {
+        return Value::Null;
+    };
+
+    let now = SystemTime::now();
+    let mut has_local = false;
+    let mut has_global = false;
+    let mut matches = Vec::new();
+
+    if let Some(hit) = denylist.check_manifest_digest(stored.manifest_digest(), now) {
+        if hit.entry().is_governance_backed() {
+            has_global = true;
+        } else {
+            has_local = true;
+        }
+        matches.push(cid_lookup_moderation_match_json("manifest_digest", &hit));
+    }
+
+    if let Some(hit) = denylist.check_cid(stored.manifest_cid(), now) {
+        if hit.entry().is_governance_backed() {
+            has_global = true;
+        } else {
+            has_local = true;
+        }
+        matches.push(cid_lookup_moderation_match_json("cid", &hit));
+    }
+
+    let status = if matches.is_empty() {
+        "clear"
+    } else if has_local && has_global {
+        "mixed_blocked"
+    } else if has_global {
+        "global_blocked"
+    } else {
+        "local_blocked"
+    };
+
+    json_object(vec![
+        json_entry("status", Value::from(status)),
+        json_entry("public_links_enabled", Value::from(matches.is_empty())),
+        json_entry("matches", Value::Array(matches)),
+    ])
+}
+
+fn attach_cid_gateway_headers(response: &mut Response, stored: &StoredManifest) {
+    response.headers_mut().insert(
+        HeaderName::from_static(HEADER_SORA_CONTENT_CID),
+        HeaderValue::from_str(&encode_content_cid(stored.manifest_cid()))
+            .unwrap_or_else(|_| HeaderValue::from_static("invalid")),
+    );
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=31536000, immutable"),
+    );
+}
+
+fn should_use_spa_fallback_enabled(raw_path: &str, enabled: bool) -> bool {
+    if !enabled {
+        return false;
+    }
+    let trimmed = raw_path.trim_end_matches('/');
+    let last = trimmed.rsplit('/').next().unwrap_or_default();
+    !last.contains('.')
+}
+
+fn index_document_path(index_document: &str) -> Vec<String> {
+    path_components_for_request(index_document, index_document)
+        .unwrap_or_else(|| vec![index_document.to_owned()])
+}
+
+fn is_browser_document_request(headers: &HeaderMap) -> bool {
+    if headers
+        .get("sec-fetch-dest")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("document"))
+    {
+        return true;
+    }
+
+    if headers
+        .get("sec-fetch-mode")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("navigate"))
+    {
+        return true;
+    }
+
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.split(',').any(|entry| {
+                let mime = entry.trim().split(';').next().unwrap_or_default().trim();
+                mime.eq_ignore_ascii_case("text/html")
+                    || mime.eq_ignore_ascii_case("application/xhtml+xml")
+            })
+        })
+}
+
+fn path_gateway_host_for_cid_suffix(suffix: &str) -> Option<String> {
+    suffix
+        .strip_prefix("sorafs.")
+        .map(|value| value.trim().trim_end_matches('.').to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+}
+
+fn canonical_cid_host_suffix_for_request(
+    headers: &HeaderMap,
+    config: &iroha_config::parameters::actual::SorafsGatewayUntrustedHosting,
+) -> Option<String> {
+    let host = headers.get(header::HOST)?.to_str().ok()?;
+    let normalized_host = normalize_host_header(host)?;
+
+    for suffix in [
+        config.cid_host_suffixes.taira.as_str(),
+        config.cid_host_suffixes.live.as_str(),
+    ] {
+        let Some(path_gateway_host) = path_gateway_host_for_cid_suffix(suffix) else {
+            continue;
+        };
+        if normalized_host == path_gateway_host {
+            return Some(suffix.to_owned());
+        }
+    }
+
+    None
+}
+
+fn cid_gateway_request_path(uri: &Uri, cid: &str) -> Option<String> {
+    let prefix = format!("/sorafs/cid/{cid}");
+    let path = uri.path();
+    if path == prefix || path == format!("{prefix}/") {
+        return Some("/".to_owned());
+    }
+
+    path.strip_prefix(&format!("{prefix}/"))
+        .map(|suffix| format!("/{suffix}"))
+}
+
+fn permanent_redirect(location: String) -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::PERMANENT_REDIRECT;
+    response.headers_mut().insert(
+        header::LOCATION,
+        HeaderValue::from_str(&location).unwrap_or_else(|_| HeaderValue::from_static("/")),
+    );
+    response
+}
+
+fn maybe_redirect_cid_gateway_request(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    uri: &Uri,
+    cid: &str,
+) -> Option<Response> {
+    let config = &state.sorafs_gateway_config.untrusted_hosting;
+    if !config.enabled || !config.path_gateway_redirect {
+        return None;
+    }
+    if config.redirect_html_only && !is_browser_document_request(headers) {
+        return None;
+    }
+
+    let suffix = canonical_cid_host_suffix_for_request(headers, config)?;
+    let path = cid_gateway_request_path(uri, cid)?;
+    let mut location = format!("https://{cid}.{suffix}{path}");
+    if let Some(query) = uri.query() {
+        location.push('?');
+        location.push_str(query);
+    }
+    Some(permanent_redirect(location))
+}
+
+fn build_site_file_response(
+    state: &SharedAppState,
+    stored: &StoredManifest,
+    path: &[String],
+) -> Response {
+    let Some(file) = stored.file_by_path(path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let Ok(length) = usize::try_from(file.size) else {
+        return json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "stored file exceeds supported response size",
+        );
+    };
+
+    let bytes =
+        match state
+            .sorafs_node
+            .read_payload_range(stored.manifest_id(), file.offset, length)
+        {
+            Ok(value) => value,
+            Err(err) => return node_storage_error_response(err),
+        };
+
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(content_type_for_path(path)),
+    );
+    response.headers_mut().insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&file.size.to_string())
+            .unwrap_or_else(|_| HeaderValue::from_static("0")),
+    );
+    response
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_get_sorafs_site_manifest(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    let resolved = match resolve_site_host(&state, &headers).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let manifest_bytes = match fs::read(resolved.stored.manifest_path()) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            error!(
+                ?err,
+                "failed to read stored manifest bytes for site binding"
+            );
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to read stored manifest bytes",
+            );
+        }
+    };
+
+    let value = json_object(vec![
+        json_entry("hostname", Value::from(resolved.hostname.clone())),
+        json_entry(
+            "content_cid",
+            Value::from(encode_content_cid(resolved.stored.manifest_cid())),
+        ),
+        json_entry(
+            "manifest_digest_hex",
+            Value::from(hex::encode(resolved.stored.manifest_digest())),
+        ),
+        json_entry(
+            "manifest_id_hex",
+            Value::from(resolved.stored.manifest_id().to_owned()),
+        ),
+        json_entry(
+            "manifest_b64",
+            Value::from(BASE64_STANDARD.encode(manifest_bytes)),
+        ),
+        json_entry(
+            "index_document",
+            Value::from(resolved.index_document.clone()),
+        ),
+        json_entry("spa_fallback", Value::from(resolved.spa_fallback)),
+        json_entry("files", file_listing_json(&resolved.stored)),
+    ]);
+    JsonBody(value).into_response()
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_get_sorafs_site_root(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+) -> Response {
+    handle_get_sorafs_site_path(State(state), headers, Path(String::new())).await
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_get_sorafs_site_path(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    Path(raw_path): Path<String>,
+) -> Response {
+    let resolved = match resolve_site_host(&state, &headers).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let Some(mut path) = path_components_for_request(&raw_path, &resolved.index_document) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    if resolved.stored.file_by_path(&path).is_none()
+        && should_use_spa_fallback_enabled(&raw_path, resolved.spa_fallback)
+    {
+        path = index_document_path(&resolved.index_document);
+    }
+
+    build_site_file_response(&state, &resolved.stored, &path)
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_get_sorafs_cid_lookup(
+    State(state): State<SharedAppState>,
+    Path(cid): Path<String>,
+) -> Response {
+    let stored = match resolve_site_manifest_by_cid_unchecked(&state, &cid).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let value = json_object(vec![
+        json_entry(
+            "content_cid",
+            Value::from(encode_content_cid(stored.manifest_cid())),
+        ),
+        json_entry(
+            "manifest_digest_hex",
+            Value::from(hex::encode(stored.manifest_digest())),
+        ),
+        json_entry(
+            "manifest_id_hex",
+            Value::from(stored.manifest_id().to_owned()),
+        ),
+        json_entry(
+            "index_document",
+            stored
+                .file_by_path(&["index.html".to_owned()])
+                .map(|_| Value::from("index.html"))
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("files", file_listing_json(&stored)),
+        json_entry("moderation", cid_lookup_moderation_json(&state, &stored)),
+    ]);
+    JsonBody(value).into_response()
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_get_sorafs_cid_root_redirect(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    uri: Uri,
+    Path(cid): Path<String>,
+) -> Response {
+    if decode_content_cid(&cid).is_none() {
+        return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
+    }
+
+    if let Some(response) = maybe_redirect_cid_gateway_request(&state, &headers, &uri, &cid) {
+        return response;
+    }
+
+    let mut location = format!("/sorafs/cid/{cid}/");
+    if let Some(query) = uri.query() {
+        location.push('?');
+        location.push_str(query);
+    }
+    permanent_redirect(location)
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_get_sorafs_cid_root(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    uri: Uri,
+    Path(cid): Path<String>,
+) -> Response {
+    handle_get_sorafs_cid_path(State(state), headers, uri, Path((cid, String::new()))).await
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_get_sorafs_cid_path(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    uri: Uri,
+    Path((cid, raw_path)): Path<(String, String)>,
+) -> Response {
+    if decode_content_cid(&cid).is_none() {
+        return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
+    }
+
+    if let Some(response) = maybe_redirect_cid_gateway_request(&state, &headers, &uri, &cid) {
+        return response;
+    }
+
+    let stored = match resolve_site_manifest_by_cid(&state, &cid).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let Some(path) = path_components_for_request(&raw_path, "index.html") else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let mut response = build_site_file_response(&state, &stored, &path);
+    if response.status().is_success() {
+        attach_cid_gateway_headers(&mut response, &stored);
+    }
+    response
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_get_sorafs_denylist_catalog(
+    State(state): State<SharedAppState>,
+) -> Response {
+    let Some(catalog) = &state.sorafs_gateway_denylist_catalog else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let value = json_object(vec![
+        json_entry("version", Value::from(catalog.version as u64)),
+        json_entry(
+            "jurisdiction",
+            catalog
+                .jurisdiction
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "opt_out_packs",
+            Value::Array(
+                catalog
+                    .opt_out_packs
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "extra_packs",
+            Value::Array(
+                catalog
+                    .extra_packs
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        ),
+        json_entry(
+            "packs",
+            Value::Array(
+                catalog
+                    .packs
+                    .iter()
+                    .map(|pack| {
+                        json_object(vec![
+                            json_entry("pack_id", Value::from(pack.pack_id.clone())),
+                            json_entry(
+                                "version",
+                                pack.version
+                                    .clone()
+                                    .map(Value::String)
+                                    .unwrap_or(Value::Null),
+                            ),
+                            json_entry("default_enabled", Value::from(pack.default_enabled)),
+                            json_entry("active", Value::from(pack.active)),
+                            json_entry(
+                                "policy_tier",
+                                pack.policy_tier
+                                    .clone()
+                                    .map(Value::String)
+                                    .unwrap_or(Value::Null),
+                            ),
+                            json_entry(
+                                "manifest_cid",
+                                pack.manifest_cid
+                                    .clone()
+                                    .map(Value::String)
+                                    .unwrap_or(Value::Null),
+                            ),
+                            json_entry(
+                                "merkle_root",
+                                pack.merkle_root
+                                    .clone()
+                                    .map(Value::String)
+                                    .unwrap_or(Value::Null),
+                            ),
+                            json_entry(
+                                "issued_by_proposal_id",
+                                pack.issued_by_proposal_id
+                                    .clone()
+                                    .map(Value::String)
+                                    .unwrap_or(Value::Null),
+                            ),
+                            json_entry(
+                                "review_reference",
+                                pack.review_reference
+                                    .clone()
+                                    .map(Value::String)
+                                    .unwrap_or(Value::Null),
+                            ),
+                            json_entry(
+                                "jurisdiction",
+                                pack.jurisdiction
+                                    .clone()
+                                    .map(Value::String)
+                                    .unwrap_or(Value::Null),
+                            ),
+                            json_entry(
+                                "issued_at",
+                                pack.issued_at
+                                    .clone()
+                                    .map(Value::String)
+                                    .unwrap_or(Value::Null),
+                            ),
+                            json_entry(
+                                "expires_at",
+                                pack.expires_at
+                                    .clone()
+                                    .map(Value::String)
+                                    .unwrap_or(Value::Null),
+                            ),
+                            json_entry("entry_count", Value::from(pack.entry_count as u64)),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+    ]);
+
+    JsonBody(value).into_response()
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_get_sorafs_denylist_pack(
+    State(state): State<SharedAppState>,
+    Path(pack_id): Path<String>,
+) -> Response {
+    let Some(catalog) = &state.sorafs_gateway_denylist_catalog else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let Some(pack) = catalog
+        .packs
+        .iter()
+        .find(|entry| entry.pack_id.eq_ignore_ascii_case(pack_id.trim()))
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let value = json_object(vec![
+        json_entry("pack_id", Value::from(pack.pack_id.clone())),
+        json_entry(
+            "version",
+            pack.version
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("default_enabled", Value::from(pack.default_enabled)),
+        json_entry("active", Value::from(pack.active)),
+        json_entry(
+            "policy_tier",
+            pack.policy_tier
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "manifest_cid",
+            pack.manifest_cid
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "merkle_root",
+            pack.merkle_root
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "issued_by_proposal_id",
+            pack.issued_by_proposal_id
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "review_reference",
+            pack.review_reference
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "jurisdiction",
+            pack.jurisdiction
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "issued_at",
+            pack.issued_at
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry(
+            "expires_at",
+            pack.expires_at
+                .clone()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        ),
+        json_entry("entry_count", Value::from(pack.entry_count as u64)),
+        json_entry("source_path", Value::from(pack.path.display().to_string())),
+    ]);
+
+    JsonBody(value).into_response()
+}
+
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_post_sorafs_storage_pin(
     State(state): State<SharedAppState>,
@@ -2707,7 +4207,9 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
     if !state.sorafs_node.is_enabled() {
         return storage_disabled_response();
     }
-    if let Err(err) = state.sorafs_pin_policy.enforce(&headers, Some(remote.ip())) {
+    let canonical_remote =
+        crate::limits::ingress_remote_ip(&headers, Some(remote.ip()), &state.trusted_proxy_nets);
+    if let Err(err) = state.sorafs_pin_policy.enforce(&headers, canonical_remote) {
         return pin_auth_error_response(err);
     }
     let provider_id = state
@@ -2764,18 +4266,30 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
         );
     }
 
+    if let Some(denylist) = &state.sorafs_gateway_denylist {
+        let now = SystemTime::now();
+        if let Some(hit) = manifest
+            .digest()
+            .ok()
+            .and_then(|digest| denylist.check_manifest_digest(digest.as_bytes(), now))
+            .or_else(|| denylist.check_cid(&manifest.root_cid, now))
+        {
+            return gateway_policy_violation_response(
+                PolicyViolation::Denylisted(Box::new(hit)),
+                None,
+            );
+        }
+    }
+
     let profile = match chunk_profile_for_manifest(&manifest) {
         Ok(profile) => profile,
         Err(err) => return err.into_response(),
     };
 
-    let plan = match CarBuildPlan::single_file_with_profile(&payload, profile) {
+    let plan = match build_plan_for_storage_pin_request(&payload, profile, req.files.as_deref()) {
         Ok(plan) => plan,
         Err(err) => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                format!("failed to derive chunk plan: {err}"),
-            );
+            return json_error(StatusCode::BAD_REQUEST, err);
         }
     };
 
@@ -3666,8 +5180,15 @@ fn resolve_manifest_storage_id(
     ))
 }
 
-fn gateway_client_fingerprint(remote: SocketAddr, headers: &HeaderMap) -> ClientFingerprint {
-    let mut identifier = remote.ip().to_string();
+fn gateway_client_fingerprint(
+    remote: SocketAddr,
+    headers: &HeaderMap,
+    trusted_proxies: &[crate::limits::IpNet],
+) -> ClientFingerprint {
+    let effective_ip =
+        crate::limits::ingress_remote_ip(headers, Some(remote.ip()), trusted_proxies)
+            .unwrap_or_else(|| remote.ip());
+    let mut identifier = effective_ip.to_string();
     if let Some(client_header) = headers
         .get(HEADER_SORA_CLIENT)
         .and_then(|value| value.to_str().ok())
@@ -3689,7 +5210,7 @@ fn enforce_gateway_policy_for_request(
     provider_id: Option<[u8; 32]>,
     remote: SocketAddr,
 ) -> Result<(), Response> {
-    let fingerprint = gateway_client_fingerprint(remote, headers);
+    let fingerprint = gateway_client_fingerprint(remote, headers, &state.trusted_proxy_nets);
     let now = SystemTime::now();
     let monotonic_now = Instant::now();
     let mut context = RequestContext::new(&fingerprint, now, monotonic_now)
@@ -5993,7 +7514,7 @@ mod app_api_tests {
         time::Duration,
     };
 
-    use axum::body;
+    use axum::{body, http::Uri};
     use blake3::hash;
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_config::parameters::actual::SorafsTokenConfig;
@@ -7117,7 +8638,7 @@ fn car_verification_refusal(
     )
 }
 
-fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<ChunkProfile> {
+pub(crate) fn chunk_profile_for_manifest(manifest: &ManifestV1) -> ApiResult<ChunkProfile> {
     if let Some(descriptor) = chunker_registry::lookup(manifest.chunking.profile_id) {
         if descriptor.multihash_code != manifest.chunking.multihash_code {
             return Err(json_error(
@@ -7664,9 +9185,22 @@ pub(crate) fn init_cache(
 
 #[cfg(test)]
 mod advert_tests {
-    use std::{io::Write, str::FromStr, sync::Arc};
+    use std::{
+        io::Write,
+        str::FromStr,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
 
-    use axum::body::{self, Bytes};
+    use axum::{
+        Router,
+        body::{self, Bytes},
+        extract::Path as AxumPath,
+        response::IntoResponse,
+        routing::{get, post},
+    };
     use base64::Engine as _;
     use blake3;
     use ed25519_dalek::{Signer, SigningKey};
@@ -7677,12 +9211,18 @@ mod advert_tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::PublicKey;
+    use iroha_crypto::{Hash, PublicKey};
     use iroha_data_model::{
+        Encode,
         account::AccountId,
         block::BlockHeader,
         domain::DomainId,
         metadata::Metadata,
+        soracloud::{
+            SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+            SoraContainerManifestV1, SoraDeploymentBundleV1, SoraServiceConfigEntryV1,
+            SoraServiceDeploymentStateV1, SoraServiceManifestV1,
+        },
         sorafs::{
             capacity::{CapacityDeclarationRecord, ProviderId},
             pin_registry::{
@@ -7692,6 +9232,7 @@ mod advert_tests {
             },
         },
     };
+    use iroha_primitives::json::Json;
     use nonzero_ext::nonzero;
     use norito::to_bytes;
     use sorafs_manifest::{
@@ -7713,7 +9254,12 @@ mod advert_tests {
         proof_stream::ProofStreamTier,
     };
     use sorafs_node::config::StorageConfig;
+    use std::{
+        collections::BTreeMap,
+        sync::{LazyLock, Mutex, MutexGuard},
+    };
     use tempfile::{NamedTempFile, TempDir};
+    use tokio::net::TcpListener;
 
     use super::*;
     use crate::{
@@ -7722,6 +9268,7 @@ mod advert_tests {
             StreamTokenIssuer,
             registry::{RegistryCreditLedgerEntry, RegistryDeclaration, RegistryFeeLedgerEntry},
         },
+        tests_runtime_handlers::mk_app_state_for_tests_with_world,
         utils::extractors::JsonOnly,
     };
 
@@ -8082,7 +9629,7 @@ mod advert_tests {
 
         #[cfg(feature = "telemetry")]
         {
-            let telemetry = crate::routing::MaybeTelemetry::for_tests();
+            let telemetry = isolated_test_telemetry();
             record_pin_registry_metrics(&telemetry, &snapshot);
             let metrics_text = telemetry
                 .telemetry()
@@ -8106,6 +9653,24 @@ mod advert_tests {
         }
     }
 
+    fn encode_replication_order_bytes_with_providers(
+        order_id: &ReplicationOrderId,
+        _manifest_digest: &ManifestDigest,
+        manifest_cid: &[u8],
+        providers: Vec<[u8; 32]>,
+        deadline_epoch: u64,
+    ) -> Vec<u8> {
+        let order = sorafs_manifest::pin_registry::ReplicationOrderV1 {
+            order_id: *order_id.as_bytes(),
+            manifest_cid: manifest_cid.to_vec(),
+            providers,
+            redundancy: 1,
+            deadline: deadline_epoch,
+            policy_hash: [0x51; 32],
+        };
+        norito::to_bytes(&order).expect("encode replication order")
+    }
+
     fn encode_replication_order_bytes(
         order_id: &ReplicationOrderId,
         manifest_digest: &ManifestDigest,
@@ -8113,15 +9678,70 @@ mod advert_tests {
     ) -> Vec<u8> {
         let id_bytes = *order_id.as_bytes();
         let providers = vec![[id_bytes[0]; 32], [id_bytes[0].wrapping_add(1); 32]];
-        let order = sorafs_manifest::pin_registry::ReplicationOrderV1 {
-            order_id: id_bytes,
-            manifest_cid: manifest_digest.as_bytes().to_vec(),
+        encode_replication_order_bytes_with_providers(
+            order_id,
+            manifest_digest,
+            manifest_digest.as_bytes(),
             providers,
-            redundancy: 1,
-            deadline: deadline_epoch,
-            policy_hash: [0x51; 32],
-        };
-        norito::to_bytes(&order).expect("encode replication order")
+            deadline_epoch,
+        )
+    }
+
+    fn seed_registry_manifest_for_gateway(
+        state: &State,
+        manifest: &ManifestV1,
+        provider_id: [u8; 32],
+    ) {
+        let mut block = state.block(default_block_header());
+        let mut tx = block.transaction();
+
+        let manifest_digest = ManifestDigest::new(
+            manifest
+                .digest()
+                .expect("compute manifest digest for registry seed")
+                .into(),
+        );
+        let issuer = test_account();
+        let mut manifest_record = PinManifestRecord::new(
+            manifest_digest.clone(),
+            default_chunker_handle(),
+            [0xAB; 32],
+            RegistryPinPolicy::default(),
+            issuer.clone(),
+            5,
+            None,
+            None,
+            Metadata::default(),
+        );
+        manifest_record.approve(7, None);
+        tx.world_mut_for_testing()
+            .pin_manifests_mut_for_testing()
+            .insert(manifest_digest.clone(), manifest_record);
+
+        let order_id = ReplicationOrderId::new([0x51; 32]);
+        tx.world_mut_for_testing()
+            .replication_orders_mut_for_testing()
+            .insert(
+                order_id,
+                ReplicationOrderRecord {
+                    order_id,
+                    manifest_digest: manifest_digest.clone(),
+                    issued_by: issuer,
+                    issued_epoch: 8,
+                    deadline_epoch: 24,
+                    canonical_order: encode_replication_order_bytes_with_providers(
+                        &order_id,
+                        &manifest_digest,
+                        &manifest.root_cid,
+                        vec![provider_id],
+                        24,
+                    ),
+                    status: ReplicationOrderStatus::Completed(9),
+                },
+            );
+
+        tx.apply();
+        block.commit().expect("commit registry seed block");
     }
 
     fn make_state() -> State {
@@ -8305,6 +9925,65 @@ mod advert_tests {
             .data_dir(temp_dir.path().join("storage"))
             .build();
         (sorafs_node::NodeHandle::new(cfg), temp_dir)
+    }
+
+    fn workspace_fixture(path: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join(path)
+    }
+
+    fn load_fixture_json<T>(path: &str) -> T
+    where
+        T: norito::json::JsonDeserialize,
+    {
+        let bytes = fs::read(workspace_fixture(path)).expect("read fixture");
+        norito::json::from_slice(&bytes).expect("decode fixture")
+    }
+
+    fn fixture_public_service_bundle(version: &str, host: &str) -> SoraDeploymentBundleV1 {
+        let container: SoraContainerManifestV1 =
+            load_fixture_json("fixtures/soracloud/sora_container_manifest_v1.json");
+        let mut service: SoraServiceManifestV1 =
+            load_fixture_json("fixtures/soracloud/sora_service_manifest_v1.json");
+        service.service_version = version.to_owned();
+        if let Some(route) = service.route.as_mut() {
+            route.host = host.to_owned();
+        }
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        }
+    }
+
+    fn site_bindings_override_test_lock() -> &'static Mutex<()> {
+        // Site-binding overrides use a single global path, so tests that mutate
+        // it must not run concurrently.
+        static LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+        &LOCK
+    }
+
+    struct SiteBindingsOverrideGuard(MutexGuard<'static, ()>);
+
+    impl SiteBindingsOverrideGuard {
+        fn set(path: &std::path::Path) -> Self {
+            let lock = site_bindings_override_test_lock()
+                .lock()
+                .expect("site bindings override test lock poisoned");
+            crate::sorafs::site::set_site_bindings_file_override_for_tests(Some(
+                path.to_path_buf(),
+            ));
+            Self(lock)
+        }
+    }
+
+    impl Drop for SiteBindingsOverrideGuard {
+        fn drop(&mut self) {
+            crate::sorafs::site::set_site_bindings_file_override_for_tests(None);
+        }
     }
 
     fn stream_token_issuer_for_tests(dir: &TempDir) -> StreamTokenIssuer {
@@ -8545,9 +10224,23 @@ mod advert_tests {
         token_test_context_with_payload(b"stream token payload fixture".to_vec())
     }
 
+    #[cfg(feature = "telemetry")]
+    fn isolated_test_telemetry() -> crate::routing::MaybeTelemetry {
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        let telemetry = iroha_core::telemetry::Telemetry::new(metrics, true);
+        crate::routing::MaybeTelemetry::from_profile(
+            Some(telemetry),
+            iroha_config::parameters::actual::TelemetryProfile::Full,
+        )
+    }
+
     fn token_test_context_with_payload(payload: Vec<u8>) -> TokenTestContext {
         let mut app = Arc::try_unwrap(mk_app_state_for_tests())
             .unwrap_or_else(|_| panic!("exclusive app state required"));
+        #[cfg(feature = "telemetry")]
+        {
+            app.telemetry = isolated_test_telemetry();
+        }
         let (node, storage_dir) = sorafs_node_with_temp_storage();
 
         let manifest = manifest_for_payload(0x42, &payload);
@@ -9227,6 +10920,126 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn storage_pin_rate_limit_uses_forwarded_client_ip_from_trusted_proxy() {
+        use std::num::NonZeroU32;
+
+        use iroha_config::parameters::actual::{
+            SorafsGatewayRateLimit as GatewayRateLimitCfg, SorafsStoragePin as PinCfg,
+        };
+
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app)
+            .unwrap_or_else(|_| panic!("unique app state for pin policy mutation"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        inner.trusted_proxy_nets = Arc::new(crate::limits::parse_cidrs(&["127.0.0.0/8".into()]));
+
+        let mut pin_cfg = PinCfg {
+            require_token: true,
+            ..Default::default()
+        };
+        pin_cfg.tokens.insert("secret-token".to_string());
+        pin_cfg.allow_cidrs = vec!["203.0.113.0/24".to_string()];
+        pin_cfg.rate_limit = GatewayRateLimitCfg {
+            max_requests: Some(NonZeroU32::new(1).expect("non-zero max_requests")),
+            window: Duration::from_secs(60),
+            ban: None,
+        };
+        inner.sorafs_pin_policy =
+            PinSubmissionPolicy::from_config(&pin_cfg).expect("valid pin policy");
+
+        let make_request = |seed: u8| StoragePinRequestDto {
+            manifest_b64: {
+                let payload = vec![seed; 64];
+                let manifest = manifest_for_payload(seed, &payload);
+                base64::engine::general_purpose::STANDARD
+                    .encode(norito::to_bytes(&manifest).expect("encode manifest"))
+            },
+            payload_b64: {
+                let payload = vec![seed; 64];
+                base64::engine::general_purpose::STANDARD.encode(payload)
+            },
+            ..Default::default()
+        };
+        let request_a = make_request(0x44);
+        let request_b = make_request(0x45);
+        let request_c = make_request(0x46);
+        let request_d = make_request(0x47);
+
+        let app = Arc::new(inner);
+        let trusted_proxy = ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080)));
+        let untrusted_remote = ConnectInfo(SocketAddr::from(([198, 51, 100, 10], 8080)));
+
+        let mut forwarded_a = HeaderMap::new();
+        forwarded_a.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret-token"),
+        );
+        forwarded_a.insert(
+            HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
+            HeaderValue::from_static("203.0.113.10"),
+        );
+
+        let mut forwarded_b = HeaderMap::new();
+        forwarded_b.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer secret-token"),
+        );
+        forwarded_b.insert(
+            HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
+            HeaderValue::from_static("203.0.113.11"),
+        );
+
+        let response = handle_post_sorafs_storage_pin(
+            State(app.clone()),
+            forwarded_a.clone(),
+            trusted_proxy.clone(),
+            JsonOnly(request_a),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = handle_post_sorafs_storage_pin(
+            State(app.clone()),
+            forwarded_b,
+            trusted_proxy.clone(),
+            JsonOnly(request_b),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "distinct forwarded client IPs should not share one rate-limit bucket"
+        );
+
+        let response = handle_post_sorafs_storage_pin(
+            State(app.clone()),
+            forwarded_a.clone(),
+            trusted_proxy,
+            JsonOnly(request_c),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "reusing the same forwarded client IP should hit the same bucket"
+        );
+
+        let response = handle_post_sorafs_storage_pin(
+            State(app),
+            forwarded_a,
+            untrusted_remote,
+            JsonOnly(request_d),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "untrusted peers must not spoof the forwarded client IP header"
+        );
+    }
+
+    #[tokio::test]
     async fn storage_pin_and_fetch_roundtrip() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
@@ -9297,11 +11110,11 @@ mod advert_tests {
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NAME),
-            HeaderValue::from_static("alice@wonderland"),
+            HeaderValue::from_static("alice@banka.dataspace"),
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
-            alias_proof_header("alice@wonderland"),
+            alias_proof_header("alice@banka.dataspace"),
         );
 
         let fetch_request = StorageFetchRequestDto {
@@ -9398,6 +11211,1498 @@ mod advert_tests {
             .decode(manifest_b64.as_bytes())
             .expect("decode manifest");
         assert_eq!(decoded, manifest_bytes);
+    }
+
+    #[tokio::test]
+    async fn site_binding_serves_manifest_and_spa_fallback() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let index_bytes = b"<!doctype html><title>Taira</title>";
+        let asset_bytes = b"console.log('taira');";
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![
+                FileEntry {
+                    path: vec!["assets".to_owned(), "app.js".to_owned()],
+                    data: asset_bytes.to_vec(),
+                },
+                FileEntry {
+                    path: vec!["index.html".to_owned()],
+                    data: index_bytes.to_vec(),
+                },
+            ],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let manifest = manifest_for_payload(0xD4, &payload);
+        let content_cid = encode_content_cid(&manifest.root_cid);
+        let manifest_digest_hex =
+            hex::encode(manifest.digest().expect("manifest digest").as_bytes());
+        let mut reader = payload.as_slice();
+        node.ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest site payload");
+
+        let bindings_file = NamedTempFile::new().expect("site bindings file");
+        fs::write(
+            bindings_file.path(),
+            norito::json::to_vec(&crate::sorafs::site::SiteBindingsDocument {
+                version: Some(1),
+                sites: vec![crate::sorafs::site::SiteBinding {
+                    hostname: "taira.sora.org".to_owned(),
+                    manifest_digest_hex,
+                    index_document: None,
+                    spa_fallback: Some(true),
+                }],
+            })
+            .expect("encode site bindings"),
+        )
+        .expect("write site bindings");
+        let _env_guard = SiteBindingsOverrideGuard::set(bindings_file.path());
+
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let mut root_headers = HeaderMap::new();
+        root_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
+        assert_eq!(root_response.status(), StatusCode::OK);
+        assert_eq!(
+            root_response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/html; charset=utf-8"))
+        );
+        let root_body = body::to_bytes(root_response.into_body(), usize::MAX)
+            .await
+            .expect("read root body");
+        assert_eq!(root_body, &index_bytes[..]);
+
+        let mut manifest_headers = HeaderMap::new();
+        manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let manifest_response =
+            handle_get_sorafs_site_manifest(State(state.clone()), manifest_headers).await;
+        assert_eq!(manifest_response.status(), StatusCode::OK);
+        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .expect("read manifest body");
+        let manifest_value: Value =
+            norito::json::from_slice(&manifest_body).expect("decode manifest response");
+        assert_eq!(
+            manifest_value.get("hostname").and_then(Value::as_str),
+            Some("taira.sora.org")
+        );
+        assert_eq!(
+            manifest_value
+                .get("files")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+
+        let mut spa_headers = HeaderMap::new();
+        spa_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let spa_response =
+            handle_get_sorafs_site_path(State(state.clone()), spa_headers, Path("swap".to_owned()))
+                .await;
+        assert_eq!(spa_response.status(), StatusCode::OK);
+        let spa_body = body::to_bytes(spa_response.into_body(), usize::MAX)
+            .await
+            .expect("read spa body");
+        assert_eq!(spa_body, &index_bytes[..]);
+
+        let mut asset_headers = HeaderMap::new();
+        asset_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let asset_response = handle_get_sorafs_site_path(
+            State(state.clone()),
+            asset_headers,
+            Path("assets/app.js".to_owned()),
+        )
+        .await;
+        assert_eq!(asset_response.status(), StatusCode::OK);
+        assert_eq!(
+            asset_response.headers().get(header::CONTENT_TYPE),
+            Some(&HeaderValue::from_static("text/javascript; charset=utf-8"))
+        );
+        let asset_body = body::to_bytes(asset_response.into_body(), usize::MAX)
+            .await
+            .expect("read asset body");
+        assert_eq!(asset_body, &asset_bytes[..]);
+
+        let cid_lookup =
+            handle_get_sorafs_cid_lookup(State(state.clone()), Path(content_cid.clone())).await;
+        assert_eq!(cid_lookup.status(), StatusCode::OK);
+        let cid_lookup_body = body::to_bytes(cid_lookup.into_body(), usize::MAX)
+            .await
+            .expect("read cid lookup body");
+        let cid_lookup_value: Value =
+            norito::json::from_slice(&cid_lookup_body).expect("decode cid lookup response");
+        assert_eq!(
+            cid_lookup_value.get("content_cid").and_then(Value::as_str),
+            Some(content_cid.as_str())
+        );
+        assert_eq!(cid_lookup_value.get("moderation"), Some(&Value::Null));
+
+        let cid_root = handle_get_sorafs_cid_root(
+            State(state.clone()),
+            HeaderMap::new(),
+            format!("/sorafs/cid/{content_cid}/")
+                .parse::<Uri>()
+                .expect("cid root uri"),
+            Path(content_cid.clone()),
+        )
+        .await;
+        assert_eq!(cid_root.status(), StatusCode::OK);
+        let cid_root_body = body::to_bytes(cid_root.into_body(), usize::MAX)
+            .await
+            .expect("read cid root body");
+        assert_eq!(cid_root_body, &index_bytes[..]);
+
+        let cid_asset = handle_get_sorafs_cid_path(
+            State(state.clone()),
+            HeaderMap::new(),
+            format!("/sorafs/cid/{content_cid}/assets/app.js")
+                .parse::<Uri>()
+                .expect("cid asset uri"),
+            Path((content_cid.clone(), "assets/app.js".to_owned())),
+        )
+        .await;
+        assert_eq!(cid_asset.status(), StatusCode::OK);
+        assert_eq!(
+            cid_asset
+                .headers()
+                .get(HeaderName::from_static(HEADER_SORA_CONTENT_CID))
+                .and_then(|value| value.to_str().ok()),
+            Some(content_cid.as_str())
+        );
+        assert_eq!(
+            cid_asset.headers().get(CACHE_CONTROL),
+            Some(&HeaderValue::from_static(
+                "public, max-age=31536000, immutable"
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn site_binding_prefers_authoritative_soracloud_app_state() {
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let old_index_bytes = b"<!doctype html><title>Old</title>";
+        let (old_plan, old_payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: old_index_bytes.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("old directory plan");
+        let old_manifest = manifest_for_payload(0xD6, &old_payload);
+        let old_manifest_digest_hex = hex::encode(
+            old_manifest
+                .digest()
+                .expect("old manifest digest")
+                .as_bytes(),
+        );
+
+        let new_index_bytes = b"<!doctype html><title>Authoritative</title>";
+        let (new_plan, new_payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: new_index_bytes.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("new directory plan");
+        let new_manifest = manifest_for_payload(0xE6, &new_payload);
+        let new_content_cid = encode_content_cid(&new_manifest.root_cid);
+        let new_manifest_digest_hex = hex::encode(
+            new_manifest
+                .digest()
+                .expect("new manifest digest")
+                .as_bytes(),
+        );
+
+        let mut old_reader = old_payload.as_slice();
+        node.ingest_manifest(&old_manifest, &old_plan, &mut old_reader)
+            .expect("ingest old site payload");
+        let mut new_reader = new_payload.as_slice();
+        node.ingest_manifest(&new_manifest, &new_plan, &mut new_reader)
+            .expect("ingest new site payload");
+
+        let bindings_file = NamedTempFile::new().expect("site bindings file");
+        fs::write(
+            bindings_file.path(),
+            norito::json::to_vec(&crate::sorafs::site::SiteBindingsDocument {
+                version: Some(1),
+                sites: vec![crate::sorafs::site::SiteBinding {
+                    hostname: "taira.sora.org".to_owned(),
+                    manifest_digest_hex: old_manifest_digest_hex,
+                    index_document: None,
+                    spa_fallback: Some(true),
+                }],
+            })
+            .expect("encode site bindings"),
+        )
+        .expect("write site bindings");
+        let _env_guard = SiteBindingsOverrideGuard::set(bindings_file.path());
+
+        let mut world = World::new();
+        let bundle = fixture_public_service_bundle("2026.04.0", "taira.sora.org");
+        let service_name = bundle.service.service_name.clone();
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (
+                bundle.service.service_name.to_string(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        let config_value = norito::json!({
+            "schema_version": APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1,
+            "hostname": "taira.sora.org",
+            "mount_path": "/",
+            "index_document": "index.html",
+            "spa_fallback": true,
+            "manifest_digest_hex": new_manifest_digest_hex,
+        });
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name.clone(),
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name,
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 1,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::from([(
+                        APP_STATIC_SITE_CONFIG_NAME.to_owned(),
+                        SoraServiceConfigEntryV1 {
+                            schema_version: SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+                            config_name: APP_STATIC_SITE_CONFIG_NAME.to_owned(),
+                            value_hash: Hash::new(
+                                norito::json::to_vec(&config_value)
+                                    .expect("config value should encode"),
+                            ),
+                            value_json: Json::from(config_value),
+                            last_update_sequence: 42,
+                        },
+                    )]),
+                    service_secrets: BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
+                },
+            );
+
+        let app = mk_app_state_for_tests_with_world(world);
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let mut root_headers = HeaderMap::new();
+        root_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
+        assert_eq!(root_response.status(), StatusCode::OK);
+        let root_body = body::to_bytes(root_response.into_body(), usize::MAX)
+            .await
+            .expect("read authoritative root body");
+        assert_eq!(root_body, &new_index_bytes[..]);
+
+        let mut manifest_headers = HeaderMap::new();
+        manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let manifest_response =
+            handle_get_sorafs_site_manifest(State(state), manifest_headers).await;
+        assert_eq!(manifest_response.status(), StatusCode::OK);
+        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .expect("read authoritative manifest body");
+        let manifest_value: Value =
+            norito::json::from_slice(&manifest_body).expect("decode manifest response");
+        assert_eq!(
+            manifest_value.get("content_cid").and_then(Value::as_str),
+            Some(new_content_cid.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn authoritative_root_ignores_public_services_without_static_site_binding_config() {
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let old_index_bytes = b"<!doctype html><title>Old site</title>";
+        let (old_plan, old_payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: old_index_bytes.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("old directory plan");
+        let old_manifest = manifest_for_payload(0xD7, &old_payload);
+        let old_content_cid = encode_content_cid(&old_manifest.root_cid);
+        let old_manifest_digest_hex = hex::encode(
+            old_manifest
+                .digest()
+                .expect("old manifest digest")
+                .as_bytes(),
+        );
+
+        let new_index_bytes = b"<!doctype html><title>Unbound service</title>";
+        let (new_plan, new_payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: new_index_bytes.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("new directory plan");
+        let new_manifest = manifest_for_payload(0xE7, &new_payload);
+
+        let mut old_reader = old_payload.as_slice();
+        node.ingest_manifest(&old_manifest, &old_plan, &mut old_reader)
+            .expect("ingest old site payload");
+        let mut new_reader = new_payload.as_slice();
+        node.ingest_manifest(&new_manifest, &new_plan, &mut new_reader)
+            .expect("ingest new site payload");
+
+        let bindings_file = NamedTempFile::new().expect("site bindings file");
+        fs::write(
+            bindings_file.path(),
+            norito::json::to_vec(&crate::sorafs::site::SiteBindingsDocument {
+                version: Some(1),
+                sites: vec![crate::sorafs::site::SiteBinding {
+                    hostname: "taira.sora.org".to_owned(),
+                    manifest_digest_hex: old_manifest_digest_hex,
+                    index_document: None,
+                    spa_fallback: Some(true),
+                }],
+            })
+            .expect("encode site bindings"),
+        )
+        .expect("write site bindings");
+        let _env_guard = SiteBindingsOverrideGuard::set(bindings_file.path());
+
+        let mut world = World::new();
+        let bundle = fixture_public_service_bundle("2026.04.1", "taira.sora.org");
+        let service_name = bundle.service.service_name.clone();
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (
+                bundle.service.service_name.to_string(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name.clone(),
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name,
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::new(),
+                    service_secrets: BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
+                },
+            );
+
+        let app = mk_app_state_for_tests_with_world(world);
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let mut root_headers = HeaderMap::new();
+        root_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
+        assert_eq!(root_response.status(), StatusCode::OK);
+        let root_body = body::to_bytes(root_response.into_body(), usize::MAX)
+            .await
+            .expect("read root body");
+        assert_eq!(root_body, &old_index_bytes[..]);
+
+        let mut manifest_headers = HeaderMap::new();
+        manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let manifest_response =
+            handle_get_sorafs_site_manifest(State(state), manifest_headers).await;
+        assert_eq!(manifest_response.status(), StatusCode::OK);
+        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .expect("read manifest body");
+        let manifest_value: Value =
+            norito::json::from_slice(&manifest_body).expect("decode manifest response");
+        assert_eq!(
+            manifest_value.get("content_cid").and_then(Value::as_str),
+            Some(old_content_cid.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn cid_host_serves_manifest_and_spa_fallback() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let index_bytes = b"<!doctype html><title>CID host</title>";
+        let asset_bytes = b"console.log('cid-host');";
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![
+                FileEntry {
+                    path: vec!["assets".to_owned(), "app.js".to_owned()],
+                    data: asset_bytes.to_vec(),
+                },
+                FileEntry {
+                    path: vec!["index.html".to_owned()],
+                    data: index_bytes.to_vec(),
+                },
+            ],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let manifest = manifest_for_payload(0xD5, &payload);
+        let content_cid = encode_content_cid(&manifest.root_cid);
+        let cid_host = format!("{content_cid}.sorafs.taira.sora.org");
+        let mut reader = payload.as_slice();
+        node.ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest site payload");
+
+        inner.sorafs_node = node;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .live = "sorafs.sora.org".to_owned();
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
+        let state = Arc::new(inner);
+
+        let mut root_headers = HeaderMap::new();
+        root_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&cid_host).expect("cid host header"),
+        );
+        let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
+        assert_eq!(root_response.status(), StatusCode::OK);
+        let root_body = body::to_bytes(root_response.into_body(), usize::MAX)
+            .await
+            .expect("read cid host root body");
+        assert_eq!(root_body, &index_bytes[..]);
+
+        let mut manifest_headers = HeaderMap::new();
+        manifest_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&cid_host).expect("cid host header"),
+        );
+        let manifest_response =
+            handle_get_sorafs_site_manifest(State(state.clone()), manifest_headers).await;
+        assert_eq!(manifest_response.status(), StatusCode::OK);
+        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .expect("read cid host manifest body");
+        let manifest_value: Value =
+            norito::json::from_slice(&manifest_body).expect("decode cid host manifest");
+        assert_eq!(
+            manifest_value.get("hostname").and_then(Value::as_str),
+            Some(cid_host.as_str())
+        );
+        assert_eq!(
+            manifest_value.get("index_document").and_then(Value::as_str),
+            Some("index.html")
+        );
+        assert_eq!(
+            manifest_value.get("spa_fallback").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let mut spa_headers = HeaderMap::new();
+        spa_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&cid_host).expect("cid host header"),
+        );
+        let spa_response = handle_get_sorafs_site_path(
+            State(state.clone()),
+            spa_headers,
+            Path("swap/ton/usdt".to_owned()),
+        )
+        .await;
+        assert_eq!(spa_response.status(), StatusCode::OK);
+        let spa_body = body::to_bytes(spa_response.into_body(), usize::MAX)
+            .await
+            .expect("read cid host spa body");
+        assert_eq!(spa_body, &index_bytes[..]);
+
+        let mut asset_headers = HeaderMap::new();
+        asset_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&cid_host).expect("cid host header"),
+        );
+        let asset_response = handle_get_sorafs_site_path(
+            State(state),
+            asset_headers,
+            Path("assets/app.js".to_owned()),
+        )
+        .await;
+        assert_eq!(asset_response.status(), StatusCode::OK);
+        let asset_body = body::to_bytes(asset_response.into_body(), usize::MAX)
+            .await
+            .expect("read cid host asset body");
+        assert_eq!(asset_body, &asset_bytes[..]);
+    }
+
+    #[tokio::test]
+    async fn cid_host_rejects_invalid_cid_label() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
+        let state = Arc::new(inner);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_static("notacid.sorafs.taira.sora.org"),
+        );
+        let response = handle_get_sorafs_site_root(State(state), headers).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn cid_path_gateway_redirects_browser_navigation_to_canonical_host() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let index_bytes = b"<!doctype html><title>Redirected</title>";
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: index_bytes.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let manifest = manifest_for_payload(0xD7, &payload);
+        let content_cid = encode_content_cid(&manifest.root_cid);
+        let mut reader = payload.as_slice();
+        node.ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest site payload");
+
+        inner.sorafs_node = node;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .path_gateway_redirect = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .redirect_html_only = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
+        let state = Arc::new(inner);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
+        let response = handle_get_sorafs_cid_path(
+            State(state),
+            headers,
+            format!("/sorafs/cid/{content_cid}/swap/ton/usdt?x=1")
+                .parse::<Uri>()
+                .expect("browser redirect uri"),
+            Path((content_cid.clone(), "swap/ton/usdt".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            response.headers().get(header::LOCATION),
+            Some(
+                &HeaderValue::from_str(&format!(
+                    "https://{content_cid}.sorafs.taira.sora.org/swap/ton/usdt?x=1"
+                ))
+                .expect("redirect header")
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn cid_path_gateway_non_browser_request_stays_on_path_gateway() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let asset_bytes = b"console.log('path-gateway');";
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![
+                FileEntry {
+                    path: vec!["assets".to_owned(), "app.js".to_owned()],
+                    data: asset_bytes.to_vec(),
+                },
+                FileEntry {
+                    path: vec!["index.html".to_owned()],
+                    data: b"<!doctype html><title>Path gateway</title>".to_vec(),
+                },
+            ],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let manifest = manifest_for_payload(0xD8, &payload);
+        let content_cid = encode_content_cid(&manifest.root_cid);
+        let mut reader = payload.as_slice();
+        node.ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest site payload");
+
+        inner.sorafs_node = node;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .path_gateway_redirect = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .redirect_html_only = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
+        let state = Arc::new(inner);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+        let response = handle_get_sorafs_cid_path(
+            State(state),
+            headers,
+            format!("/sorafs/cid/{content_cid}/assets/app.js")
+                .parse::<Uri>()
+                .expect("non-browser uri"),
+            Path((content_cid.clone(), "assets/app.js".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(header::LOCATION).is_none());
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read path gateway asset body");
+        assert_eq!(body, &asset_bytes[..]);
+    }
+
+    #[tokio::test]
+    async fn cid_gateway_prefers_site_manifest_when_same_cid_has_blob_and_site_variants() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let index_bytes = b"<!doctype html><title>Preferred site</title>";
+        let asset_bytes = b"console.log('preferred-site');";
+        let files = vec![
+            FileEntry {
+                path: vec!["assets".to_owned(), "app.js".to_owned()],
+                data: asset_bytes.to_vec(),
+            },
+            FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: index_bytes.to_vec(),
+            },
+        ];
+        let (_site_plan, payload) = CarBuildPlan::from_files_with_profile(
+            files.clone(),
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+
+        let blob_manifest = manifest_for_payload(0xD6, &payload);
+        let mut site_manifest = manifest_for_payload(0xD6, &payload);
+        site_manifest
+            .chunking
+            .aliases
+            .push("alias/preferred-site".to_owned());
+        let content_cid = encode_content_cid(&site_manifest.root_cid);
+
+        let blob_plan = CarBuildPlan::single_file(&payload).expect("single-file plan");
+        let mut blob_reader = payload.as_slice();
+        node.ingest_manifest(&blob_manifest, &blob_plan, &mut blob_reader)
+            .expect("ingest blob manifest");
+
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let manifest_b64 = base64::engine::general_purpose::STANDARD
+            .encode(norito::to_bytes(&site_manifest).expect("encode manifest"));
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&payload);
+        let request = StoragePinRequestDto {
+            manifest_b64,
+            payload_b64,
+            files: Some(
+                files
+                    .iter()
+                    .map(|file| StorageFileEntryDto {
+                        path: file.path.clone(),
+                        size: file.data.len() as u64,
+                    })
+                    .collect(),
+            ),
+            stripe_layout: None,
+            chunk_roles: None,
+        };
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state.clone()),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))),
+            JsonOnly(request),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let cid_root = handle_get_sorafs_cid_root(
+            State(state.clone()),
+            HeaderMap::new(),
+            format!("/sorafs/cid/{content_cid}/")
+                .parse::<Uri>()
+                .expect("preferred cid root uri"),
+            Path(content_cid.clone()),
+        )
+        .await;
+        assert_eq!(cid_root.status(), StatusCode::OK);
+        let cid_root_body = body::to_bytes(cid_root.into_body(), usize::MAX)
+            .await
+            .expect("read cid root body");
+        assert_eq!(cid_root_body, &index_bytes[..]);
+
+        let cid_lookup =
+            handle_get_sorafs_cid_lookup(State(state.clone()), Path(content_cid.clone())).await;
+        assert_eq!(cid_lookup.status(), StatusCode::OK);
+        let cid_lookup_body = body::to_bytes(cid_lookup.into_body(), usize::MAX)
+            .await
+            .expect("read cid lookup body");
+        let cid_lookup_value: Value =
+            norito::json::from_slice(&cid_lookup_body).expect("decode cid lookup response");
+        assert_eq!(
+            cid_lookup_value
+                .get("index_document")
+                .and_then(Value::as_str),
+            Some("index.html")
+        );
+        assert_eq!(
+            cid_lookup_value
+                .get("files")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(cid_lookup_value.get("moderation"), Some(&Value::Null));
+    }
+
+    #[tokio::test]
+    async fn cid_lookup_reports_moderation_without_unblocking_gateway_fetches() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+
+        let payload = b"blocked site payload".to_vec();
+        let manifest = manifest_for_payload(0xD9, &payload);
+        let manifest_digest: [u8; 32] = manifest.digest().expect("manifest digest").into();
+        let content_cid = encode_content_cid(&manifest.root_cid);
+        let local_issued_at = SystemTime::now();
+        let plan =
+            CarBuildPlan::single_file_with_profile(&payload, sorafs_chunker::ChunkProfile::DEFAULT)
+                .expect("plan");
+        let mut reader = payload.as_slice();
+        inner
+            .sorafs_node
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest manifest");
+
+        let components = build_sorafs_gateway_security(
+            &inner.sorafs_gateway_config,
+            inner.sorafs_admission.clone(),
+        );
+        inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
+        inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
+        inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        if let Some(denylist) = &inner.sorafs_gateway_denylist {
+            denylist.upsert(
+                crate::sorafs::gateway::DenylistKind::Cid(manifest.root_cid.clone()),
+                crate::sorafs::gateway::DenylistEntryBuilder::default()
+                    .reason("local operator quarantine")
+                    .policy_tier(crate::sorafs::gateway::DenylistPolicyTier::Emergency)
+                    .canon(Some("incident-42"))
+                    .issued_at(local_issued_at)
+                    .expires_at(local_issued_at + Duration::from_secs(600))
+                    .review_deadline(Some(local_issued_at + Duration::from_secs(300)))
+                    .build(),
+            );
+            denylist.upsert(
+                crate::sorafs::gateway::DenylistKind::ManifestDigest(manifest_digest),
+                crate::sorafs::gateway::DenylistEntryBuilder::default()
+                    .reason("governance-backed removal review")
+                    .policy_tier(crate::sorafs::gateway::DenylistPolicyTier::Permanent)
+                    .governance_reference(Some("council-resolution-2026-014"))
+                    .source_pack_id(Some("global-core".to_owned()))
+                    .source_pack_manifest_cid(Some("bafy-pack".to_owned()))
+                    .source_pack_merkle_root(Some("merkle-root".to_owned()))
+                    .issued_by_proposal_id(Some("AC-2026-241".to_owned()))
+                    .review_reference(Some("review-42".to_owned()))
+                    .issued_at(SystemTime::UNIX_EPOCH + Duration::from_secs(900))
+                    .build(),
+            );
+        } else {
+            panic!("gateway denylist must be configured");
+        }
+        let state = Arc::new(inner);
+
+        let cid_lookup =
+            handle_get_sorafs_cid_lookup(State(state.clone()), Path(content_cid.clone())).await;
+        assert_eq!(cid_lookup.status(), StatusCode::OK);
+        let cid_lookup_body = body::to_bytes(cid_lookup.into_body(), usize::MAX)
+            .await
+            .expect("read cid lookup body");
+        let cid_lookup_value: Value =
+            norito::json::from_slice(&cid_lookup_body).expect("decode cid lookup response");
+        let moderation = cid_lookup_value
+            .get("moderation")
+            .and_then(Value::as_object)
+            .expect("moderation payload");
+        assert_eq!(
+            moderation.get("status").and_then(Value::as_str),
+            Some("mixed_blocked")
+        );
+        assert_eq!(
+            moderation
+                .get("public_links_enabled")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let matches = moderation
+            .get("matches")
+            .and_then(Value::as_array)
+            .expect("moderation matches");
+        assert_eq!(matches.len(), 2);
+
+        let local_match = matches
+            .iter()
+            .find(|entry| entry.get("match_kind").and_then(Value::as_str) == Some("cid"))
+            .expect("local cid match");
+        assert_eq!(
+            local_match.get("scope").and_then(Value::as_str),
+            Some("local")
+        );
+        assert_eq!(
+            local_match.get("policy_tier").and_then(Value::as_str),
+            Some("emergency")
+        );
+        assert!(
+            local_match
+                .get("review_due_at")
+                .and_then(Value::as_str)
+                .is_some()
+        );
+
+        let global_match = matches
+            .iter()
+            .find(|entry| {
+                entry.get("match_kind").and_then(Value::as_str) == Some("manifest_digest")
+            })
+            .expect("global manifest match");
+        assert_eq!(
+            global_match.get("scope").and_then(Value::as_str),
+            Some("global")
+        );
+        assert_eq!(
+            global_match.get("pack_id").and_then(Value::as_str),
+            Some("global-core")
+        );
+        assert_eq!(
+            global_match
+                .get("issued_by_proposal_id")
+                .and_then(Value::as_str),
+            Some("AC-2026-241")
+        );
+        assert_eq!(
+            global_match.get("review_reference").and_then(Value::as_str),
+            Some("review-42")
+        );
+
+        let cid_root = handle_get_sorafs_cid_root(
+            State(state),
+            HeaderMap::new(),
+            format!("/sorafs/cid/{content_cid}/")
+                .parse::<Uri>()
+                .expect("cid root uri"),
+            Path(content_cid),
+        )
+        .await;
+        assert_eq!(cid_root.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
+    }
+
+    #[tokio::test]
+    async fn cid_gateway_fetches_and_caches_remote_site_on_miss() {
+        let index_bytes = b"<!doctype html><title>Gateway</title>";
+        let asset_bytes = b"console.log('gateway-cache');";
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![
+                FileEntry {
+                    path: vec!["assets".to_owned(), "app.js".to_owned()],
+                    data: asset_bytes.to_vec(),
+                },
+                FileEntry {
+                    path: vec!["index.html".to_owned()],
+                    data: index_bytes.to_vec(),
+                },
+            ],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let manifest = manifest_for_payload(0xE4, &payload);
+        let manifest_digest: [u8; 32] = manifest.digest().expect("compute manifest digest").into();
+        let manifest_id_hex = hex::encode(manifest_digest);
+        let content_cid = encode_content_cid(&manifest.root_cid);
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind remote storage listener");
+        let remote_origin = format!("http://{}", listener.local_addr().expect("listener addr"));
+        let manifest_requests = Arc::new(AtomicUsize::new(0));
+        let fetch_requests = Arc::new(AtomicUsize::new(0));
+        let remote_provider_id_hex = hex::encode([0x11; 32]);
+        let mut remote_files = Vec::with_capacity(plan.files.len());
+        let mut remote_offset = 0_u64;
+        for file in &plan.files {
+            remote_files.push(StorageStoredFileDto {
+                path: file.path.clone(),
+                offset: remote_offset,
+                size: file.size,
+                first_chunk: file.first_chunk as u64,
+                chunk_count: file.chunk_count as u64,
+            });
+            remote_offset = remote_offset.saturating_add(file.size);
+        }
+        let manifest_response_value = norito::json::to_value(&StorageManifestResponseDto {
+            manifest_id_hex: manifest_id_hex.clone(),
+            manifest_b64: BASE64_STANDARD
+                .encode(norito::to_bytes(&manifest).expect("encode manifest")),
+            manifest_digest_hex: manifest_id_hex.clone(),
+            payload_digest_hex: hex::encode(plan.payload_digest.as_bytes()),
+            content_length: plan.content_length,
+            chunk_count: plan.chunks.len() as u64,
+            chunk_profile_handle: format!(
+                "{}.{}@{}",
+                manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+            ),
+            stored_at_unix_secs: 1_700_000_000,
+            files: remote_files,
+        })
+        .expect("serialize remote manifest response");
+        let fetch_response_value = norito::json::to_value(&StorageFetchResponseDto {
+            manifest_id_hex: manifest_id_hex.clone(),
+            offset: 0,
+            length: payload.len() as u64,
+            data_b64: BASE64_STANDARD.encode(payload.as_slice()),
+        })
+        .expect("serialize remote fetch response");
+        let remote_router = Router::new()
+            .route(
+                "/v1/sorafs/storage/manifest/{manifest_id_hex}",
+                get({
+                    let manifest_requests = Arc::clone(&manifest_requests);
+                    let manifest_id_hex = manifest_id_hex.clone();
+                    let manifest_response_value = manifest_response_value.clone();
+                    move |AxumPath(requested_manifest_id_hex): AxumPath<String>| {
+                        let manifest_requests = Arc::clone(&manifest_requests);
+                        let manifest_id_hex = manifest_id_hex.clone();
+                        let manifest_response_value = manifest_response_value.clone();
+                        async move {
+                            manifest_requests.fetch_add(1, Ordering::SeqCst);
+                            assert_eq!(requested_manifest_id_hex, manifest_id_hex);
+                            crate::JsonBody(manifest_response_value).into_response()
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v1/sorafs/storage/fetch",
+                post({
+                    let fetch_requests = Arc::clone(&fetch_requests);
+                    let provider_id_hex = remote_provider_id_hex.clone();
+                    let manifest_id_hex = manifest_id_hex.clone();
+                    let fetch_response_value = fetch_response_value.clone();
+                    move |body: Bytes| {
+                        let fetch_requests = Arc::clone(&fetch_requests);
+                        let provider_id_hex = provider_id_hex.clone();
+                        let manifest_id_hex = manifest_id_hex.clone();
+                        let fetch_response_value = fetch_response_value.clone();
+                        async move {
+                            fetch_requests.fetch_add(1, Ordering::SeqCst);
+                            let request = norito::json::from_slice::<StorageFetchRequestDto>(&body)
+                                .expect("decode remote fetch request");
+                            assert_eq!(request.manifest_id_hex, manifest_id_hex);
+                            assert_eq!(
+                                request.provider_id_hex.as_deref(),
+                                Some(provider_id_hex.as_str())
+                            );
+                            crate::JsonBody(fetch_response_value).into_response()
+                        }
+                    }
+                }),
+            );
+        let remote_server = tokio::spawn(async move {
+            axum::serve(listener, remote_router)
+                .await
+                .expect("serve remote storage routes");
+        });
+
+        let fixture = make_signed_advert_with_host(&remote_origin);
+        let app = app_state_with_seeded_cache(&fixture);
+        let inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        seed_registry_manifest_for_gateway(&inner.state, &manifest, fixture.provider_id());
+        assert!(
+            inner
+                .sorafs_node
+                .manifest_metadata_by_digest(&manifest_digest)
+                .is_err(),
+            "test node should start without the requested CID cached locally"
+        );
+        let state = Arc::new(inner);
+
+        let cid_root = handle_get_sorafs_cid_root(
+            State(state.clone()),
+            HeaderMap::new(),
+            format!("/sorafs/cid/{content_cid}/")
+                .parse::<Uri>()
+                .expect("remote cid root uri"),
+            Path(content_cid.clone()),
+        )
+        .await;
+        assert_eq!(cid_root.status(), StatusCode::OK);
+        let cid_root_body = body::to_bytes(cid_root.into_body(), usize::MAX)
+            .await
+            .expect("read cid root body");
+        assert_eq!(cid_root_body, &index_bytes[..]);
+        assert_eq!(manifest_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(fetch_requests.load(Ordering::SeqCst), 1);
+
+        let cid_asset = handle_get_sorafs_cid_path(
+            State(state.clone()),
+            HeaderMap::new(),
+            format!("/sorafs/cid/{content_cid}/assets/app.js")
+                .parse::<Uri>()
+                .expect("remote cid asset uri"),
+            Path((content_cid.clone(), "assets/app.js".to_owned())),
+        )
+        .await;
+        assert_eq!(cid_asset.status(), StatusCode::OK);
+        let cid_asset_body = body::to_bytes(cid_asset.into_body(), usize::MAX)
+            .await
+            .expect("read cid asset body");
+        assert_eq!(cid_asset_body, &asset_bytes[..]);
+        assert_eq!(
+            manifest_requests.load(Ordering::SeqCst),
+            1,
+            "second request should hit the local cache instead of re-fetching manifest metadata",
+        );
+        assert_eq!(
+            fetch_requests.load(Ordering::SeqCst),
+            1,
+            "second request should hit the local cache instead of re-fetching payload bytes",
+        );
+        assert!(
+            state
+                .sorafs_node
+                .manifest_metadata_by_digest(&manifest_digest)
+                .is_ok(),
+            "CID gateway miss should hydrate local storage from a remote provider",
+        );
+
+        remote_server.abort();
+    }
+
+    #[tokio::test]
+    async fn app_api_cid_manifest_fetches_and_caches_remote_manifest_on_miss() {
+        let app_api_manifest_bytes = br#"{
+  "schema_version": 1,
+  "app_id": "soraswap.trader",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/v1/contracts/rollups/swaps/fills",
+      "adapter": "contract.rollups.swaps_fills.v1",
+      "cache_ttl_ms": 2500
+    }
+  ]
+}"#
+        .to_vec();
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["app-api.json".to_owned()],
+                data: app_api_manifest_bytes,
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("app api manifest plan");
+        let manifest = manifest_for_payload(0xE5, &payload);
+        let manifest_digest: [u8; 32] = manifest.digest().expect("compute manifest digest").into();
+        let manifest_id_hex = hex::encode(manifest_digest);
+        let content_cid = encode_content_cid(&manifest.root_cid);
+
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind remote storage listener");
+        let remote_origin = format!("http://{}", listener.local_addr().expect("listener addr"));
+        let manifest_requests = Arc::new(AtomicUsize::new(0));
+        let fetch_requests = Arc::new(AtomicUsize::new(0));
+        let remote_provider_id_hex = hex::encode([0x11; 32]);
+        let mut remote_files = Vec::with_capacity(plan.files.len());
+        let mut remote_offset = 0_u64;
+        for file in &plan.files {
+            remote_files.push(StorageStoredFileDto {
+                path: file.path.clone(),
+                offset: remote_offset,
+                size: file.size,
+                first_chunk: file.first_chunk as u64,
+                chunk_count: file.chunk_count as u64,
+            });
+            remote_offset = remote_offset.saturating_add(file.size);
+        }
+        let manifest_response_value = norito::json::to_value(&StorageManifestResponseDto {
+            manifest_id_hex: manifest_id_hex.clone(),
+            manifest_b64: BASE64_STANDARD
+                .encode(norito::to_bytes(&manifest).expect("encode manifest")),
+            manifest_digest_hex: manifest_id_hex.clone(),
+            payload_digest_hex: hex::encode(plan.payload_digest.as_bytes()),
+            content_length: plan.content_length,
+            chunk_count: plan.chunks.len() as u64,
+            chunk_profile_handle: format!(
+                "{}.{}@{}",
+                manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+            ),
+            stored_at_unix_secs: 1_700_000_000,
+            files: remote_files,
+        })
+        .expect("serialize remote manifest response");
+        let fetch_response_value = norito::json::to_value(&StorageFetchResponseDto {
+            manifest_id_hex: manifest_id_hex.clone(),
+            offset: 0,
+            length: payload.len() as u64,
+            data_b64: BASE64_STANDARD.encode(payload.as_slice()),
+        })
+        .expect("serialize remote fetch response");
+        let remote_router = Router::new()
+            .route(
+                "/v1/sorafs/storage/manifest/{manifest_id_hex}",
+                get({
+                    let manifest_requests = Arc::clone(&manifest_requests);
+                    let manifest_id_hex = manifest_id_hex.clone();
+                    let manifest_response_value = manifest_response_value.clone();
+                    move |AxumPath(requested_manifest_id_hex): AxumPath<String>| {
+                        let manifest_requests = Arc::clone(&manifest_requests);
+                        let manifest_id_hex = manifest_id_hex.clone();
+                        let manifest_response_value = manifest_response_value.clone();
+                        async move {
+                            manifest_requests.fetch_add(1, Ordering::SeqCst);
+                            assert_eq!(requested_manifest_id_hex, manifest_id_hex);
+                            crate::JsonBody(manifest_response_value).into_response()
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v1/sorafs/storage/fetch",
+                post({
+                    let fetch_requests = Arc::clone(&fetch_requests);
+                    let provider_id_hex = remote_provider_id_hex.clone();
+                    let manifest_id_hex = manifest_id_hex.clone();
+                    let fetch_response_value = fetch_response_value.clone();
+                    move |body: Bytes| {
+                        let fetch_requests = Arc::clone(&fetch_requests);
+                        let provider_id_hex = provider_id_hex.clone();
+                        let manifest_id_hex = manifest_id_hex.clone();
+                        let fetch_response_value = fetch_response_value.clone();
+                        async move {
+                            fetch_requests.fetch_add(1, Ordering::SeqCst);
+                            let request = norito::json::from_slice::<StorageFetchRequestDto>(&body)
+                                .expect("decode remote fetch request");
+                            assert_eq!(request.manifest_id_hex, manifest_id_hex);
+                            assert_eq!(
+                                request.provider_id_hex.as_deref(),
+                                Some(provider_id_hex.as_str())
+                            );
+                            crate::JsonBody(fetch_response_value).into_response()
+                        }
+                    }
+                }),
+            );
+        let remote_server = tokio::spawn(async move {
+            axum::serve(listener, remote_router)
+                .await
+                .expect("serve remote storage routes");
+        });
+
+        let fixture = make_signed_advert_with_host(&remote_origin);
+        let app = app_state_with_seeded_cache(&fixture);
+        let inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        seed_registry_manifest_for_gateway(&inner.state, &manifest, fixture.provider_id());
+        assert!(
+            inner
+                .sorafs_node
+                .manifest_metadata_by_digest(&manifest_digest)
+                .is_err(),
+            "test node should start without the requested app api CID cached locally"
+        );
+        let state = Arc::new(inner);
+
+        let manifest_response = crate::app_api::handle_get_app_api_cid_manifest(
+            State(state.clone()),
+            Path(content_cid.clone()),
+        )
+        .await;
+        assert_eq!(manifest_response.status(), StatusCode::OK);
+        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .expect("read app api manifest body");
+        let manifest_value: Value =
+            norito::json::from_slice(&manifest_body).expect("decode app api manifest response");
+        assert_eq!(
+            manifest_value.get("app_id").and_then(Value::as_str),
+            Some("soraswap.trader")
+        );
+        assert_eq!(
+            manifest_value.get("content_cid").and_then(Value::as_str),
+            Some(content_cid.as_str())
+        );
+        assert_eq!(manifest_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(fetch_requests.load(Ordering::SeqCst), 1);
+        assert!(
+            state
+                .sorafs_node
+                .manifest_metadata_by_digest(&manifest_digest)
+                .is_ok(),
+            "app api CID miss should hydrate local storage from a remote provider",
+        );
+
+        let manifest_response =
+            crate::app_api::handle_get_app_api_cid_manifest(State(state), Path(content_cid)).await;
+        assert_eq!(manifest_response.status(), StatusCode::OK);
+        assert_eq!(
+            manifest_requests.load(Ordering::SeqCst),
+            1,
+            "second request should hit the local cache instead of re-fetching manifest metadata",
+        );
+        assert_eq!(
+            fetch_requests.load(Ordering::SeqCst),
+            1,
+            "second request should hit the local cache instead of re-fetching payload bytes",
+        );
+
+        remote_server.abort();
+    }
+
+    #[tokio::test]
+    async fn storage_pin_rejects_denylisted_cid() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let components = build_sorafs_gateway_security(
+            &inner.sorafs_gateway_config,
+            inner.sorafs_admission.clone(),
+        );
+        inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
+        inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
+        inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        if let Some(denylist) = &inner.sorafs_gateway_denylist {
+            let metadata = crate::sorafs::gateway::DenylistEntryBuilder::default()
+                .reason("blocked test payload")
+                .build();
+            denylist.upsert(
+                crate::sorafs::gateway::DenylistKind::Cid(vec![0xAA; 16]),
+                metadata,
+            );
+        } else {
+            panic!("gateway denylist must be configured");
+        }
+        let state = Arc::new(inner);
+
+        let payload = b"denylisted site payload";
+        let plan = CarBuildPlan::single_file(payload).expect("plan");
+        let manifest = ManifestBuilder::new()
+            .root_cid(vec![0xAA; 16])
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(
+                sorafs_chunker::ChunkProfile::DEFAULT,
+                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+            )
+            .content_length(plan.content_length)
+            .car_digest(blake3::hash(payload).into())
+            .car_size(plan.content_length)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .expect("manifest");
+        let request = StoragePinRequestDto {
+            manifest_b64: BASE64_STANDARD
+                .encode(norito::to_bytes(&manifest).expect("manifest bytes")),
+            payload_b64: BASE64_STANDARD.encode(payload),
+            ..Default::default()
+        };
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8111))),
+            JsonOnly(request),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
+    }
+
+    #[tokio::test]
+    async fn denylist_catalog_endpoints_report_active_packs() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let tempdir = TempDir::new().expect("tempdir");
+        let core_path = tempdir.path().join("global-core.json");
+        let emergency_path = tempdir.path().join("global-emergency.json");
+        let catalog_path = tempdir.path().join("catalog.json");
+
+        fs::write(
+            &core_path,
+            r#"[
+  {
+    "kind": "cid",
+    "cid_utf8": "bafycore",
+    "reason": "core"
+  }
+]"#,
+        )
+        .expect("write core denylist pack");
+        fs::write(
+            &emergency_path,
+            r#"[
+  {
+    "kind": "cid",
+    "cid_utf8": "bafyemergency",
+    "reason": "emergency"
+  }
+]"#,
+        )
+        .expect("write emergency denylist pack");
+        fs::write(
+            &catalog_path,
+            r#"{
+  "version": 1,
+  "packs": [
+    {
+      "pack_id": "global-core",
+      "path": "global-core.json",
+      "default_enabled": true,
+      "policy_tier": "standard",
+      "manifest_cid": "bafycorepack"
+    },
+    {
+      "pack_id": "global-emergency",
+      "path": "global-emergency.json",
+      "default_enabled": true,
+      "policy_tier": "emergency",
+      "manifest_cid": "bafyemergencypack"
+    }
+  ]
+}"#,
+        )
+        .expect("write denylist catalog");
+
+        inner.sorafs_gateway_config.denylist.catalog_path = Some(catalog_path);
+        inner.sorafs_gateway_config.denylist.opt_out_packs = vec!["global-emergency".to_owned()];
+
+        let components = build_sorafs_gateway_security(
+            &inner.sorafs_gateway_config,
+            inner.sorafs_admission.clone(),
+        );
+        inner.sorafs_gateway_policy = Some(components.policy.clone());
+        inner.sorafs_gateway_denylist = Some(components.denylist.clone());
+        inner.sorafs_gateway_denylist_catalog = components.denylist_catalog.clone();
+        inner.sorafs_gateway_tls_state = Some(components.tls_state.clone());
+        let state = Arc::new(inner);
+
+        let catalog_response = handle_get_sorafs_denylist_catalog(State(state.clone())).await;
+        assert_eq!(catalog_response.status(), StatusCode::OK);
+        let catalog_body = body::to_bytes(catalog_response.into_body(), usize::MAX)
+            .await
+            .expect("read catalog body");
+        let catalog_value: Value =
+            norito::json::from_slice(&catalog_body).expect("decode catalog response");
+        let packs = catalog_value
+            .get("packs")
+            .and_then(Value::as_array)
+            .expect("packs array");
+        assert_eq!(packs.len(), 2);
+        assert_eq!(
+            catalog_value
+                .get("opt_out_packs")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            packs[0].get("pack_id").and_then(Value::as_str),
+            Some("global-core")
+        );
+        assert_eq!(packs[0].get("active").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            packs[1].get("pack_id").and_then(Value::as_str),
+            Some("global-emergency")
+        );
+        assert_eq!(packs[1].get("active").and_then(Value::as_bool), Some(false));
+
+        let pack_response =
+            handle_get_sorafs_denylist_pack(State(state), Path("global-core".to_owned())).await;
+        assert_eq!(pack_response.status(), StatusCode::OK);
+        let pack_body = body::to_bytes(pack_response.into_body(), usize::MAX)
+            .await
+            .expect("read pack body");
+        let pack_value: Value = norito::json::from_slice(&pack_body).expect("decode pack response");
+        assert_eq!(
+            pack_value.get("pack_id").and_then(Value::as_str),
+            Some("global-core")
+        );
+        assert_eq!(
+            pack_value.get("active").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            pack_value.get("manifest_cid").and_then(Value::as_str),
+            Some("bafycorepack")
+        );
     }
 
     #[tokio::test]
@@ -9882,11 +13187,11 @@ mod advert_tests {
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_NAME),
-            HeaderValue::from_static("alice@wonderland"),
+            HeaderValue::from_static("alice@banka.dataspace"),
         );
         fetch_headers.insert(
             header::HeaderName::from_static(HEADER_SORA_PROOF),
-            alias_proof_header("alice@wonderland"),
+            alias_proof_header("alice@banka.dataspace"),
         );
 
         let fetch_request = StorageFetchRequestDto {
@@ -10236,6 +13541,7 @@ mod advert_tests {
         let pin_request = StoragePinRequestDto {
             manifest_b64,
             payload_b64,
+            files: None,
             stripe_layout: Some(stripe_layout),
             chunk_roles: Some(chunk_roles.clone()),
         };
@@ -10294,6 +13600,7 @@ mod advert_tests {
         let pin_request = StoragePinRequestDto {
             manifest_b64,
             payload_b64,
+            files: None,
             stripe_layout: Some(DaStripeLayout {
                 total_stripes: 1,
                 shards_per_stripe: 1,
@@ -11727,11 +15034,11 @@ mod advert_tests {
             );
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_NAME),
-                HeaderValue::from_static("alias@capability"),
+                HeaderValue::from_static("alias@capability.dataspace"),
             );
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_PROOF),
-                alias_proof_header("alias@capability"),
+                alias_proof_header("alias@capability.dataspace"),
             );
             headers.insert(
                 header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
@@ -12707,6 +16014,130 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn car_range_rate_limit_uses_forwarded_client_ip_from_trusted_proxy() {
+        let mut context = token_test_context();
+        let mut app_inner = Arc::try_unwrap(context.app)
+            .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
+        let mut gateway_config = app_inner.sorafs_gateway_config.clone();
+        gateway_config.enforce_admission = false;
+        gateway_config.rate_limit.max_requests = Some(NonZeroU32::new(1).expect("non-zero"));
+        gateway_config.rate_limit.window = Duration::from_mins(1);
+        gateway_config.rate_limit.ban = None;
+        let components =
+            build_sorafs_gateway_security(&gateway_config, app_inner.sorafs_admission.clone());
+        app_inner.sorafs_gateway_config = gateway_config;
+        app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
+        app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
+        app_inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        app_inner.trusted_proxy_nets =
+            Arc::new(crate::limits::parse_cidrs(&["127.0.0.0/8".into()]));
+        context.app = Arc::new(app_inner);
+
+        let manifest = context
+            .app
+            .sorafs_node
+            .manifest_metadata(&context.manifest_id_hex)
+            .expect("manifest");
+        let end = manifest.content_length().saturating_sub(1);
+        let trusted_token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
+        let untrusted_token_base64 = issue_token_base64(&context, TokenOverrides::default()).await;
+        let trusted_proxy = ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8093)));
+        let untrusted_remote = ConnectInfo(SocketAddr::from(([198, 51, 100, 10], 8093)));
+
+        let build_headers =
+            |nonce: &'static str, forwarded_ip: Option<&'static str>, token_base64: &str| {
+                let mut headers = HeaderMap::new();
+                headers.insert(
+                    header::RANGE,
+                    HeaderValue::from_str(&format!("bytes=0-{end}")).expect("range header"),
+                );
+                headers.insert(
+                    header::HeaderName::from_static(HEADER_DAG_SCOPE),
+                    HeaderValue::from_static("block"),
+                );
+                headers.insert(
+                    header::HeaderName::from_static(HEADER_SORA_CHUNKER),
+                    header_value(manifest.chunk_profile_handle(), "X-SoraFS-Chunker"),
+                );
+                headers.insert(
+                    header::HeaderName::from_static(HEADER_SORA_NONCE),
+                    HeaderValue::from_static(nonce),
+                );
+                headers.insert(
+                    header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
+                    header_value(token_base64, "X-SoraFS-Stream-Token"),
+                );
+                headers.insert(
+                    header::HeaderName::from_static(HEADER_SORA_MANIFEST_ENVELOPE),
+                    HeaderValue::from_static("dummy"),
+                );
+                headers.insert(
+                    header::HeaderName::from_static(HEADER_SORA_CLIENT),
+                    HeaderValue::from_static("gateway-alpha"),
+                );
+                if let Some(ip) = forwarded_ip {
+                    headers.insert(
+                        header::HeaderName::from_static(crate::limits::REMOTE_ADDR_HEADER),
+                        HeaderValue::from_static(ip),
+                    );
+                }
+                headers
+            };
+
+        let response = handle_get_sorafs_storage_car_range(
+            State(context.app.clone()),
+            Path(context.manifest_id_hex.clone()),
+            build_headers("nonce-fwd-a-0", Some("203.0.113.10"), &trusted_token_base64),
+            trusted_proxy.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+
+        let response = handle_get_sorafs_storage_car_range(
+            State(context.app.clone()),
+            Path(context.manifest_id_hex.clone()),
+            build_headers("nonce-fwd-b-0", Some("203.0.113.11"), &trusted_token_base64),
+            trusted_proxy.clone(),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::PARTIAL_CONTENT,
+            "distinct forwarded client IPs should not share one gateway bucket"
+        );
+
+        let response = handle_get_sorafs_storage_car_range(
+            State(context.app.clone()),
+            Path(context.manifest_id_hex.clone()),
+            build_headers("nonce-fwd-a-1", Some("203.0.113.10"), &trusted_token_base64),
+            trusted_proxy,
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "reusing the same trusted forwarded client IP should hit the same gateway bucket"
+        );
+
+        let response = handle_get_sorafs_storage_car_range(
+            State(context.app),
+            Path(context.manifest_id_hex),
+            build_headers(
+                "nonce-untrusted-0",
+                Some("203.0.113.10"),
+                &untrusted_token_base64,
+            ),
+            untrusted_remote,
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            StatusCode::PARTIAL_CONTENT,
+            "untrusted peers must not inherit the trusted client's forwarded-IP bucket"
+        );
+    }
+
+    #[tokio::test]
     async fn chunk_range_blocked_for_denylisted_provider() {
         let mut context = token_test_context();
         let manifest = context
@@ -13461,6 +16892,10 @@ mod advert_tests {
     }
 
     fn make_signed_advert() -> ProviderFixture {
+        make_signed_advert_with_host("storage.example.test")
+    }
+
+    fn make_signed_advert_with_host(host_pattern: &str) -> ProviderFixture {
         let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
         let provider_id = [0x11; 32];
         let stake_pool_id = [0x21; 32];
@@ -13506,7 +16941,7 @@ mod advert_tests {
             capabilities: capabilities.clone(),
             endpoints: vec![AdvertEndpoint {
                 kind: EndpointKind::Torii,
-                host_pattern: "storage.example.test".to_owned(),
+                host_pattern: host_pattern.to_owned(),
                 metadata: vec![EndpointMetadata {
                     key: EndpointMetadataKey::Region,
                     value: b"global".to_vec(),

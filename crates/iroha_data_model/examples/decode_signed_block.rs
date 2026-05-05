@@ -192,6 +192,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                         }
                     }
+                    Executable::ContractCall(call) => {
+                        println!(
+                            "  contract call: address={} entrypoint={} payload={:?}",
+                            call.contract_address, call.entrypoint, call.payload
+                        );
+                    }
                     Executable::Ivm(bytecode) => {
                         println!("  ivm bytecode: {bytecode:?}");
                     }

@@ -44,19 +44,18 @@ struct AdversarialSetup {
 fn setup_world() -> AdversarialSetup {
     let (alice_id, alice_kp) = gen_account_in("wonderland");
     let (bob_id, _) = gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
         NumericSpec::default(),
     )
     .build(&alice_id);
-    let alice_account =
-        Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
-    let bob_account = Account::new(bob_id.clone().to_account_id(domain_id)).build(&alice_id);
+    let alice_account = Account::new(alice_id.clone()).build(&alice_id);
+    let bob_account = Account::new(bob_id.clone()).build(&alice_id);
 
     let alice_asset_id = AssetId::of(ad.id().clone(), alice_id.clone());
     let bob_asset_id = AssetId::of(ad.id().clone(), bob_id.clone());
@@ -115,7 +114,7 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     let mut ivm_cache = IvmCache::new();
 
     let ghost_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "ghost".parse().unwrap(),
     );
     let ghost_asset_id = AssetId::of(ghost_def, alice_id.clone());

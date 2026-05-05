@@ -20,7 +20,7 @@ public final class HttpClientTransportExportOptionsTests {
   }
 
   private static void passphraseProviderArraysAreWipedAfterUse() throws Exception {
-    final IrohaKeyManager keyManager = IrohaKeyManager.withSoftwareFallback();
+    final IrohaKeyManager keyManager = IrohaKeyManager.withSoftwareProvider();
     keyManager.generateOrLoad("alias", KeySecurityPreference.SOFTWARE_ONLY);
     final char[] shared = "export-passphrase".toCharArray();
 

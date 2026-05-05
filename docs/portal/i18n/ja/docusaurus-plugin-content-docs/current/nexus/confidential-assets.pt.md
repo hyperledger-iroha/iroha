@@ -91,7 +91,7 @@ Rust の財布の説明。
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -237,7 +237,7 @@ Documente は、オペラの運用手順書を無効にします。管理政治�
 - アカウントの派生階層:
   - `sk_spend` -> `nk` (無効化キー)、`ivk` (受信表示キー)、`ovk` (送信表示キー)、`fvk`。
 - ECDH から派生した AEAD com 共有キーを暗号化するペイロード。監査人の意見を反映した監査結果のキーを表示し、出力が政治資産に準拠していることを確認します。
-- CLI の関連性: `confidential create-keys`、`confidential send`、`confidential export-view-key`、記述メモの監査ツール、製品/検査エンベロープ Norito のヘルパー `iroha app zk envelope` オフライン。 Torii は、`POST /v1/confidential/derive-keyset` 経由での派生メッセージの詳細を説明し、16 進数の Base64 パラケ ウォレット プログラムの階層を表示します。
+- CLI の関連性: `confidential create-keys`、`confidential send`、`confidential export-view-key`、記述メモの監査ツール、製品/検査エンベロープ Norito のヘルパー `iroha app zk envelope` オフライン。
 
 ## ガス、制限、DoS 制御
 - ガスのスケジュール決定:

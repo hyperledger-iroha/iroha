@@ -32,7 +32,7 @@ translator: machine-google-reviewed
   სურვილისამებრ სკუპირება ერთი აქტივის განსაზღვრებამდე. CLI მაგალითი:
 
   ```bash
-  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "rose#wonderland" } }'
+  iroha ledger events data watch --filter '{ "confidential": { "asset_definition_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM" } }'
   ```
 
 - პოლიტიკის მეტამონაცემები და მომლოდინე გადასვლები ხელმისაწვდომია მეშვეობით

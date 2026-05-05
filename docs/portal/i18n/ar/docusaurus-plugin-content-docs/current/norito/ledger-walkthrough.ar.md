@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 IP الدليل، استبدل `$ADMIN_ACCOUNT` و `$RECEIVER_ACCOUNT` بمعرفات الحساب التي تخطط لاستخدامها. تتضمن ـ الحزمة الافتراضية بالفعل حسابين مشتقين من مفاتيح العرض:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 قيم القيم عبر سرد اولى آت:
@@ -46,7 +46,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts داخل wonderland (استبدل --limit بعدد اكبر عند الحاجة)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions الموجودة مسبقا
@@ -59,14 +59,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 يطبع CLI hash مميزة (مثلا `0x5f…`). احفظه كي يتعلم عن الحالة لاحقا.
 
 ## 3. وحدات سك في حسابات التشغيل
 
-هناك المزيد من الاصول تحت الزوج `(asset definition, account)`. اسك 250 وحدة من `coffee#wonderland` في `$ADMIN_ACCOUNT`:
+هناك المزيد من الاصول تحت الزوج `(asset definition, account)`. اسك 250 وحدة من `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` في `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

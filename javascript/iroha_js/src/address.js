@@ -3,8 +3,14 @@
 import { Buffer } from "node:buffer";
 import { domainToASCII } from "node:url";
 import { blake2b256 } from "./blake2b.js";
-import { getNativeBinding } from "./native.js";
-export const DEFAULT_DOMAIN_NAME = "default";
+import {
+  canonicalCurveAlgorithm,
+  CURVE_PUBLIC_KEY_LENGTH,
+  CurveFeature,
+  CurveId,
+  getCurveEntryByAlgorithm,
+  getCurveEntryById,
+} from "./curveRegistry.js";
 const DEFAULT_I105_DISCRIMINANT = 0x02f1;
 const I105_DISCRIMINANT_MAX = 0xffff;
 const HEADER_VERSION_V1 = 0;
@@ -13,124 +19,10 @@ const I105_SENTINEL_SORA = "sora";
 const I105_SENTINEL_TEST = "test";
 const I105_SENTINEL_DEV = "dev";
 const I105_SENTINEL_NUMERIC_PREFIX = "n";
-const I105_SENTINEL_SORA_FULLWIDTH = "ｓｏｒａ";
-const I105_SENTINEL_TEST_FULLWIDTH = "ｔｅｓｔ";
-const I105_SENTINEL_DEV_FULLWIDTH = "ｄｅｖ";
-const I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH = "ｎ";
 const I105_CHECKSUM_LEN = 6;
 const BECH32M_CONST = 0x2bc830a3;
 const I105_WARNING =
-  "I105 addresses are the canonical account literal encoding. Use the chain-discriminant sentinel (for example, `sora` on discriminant 753).";
-const I105_ASCII_ALPHABET = [
-  "1",
-  "2",
-  "3",
-  "4",
-  "5",
-  "6",
-  "7",
-  "8",
-  "9",
-  "A",
-  "B",
-  "C",
-  "D",
-  "E",
-  "F",
-  "G",
-  "H",
-  "J",
-  "K",
-  "L",
-  "M",
-  "N",
-  "P",
-  "Q",
-  "R",
-  "S",
-  "T",
-  "U",
-  "V",
-  "W",
-  "X",
-  "Y",
-  "Z",
-  "a",
-  "b",
-  "c",
-  "d",
-  "e",
-  "f",
-  "g",
-  "h",
-  "i",
-  "j",
-  "k",
-  "m",
-  "n",
-  "o",
-  "p",
-  "q",
-  "r",
-  "s",
-  "t",
-  "u",
-  "v",
-  "w",
-  "x",
-  "y",
-  "z",
-];
-
-const SORA_KANA = [
-  "ｲ",
-  "ﾛ",
-  "ﾊ",
-  "ﾆ",
-  "ﾎ",
-  "ﾍ",
-  "ﾄ",
-  "ﾁ",
-  "ﾘ",
-  "ﾇ",
-  "ﾙ",
-  "ｦ",
-  "ﾜ",
-  "ｶ",
-  "ﾖ",
-  "ﾀ",
-  "ﾚ",
-  "ｿ",
-  "ﾂ",
-  "ﾈ",
-  "ﾅ",
-  "ﾗ",
-  "ﾑ",
-  "ｳ",
-  "ヰ",
-  "ﾉ",
-  "ｵ",
-  "ｸ",
-  "ﾔ",
-  "ﾏ",
-  "ｹ",
-  "ﾌ",
-  "ｺ",
-  "ｴ",
-  "ﾃ",
-  "ｱ",
-  "ｻ",
-  "ｷ",
-  "ﾕ",
-  "ﾒ",
-  "ﾐ",
-  "ｼ",
-  "ヱ",
-  "ﾋ",
-  "ﾓ",
-  "ｾ",
-  "ｽ",
-];
+  "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 half-width katakana from the Iroha poem. Render and validate them with the intended chain discriminant.";
 
 const MULTISIG_DIGEST_PERSONALIZATION = (() => {
   const bytes = new Uint8Array(16);
@@ -138,99 +30,16 @@ const MULTISIG_DIGEST_PERSONALIZATION = (() => {
   return bytes;
 })();
 
-const nativeBinding = getNativeBinding();
-const nativeAddressCodec = initNativeAddressCodec(nativeBinding);
-
-const SORA_KANA_FULLWIDTH = [
-  "イ",
-  "ロ",
-  "ハ",
-  "ニ",
-  "ホ",
-  "ヘ",
-  "ト",
-  "チ",
-  "リ",
-  "ヌ",
-  "ル",
-  "ヲ",
-  "ワ",
-  "カ",
-  "ヨ",
-  "タ",
-  "レ",
-  "ソ",
-  "ツ",
-  "ネ",
-  "ナ",
-  "ラ",
-  "ム",
-  "ウ",
-  "ヰ",
-  "ノ",
-  "オ",
-  "ク",
-  "ヤ",
-  "マ",
-  "ケ",
-  "フ",
-  "コ",
-  "エ",
-  "テ",
-  "ア",
-  "サ",
-  "キ",
-  "ユ",
-  "メ",
-  "ミ",
-  "シ",
-  "ヱ",
-  "ヒ",
-  "モ",
-  "セ",
-  "ス",
+const BASE58_ALPHABET = Array.from(
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz",
+);
+const IROHA_POEM_KANA_HALFWIDTH = [
+  "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ",
+  "ﾖ", "ﾀ", "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ",
+  "ﾔ", "ﾏ", "ｹ", "ﾌ", "ｺ", "ｴ", "ﾃ", "ｱ", "ｻ", "ｷ", "ﾕ", "ﾒ", "ﾐ", "ｼ",
+  "ヱ", "ﾋ", "ﾓ", "ｾ", "ｽ",
 ];
-
-function domainSelectorDetails(selector) {
-  if (!selector) {
-    return { tag: null, digestHex: null, registryId: null, label: null };
-  }
-  return {
-    tag: selector.tag,
-    digestHex:
-      selector.payload && selector.payload.length > 0
-        ? Buffer.from(selector.payload).toString("hex")
-        : null,
-    registryId: decodeRegistryId(selector),
-    label: selector.tag === 0 ? DEFAULT_DOMAIN_NAME : null,
-  };
-}
-
-function assertDomainMatches(address, expectedDomainName) {
-  if (expectedDomainName === undefined || expectedDomainName === null) {
-    return;
-  }
-  if (typeof expectedDomainName !== "string") {
-    throw new TypeError("expected domain name must be a string");
-  }
-  const normalizedDomain = expectedDomainName.trim();
-  if (normalizedDomain.length === 0) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.DOMAIN_MISMATCH,
-      "account address domain selector does not match an empty domain",
-      { details: { expectedDomain: expectedDomainName } },
-    );
-  }
-  // Account IDs are globally scoped in v1; expectedDomain is validated but not bound to payload.
-  canonicalizeDomainLabel(normalizedDomain);
-}
-
-const I105_ALPHABET = I105_ASCII_ALPHABET.concat(SORA_KANA);
-const I105_ALPHABET_FULLWIDTH = I105_ASCII_ALPHABET.concat(SORA_KANA_FULLWIDTH);
-const I105_DIGIT_INDEX = new Map(I105_ALPHABET.map((symbol, idx) => [symbol, idx]));
-for (const [idx, symbol] of I105_ALPHABET_FULLWIDTH.entries()) {
-  I105_DIGIT_INDEX.set(symbol, idx);
-}
+const I105_ALPHABET = [...BASE58_ALPHABET, ...IROHA_POEM_KANA_HALFWIDTH];
 const I105_BASE = I105_ALPHABET.length;
 
 export const AccountAddressErrorCode = Object.freeze({
@@ -287,58 +96,10 @@ const AddressClass = Object.freeze({
 
 const CONTROLLER_TAG_SINGLE = 0x00;
 const CONTROLLER_TAG_MULTISIG = 0x01;
-const MULTISIG_MEMBER_MAX = 0xff;
+const MULTISIG_MEMBER_MAX = 0xffff;
 const MULTISIG_POLICY_VERSION = 1;
 const HEX_BODY_RE = /^[0-9a-fA-F]+$/;
-
-const CurveFeature = Object.freeze({
-  NONE: null,
-  ML_DSA: "ml-dsa",
-  GOST: "gost",
-  SM2: "sm",
-});
-
-const CurveId = Object.freeze({
-  ED25519: 1,
-  MLDSA: 2,
-  GOST_256_A: 10,
-  GOST_256_B: 11,
-  GOST_256_C: 12,
-  GOST_512_A: 13,
-  GOST_512_B: 14,
-  SM2: 15,
-});
-
-const CURVE_REGISTRY = [
-  { id: CurveId.ED25519, feature: CurveFeature.NONE, aliases: ["ed25519", "ed"] },
-  { id: CurveId.MLDSA, feature: CurveFeature.ML_DSA, aliases: ["ml-dsa", "mldsa", "ml_dsa"] },
-  {
-    id: CurveId.GOST_256_A,
-    feature: CurveFeature.GOST,
-    aliases: ["gost256a", "gost-256-a"],
-  },
-  {
-    id: CurveId.GOST_256_B,
-    feature: CurveFeature.GOST,
-    aliases: ["gost256b", "gost-256-b"],
-  },
-  {
-    id: CurveId.GOST_256_C,
-    feature: CurveFeature.GOST,
-    aliases: ["gost256c", "gost-256-c"],
-  },
-  {
-    id: CurveId.GOST_512_A,
-    feature: CurveFeature.GOST,
-    aliases: ["gost512a", "gost-512-a"],
-  },
-  {
-    id: CurveId.GOST_512_B,
-    feature: CurveFeature.GOST,
-    aliases: ["gost512b", "gost-512-b"],
-  },
-  { id: CurveId.SM2, feature: CurveFeature.SM2, aliases: ["sm2", "sm-2"] },
-];
+const SM2_DEFAULT_DISTINGUISHED_ID = "1234567812345678";
 
 const ED25519_FIELD_MODULUS = BigInt("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed");
 const ED25519_SMALL_ORDER_ENCODINGS = [
@@ -352,37 +113,16 @@ const ED25519_SMALL_ORDER_ENCODINGS = [
   "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
 ].map((hex) => normalizeBytes(hex));
 
-const CURVE_NAME_TO_ENTRY = new Map();
-const CURVE_ID_TO_ENTRY = new Map();
-for (const entry of CURVE_REGISTRY) {
-  CURVE_ID_TO_ENTRY.set(entry.id, entry);
-  for (const alias of entry.aliases) {
-    CURVE_NAME_TO_ENTRY.set(alias, entry);
-  }
-}
-
-let enabledCurveIds = new Set([CurveId.ED25519]);
 let enabledFeatures = new Set();
-
-const CURVE_PUBLIC_KEY_LENGTH = new Map([
-  [CurveId.ED25519, 32],
-  [CurveId.MLDSA, 32],
-  [CurveId.GOST_256_A, 64],
-  [CurveId.GOST_256_B, 64],
-  [CurveId.GOST_256_C, 64],
-  [CurveId.GOST_512_A, 128],
-  [CurveId.GOST_512_B, 128],
-  [CurveId.SM2, 65],
-]);
 
 function normalizeCurveSupportOptions(options) {
   if (options === undefined) {
-    return { allowMlDsa: false, allowGost: false, allowSm2: false };
+    return { allowMlDsa: false, allowGost: false, allowSm2: false, allowBls: false };
   }
   if (!isPlainObject(options)) {
     throw new TypeError("configureCurveSupport options must be an object");
   }
-  const allowedKeys = new Set(["allowMlDsa", "allowGost", "allowSm2"]);
+  const allowedKeys = new Set(["allowMlDsa", "allowGost", "allowSm2", "allowBls"]);
   const extras = Object.keys(options).filter((key) => !allowedKeys.has(key));
   if (extras.length > 0) {
     throw new TypeError(
@@ -407,32 +147,34 @@ function normalizeCurveSupportOptions(options) {
   ) {
     throw new TypeError("configureCurveSupport options.allowSm2 must be a boolean");
   }
+  if (
+    Object.prototype.hasOwnProperty.call(options, "allowBls") &&
+    typeof options.allowBls !== "boolean"
+  ) {
+    throw new TypeError("configureCurveSupport options.allowBls must be a boolean");
+  }
   return {
     allowMlDsa: options.allowMlDsa === true,
     allowGost: options.allowGost === true,
     allowSm2: options.allowSm2 === true,
+    allowBls: options.allowBls === true,
   };
 }
 
 export function configureCurveSupport(options) {
-  const { allowMlDsa, allowGost, allowSm2 } = normalizeCurveSupportOptions(options);
-  enabledCurveIds = new Set([CurveId.ED25519]);
+  const { allowMlDsa, allowGost, allowSm2, allowBls } = normalizeCurveSupportOptions(options);
   enabledFeatures = new Set();
   if (allowMlDsa) {
-    enabledCurveIds.add(CurveId.MLDSA);
     enabledFeatures.add(CurveFeature.ML_DSA);
   }
   if (allowGost) {
     enabledFeatures.add(CurveFeature.GOST);
-    enabledCurveIds.add(CurveId.GOST_256_A);
-    enabledCurveIds.add(CurveId.GOST_256_B);
-    enabledCurveIds.add(CurveId.GOST_256_C);
-    enabledCurveIds.add(CurveId.GOST_512_A);
-    enabledCurveIds.add(CurveId.GOST_512_B);
   }
   if (allowSm2) {
-    enabledCurveIds.add(CurveId.SM2);
     enabledFeatures.add(CurveFeature.SM2);
+  }
+  if (allowBls) {
+    enabledFeatures.add(CurveFeature.BLS);
   }
 }
 
@@ -444,7 +186,7 @@ function isFeatureEnabled(feature) {
 
 function ensureCurveEnabled(entry, context) {
   if (!isFeatureEnabled(entry.feature)) {
-    const label = entry.aliases[0];
+    const label = entry.algorithm;
     throw new AccountAddressError(
       AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
       `${context ?? "curve"} disabled by configuration: ${label}`,
@@ -454,7 +196,7 @@ function ensureCurveEnabled(entry, context) {
 }
 
 function ensureCurveIdEnabled(curveId, context) {
-  const entry = CURVE_ID_TO_ENTRY.get(curveId);
+  const entry = getCurveEntryById(curveId);
   if (!entry) {
     throw new AccountAddressError(
       AccountAddressErrorCode.UNKNOWN_CURVE,
@@ -513,6 +255,23 @@ function assertEd25519NotSmallOrder(keyBytes, context) {
 
 function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
   const entry = ensureCurveIdEnabled(curveId, context);
+  if (entry.id === CurveId.SM2) {
+    const rawSm2Length = CURVE_PUBLIC_KEY_LENGTH.get(entry.id);
+    if (keyBytes.length === rawSm2Length) {
+      return;
+    }
+    if (keyBytes.length >= 2 + rawSm2Length) {
+      const distidLength = (keyBytes[0] << 8) | keyBytes[1];
+      if (keyBytes.length === 2 + distidLength + rawSm2Length) {
+        return;
+      }
+    }
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+      `invalid ${entry.algorithm} ${context}: expected raw ${rawSm2Length}-byte SEC1 data or canonical payload`,
+      { details: { curveId: entry.id, length: keyBytes.length, expectedLength: rawSm2Length } },
+    );
+  }
   const expectedLength = CURVE_PUBLIC_KEY_LENGTH.get(entry.id);
   if (expectedLength === undefined) {
     throw new AccountAddressError(
@@ -522,7 +281,7 @@ function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
     );
   }
   if (keyBytes.length !== expectedLength) {
-    const label = entry.aliases?.[0] ?? `curve id ${entry.id}`;
+    const label = entry.algorithm ?? `curve id ${entry.id}`;
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_PUBLIC_KEY,
       `invalid ${label} ${context}: expected ${expectedLength} bytes`,
@@ -533,6 +292,30 @@ function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
     assertEd25519CanonicalEncoding(keyBytes, context);
     assertEd25519NotSmallOrder(keyBytes, context);
   }
+}
+
+function normalizeControllerPublicKeyForCurve(curveId, keyBytes, context = "public key") {
+  validatePublicKeyForCurve(curveId, keyBytes, context);
+  if (curveId !== CurveId.SM2) {
+    return keyBytes;
+  }
+  const rawSm2Length = CURVE_PUBLIC_KEY_LENGTH.get(CurveId.SM2);
+  if (keyBytes.length !== rawSm2Length) {
+    return keyBytes;
+  }
+  const distidBytes = Buffer.from(SM2_DEFAULT_DISTINGUISHED_ID, "utf8");
+  if (distidBytes.length > 0xffff) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+      "SM2 distid exceeds canonical payload limits",
+    );
+  }
+  const payload = new Uint8Array(2 + distidBytes.length + keyBytes.length);
+  payload[0] = (distidBytes.length >> 8) & 0xff;
+  payload[1] = distidBytes.length & 0xff;
+  payload.set(distidBytes, 2);
+  payload.set(keyBytes, 2 + distidBytes.length);
+  return payload;
 }
 
 function invalidMultisigPolicy(policyError, message, extraDetails) {
@@ -575,13 +358,17 @@ function normalizeMultisigMembers(members) {
       throw new TypeError("multisig member weight must fit in a 16-bit unsigned integer");
     }
     const publicKey = normalizeBytes(member.publicKey);
-    validatePublicKeyForCurve(curve, publicKey, `multisig member ${index} public key`);
+    const canonicalPublicKey = normalizeControllerPublicKeyForCurve(
+      curve,
+      publicKey,
+      `multisig member ${index} public key`,
+    );
     const sortKey = Buffer.concat([
       Buffer.from(curveIdToAlgorithm(curve), "ascii"),
       Buffer.from([0]),
-      Buffer.from(publicKey),
+      Buffer.from(canonicalPublicKey),
     ]);
-    return { curve, weight, publicKey, sortKey };
+    return { curve, weight, publicKey: canonicalPublicKey, sortKey };
   });
   normalized.sort((left, right) => left.sortKey.compare(right.sortKey));
   for (let index = 1; index < normalized.length; index += 1) {
@@ -694,8 +481,7 @@ function blake2b256Personalized(data, personalization, includeZeroKeyBlock = fal
 }
 
 function curveIdFromAlgorithm(algorithm) {
-  const key = String(algorithm).trim().toLowerCase();
-  const entry = CURVE_NAME_TO_ENTRY.get(key);
+  const entry = getCurveEntryByAlgorithm(algorithm);
   if (!entry) {
     throw new AccountAddressError(
       AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
@@ -748,19 +534,23 @@ function decodeHeader(byte) {
 
 function encodeController(controller) {
   if (controller.tag === CONTROLLER_TAG_SINGLE) {
-    validatePublicKeyForCurve(controller.curve, controller.publicKey, "controller public key");
-    if (controller.publicKey.length > 0xff) {
+    const keyBytes = normalizeControllerPublicKeyForCurve(
+      controller.curve,
+      controller.publicKey,
+      "controller public key",
+    );
+    if (keyBytes.length > 0xff) {
       throw new AccountAddressError(
         AccountAddressErrorCode.KEY_PAYLOAD_TOO_LONG,
-        `key payload too long: ${controller.publicKey.length} bytes`,
-        { details: { length: controller.publicKey.length } },
+        `key payload too long: ${keyBytes.length} bytes`,
+        { details: { length: keyBytes.length } },
       );
     }
-    const out = new Uint8Array(3 + controller.publicKey.length);
+    const out = new Uint8Array(3 + keyBytes.length);
     out[0] = controller.tag;
     out[1] = controller.curve;
-    out[2] = controller.publicKey.length;
-    out.set(controller.publicKey, 3);
+    out[2] = keyBytes.length;
+    out.set(keyBytes, 3);
     return out;
   }
 
@@ -779,15 +569,18 @@ function encodeController(controller) {
     parts.push(normalized.version);
     const threshold = normalized.threshold;
     parts.push((threshold >> 8) & 0xff, threshold & 0xff);
-    parts.push(members.length);
+    parts.push((members.length >> 8) & 0xff, members.length & 0xff);
     for (const member of members) {
       const curve = member.curve ?? CurveId.ED25519;
       ensureCurveIdEnabled(curve, "multisig member");
       parts.push(curve);
       const weight = member.weight ?? 0;
       parts.push((weight >> 8) & 0xff, weight & 0xff);
-      const keyBytes = normalizeBytes(member.publicKey);
-      validatePublicKeyForCurve(curve, keyBytes, "multisig member public key");
+      const keyBytes = normalizeControllerPublicKeyForCurve(
+        curve,
+        normalizeBytes(member.publicKey),
+        "multisig member public key",
+      );
       if (keyBytes.length > 0xffff) {
         throw new AccountAddressError(
           AccountAddressErrorCode.KEY_PAYLOAD_TOO_LONG,
@@ -845,8 +638,11 @@ function decodeController(bytes, cursor) {
     if (cursor >= bytes.length) {
       throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
     }
-    const memberCount = bytes[cursor];
-    cursor += 1;
+    if (cursor + 1 >= bytes.length) {
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+    }
+    const memberCount = (bytes[cursor] << 8) | bytes[cursor + 1];
+    cursor += 2;
     if (memberCount > MULTISIG_MEMBER_MAX) {
       throw new AccountAddressError(
         AccountAddressErrorCode.MULTISIG_MEMBER_OVERFLOW,
@@ -996,7 +792,7 @@ function cborAppendBytes(parts, bytes) {
 
 function curveIdToAlgorithm(curveId) {
   const entry = ensureCurveIdEnabled(curveId, `curve id ${curveId}`);
-  return entry.aliases[0];
+  return canonicalCurveAlgorithm(entry.id) ?? entry.algorithm;
 }
 
 function bytesToHex(bytes) {
@@ -1109,98 +905,58 @@ export function canonicalizeDomainLabel(domain) {
   return canonical;
 }
 
-function normalizeRegistryId(registryId) {
-  let value = registryId;
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (trimmed.length === 0) {
-      throw new AccountAddressError(
-        AccountAddressErrorCode.INVALID_REGISTRY_ID,
-        "registry id must be a numeric value",
-      );
-    }
-    value = Number(trimmed);
-  }
-  if (typeof value === "bigint") {
-    value = Number(value);
-  }
-  if (
-    typeof value !== "number" ||
-    !Number.isFinite(value) ||
-    Math.floor(value) !== value ||
-    value < 0 ||
-    value > 0xffffffff
-  ) {
+function canonicalizeDomainName(domain) {
+  if (typeof domain !== "string") {
     throw new AccountAddressError(
-      AccountAddressErrorCode.INVALID_REGISTRY_ID,
-      "registry id must be a 32-bit unsigned integer",
-      { details: { registryId } },
+      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+      "domain label must be a string",
     );
   }
-  return value >>> 0;
-}
-
-function encodeDomainFromRegistryId(registryId) {
-  normalizeRegistryId(registryId);
-  // Canonical payloads are globally scoped and no longer encode registry selectors.
-  return { tag: 0, payload: null };
-}
-
-function decodeRegistryId(selector) {
-  if (!selector || selector.tag !== 2 || !selector.payload || selector.payload.length !== 4) {
-    return null;
+  const trimmed = domain.trim();
+  if (trimmed.length === 0) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+      "domain label must be a non-empty string",
+    );
   }
-  // Stored as big-endian u32
-  return (
-    ((selector.payload[0] << 24) |
-      (selector.payload[1] << 16) |
-      (selector.payload[2] << 8) |
-      selector.payload[3]) >>>
-    0
-  );
-}
-
-function encodeDomainFromName(domain) {
-  canonicalizeDomainLabel(domain);
-  // Canonical payloads are globally scoped and no longer encode local selectors.
-  return { tag: 0, payload: null };
-}
-
-function encodeDomainFromAccountInputs(domain, registryId) {
-  const hasDomain = domain !== undefined && domain !== null;
-  const hasRegistryId = registryId !== undefined && registryId !== null;
-  if (hasDomain && hasRegistryId) {
-    throw new TypeError("fromAccount accepts either domain or registryId, not both");
+  const labels = trimmed.split(".");
+  if (labels.some((label) => label.length === 0)) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_DOMAIN_LABEL,
+      "domain label must not contain empty segments",
+    );
   }
-  if (!hasDomain && !hasRegistryId) {
-    throw new TypeError("fromAccount requires a domain or registryId");
-  }
-  if (hasRegistryId) {
-    return encodeDomainFromRegistryId(registryId);
-  }
-  return encodeDomainFromName(domain);
+  return labels.map((label) => canonicalizeDomainLabel(label)).join(".");
 }
 
 export class AccountAddress {
-  constructor(header, domain, controller) {
+  constructor(header, controller) {
     this._header = header;
-    this._domain = domain;
     this._controller = controller;
   }
 
-  static fromAccount({ domain, registryId, publicKey, algorithm = "ed25519" }) {
+  static fromAccount(options) {
+    if (!isPlainObject(options)) {
+      throw new TypeError("AccountAddress.fromAccount options must be an object");
+    }
+    const allowedKeys = new Set(["publicKey", "algorithm"]);
+    const extras = Object.keys(options).filter((key) => !allowedKeys.has(key));
+    if (extras.length > 0) {
+      throw new TypeError(
+        `AccountAddress.fromAccount options contains unsupported fields: ${extras.join(", ")}`,
+      );
+    }
+    const { publicKey, algorithm = "ed25519" } = options;
     const header = {
       version: HEADER_VERSION_V1,
       classId: AddressClass.SINGLE_KEY,
       normVersion: HEADER_NORM_VERSION_V1,
       extFlag: false,
     };
-    const selector = encodeDomainFromAccountInputs(domain, registryId);
     const curve = curveIdFromAlgorithm(algorithm);
-    const keyBytes = normalizeBytes(publicKey);
-    validatePublicKeyForCurve(curve, keyBytes, "public key");
+    const keyBytes = normalizeControllerPublicKeyForCurve(curve, normalizeBytes(publicKey), "public key");
     const controller = { tag: CONTROLLER_TAG_SINGLE, curve, publicKey: keyBytes };
-    return new AccountAddress(header, selector, controller);
+    return new AccountAddress(header, controller);
   }
 
   static fromCanonicalBytes(bytes) {
@@ -1218,33 +974,32 @@ export class AccountAddress {
         "unexpected trailing bytes in canonical payload",
       );
     }
-    return new AccountAddress(header, { tag: 0, payload: null }, controller);
+    return new AccountAddress(header, controller);
   }
 
   static fromI105(encoded, expectedPrefix) {
+    const literal = typeof encoded === "string" ? encoded.trim() : encoded;
     const normalizedExpectedDiscriminant =
       expectedPrefix === undefined
         ? undefined
         : normalizeI105DiscriminantInput(
             expectedPrefix,
-            "AccountAddress.fromI105 expectedPrefix",
-          );
-    const nativeParsed = parseWithNativeCodec(
+	            "AccountAddress.fromI105 expectedPrefix",
+	          );
+    const [, canonical] = decodeSupportedI105String(
       encoded,
       normalizedExpectedDiscriminant,
     );
-    if (nativeParsed) {
-      return AccountAddress.fromCanonicalBytes(nativeParsed.canonicalBytes);
-    }
-    const [, canonical] = decodeI105String(encoded, normalizedExpectedDiscriminant);
-    return AccountAddress.fromCanonicalBytes(canonical);
+    const address = AccountAddress.fromCanonicalBytes(canonical);
+    assertCanonicalI105Literal(literal, address);
+    return address;
   }
 
-  static fromI105Default(encoded) {
-    return AccountAddress.fromI105(encoded, DEFAULT_I105_DISCRIMINANT);
+  static fromAccountId(accountId, expectedPrefix) {
+    return AccountAddress.parseEncoded(accountId, expectedPrefix).address;
   }
 
-  static parseEncoded(input, expectedPrefix, expectedDomainName) {
+  static parseEncoded(input, expectedPrefix) {
     if (typeof input !== "string") {
       throw new TypeError("account address literal must be a string");
     }
@@ -1266,7 +1021,6 @@ export class AccountAddress {
     }
     try {
       const address = AccountAddress.fromI105(trimmed, expectedPrefix);
-      assertDomainMatches(address, expectedDomainName);
       return {
         address,
         chainDiscriminant: tryExtractI105Discriminant(trimmed),
@@ -1298,10 +1052,6 @@ export class AccountAddress {
 
   canonicalHex() {
     const canonical = this.canonicalBytes();
-    const rendered = renderWithNativeCodec(canonical, DEFAULT_I105_DISCRIMINANT);
-    if (rendered?.canonicalHex) {
-      return rendered.canonicalHex;
-    }
     return `0x${Buffer.from(canonical).toString("hex")}`;
   }
 
@@ -1309,30 +1059,13 @@ export class AccountAddress {
     const normalizedDiscriminant = normalizeI105DiscriminantInput(
       prefix,
       "AccountAddress.toI105 chainDiscriminant",
-    );
+	);
     const canonical = this.canonicalBytes();
-    const rendered = renderWithNativeCodec(canonical, normalizedDiscriminant);
-    if (rendered?.i105) {
-      return rendered.i105;
-    }
     return encodeI105String(normalizedDiscriminant, canonical);
   }
 
-  toI105Default() {
-    return this.toI105(DEFAULT_I105_DISCRIMINANT);
-  }
-
-  toI105DefaultFullWidth() {
-    const canonical = this.canonicalBytes();
-    const rendered = renderWithNativeCodec(canonical, DEFAULT_I105_DISCRIMINANT);
-    if (rendered?.i105FullWidth) {
-      return rendered.i105FullWidth;
-    }
-    return encodeI105String(DEFAULT_I105_DISCRIMINANT, canonical, { fullWidth: true });
-  }
-
   toString() {
-    return this.canonicalHex();
+    return this.toI105();
   }
 
   /**
@@ -1340,7 +1073,7 @@ export class AccountAddress {
    *
    * @param {number|bigint|string} chainDiscriminant - Chain discriminant (defaults to Sora `753`);
    * accepts numeric strings that will be normalized.
-   * @returns {{ i105: string, chainDiscriminant: number, i105Warning: string, domainSummary: { kind: string, warning: string | null, selector: { tag: number | null, digestHex: string | null, registryId: number | null, label: string | null } } }}
+   * @returns {{ i105: string, chainDiscriminant: number, i105Warning: string }}
    */
   displayFormats(chainDiscriminant = DEFAULT_I105_DISCRIMINANT) {
     const normalizedDiscriminant = normalizeI105DiscriminantInput(
@@ -1348,37 +1081,11 @@ export class AccountAddress {
       "AccountAddress.displayFormats chainDiscriminant",
     );
     const i105 = this.toI105(normalizedDiscriminant);
-    const domainSummary = this.domainSummary();
-    const selector = Object.freeze({
-      tag: domainSummary.selector?.tag ?? null,
-      digestHex: domainSummary.selector?.digestHex ?? null,
-      registryId: domainSummary.selector?.registryId ?? null,
-      label: domainSummary.selector?.label ?? null,
-    });
     return Object.freeze({
       i105,
       chainDiscriminant: normalizedDiscriminant,
       i105Warning: I105_WARNING,
-      domainSummary: Object.freeze({
-        kind: domainSummary.kind,
-        warning: domainSummary.warning,
-        selector,
-      }),
     });
-  }
-
-  domainSelector() {
-    if (!this._domain) {
-      return { tag: null, payload: null };
-    }
-    return Object.freeze({
-      tag: this._domain.tag,
-      payload: this._domain.payload ? Uint8Array.from(this._domain.payload) : null,
-    });
-  }
-
-  domainSummary() {
-    return summarizeDomainSelector(this._domain);
   }
 
   multisigPolicyInfo() {
@@ -1405,156 +1112,32 @@ export class AccountAddress {
   }
 }
 
-function summarizeDomainSelector(selector) {
-  if (!selector || typeof selector.tag !== "number") {
-    return {
-      kind: "unknown",
-      warning: null,
-      selector: Object.freeze({ tag: null, digestHex: null, registryId: null, label: null }),
-    };
+function assertCanonicalI105Literal(input, address) {
+  if (typeof input !== "string") {
+    return;
   }
-  const details = domainSelectorDetails(selector);
-  switch (selector.tag) {
-    case 0:
-      return {
-        kind: "default",
-        warning: null,
-        selector: Object.freeze(details),
-      };
-    default:
-      return {
-        kind: "unknown",
-        warning: null,
-        selector: Object.freeze({
-          ...details,
-          tag: selector.tag,
-        }),
-      };
+  const discriminant = tryExtractI105Discriminant(input);
+  if (discriminant === undefined) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      "account address literals must use canonical I105 form",
+    );
+  }
+  if (address.toI105(discriminant) !== input) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT,
+      "account address literals must use canonical I105 form",
+    );
   }
 }
 
 function tryExtractI105Discriminant(literal) {
   try {
-    const [discriminant] = decodeI105String(literal);
+    const [discriminant] = decodeSupportedI105String(literal);
     return discriminant;
   } catch {
     return undefined;
   }
-}
-
-function initNativeAddressCodec(binding) {
-  if (!binding) {
-    return null;
-  }
-  if (
-    typeof binding.accountAddressParseEncoded !== "function" ||
-    typeof binding.accountAddressRender !== "function"
-  ) {
-    return null;
-  }
-  return {
-    parseEncoded: binding.accountAddressParseEncoded.bind(binding),
-    render: binding.accountAddressRender.bind(binding),
-  };
-}
-
-function parseWithNativeCodec(input, expectedPrefix) {
-  if (!nativeAddressCodec) {
-    return null;
-  }
-  try {
-    const parsed = nativeAddressCodec.parseEncoded(String(input), expectedPrefix ?? null);
-    if (!parsed) {
-      return null;
-    }
-    const canonical = parsed.canonical_bytes;
-    if (!canonical || canonical.length === 0) {
-      // Some native codec builds may return an empty canonical payload for
-      // otherwise parseable literals. Fall back to the pure-JS codec path.
-      return null;
-    }
-    return {
-      canonicalBytes: Uint8Array.from(canonical),
-      chainDiscriminant: parsed.network_prefix ?? undefined,
-    };
-  } catch (error) {
-    const converted = convertNativeCodecError(error);
-    if (
-      converted instanceof AccountAddressError &&
-      (converted.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT ||
-        converted.code === AccountAddressErrorCode.UNKNOWN_CURVE ||
-        converted.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM ||
-        converted.code === AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG ||
-        converted.code === AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG ||
-        converted.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY ||
-        converted.code === AccountAddressErrorCode.INVALID_LENGTH)
-    ) {
-      return null;
-    }
-    throw converted;
-  }
-}
-
-function renderWithNativeCodec(canonicalBytes, chainDiscriminant = DEFAULT_I105_DISCRIMINANT) {
-  if (!nativeAddressCodec) {
-    return null;
-  }
-  const normalizedDiscriminant = normalizeI105DiscriminantInput(
-    chainDiscriminant,
-    "renderWithNativeCodec chainDiscriminant",
-  );
-  try {
-    const bytes = Buffer.isBuffer(canonicalBytes)
-      ? canonicalBytes
-      : Uint8Array.from(canonicalBytes);
-    const rendered = nativeAddressCodec.render(bytes, normalizedDiscriminant);
-    if (!rendered) {
-      return null;
-    }
-    return {
-      canonicalHex: rendered.canonical_hex,
-      i105: rendered.i105,
-      i105FullWidth: rendered.i105_default_fullwidth,
-    };
-  } catch (error) {
-    const converted = convertNativeCodecError(error);
-    if (
-      converted instanceof AccountAddressError &&
-      (converted.code === AccountAddressErrorCode.UNSUPPORTED_ADDRESS_FORMAT ||
-        converted.code === AccountAddressErrorCode.UNKNOWN_CURVE ||
-        converted.code === AccountAddressErrorCode.UNSUPPORTED_ALGORITHM ||
-        converted.code === AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG ||
-        converted.code === AccountAddressErrorCode.UNKNOWN_DOMAIN_TAG ||
-        converted.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY ||
-        converted.code === AccountAddressErrorCode.INVALID_LENGTH)
-    ) {
-      return null;
-    }
-    throw converted;
-  }
-}
-
-function convertNativeCodecError(error) {
-  if (!error || typeof error.message !== "string") {
-    return new AccountAddressError(
-      AccountAddressErrorCode.INVALID_LENGTH,
-      "native address codec failure",
-      { cause: error },
-    );
-  }
-  const trimmed = error.message.trim();
-  const match = /^([A-Z0-9_]+):\s*(.*)$/.exec(trimmed);
-  if (match) {
-    const [, code, rest] = match;
-    if (ACCOUNT_ADDRESS_ERROR_CODES.has(code)) {
-      return new AccountAddressError(code, rest || "address codec failure", {
-        cause: error,
-      });
-    }
-  }
-  return new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, trimmed, {
-    cause: error,
-  });
 }
 
 export function encodeI105AccountAddress(canonicalBytes, options = {}) {
@@ -1567,16 +1150,21 @@ export function encodeI105AccountAddress(canonicalBytes, options = {}) {
 
 export function decodeI105AccountAddress(encoded, options = {}) {
   if (typeof encoded !== "string") {
-    throw new TypeError("I105 address must be a string");
+    throw new TypeError("i105 address must be a string");
   }
   const normalizedOptions = normalizeI105DecodeOptions(options);
-  const [, canonical] = decodeI105String(encoded, normalizedOptions.expectDiscriminant);
+  const [, canonical] = decodeSupportedI105String(
+    encoded,
+    normalizedOptions.expectDiscriminant,
+  );
+  const address = AccountAddress.fromCanonicalBytes(canonical);
+  assertCanonicalI105Literal(encoded.trim(), address);
   return canonical;
 }
 
 function isCanonicalHexLiteral(literal) {
   if (literal.startsWith("0x") || literal.startsWith("0X")) {
-    // Honour the sentinel regardless of body validity so errors stay in the hex path.
+    // Honour the hex prefix regardless of body validity so errors stay in the hex path.
     return true;
   }
   const body = literal;
@@ -1605,11 +1193,9 @@ function classifyDetectedFormat(literal, inputKind, chainDiscriminant) {
  * @param {{ chainDiscriminant?: number, expectDiscriminant?: number }} [options]
  * @returns {{
  *   detectedFormat: { kind: string, chainDiscriminant?: number },
- *   domain: { kind: string, warning: string | null },
  *   canonicalHex: string,
  *   i105: { value: string, chainDiscriminant: number },
  *   i105Warning: string,
- *   inputDomain: string | null,
  *   warnings: string[]
  * }}
  */
@@ -1635,38 +1221,28 @@ export function inspectAccountId(literal, options = {}) {
   const chainDiscriminant =
     normalizedOptions.chainDiscriminant ?? detectedDiscriminant ?? DEFAULT_I105_DISCRIMINANT;
 
-  const domainSummary = address.domainSummary();
-  const warnings = domainSummary.warning ? [domainSummary.warning] : [];
   return Object.freeze({
     detectedFormat: classifyDetectedFormat(trimmed, inputKind, detectedDiscriminant),
-    domain: domainSummary,
     canonicalHex: address.canonicalHex(),
     i105: { value: address.toI105(chainDiscriminant), chainDiscriminant },
     i105Warning: I105_WARNING,
-    inputDomain: null,
-    warnings,
+    warnings: Object.freeze([]),
   });
 }
 
 function normalizeI105EncodeOptions(options, context) {
   if (options === undefined) {
-    return { fullWidth: false, chainDiscriminant: DEFAULT_I105_DISCRIMINANT };
+    return { chainDiscriminant: DEFAULT_I105_DISCRIMINANT };
   }
   if (!isPlainObject(options)) {
     throw new TypeError(`${context} options must be an object`);
   }
-  const allowedKeys = new Set(["fullWidth", "chainDiscriminant"]);
+  const allowedKeys = new Set(["chainDiscriminant"]);
   const extras = Object.keys(options).filter((key) => !allowedKeys.has(key));
   if (extras.length > 0) {
     throw new TypeError(
       `${context} options contains unsupported fields: ${extras.join(", ")}`,
     );
-  }
-  if (
-    Object.prototype.hasOwnProperty.call(options, "fullWidth") &&
-    typeof options.fullWidth !== "boolean"
-  ) {
-    throw new TypeError(`${context} options.fullWidth must be a boolean`);
   }
   const chainDiscriminant = Object.prototype.hasOwnProperty.call(options, "chainDiscriminant")
     ? normalizeI105DiscriminantInput(
@@ -1674,7 +1250,7 @@ function normalizeI105EncodeOptions(options, context) {
       `${context} options.chainDiscriminant`,
     )
     : DEFAULT_I105_DISCRIMINANT;
-  return { fullWidth: options.fullWidth === true, chainDiscriminant };
+  return { chainDiscriminant };
 }
 
 function normalizeI105DecodeOptions(options) {
@@ -1737,7 +1313,7 @@ function isPlainObject(value) {
   return prototype === Object.prototype || prototype === null;
 }
 
-function normalizeI105DiscriminantInput(value, context = "I105 chain discriminant") {
+function normalizeI105DiscriminantInput(value, context = "i105 chain discriminant") {
   if (value === undefined || value === null) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_I105_DISCRIMINANT,
@@ -1779,56 +1355,35 @@ function normalizeI105DiscriminantInput(value, context = "I105 chain discriminan
 }
 
 function i105SentinelForDiscriminant(discriminant) {
-  if (discriminant === DEFAULT_I105_DISCRIMINANT) {
-    return I105_SENTINEL_SORA;
+  switch (discriminant) {
+    case DEFAULT_I105_DISCRIMINANT:
+      return I105_SENTINEL_SORA;
+    case 0x0171:
+      return I105_SENTINEL_TEST;
+    case 0x0000:
+      return I105_SENTINEL_DEV;
+    default:
+      return `${I105_SENTINEL_NUMERIC_PREFIX}${discriminant}`;
   }
-  if (discriminant === 0x0171) {
-    return I105_SENTINEL_TEST;
-  }
-  if (discriminant === 0x0000) {
-    return I105_SENTINEL_DEV;
-  }
-  return `${I105_SENTINEL_NUMERIC_PREFIX}${discriminant}`;
-}
-
-function toFullwidthAscii(input) {
-  let output = "";
-  for (const ch of input) {
-    if (ch >= "!" && ch <= "~") {
-      output += String.fromCharCode(ch.codePointAt(0) + 0xfee0);
-    } else {
-      output += ch;
-    }
-  }
-  return output;
 }
 
 function parseI105SentinelAndPayload(encoded) {
-  if (encoded.startsWith(I105_SENTINEL_SORA) || encoded.startsWith(I105_SENTINEL_SORA_FULLWIDTH)) {
+  if (typeof encoded !== "string") {
+    return null;
+  }
+  if (encoded.startsWith(I105_SENTINEL_SORA)) {
     return [DEFAULT_I105_DISCRIMINANT, encoded.slice(I105_SENTINEL_SORA.length)];
   }
-  if (encoded.startsWith(I105_SENTINEL_TEST) || encoded.startsWith(I105_SENTINEL_TEST_FULLWIDTH)) {
+  if (encoded.startsWith(I105_SENTINEL_TEST)) {
     return [0x0171, encoded.slice(I105_SENTINEL_TEST.length)];
   }
-  if (encoded.startsWith(I105_SENTINEL_DEV) || encoded.startsWith(I105_SENTINEL_DEV_FULLWIDTH)) {
+  if (encoded.startsWith(I105_SENTINEL_DEV)) {
     return [0x0000, encoded.slice(I105_SENTINEL_DEV.length)];
   }
-  if (
-    !encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX) &&
-    !encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX_FULLWIDTH)
-  ) {
+  if (!encoded.startsWith(I105_SENTINEL_NUMERIC_PREFIX)) {
     return null;
   }
   const tail = encoded.slice(I105_SENTINEL_NUMERIC_PREFIX.length);
-  const toAsciiDigit = (char) => {
-    if (char >= "0" && char <= "9") {
-      return char;
-    }
-    if (char >= "０" && char <= "９") {
-      return String.fromCharCode(char.codePointAt(0) - 0xfee0);
-    }
-    return null;
-  };
   let index = 0;
   let discriminantDigits = "";
   while (index < tail.length) {
@@ -1843,91 +1398,122 @@ function parseI105SentinelAndPayload(encoded) {
     return null;
   }
   const discriminant = Number(discriminantDigits);
-  if (!Number.isInteger(discriminant) || discriminant < 0 || discriminant > I105_DISCRIMINANT_MAX) {
+  if (
+    !Number.isInteger(discriminant) ||
+    discriminant < 0 ||
+    discriminant > I105_DISCRIMINANT_MAX
+  ) {
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_I105_DISCRIMINANT,
-      `invalid I105 chain discriminant sentinel: ${encoded}`,
+      `invalid i105 chain discriminant sentinel: ${encoded}`,
     );
   }
   return [discriminant, tail.slice(index)];
 }
 
-function encodeI105String(discriminant, canonical, options = {}) {
+function toAsciiDigit(char) {
+  if (char >= "0" && char <= "9") {
+    return char;
+  }
+  return null;
+}
+
+function encodeI105String(discriminant, canonical) {
   const normalizedDiscriminant = normalizeI105DiscriminantInput(
     discriminant,
-    "I105 chain discriminant",
+    "i105 chain discriminant",
   );
   const canonicalBytes = normalizeBytes(canonical);
   const digits = encodeBaseN(canonicalBytes, I105_BASE);
   const checksum = i105ChecksumDigits(canonicalBytes);
-  const alphabet = options.fullWidth === true ? I105_ALPHABET_FULLWIDTH : I105_ALPHABET;
   const sentinel = i105SentinelForDiscriminant(normalizedDiscriminant);
-  const renderedSentinel = options.fullWidth === true ? toFullwidthAscii(sentinel) : sentinel;
-  const parts = [renderedSentinel];
-  parts.push(...digits.map((digit) => alphabet[digit]));
-  parts.push(...checksum.map((digit) => alphabet[digit]));
+  const parts = [sentinel];
+  parts.push(...digits.map((digit) => I105_ALPHABET[digit]));
+  parts.push(...checksum.map((digit) => I105_ALPHABET[digit]));
   return parts.join("");
+}
+
+function decodeSupportedI105String(encoded, expectedDiscriminant) {
+  return decodeI105String(encoded, expectedDiscriminant);
+}
+
+function lookupI105Digit(symbol) {
+  const canonicalIndex = I105_ALPHABET.indexOf(symbol);
+  if (canonicalIndex !== -1) {
+    return canonicalIndex;
+  }
+  return undefined;
+}
+
+function decodeI105Payload(payload) {
+  const digits = [];
+  for (const symbol of Array.from(payload)) {
+    const digit = lookupI105Digit(symbol);
+    if (digit === undefined) {
+      throw new AccountAddressError(
+        AccountAddressErrorCode.INVALID_I105_CHAR,
+        `invalid character in i105 address: ${symbol}`,
+        { details: { char: symbol } },
+      );
+    }
+    digits.push(digit);
+  }
+
+  if (digits.length <= I105_CHECKSUM_LEN) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.I105_TOO_SHORT,
+      "i105 address too short",
+    );
+  }
+
+  const dataDigits = digits.slice(0, -I105_CHECKSUM_LEN);
+  const checksumDigits = digits.slice(-I105_CHECKSUM_LEN);
+  const canonicalBytes = decodeBaseN(dataDigits, I105_BASE);
+  const expected = i105ChecksumDigits(canonicalBytes);
+  if (!Buffer.from(expected).equals(Buffer.from(checksumDigits))) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.CHECKSUM_MISMATCH,
+      "i105 checksum mismatch",
+    );
+  }
+  return canonicalBytes;
 }
 
 function decodeI105String(encoded, expectedDiscriminant) {
   if (typeof encoded !== "string") {
-    throw new TypeError("I105 address must be a string");
+    throw new TypeError("i105 address must be a string");
   }
   const parsed = parseI105SentinelAndPayload(encoded);
   if (!parsed) {
     throw new AccountAddressError(
       AccountAddressErrorCode.MISSING_I105_SENTINEL,
-      "I105 address is missing the expected chain-discriminant sentinel",
+      "i105 address is missing the expected chain-discriminant sentinel",
     );
   }
   const [discriminant, payload] = parsed;
   if (expectedDiscriminant !== undefined) {
     const normalizedExpected = normalizeI105DiscriminantInput(
       expectedDiscriminant,
-      "expected I105 chain discriminant",
+      "expected i105 chain discriminant",
     );
     if (discriminant !== normalizedExpected) {
       throw new AccountAddressError(
         AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
-        `unexpected I105 chain discriminant: expected ${normalizedExpected}, found ${discriminant}`,
+        `unexpected i105 chain discriminant: expected ${normalizedExpected}, found ${discriminant}`,
         { details: { expected: normalizedExpected, found: discriminant } },
       );
     }
   }
-  if (payload.length <= I105_CHECKSUM_LEN) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.I105_TOO_SHORT,
-      "I105 address too short",
-    );
-  }
-  const digits = [];
-  for (const ch of payload) {
-    const value = I105_DIGIT_INDEX.get(ch);
-    if (value === undefined) {
-      throw new AccountAddressError(
-        AccountAddressErrorCode.INVALID_I105_CHAR,
-        `invalid character in I105 address: ${ch}`,
-        { details: { char: ch } },
-      );
-    }
-    digits.push(value);
-  }
-  const dataDigits = digits.slice(0, -I105_CHECKSUM_LEN);
-  const checksumDigits = digits.slice(-I105_CHECKSUM_LEN);
-  const canonical = decodeBaseN(dataDigits, I105_BASE);
-  const expected = i105ChecksumDigits(canonical);
-  if (!Buffer.from(expected).equals(Buffer.from(checksumDigits))) {
-    throw new AccountAddressError(
-      AccountAddressErrorCode.CHECKSUM_MISMATCH,
-      "I105 checksum mismatch",
-    );
-  }
-  return [discriminant, canonical];
+  const canonicalBytes = decodeI105Payload(payload);
+  return [discriminant, canonicalBytes];
 }
 
 function encodeBaseN(bytes, base) {
   if (base < 2) {
-    throw new AccountAddressError(AccountAddressErrorCode.INVALID_I105_BASE, "invalid base for encoding");
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_I105_BASE,
+      "invalid base for encoding",
+    );
   }
   const value = Array.from(bytes);
   let leading = 0;
@@ -1960,7 +1546,10 @@ function encodeBaseN(bytes, base) {
 
 function decodeBaseN(digits, base) {
   if (base < 2) {
-    throw new AccountAddressError(AccountAddressErrorCode.INVALID_I105_BASE, "invalid base for decoding");
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_I105_BASE,
+      "invalid base for decoding",
+    );
   }
   if (digits.length === 0) {
     throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
@@ -2063,3 +1652,11 @@ function i105ChecksumDigits(canonical) {
   const base32 = convertToBase32(canonical);
   return bech32mChecksum(base32);
 }
+
+export {
+  curveIdFromAlgorithm,
+  curveIdToAlgorithm,
+  ensureCurveIdEnabled,
+  normalizeBytes,
+  validatePublicKeyForCurve,
+};

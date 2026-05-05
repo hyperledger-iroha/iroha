@@ -37,7 +37,7 @@ fn python_sequence_fixture_with_wrong_minor_version_is_rejected() {
 
 #[test]
 fn decode_python_adaptive_rows_fixture() {
-    let hex = "0103000000530000000100000000000000020200000000000005000000080000000f000000616c696365626f62636861726c696505";
+    let hex = "000301010000000000000005616c69636501020000000000000003626f6200030000000000000007636861726c696501";
     let bytes = hex_to_bytes(hex);
     let rows = [
         (1u64, "alice", true),
@@ -63,8 +63,7 @@ fn decode_python_adaptive_rows_fixture() {
 
 #[test]
 fn decode_java_adaptive_rows_fixture() {
-    let hex =
-        "0102000000530000000a000000000000001400000000000000050000000900000064656c74616563686f02";
+    let hex = "0002010a000000000000000564656c7461001400000000000000046563686f01";
     let bytes = hex_to_bytes(hex);
     let rows = [(10u64, "delta", false), (20, "echo", true)];
     let generated = norito::columnar::encode_rows_u64_str_bool_adaptive(&rows);

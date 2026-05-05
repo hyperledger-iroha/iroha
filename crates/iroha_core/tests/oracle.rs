@@ -139,12 +139,13 @@ fn observation(
 }
 
 fn world_with_providers(providers: &[AccountId]) -> World {
-    let validator_domain_id: DomainId = "validators".parse().expect("domain");
+    let validator_domain_id: DomainId =
+        DomainId::try_new("validators", "universal").expect("domain");
     let domain: Domain = Domain::new(validator_domain_id.clone())
         .build(providers.first().expect("at least one provider"));
     let accounts = providers
         .iter()
-        .map(|id| Account::new(id.clone().to_account_id(validator_domain_id.clone())).build(id));
+        .map(|id| Account::new(id.clone()).build(id));
     World::with([domain], accounts, [])
 }
 
@@ -160,10 +161,11 @@ fn oracle_state_with_accounts(
     let reward_pool = defaults::oracle::reward_pool();
     let slash_receiver = defaults::oracle::slash_receiver();
 
-    let validator_domain_id: DomainId = "validators".parse().expect("domain");
+    let validator_domain_id: DomainId =
+        DomainId::try_new("validators", "universal").expect("domain");
     let validator_domain: Domain =
         Domain::new(validator_domain_id.clone()).build(providers.first().expect("provider"));
-    let sora_domain_id: DomainId = "sora".parse().expect("domain");
+    let sora_domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain");
     let sora_domain: Domain = Domain::new(sora_domain_id.clone()).build(&reward_pool);
 
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&reward_pool);
@@ -184,17 +186,15 @@ fn oracle_state_with_accounts(
                 AssetId::new(asset_def_id.clone(), id.clone()),
                 Numeric::from_str("5").expect("provider balance"),
             ));
-            Account::new(id.clone().to_account_id(validator_domain_id.clone())).build(id)
+            Account::new(id.clone()).build(id)
         })
         .collect();
 
     let world = World::with_assets(
         [validator_domain, sora_domain],
         accounts.into_iter().chain([
-            Account::new(reward_pool.clone().to_account_id(sora_domain_id.clone()))
-                .build(&reward_pool),
-            Account::new(slash_receiver.clone().to_account_id(sora_domain_id))
-                .build(&slash_receiver),
+            Account::new(reward_pool.clone()).build(&reward_pool),
+            Account::new(slash_receiver.clone()).build(&slash_receiver),
         ]),
         [asset_def],
         assets,

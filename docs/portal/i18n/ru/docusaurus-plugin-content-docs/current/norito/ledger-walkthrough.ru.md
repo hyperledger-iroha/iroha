@@ -29,8 +29,8 @@ translation_last_reviewed: 2026-02-07
 ID аккаунтов. В дефолтном комплекте уже есть два аккаунта, полученные из демо-ключей:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Подтвердите значения, выведя первые аккаунты:
@@ -49,7 +49,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts внутри wonderland (увеличьте --limit при необходимости)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions, которые уже существуют
@@ -65,7 +65,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI выводит хэш-доставку (например, `0x5f…`). Сохраните его, чтобы
@@ -74,7 +74,7 @@ CLI выводит хэш-доставку (например, `0x5f…`). Сох
 ## 3. Замитьте значение на операторском аккаунте
 
 Количество активности под парой `(asset definition, account)`. Замитьте 250
-единица `coffee#wonderland` на `$ADMIN_ACCOUNT`:
+единица `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` на `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

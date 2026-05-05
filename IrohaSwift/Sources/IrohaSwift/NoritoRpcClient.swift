@@ -4,7 +4,7 @@ import Foundation
 public struct NoritoRpcError: Error, Sendable {
     /// HTTP status code returned by Torii.
     public let statusCode: Int
-    /// Response body rendered as UTF-8 (or a fallback message when decoding failed).
+    /// Response body rendered as UTF-8 (or a generated message when decoding failed).
     public let body: String
 }
 
@@ -14,6 +14,8 @@ public enum NoritoRpcClientError: Error {
     case invalidURL(String)
     /// The HTTP method was empty or contained only whitespace.
     case invalidMethod
+    /// The request would send credentials over an insecure or mismatched transport.
+    case insecureTransport(String)
 }
 
 /// Thin HTTP helper for the Torii Norito-RPC surface.
@@ -85,6 +87,13 @@ public final class NoritoRpcClient {
             for (key, value) in overrides {
                 NoritoRpcClient.setHeader(&finalHeaders, key: key, value: value)
             }
+        }
+        if let violation = IrohaTransportSecurity.httpViolation(context: "NoritoRpcClient",
+                                                                baseURL: baseURL,
+                                                                targetURL: url,
+                                                                headers: finalHeaders,
+                                                                body: nil) {
+            throw NoritoRpcClientError.insecureTransport(violation)
         }
         request.allHTTPHeaderFields = finalHeaders
 

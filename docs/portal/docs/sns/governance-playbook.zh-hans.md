@@ -118,7 +118,7 @@ N1（公开发布）之前面向运营商的参考。
    解析器透明度尾部确认传播的新 GAR/区域状态
    （参见第 4.5 节）。
 6. **客户披露：** 更新面向客户的账本（钱包/资源管理器）
-   通过[`address-display-guidelines.md`](./address-display-guidelines.md)中的共享夹具，确保I105和
+   通过[`address-display-guidelines.md`](./address-display-guidelines.md)中的共享夹具，确保i105和
    压缩效果图与文案/QR 指南相符。
 
 ### 4.3 续订、计费和财务对账- **续订工作流程：** 注册商强制执行 30 天宽限期 + 60 天赎回期
@@ -147,11 +147,11 @@ N1（公开发布）之前面向运营商的参考。
 |相|业主|行动与证据|服务水平协议 |
 |--------|--------|--------------------|-----|
 |软冻结请求 |管家/支持|将票据 `SNS-DF-<id>` 归档，其中包含付款证明、争议保证金参考和受影响的选择器。 |摄入后≤4小时。 |
-|监护人票|监护板| `sns governance freeze --selector <I105> --reason <text> --until <ts>` 生成签名的 `GuardianFreezeTicketV1`。将票证 JSON 存储在 `artifacts/sns/guardian/<id>.json` 下。 | ≤30min ACK，≤2h 执行。 |
+|监护人票|监护板| `sns governance freeze --selector <i105> --reason <text> --until <ts>` 生成签名的 `GuardianFreezeTicketV1`。将票证 JSON 存储在 `artifacts/sns/guardian/<id>.json` 下。 | ≤30min ACK，≤2h 执行。 |
 |理事会批准 |治理委员会|批准或拒绝冻结，将决定链接记录到监护人票证和争议债券摘要。 |下次理事会会议或异步投票。 |
 |仲裁小组|合规+管家|召集 7 名陪审员小组（根据路线图），并通过 `sns governance dispute ballot` 提交哈希选票。将匿名投票收据附加到事件数据包中。 |保证金存入后≤7 天作出判决。 |
 |上诉|监护人+理事会|上诉使保证金加倍并重复陪审员程序；记录 Norito 清单 `DisputeAppealV1` 和参考主票证。 | ≤10天。 |
-|解冻和修复|注册商 + 解析器操作 |执行 `sns governance unfreeze --selector <I105> --ticket <id>`，更新注册器状态并传播 GAR/解析器差异。 |判决后立即。 |
+|解冻和修复|注册商 + 解析器操作 |执行 `sns governance unfreeze --selector <i105> --ticket <id>`，更新注册器状态并传播 GAR/解析器差异。 |判决后立即。 |
 
 紧急大炮（监护人触发的冻结≤72小时）遵循相同的流程，但
 要求理事会进行追溯审查并提供透明度说明

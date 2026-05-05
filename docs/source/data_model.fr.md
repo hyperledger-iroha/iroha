@@ -1,12 +1,14 @@
+<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
+
 ---
 lang: fr
 direction: ltr
 source: docs/source/data_model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 683bfb31442f8f4ce7b1bf5038f9dba92fe092545e655f43b51195c21535d3c4
-source_last_modified: "2026-03-12T11:24:23.059339+00:00"
-translation_last_reviewed: 2026-03-12
+source_hash: 8055b28096f5884d2636a19a98e92a74599802fa1bd3ff350dbb636d1300b1f8
+source_last_modified: "2026-03-30T18:22:55.957443+00:00"
+translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---
 
@@ -31,37 +33,44 @@ Ce document explique les structures, les identifiants, les caractéristiques et 
 - `IdBox` : Une enveloppe de type somme pour tout identifiant pris en charge (`DomainId`, `AccountId`, `AssetDefinitionId`, `AssetId`, `NftId`, `PeerId`, `TriggerId`, `RoleId`, `Permission`, `CustomParameterId`). Utile pour les flux génériques et l’encodage Norito en tant que type unique.
 - `ChainId` : Identifiant de chaîne opaque utilisé pour la protection contre la relecture dans les transactions.Formes de chaîne d'identifiants (autorisées avec `Display`/`FromStr`) :
 - `DomainId` : `name` (par exemple, `wonderland`).
-- `AccountId` : identifiant canonique de compte sans domaine codé via `AccountAddress` en I105 uniquement. Les entrées de l'analyseur doivent être canoniques I105 ; les suffixes de domaine (`@domain`), les littéraux canoniques I105, les littéraux d'alias, l'entrée de l'analyseur hexadécimal canonique, les charges utiles `norito:` héritées et les formulaires d'analyseur de compte `uaid:`/`opaque:` sont rejetés.
-- `AssetDefinitionId` : canonique `aid:<32-lower-hex-no-dash>` (UUID-v4 octets).
-- `AssetId` : littéral codé canonique `norito:<hex>` (les formes textuelles héritées ne sont pas prises en charge dans la première version).
+- `AccountId` : identifiant canonique de compte sans domaine codé via `AccountAddress` en I105 uniquement. Les entrées de l'analyseur strict doivent être canoniques I105 ; les suffixes de domaine (`@domain`), les littéraux d'alias de compte, les entrées d'analyseur hexadécimal canonique, les charges utiles `norito:` héritées et les formulaires d'analyseur de compte `uaid:`/`opaque:` sont rejetés. Les alias de compte en chaîne utilisent `name@domain.dataspace` ou `name@dataspace` et sont résolus en valeurs canoniques `AccountId`.
+- `AssetDefinitionId` : adresse Base58 canonique sans préfixe sur les octets canoniques de définition d'actif. Il s'agit de l'ID de l'actif public. Les alias d'actifs en chaîne utilisent `name#domain.dataspace` ou `name#dataspace` et sont résolus uniquement par cet ID d'actif canonique Base58.
+- `AssetId` : identifiant du bien public sous forme canonique nue Base58. Les alias d'actifs tels que `name#dataspace` ou `name#domain.dataspace` sont résolus en `AssetId`. Les avoirs du grand livre interne peuvent en outre exposer des champs `asset + account + optional dataspace` divisés si nécessaire, mais cette forme composite n'est pas la forme publique `AssetId`.
 - `NftId` : `nft$domain` (par exemple, `rose$garden`).
 - `PeerId` : `public_key` (l'égalité des pairs se fait par clé publique).
 
-## Entités
-
-### Domaine
+## Entités### Domaine
 - `DomainId { name: Name }` – nom unique.
-- `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
+-`Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`.
 - Constructeur : `NewDomain` avec `with_logo`, `with_metadata`, puis `Registrable::build(authority)` définit `owned_by`.### Compte
 - `AccountId` est l'identité canonique du compte sans domaine saisie par le contrôleur et codée comme canonique I105.
-- `ScopedAccountId { account: AccountId, domain: DomainId }` comporte un contexte de domaine explicite uniquement lorsqu'une vue étendue est requise.
-- `Account { id, metadata, label?, uaid? }` — `label` est un alias stable facultatif utilisé par les enregistrements de retouche, `uaid` porte l'[ID de compte universel] facultatif Nexus (./universal_accounts_guide.md).
-- Constructeur : `NewAccount` via `Account::new(id)` ; l'enregistrement nécessite un domaine `ScopedAccountId` explicite et n'en déduit pas à partir des valeurs par défaut.
-
-### Définitions et actifs des actifs
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` exposé textuellement sous la forme `aid:<32-hex-no-dash>`.
+- `Account { id, metadata, label?, uaid?, opaque_ids[] }` — `label` est un `AccountAlias` principal facultatif utilisé par les enregistrements de retouche, `uaid` comporte les pistes facultatives Nexus [ID de compte universel] (./universal_accounts_guide.md) et `opaque_ids`. identifiants cachés liés à cet UAID. L'état du compte stocké ne comporte plus de champ de domaine lié.
+- Constructeurs :
+  - `NewAccount` via `Account::new(id)` enregistre le sujet canonique du compte sans domaine.
+- Modèle d'alias :
+  - L'identité canonique du compte n'inclut jamais de domaine ou de segment d'espace de données.
+  - Les valeurs `AccountAlias` sont des liaisons SNS distinctes superposées à `AccountId`.
+  - Les alias qualifiés de domaine tels que `merchant@banka.paynet` transportent à la fois un domaine et un espace de données dans la liaison d'alias.
+  - Les alias racine de l'espace de données tels que `merchant@paynet` transportent uniquement l'espace de données et s'associent donc naturellement avec `Account::new(...)`.
+  - Les tests et les appareils doivent d'abord amorcer le `AccountId` universel, puis ajouter séparément les baux d'alias, les autorisations d'alias et tout état appartenant au domaine au lieu de coder les hypothèses de domaine dans l'identité du compte lui-même.
+  - La recherche de comptes publics singuliers se concentre désormais sur les alias (`FindAliasesByAccountId`) ; l'identité du compte elle-même reste sans domaine.### Définitions et actifs des actifs
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` exposé textuellement sous la forme d'une adresse Base58 sans préfixe avec gestion des versions et somme de contrôle.
 -`AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`.
   - `name` est un texte d'affichage destiné à un être humain et ne doit pas contenir `#`/`@`.
   - `alias` est facultatif et doit être l'un des :
-    -`<name>#<domain>@<dataspace>`
+    -`<name>#<domain>.<dataspace>`
     -`<name>#<dataspace>`
     avec le segment gauche correspondant exactement à `AssetDefinition.name`.
-  -`Mintable` : `Infinitely` | `Once` | `Limited(u32)` | `Not`.
+  - L'état du bail d'alias est stocké avec autorité dans l'enregistrement de liaison d'alias persistant ; le champ `alias` en ligne est dérivé lorsque les définitions sont relues via les API core/Torii.
+  - Les réponses de définition d'actif Torii peuvent inclure `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, où `status` est l'un des `permanent`, `leased_active`, `leased_grace` ou `expired_pending_cleanup`.
+  - La résolution d'alias utilise le dernier horodatage de bloc validé plutôt que l'horloge murale du nœud. Une fois `grace_until_ms` passé, les sélecteurs d'alias cessent de se résoudre immédiatement même si le nettoyage par balayage n'a pas encore supprimé la liaison obsolète ; les lectures de définition directe peuvent toujours signaler la liaison persistante comme `expired_pending_cleanup`.
+  - `Mintable` : `Infinitely` | `Once` | `Limited(u32)` | `Not`.
   - Constructeurs : `AssetDefinition::new(id, spec)` ou commodité `numeric(id)` ; `name` est requis et doit être défini via `.with_name(...)`.
 -`AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`.
-- `Asset { id, value: Numeric }` avec `AssetEntry`/`AssetValue` convivial pour le stockage.
-- `AssetBalanceScope` : `Global` pour les soldes sans restriction et `Dataspace(DataSpaceId)` pour les soldes restreints en espace de données.
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` exposé pour les API récapitulatives.### NFT
+- `Asset { id, value: Numeric }` avec `AssetEntry`/`AssetValue` convivial pour le stockage.- `AssetBalanceScope` : `Global` pour les soldes sans restriction et `Dataspace(DataSpaceId)` pour les soldes avec espace de données restreint.
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` exposé pour les API récapitulatives.
+
+### NFT
 -`NftId { domain: DomainId, name: Name }`.
 - `Nft { id, content: Metadata, owned_by: AccountId }` (le contenu est constitué de métadonnées clé/valeur arbitraires).
 - Constructeur : `NewNft` via `Nft::new(id, content)`.
@@ -72,14 +81,14 @@ Ce document explique les structures, les identifiants, les caractéristiques et 
 - `Permission { name: Ident, payload: Json }` – le `name` et le schéma de charge utile doivent s'aligner sur le `ExecutorDataModel` actif (voir ci-dessous).
 
 ### Pairs
-- `PeerId { public_key: PublicKey }`.
+-`PeerId { public_key: PublicKey }`.
 - `Peer { address: SocketAddr, id: PeerId }` et forme de chaîne analysable `public_key@address`.
 
 ### Primitives cryptographiques (fonctionnalité `sm`)
 - `Sm2PublicKey` et `Sm2Signature` : points conformes SEC1 et signatures `r∥s` à largeur fixe pour SM2. Les constructeurs valident l'appartenance à la courbe et les identifiants distinctifs ; Le codage Norito reflète la représentation canonique utilisée par `iroha_crypto`.
 - `Sm3Hash` : nouveau type `[u8; 32]` représentant le résumé GM/T 0004, utilisé dans les manifestes, la télémétrie et les réponses d'appel système.
 - `Sm4Key` : wrapper de clé symétrique de 128 bits partagé entre les appels système de l'hôte et les appareils de modèle de données.
-Ces types s'assoient aux côtés des primitives Ed25519/BLS/ML-DSA existantes et font partie du schéma public une fois que l'espace de travail est construit avec `--features sm`.### Déclencheurs et événements
+Ces types s'ajoutent aux primitives Ed25519/BLS/ML-DSA existantes et font partie du schéma public une fois que l'espace de travail est construit avec `--features sm`.### Déclencheurs et événements
 - `TriggerId { name: Name }` et `Trigger { id, action: action::Action }`.
 -`action::Action { executable: Executable, repeats: Repeats, authority: AccountId, filter: EventFilterBox, metadata }`.
   - `Repeats` : `Indefinitely` ou `Exactly(u32)` ; utilitaires de commande et d’épuisement inclus.
@@ -91,7 +100,7 @@ Ces types s'assoient aux côtés des primitives Ed25519/BLS/ML-DSA existantes et
 - Familles de paramètres système (tous `Default`ed, portent des getters et sont convertis en énumérations individuelles) :
 -`SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`.
   -`BlockParameters { max_transactions: NonZeroU64 }`.
-  -`TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`.
+  - `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`.
   -`SmartContractParameters { fuel, memory, execution_depth }`.
 - `Parameters` regroupe toutes les familles et un `custom: BTreeMap<CustomParameterId, CustomParameter>`.
 - Énumérations à paramètre unique : `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter` pour les mises à jour et les itérations de type diff.
@@ -159,12 +168,12 @@ Ces types s'assoient aux côtés des primitives Ed25519/BLS/ML-DSA existantes et
 ## Caractéristiques et déterminisme
 
 - Les fonctionnalités contrôlent les API facultatives (`std`, `json`, `transparent_api`, `ffi_export`, `ffi_import`, `fast_dsl`, `http`, `fault_injection`).
-- Déterminisme : toute sérialisation utilise le codage Norito pour être portable sur tout le matériel. Le bytecode IVM est un blob d'octets opaque ; l’exécution ne doit pas introduire de réductions non déterministes. L'hôte valide les transactions et fournit des entrées à IVM de manière déterministe.
+- Déterminisme : toute sérialisation utilise le codage Norito pour être portable sur tout le matériel. Le bytecode IVM est un blob d’octets opaque ; l’exécution ne doit pas introduire de réductions non déterministes. L'hôte valide les transactions et fournit des entrées à IVM de manière déterministe.
 
 ### API transparente (`transparent_api`)- Objectif : expose un accès complet et modifiable aux structures/énumérations `#[model]` pour les composants internes tels que Torii, les exécuteurs et les tests d'intégration. Sans cela, ces éléments sont intentionnellement opaques, de sorte que les SDK externes ne voient que les constructeurs sécurisés et les charges utiles codées.
 - Mécanique : la macro `iroha_data_model_derive::model` réécrit chaque champ public avec `#[cfg(feature = "transparent_api")] pub` et conserve une copie privée pour le build par défaut. L'activation de la fonctionnalité inverse ces cfg, donc la déstructuration de `Account`, `Domain`, `Asset`, etc. devient légale en dehors de leurs modules de définition.
 - Détection de surface : la caisse exporte une constante `TRANSPARENT_API: bool` (générée soit en `transparent_api.rs`, soit en `non_transparent_api.rs`). Le code en aval peut vérifier cet indicateur et cette branche lorsqu'il doit recourir à des assistants opaques.
-- Activation : ajoutez `features = ["transparent_api"]` à la dépendance dans `Cargo.toml`. Les caisses d'espace de travail qui nécessitent la projection JSON (par exemple, `iroha_torii`) transmettent automatiquement l'indicateur, mais les consommateurs tiers doivent le conserver à moins qu'ils ne contrôlent le déploiement et n'acceptent la surface d'API plus large.
+- Activation : ajoutez `features = ["transparent_api"]` à la dépendance dans `Cargo.toml`. Les caisses d'espace de travail qui nécessitent la projection JSON (par exemple, `iroha_torii`) transmettent automatiquement l'indicateur, mais les consommateurs tiers doivent le conserver à moins qu'ils ne contrôlent le déploiement et n'acceptent la surface plus large de l'API.
 
 ## Exemples rapides
 
@@ -176,17 +185,20 @@ use iroha_crypto::KeyPair;
 use iroha_primitives::numeric::Numeric;
 
 // Domain
-let domain_id: DomainId = "wonderland".parse().unwrap();
+let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
 let new_domain = Domain::new(domain_id.clone()).with_metadata(Metadata::default());
 
 // Account
 let kp = KeyPair::random();
 let account_id = AccountId::new(kp.public_key().clone());
-let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
+let new_account = Account::new(account_id.clone())
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id = AssetDefinitionId::new(
+    domain_id.clone(),
+    "usd".parse().unwrap(),
+);
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -230,36 +242,36 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / référence rapide alias (CLI + Torii) :
+Référence rapide de l'identifiant de définition d'actif/alias (CLI + Torii) :
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with a canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
-# Mint using alias + account components (no manual norito hex copy/paste)
+# Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
-  --account sorauﾛ1P... \
+  --definition-alias pkr#bankb.paynet \
+  --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```Remarque sur la migration :
 - Les anciens ID de définition d'actif `name#domain` ne sont pas acceptés dans la v1.
-- Les ID d'actifs pour la création/gravure/transfert restent canoniques `norito:<hex>` ; construisez-les avec :
-  -`iroha tools encode asset-id --definition aid:... --account <i105>`
-  - ou `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`.
+- Les sélecteurs d'actifs publics utilisent un seul format de définition d'actifs : les identifiants canoniques Base58. Les alias restent des sélecteurs facultatifs, mais se résolvent avec le même identifiant canonique.
+- Les recherches d'actifs publics concernent les soldes détenus avec `asset + account + optional scope` ; Les littéraux `AssetId` codés bruts sont une représentation interne et ne font pas partie de la surface de sélection Torii/CLI.
+- `POST /v1/assets/definitions/query` et `GET /v1/assets/definitions` acceptent les filtres/tris de définition d'actifs sur `alias_binding.status`, `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms` et `alias_binding.bound_at_ms` en plus de `id`, `name`, `alias` et `metadata.*`.
 
 ## Gestion des versions
 

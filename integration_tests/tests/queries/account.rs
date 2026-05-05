@@ -22,7 +22,7 @@ fn find_accounts_with_asset() -> Result<()> {
     let result: Result<()> = (|| {
         // Registering new asset definition
         let definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("Valid"),
+            DomainId::try_new("wonderland", "universal").expect("Valid"),
             "test_coin".parse().expect("Valid"),
         );
         let asset_definition = {
@@ -49,18 +49,12 @@ fn find_accounts_with_asset() -> Result<()> {
             gen_account_in("wonderland").0,
             gen_account_in("wonderland").0,
         ];
-        let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
-
         // Registering accounts
         let register_accounts = accounts
             .iter()
             .skip(1) // Alice has already been registered in genesis
             .cloned()
-            .map(|account_id| {
-                Register::account(Account::new(
-                    account_id.to_account_id(wonderland_domain.clone()),
-                ))
-            })
+            .map(|account_id| Register::account(Account::new(account_id.clone())))
             .collect::<Vec<_>>();
         test_client.submit_all_blocking(register_accounts)?;
 

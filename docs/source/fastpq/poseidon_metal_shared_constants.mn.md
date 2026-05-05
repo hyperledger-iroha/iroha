@@ -25,9 +25,9 @@ translator: machine-google-reviewed
 
 | Зам | Зорилго | SHA-256 |
 |------|---------|---------|
-| `artifacts/offline_poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`-с үүсгэсэн каноник хормын хувилбар; GPU бүтээх үнэний эх сурвалж. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `IrohaSwift/Fixtures/offline_poseidon/constants.ron` | Каноник агшин зуурын зургийг толин тусгал болгодог тул Swift нэгжийн туршилтууд болон XCFramework утааны бэхэлгээ нь Металл цөмүүдийн хүлээж буй тогтмолуудыг ачаалдаг. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
-| `java/iroha_android/src/test/resources/offline_poseidon/constants.ron` | Android/Kotlin бэхэлгээ нь паритет болон цуваачлалын тестийн ижил манифестийг хуваалцдаг. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | `fastpq_isi::poseidon::{ROUND_CONSTANTS, MDS}`-с үүсгэсэн каноник хормын хувилбар; GPU бүтээх үнэний эх сурвалж. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Каноник агшин зуурын зургийг толин тусгал болгодог тул Swift нэгжийн туршилтууд болон XCFramework утааны бэхэлгээ нь Металл цөмүүдийн хүлээж буй тогтмолуудыг ачаалдаг. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
+| `artifacts/poseidon/constants.ron` | Android/Kotlin бэхэлгээ нь паритет болон цуваачлалын тестийн ижил манифестийг хуваалцдаг. | `99bef7760fcc80c2d4c47e720cf28a156f106a0fa389f2be55a34493a0ca4c21` |
 
 Тогтмол утгыг GPU руу холбохын өмнө хэрэглэгч бүр хэшийг шалгах ёстой
 дамжуулах хоолой. Манифест өөрчлөгдөх үед (шинэ параметрийн багц эсвэл профайл), SHA болон
@@ -39,7 +39,7 @@ translator: machine-google-reviewed
 туслагч. Энэ тушаал нь каноник файл болон SDK толин тусгалуудыг хоёуланг нь бичдэг:
 
 ```bash
-cargo xtask offline-poseidon-fixtures --tag iroha.offline.receipt.merkle.v1
+cargo test -p fastpq_prover poseidon_manifest_consistency
 ```
 
 Очих газруудыг дарахын тулд `--constants <path>`/`--vectors <path>`-г ашиглана уу.

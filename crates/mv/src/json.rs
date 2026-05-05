@@ -141,6 +141,32 @@ impl JsonKeyCodec for (String, String) {
     }
 }
 
+impl JsonKeyCodec for (String, String, String) {
+    fn encode_json_key(&self, out: &mut String) {
+        let mut buf = String::with_capacity(self.0.len() + self.1.len() + self.2.len() + 2);
+        buf.push_str(&self.0);
+        buf.push(TUPLE_KEY_SEPARATOR);
+        buf.push_str(&self.1);
+        buf.push(TUPLE_KEY_SEPARATOR);
+        buf.push_str(&self.2);
+        json::write_json_string(&buf, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let mut parts = encoded.splitn(3, TUPLE_KEY_SEPARATOR);
+        let first = parts.next().ok_or_else(|| {
+            json::Error::Message("expected triple tuple key to contain unit separator".into())
+        })?;
+        let second = parts.next().ok_or_else(|| {
+            json::Error::Message("expected triple tuple key to contain unit separator".into())
+        })?;
+        let third = parts.next().ok_or_else(|| {
+            json::Error::Message("expected triple tuple key to contain unit separator".into())
+        })?;
+        Ok((first.to_owned(), second.to_owned(), third.to_owned()))
+    }
+}
+
 impl JsonKeyCodec for (String, u32) {
     fn encode_json_key(&self, out: &mut String) {
         let mut buf = String::with_capacity(self.0.len() + 11 + 1);
@@ -158,6 +184,41 @@ impl JsonKeyCodec for (String, u32) {
             json::Error::Message(format!("invalid circuit version `{right}`: {err}"))
         })?;
         Ok((left.to_owned(), version))
+    }
+}
+
+impl JsonKeyCodec for (String, String, u16) {
+    fn encode_json_key(&self, out: &mut String) {
+        let mut buf = String::with_capacity(self.0.len() + self.1.len() + 6 + 2);
+        buf.push_str(&self.0);
+        buf.push(TUPLE_KEY_SEPARATOR);
+        buf.push_str(&self.1);
+        buf.push(TUPLE_KEY_SEPARATOR);
+        buf.push_str(&self.2.to_string());
+        json::write_json_string(&buf, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let mut parts = encoded.splitn(3, TUPLE_KEY_SEPARATOR);
+        let first = parts.next().ok_or_else(|| {
+            json::Error::Message(
+                "expected inrou replica tuple key to contain unit separator".into(),
+            )
+        })?;
+        let second = parts.next().ok_or_else(|| {
+            json::Error::Message(
+                "expected inrou replica tuple key to contain unit separator".into(),
+            )
+        })?;
+        let third = parts.next().ok_or_else(|| {
+            json::Error::Message(
+                "expected inrou replica tuple key to contain unit separator".into(),
+            )
+        })?;
+        let replica_slot = third.parse::<u16>().map_err(|err| {
+            json::Error::Message(format!("invalid inrou replica slot `{third}`: {err}"))
+        })?;
+        Ok((first.to_owned(), second.to_owned(), replica_slot))
     }
 }
 
@@ -588,6 +649,25 @@ mod tests {
                 .view()
                 .get(&(String::from("namespace"), String::from("contract"))),
             Some(&11)
+        );
+    }
+
+    #[test]
+    fn storage_roundtrip_inrou_replica_tuple_key() {
+        let storage: Storage<(String, String, u16), i32> = Storage::new();
+        {
+            let mut block = storage.block();
+            block.insert(("service".into(), "1.2.3".into(), 7), 42);
+            block.commit();
+        }
+        let json = to_json(&storage).expect("serialize inrou replica tuple key");
+        let decoded: Storage<(String, String, u16), i32> =
+            from_json(&json).expect("deserialize inrou replica tuple key");
+        assert_eq!(
+            decoded
+                .view()
+                .get(&(String::from("service"), String::from("1.2.3"), 7)),
+            Some(&42)
         );
     }
 }

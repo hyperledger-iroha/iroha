@@ -97,7 +97,7 @@ d’accepter une charge utile. Les étapes ci‑dessous sont obligatoires :
    la clé. Rejetez toute valeur qui échoue à ce contrôle pour éliminer les
    entrées malformées tôt.
 3. **Décodage spécifique à l’algorithme :** Utilisez les mêmes décodeurs
-   canoniques que `iroha_crypto` (`ed25519_dalek`, `pqcrypto_dilithium`,
+   canoniques que `iroha_crypto` (`ed25519_dalek`, `pqcrypto_mldsa`,
    `w3f_bls`/`blstrs`, `sm2`, les helpers TC26, etc.) afin que toutes les
    implémentations partagent le même comportement de validation de sous‑groupe
    et de points.

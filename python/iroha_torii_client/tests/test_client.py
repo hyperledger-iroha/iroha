@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import quote
 
 import pytest
 import requests
@@ -15,15 +16,30 @@ if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
 from iroha_torii_client import (  # noqa: E402  (import depends on sys.path mutation)
+    ContractCallResponse,
+    ContractDeployResponse,
     ExplorerAccountQr,
+    GovernanceContractResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
     ToriiClient,
     decode_pdp_commitment_header,
 )
+from iroha_torii_client.client import _decode_i105_string  # noqa: E402
+from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
 
-CANONICAL_OWNER = "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
-CANONICAL_ASSET_ID = "norito:00112233445566778899aabbccddeeff"
+CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
+CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+
+
+def test_i105_decoder_rejects_out_of_range_numeric_discriminants() -> None:
+    payload = CANONICAL_OWNER.removeprefix("sora")
+
+    assert _decode_i105_string(f"n65535{payload}")
+    for literal in (f"n65536{payload}", f"n70000{payload}"):
+        with pytest.raises(ValueError, match="unsigned 16-bit"):
+            _decode_i105_string(literal)
 
 
 class StubResponse(requests.Response):
@@ -113,6 +129,155 @@ def test_list_peers_returns_typed_records() -> None:
             "data": None,
         }
     ]
+
+
+def test_deploy_contract_encodes_alias_first_payload_and_parses_response() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=202,
+            payload={
+                "ok": True,
+                "bundle_name": "single-contract-deploy",
+                "bundle_digest": "mock-bundle-digest",
+                "chain_fingerprint": "mock-chain@height-0",
+                "dry_run": False,
+                "completed_stages": ["plan", "deploy"],
+                "failure_point": None,
+                "contracts": [
+                    {
+                        "name": "router::universal",
+                        "contract_alias": "router::universal",
+                        "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                        "previous_contract_address": None,
+                        "upgraded": False,
+                        "dataspace": "universal",
+                        "deploy_nonce": 7,
+                        "tx_hash_hex": "11" * 32,
+                        "code_hash_hex": "22" * 32,
+                        "abi_hash_hex": "33" * 32,
+                        "status": "submitted",
+                    }
+                ],
+                "init_calls": [],
+                "assertions": [],
+            },
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.deploy_contract(
+        authority=CANONICAL_OWNER,
+        private_key="00" * 32,
+        code_b64="AQID",
+        contract_alias="router::universal",
+        lease_expiry_ms=1234,
+    )
+
+    assert isinstance(result, ContractDeployResponse)
+    assert result is not None
+    assert result.bundle_digest == "mock-bundle-digest"
+    assert result.contracts[0].contract_alias == "router::universal"
+    assert result.contracts[0].deploy_nonce == 7
+    assert len(session.calls) == 1
+    assert session.calls[0]["method"] == "POST"
+    assert session.calls[0]["url"] == "http://node.test/v1/contracts/deploy"
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload == {
+        "authority": CANONICAL_OWNER,
+        "private_key": "00" * 32,
+        "code_b64": "AQID",
+        "contract_alias": "router::universal",
+        "lease_expiry_ms": 1234,
+    }
+
+
+def test_call_contract_posts_selector_payload_and_parses_response() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=202,
+            payload={
+                "ok": True,
+                "submitted": True,
+                "dataspace": "universal",
+                "code_hash_hex": "22" * 32,
+                "abi_hash_hex": "33" * 32,
+                "creation_time_ms": 42,
+                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "tx_hash_hex": "44" * 32,
+                "entrypoint": "ping",
+                "transaction_scaffold_b64": "AQID",
+                "signed_transaction_b64": "BAUG",
+                "signing_message_b64": "BwgJ",
+            },
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.call_contract(
+        authority=CANONICAL_OWNER,
+        private_key="00" * 32,
+        contract_alias="router::universal",
+        entrypoint="ping",
+        payload={"value": 1, "labels": ["alpha"]},
+        gas_asset_id="xor#wonderland",
+        gas_limit=5000,
+    )
+
+    assert isinstance(result, ContractCallResponse)
+    assert result.entrypoint == "ping"
+    assert result.creation_time_ms == 42
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload == {
+        "authority": CANONICAL_OWNER,
+        "private_key": "00" * 32,
+        "contract_alias": "router::universal",
+        "entrypoint": "ping",
+        "payload": {"value": 1, "labels": ["alpha"]},
+        "gas_asset_id": "xor#wonderland",
+        "gas_limit": 5000,
+    }
+
+
+def test_call_contract_rejects_ambiguous_selector() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+
+    with pytest.raises(ValueError, match="exactly one of contract_address or contract_alias"):
+        client.call_contract(
+            authority=CANONICAL_OWNER,
+            private_key="00" * 32,
+            contract_address="tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            contract_alias="router::universal",
+            gas_limit=1,
+        )
+
+
+def test_get_governance_contract_parses_response() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "found": True,
+                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "dataspace": "universal",
+                "code_hash_hex": "22" * 32,
+            },
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.get_governance_contract(
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    )
+
+    assert isinstance(result, GovernanceContractResponse)
+    assert result.found is True
+    assert result.code_hash_hex == "22" * 32
+    assert session.calls[0]["url"] == (
+        "http://node.test/v1/gov/contracts/"
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    )
 
 
 def test_list_telemetry_peers_info_parses_payload() -> None:
@@ -343,8 +508,8 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     session.queue(
         StubResponse(
             payload={
-                "canonical_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-                "literal": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+                "canonical_id": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+                "literal": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
                 "network_prefix": 26,
                 "error_correction": "quartile",
                 "modules": 33,
@@ -355,11 +520,11 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    qr = client.get_explorer_account_qr("6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL")
+    qr = client.get_explorer_account_qr("sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6")
 
     assert qr == ExplorerAccountQr(
-        canonical_id="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-        literal="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        canonical_id="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+        literal="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
         network_prefix=26,
         error_correction="quartile",
         modules=33,
@@ -368,11 +533,35 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     )
     call = session.calls[0]
     assert call["method"] == "GET"
-    assert call["url"].endswith(
-        "/v1/explorer/accounts/6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL/qr"
-    )
+    assert call["url"].endswith(f"/v1/explorer/accounts/{quote(CANONICAL_OWNER, safe='')}/qr")
     assert call["params"] == {}
     assert call["headers"]["Accept"] == "application/json"
+
+
+def test_get_explorer_account_qr_accepts_account_alias_path_literal() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "canonical_id": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
+                "literal": "operator@banka.universal",
+                "network_prefix": 26,
+                "error_correction": "quartile",
+                "modules": 33,
+                "qr_version": 5,
+                "svg": "<svg></svg>",
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    qr = client.get_explorer_account_qr("operator@banka.universal")
+
+    assert qr.literal == "operator@banka.universal"
+    call = session.calls[0]
+    assert call["method"] == "GET"
+    assert call["url"].endswith("/v1/explorer/accounts/operator%40banka.universal/qr")
+    assert call["params"] == {}
 
 
 def test_get_explorer_account_qr_normalizes_payload_variants() -> None:
@@ -380,7 +569,7 @@ def test_get_explorer_account_qr_normalizes_payload_variants() -> None:
     session.queue(
         StubResponse(
             payload={
-                "canonicalId": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+                "canonicalId": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
                 "literal": "sorabobacct",
                 "networkPrefix": 27,
                 "errorCorrection": "medium",
@@ -392,10 +581,10 @@ def test_get_explorer_account_qr_normalizes_payload_variants() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    qr = client.get_explorer_account_qr("34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r")
+    qr = client.get_explorer_account_qr("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
 
     assert qr == ExplorerAccountQr(
-        canonical_id="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        canonical_id="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         literal="sorabobacct",
         network_prefix=27,
         error_correction="medium",
@@ -448,6 +637,979 @@ def test_get_node_capabilities_parses_snapshot() -> None:
     assert capabilities.crypto.sm.acceleration.neon_sm3 is True
     assert capabilities.crypto.curves.registry_version == 2
     assert capabilities.crypto.curves.allowed_curve_bitmap == [32770]
+
+
+def test_get_sccp_capabilities_parses_snapshot() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "local_domain": 0,
+                "local_chain": "sora",
+                "proof_family": "stark-fri-v1",
+                "burn_bundle_path": "/v1/sccp/proofs/burn/{message_id}",
+                "governance_bundle_path": "/v1/sccp/proofs/governance/{message_id}",
+                "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
+                "message_proof_path": "/v1/sccp/artifacts/message/{message_id}",
+                "message_job_path": "/v1/sccp/jobs/message/{message_id}",
+                "proof_manifest_path": "/v1/sccp/manifests",
+                "burn_registry_backend": "bridge/sccp/burn-v1",
+                "governance_registry_backend": "bridge/sccp/governance-v1",
+                "proof_submit_path": "/v1/bridge/proofs/submit",
+                "message_submit_path": "/v1/bridge/messages",
+                "message_payload_kinds": ["asset_register", "route_activate", "transfer"],
+                "codecs": [
+                    {
+                        "id": 4,
+                        "key": "ton_raw",
+                        "description": "Canonical TON raw addresses in workchain:account_hex form.",
+                    }
+                ],
+                "counterparties": [
+                    {
+                        "domain": 4,
+                        "chain": "ton",
+                        "message_backend": "sccp/stark-fri-v1/ton",
+                        "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                        "counterparty_account_codec": 4,
+                        "counterparty_account_codec_key": "ton_raw",
+                    }
+                ],
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    capabilities = client.get_sccp_capabilities()
+
+    assert capabilities.local_domain == 0
+    assert capabilities.local_chain == "sora"
+    assert capabilities.message_proof_path == "/v1/sccp/artifacts/message/{message_id}"
+    assert capabilities.message_job_path == "/v1/sccp/jobs/message/{message_id}"
+    assert capabilities.proof_manifest_path == "/v1/sccp/manifests"
+    assert capabilities.burn_registry_backend == "bridge/sccp/burn-v1"
+    assert capabilities.governance_registry_backend == "bridge/sccp/governance-v1"
+    assert capabilities.message_payload_kinds == ["asset_register", "route_activate", "transfer"]
+    assert capabilities.codecs[0].key == "ton_raw"
+    assert capabilities.counterparties[0].message_backend == "sccp/stark-fri-v1/ton"
+
+
+def test_get_sccp_proof_manifests_parses_snapshot() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "local_domain": 0,
+                "local_chain": "sora",
+                "proof_family": "stark-fri-v1",
+                "manifests": [
+                    {
+                        "version": 1,
+                        "local_domain": 0,
+                        "local_chain": "sora",
+                        "counterparty_domain": 1,
+                        "chain": "eth",
+                        "proof_family": "stark-fri-v1",
+                        "message_backend": "sccp/stark-fri-v1/eth",
+                        "registry_backend": "bridge/sccp/stark-fri-v1/eth",
+                        "counterparty_account_codec": 2,
+                        "counterparty_account_codec_key": "evm_hex",
+                        "finality_model": "EthereumBeaconExecution",
+                        "verifier_target": "EvmContract",
+                        "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
+                        "required_public_inputs": [
+                            "message_id",
+                            "payload_hash",
+                            "target_domain",
+                            "commitment_root",
+                            "finality_height",
+                            "finality_block_hash",
+                        ],
+                        "message_payload_kinds": ["asset_register", "route_activate", "transfer"],
+                        "submission_template": {
+                            "version": 1,
+                            "encoding": "abi_tuple_v1",
+                            "submission_kind": "contract_call",
+                            "verifier_entrypoint": (
+                                "submitSccpMessageProof(bytes proof_bytes, bytes public_inputs, "
+                                "bytes bundle_bytes)"
+                            ),
+                            "required_arguments": [
+                                {
+                                    "key": "proof_bytes",
+                                    "description": (
+                                        "Transparent SCCP proof bytes emitted by the prover "
+                                        "backend."
+                                    ),
+                                },
+                                {
+                                    "key": "public_inputs",
+                                    "description": (
+                                        "ABI-encoded SCCP public inputs in manifest order."
+                                    ),
+                                },
+                                {
+                                    "key": "bundle_bytes",
+                                    "description": (
+                                        "ABI-encoded Nexus SCCP message bundle passed to the "
+                                        "verifier contract."
+                                    ),
+                                },
+                            ],
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    manifests = client.get_sccp_proof_manifests()
+
+    assert manifests.local_domain == 0
+    assert manifests.proof_family == "stark-fri-v1"
+    assert manifests.manifests[0].chain == "eth"
+    assert manifests.manifests[0].verifier_target == "EvmContract"
+    assert manifests.manifests[0].required_public_inputs[-1] == "finality_block_hash"
+    assert manifests.manifests[0].submission_template.encoding == "abi_tuple_v1"
+    assert manifests.manifests[0].submission_template.required_arguments[0].key == "proof_bytes"
+
+
+def test_get_sccp_proof_manifests_rejects_unknown_verifier_target() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "local_domain": 0,
+                "local_chain": "sora",
+                "proof_family": "stark-fri-v1",
+                "manifests": [
+                    {
+                        "version": 1,
+                        "local_domain": 0,
+                        "local_chain": "sora",
+                        "counterparty_domain": 4,
+                        "chain": "ton",
+                        "proof_family": "stark-fri-v1",
+                        "message_backend": "sccp/stark-fri-v1/ton",
+                        "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                        "counterparty_account_codec": 4,
+                        "counterparty_account_codec_key": "ton_raw",
+                        "finality_model": "TonMasterchain",
+                        "verifier_target": "UnknownVerifier",
+                        "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                        "required_public_inputs": ["message_id"],
+                        "message_payload_kinds": ["transfer"],
+                        "submission_template": {
+                            "version": 1,
+                            "encoding": "ton_cell_v1",
+                            "submission_kind": "internal_message",
+                            "verifier_entrypoint": "op::submit_sccp_message_proof",
+                            "required_arguments": [
+                                {
+                                    "key": "proof_cell",
+                                    "description": (
+                                        "Transparent SCCP proof cell emitted by the TON prover "
+                                        "backend."
+                                    ),
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="verifier_target must be one of"):
+        client.get_sccp_proof_manifests()
+
+
+def test_get_sccp_message_proof_artifact_parses_typed_snapshot() -> None:
+    session = RecordingSession()
+    message_id = "11" * 32
+    payload_hash = "22" * 32
+    commitment_root = "33" * 32
+    finality_block_hash = "44" * 32
+    session.queue(
+        StubResponse(
+            payload={
+                "version": 1,
+                "local_domain": 0,
+                "counterparty_domain": 4,
+                "proof_family": "stark-fri-v1",
+                "message_backend": "sccp/stark-fri-v1/ton",
+                "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                "finality_model": "TonMasterchain",
+                "verifier_target": "TonContract",
+                "submission_template": {
+                    "version": 1,
+                    "encoding": "ton_cell_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "required_arguments": [
+                        {
+                            "key": "proof_cell",
+                            "description": (
+                                "Transparent SCCP proof cell emitted by the TON prover backend."
+                            ),
+                        },
+                        {
+                            "key": "public_inputs_cell",
+                            "description": "Cell-encoded SCCP public inputs in manifest order.",
+                        },
+                        {
+                            "key": "bundle_cell",
+                            "description": (
+                                "Cell-encoded Nexus SCCP message bundle for the TON bridge "
+                                "contract."
+                            ),
+                        },
+                    ],
+                },
+                "submission_package": {
+                    "version": 1,
+                    "proof_family": "stark-fri-v1",
+                    "verifier_backend": {"version": 1, "key": "ton-contract-v1"},
+                    "envelope_encoding": "ton_message_body_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "platform_payload": {
+                        "platform": "ton_internal_message",
+                        "payload": {
+                            "proof_cell": "aa55",
+                            "public_inputs_cell": "cc77",
+                            "bundle_cell": "dd88",
+                        },
+                    },
+                    "arguments": [
+                        {"key": "proof_cell", "encoding": "raw_bytes", "bytes": "aa55"},
+                        {"key": "public_inputs_cell", "encoding": "raw_bytes", "bytes": "cc77"},
+                        {"key": "bundle_cell", "encoding": "raw_bytes", "bytes": "dd88"},
+                    ],
+                    "envelope_bytes": "ee99",
+                },
+                "public_inputs": {
+                    "version": 1,
+                    "message_id": message_id,
+                    "payload_hash": payload_hash,
+                    "target_domain": 4,
+                    "commitment_root": commitment_root,
+                    "finality_height": "19",
+                    "finality_block_hash": finality_block_hash,
+                },
+                "proof_bytes": "aa55",
+                "submission_package": {
+                    "version": 1,
+                    "proof_family": "stark-fri-v1",
+                    "verifier_backend": {"version": 1, "key": "ton-contract-v1"},
+                    "envelope_encoding": "ton_message_body_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "platform_payload": {
+                        "platform": "ton_internal_message",
+                        "payload": {
+                            "proof_cell": "aa55",
+                            "public_inputs_cell": "cc77",
+                            "bundle_cell": "dd88",
+                        },
+                    },
+                    "arguments": [
+                        {"key": "proof_cell", "encoding": "raw_bytes", "bytes": "aa55"},
+                        {"key": "public_inputs_cell", "encoding": "raw_bytes", "bytes": "cc77"},
+                        {"key": "bundle_cell", "encoding": "raw_bytes", "bytes": "dd88"},
+                    ],
+                    "envelope_bytes": "ee99",
+                },
+                "bundle": {
+                    "version": 1,
+                    "commitment_root": commitment_root,
+                    "commitment": {
+                        "version": 1,
+                        "kind": "Transfer",
+                        "target_domain": 4,
+                        "message_id": message_id,
+                        "payload_hash": payload_hash,
+                        "parliament_certificate_hash": None,
+                    },
+                    "merkle_proof": {
+                        "steps": [
+                            {
+                                "sibling_hash": "55" * 32,
+                                "sibling_is_left": False,
+                            }
+                        ]
+                    },
+                    "payload": {
+                        "Transfer": {
+                            "version": 1,
+                            "source_domain": 0,
+                            "dest_domain": 4,
+                            "nonce": "21",
+                            "asset_home_domain": 0,
+                            "asset_id_codec": 1,
+                            "asset_id": "786f7223756e6976657273616c",
+                            "amount": "77",
+                            "sender_codec": 1,
+                            "sender": "6e657875733a736f726173776170",
+                            "recipient_codec": 4,
+                            "recipient": (
+                                "303a3031323334353637383961626364656630313233343536373839616263646566"
+                                "3031323334353637383961626364656630313233343536373839616263646566"
+                            ),
+                            "route_id_codec": 1,
+                            "route_id": "6e657875733a746f6e3a786f72",
+                        }
+                    },
+                    "finality_proof": "bb66",
+                },
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    artifact = client.get_sccp_message_proof_artifact(f"0x{message_id}")
+
+    assert artifact.counterparty_domain == 4
+    assert artifact.finality_model == "TonMasterchain"
+    assert artifact.public_inputs.message_id == message_id
+    assert artifact.submission_package.platform_payload.kind == "ton_internal_message"
+    assert artifact.submission_package.platform_payload.value["proof_cell"] == "aa55"
+    assert artifact.bundle.payload.kind == "Transfer"
+    assert artifact.bundle.payload.value["amount"] == "77"
+    assert session.calls[0]["url"] == f"http://node.test/v1/sccp/artifacts/message/{message_id}"
+
+
+def test_get_sccp_message_proof_artifact_rejects_mismatched_public_inputs() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "version": 1,
+                "local_domain": 0,
+                "counterparty_domain": 1,
+                "proof_family": "stark-fri-v1",
+                "message_backend": "sccp/stark-fri-v1/eth",
+                "registry_backend": "bridge/sccp/stark-fri-v1/eth",
+                "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
+                "finality_model": "EthereumBeaconExecution",
+                "verifier_target": "EvmContract",
+                "public_inputs": {
+                    "version": 1,
+                    "message_id": "11" * 32,
+                    "payload_hash": "22" * 32,
+                    "target_domain": 1,
+                    "commitment_root": "33" * 32,
+                    "finality_height": "7",
+                    "finality_block_hash": "44" * 32,
+                },
+                "proof_bytes": "aa55",
+                "submission_package": {
+                    "version": 1,
+                    "proof_family": "stark-fri-v1",
+                    "verifier_backend": {"version": 1, "key": "evm-secp256k1-keccak-v1"},
+                    "envelope_encoding": "abi_tuple_v1",
+                    "submission_kind": "contract_call",
+                    "verifier_entrypoint": (
+                        "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, "
+                        "bytes32 statement_hash)"
+                    ),
+                    "platform_payload": {
+                        "platform": "evm_contract_call",
+                        "payload": {
+                            "proof_bytes": "aa55",
+                            "public_inputs": {
+                                "message_id": "11" * 32,
+                                "payload_hash": "22" * 32,
+                                "target_domain_word": "00" * 31 + "01",
+                                "commitment_root": "33" * 32,
+                                "finality_height_word": "00" * 31 + "07",
+                                "finality_block_hash": "44" * 32,
+                            },
+                            "public_inputs_hash": "88" * 32,
+                            "statement_hash": "55" * 32,
+                            "attestation": {
+                                "version": 1,
+                                "message_id": "11" * 32,
+                                "source_domain": 0,
+                                "commitment_root": "33" * 32,
+                                "native_proof_hash": "99" * 32,
+                                "signatures": [
+                                    {
+                                        "signer_address": "12" * 20,
+                                        "signature_bytes": "34" * 65,
+                                    }
+                                ],
+                            },
+                        },
+                    },
+                    "arguments": [
+                        {"key": "proof_bytes", "encoding": "raw_bytes", "bytes": "aa55"},
+                        {"key": "public_inputs", "encoding": "abi_bytes32x6", "bytes": "66" * (32 * 6)},
+                        {"key": "statement_hash", "encoding": "abi_bytes32", "bytes": "55" * 32},
+                    ],
+                    "envelope_bytes": "77",
+                },
+                "bundle": {
+                    "version": 1,
+                    "commitment_root": "33" * 32,
+                    "commitment": {
+                        "version": 1,
+                        "kind": "Transfer",
+                        "target_domain": 1,
+                        "message_id": "99" * 32,
+                        "payload_hash": "22" * 32,
+                        "parliament_certificate_hash": None,
+                    },
+                    "merkle_proof": {"steps": []},
+                    "payload": {"Transfer": {"version": 1}},
+                    "finality_proof": "bb66",
+                },
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="message_id"):
+        client.get_sccp_message_proof_artifact("11" * 32)
+
+
+def test_get_sccp_message_proof_artifact_against_mock_server() -> None:
+    server = ToriiMockServer().start()
+    message_id = "11" * 32
+    try:
+        response = requests.post(
+            f"{server.base_url.rstrip('/')}/__mock__/sccp/config",
+            json={
+                "message_artifacts": {
+                    message_id: {
+                        "version": 1,
+                        "local_domain": 0,
+                        "counterparty_domain": 4,
+                        "proof_family": "stark-fri-v1",
+                        "message_backend": "sccp/stark-fri-v1/ton",
+                        "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                        "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                        "finality_model": "TonMasterchain",
+                        "verifier_target": "TonContract",
+                        "public_inputs": {
+                            "version": 1,
+                            "message_id": message_id,
+                            "payload_hash": "22" * 32,
+                            "target_domain": 4,
+                            "commitment_root": "33" * 32,
+                            "finality_height": "19",
+                            "finality_block_hash": "44" * 32,
+                        },
+                        "proof_bytes": "aa55",
+                        "submission_package": {
+                            "version": 1,
+                            "proof_family": "stark-fri-v1",
+                            "verifier_backend": {"version": 1, "key": "ton-contract-v1"},
+                            "envelope_encoding": "ton_message_body_v1",
+                            "submission_kind": "internal_message",
+                            "verifier_entrypoint": "op::submit_sccp_message_proof",
+                            "platform_payload": {
+                                "platform": "ton_internal_message",
+                                "payload": {
+                                    "proof_cell": "aa55",
+                                    "public_inputs_cell": "cc77",
+                                    "bundle_cell": "dd88",
+                                },
+                            },
+                            "arguments": [
+                                {"key": "proof_cell", "encoding": "raw_bytes", "bytes": "aa55"},
+                                {"key": "public_inputs_cell", "encoding": "raw_bytes", "bytes": "cc77"},
+                                {"key": "bundle_cell", "encoding": "raw_bytes", "bytes": "dd88"},
+                            ],
+                            "envelope_bytes": "ee99",
+                        },
+                        "bundle": {
+                            "version": 1,
+                            "commitment_root": "33" * 32,
+                            "commitment": {
+                                "version": 1,
+                                "kind": "Transfer",
+                                "target_domain": 4,
+                                "message_id": message_id,
+                                "payload_hash": "22" * 32,
+                                "parliament_certificate_hash": None,
+                            },
+                            "merkle_proof": {"steps": []},
+                            "payload": {"Transfer": {"version": 1, "amount": "77"}},
+                            "finality_proof": "bb66",
+                        },
+                    }
+                }
+            },
+            timeout=5.0,
+        )
+        response.raise_for_status()
+
+        client = ToriiClient(server.base_url)
+        artifact = client.get_sccp_message_proof_artifact(message_id)
+
+        assert artifact.bundle.payload.kind == "Transfer"
+        assert artifact.bundle.payload.value["amount"] == "77"
+        assert artifact.message_backend == "sccp/stark-fri-v1/ton"
+        assert artifact.submission_package.platform_payload.kind == "ton_internal_message"
+    finally:
+        server.stop()
+
+
+def test_get_sccp_message_proof_job_parses_typed_snapshot() -> None:
+    session = RecordingSession()
+    message_id = "11" * 32
+    payload_hash = "22" * 32
+    commitment_root = "33" * 32
+    finality_block_hash = "44" * 32
+    session.queue(
+        StubResponse(
+            payload={
+                "version": 1,
+                "chain_family": "Ton",
+                "chain": "ton",
+                "local_domain": 0,
+                "counterparty_domain": 4,
+                "proof_family": "stark-fri-v1",
+                "message_backend": "sccp/stark-fri-v1/ton",
+                "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                "finality_model": "TonMasterchain",
+                "verifier_target": "TonContract",
+                "submission_template": {
+                    "version": 1,
+                    "encoding": "ton_cell_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "required_arguments": [
+                        {
+                            "key": "proof_cell",
+                            "description": (
+                                "Transparent SCCP proof cell emitted by the TON prover backend."
+                            ),
+                        },
+                        {
+                            "key": "public_inputs_cell",
+                            "description": "Cell-encoded SCCP public inputs in manifest order.",
+                        },
+                        {
+                            "key": "bundle_cell",
+                            "description": (
+                                "Cell-encoded Nexus SCCP message bundle for the TON bridge "
+                                "contract."
+                            ),
+                        },
+                    ],
+                },
+                "submission_package": {
+                    "version": 1,
+                    "proof_family": "stark-fri-v1",
+                    "verifier_backend": {"version": 1, "key": "ton-contract-v1"},
+                    "envelope_encoding": "ton_message_body_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "platform_payload": {
+                        "platform": "ton_internal_message",
+                        "payload": {
+                            "proof_cell": "aa55",
+                            "public_inputs_cell": "cc77",
+                            "bundle_cell": "dd88",
+                        },
+                    },
+                    "arguments": [
+                        {"key": "proof_cell", "encoding": "raw_bytes", "bytes": "aa55"},
+                        {"key": "public_inputs_cell", "encoding": "raw_bytes", "bytes": "cc77"},
+                        {"key": "bundle_cell", "encoding": "raw_bytes", "bytes": "dd88"},
+                    ],
+                    "envelope_bytes": "ee99",
+                },
+                "public_inputs": {
+                    "version": 1,
+                    "message_id": message_id,
+                    "payload_hash": payload_hash,
+                    "target_domain": 4,
+                    "commitment_root": commitment_root,
+                    "finality_height": "19",
+                    "finality_block_hash": finality_block_hash,
+                },
+                "payload_kind": "transfer",
+                "payload_projection": {
+                    "Transfer": {
+                        "version": 1,
+                        "source_domain": 0,
+                        "dest_domain": 4,
+                        "nonce": "21",
+                        "asset_home_domain": 0,
+                        "asset_id": {"TextUtf8": {"value": "xor#universal"}},
+                        "amount": "77",
+                        "sender": {"TextUtf8": {"value": "nexus:soraswap"}},
+                        "recipient": {
+                            "TonRaw": {
+                                "workchain": 0,
+                                "account": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                            }
+                        },
+                        "route_id": {"TextUtf8": {"value": "nexus:ton:xor"}},
+                    }
+                },
+                "bundle": {
+                    "version": 1,
+                    "commitment_root": commitment_root,
+                    "commitment": {
+                        "version": 1,
+                        "kind": "Transfer",
+                        "target_domain": 4,
+                        "message_id": message_id,
+                        "payload_hash": payload_hash,
+                        "parliament_certificate_hash": None,
+                    },
+                    "merkle_proof": {"steps": []},
+                    "payload": {"Transfer": {"version": 1, "amount": "77"}},
+                    "finality_proof": "bb66",
+                },
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    job = client.get_sccp_message_proof_job(f"0x{message_id}")
+
+    assert job.chain_family == "Ton"
+    assert job.chain == "ton"
+    assert job.payload_kind == "transfer"
+    assert job.payload_projection.kind == "Transfer"
+    assert job.payload_projection.value["amount"] == 77
+    assert job.payload_projection.value["recipient"].kind == "TonRaw"
+    assert job.payload_projection.value["recipient"].value["workchain"] == 0
+    assert job.submission_template.encoding == "ton_cell_v1"
+    assert job.submission_template.required_arguments[0].key == "proof_cell"
+    assert job.submission_package.platform_payload.kind == "ton_internal_message"
+    assert session.calls[0]["url"] == f"http://node.test/v1/sccp/jobs/message/{message_id}"
+
+
+def test_get_sccp_message_proof_job_against_mock_server() -> None:
+    server = ToriiMockServer().start()
+    message_id = "11" * 32
+    try:
+        response = requests.post(
+            f"{server.base_url.rstrip('/')}/__mock__/sccp/config",
+            json={
+                "message_jobs": {
+                    message_id: {
+                        "version": 1,
+                        "chain_family": "Ton",
+                        "chain": "ton",
+                        "local_domain": 0,
+                        "counterparty_domain": 4,
+                        "proof_family": "stark-fri-v1",
+                        "message_backend": "sccp/stark-fri-v1/ton",
+                        "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                        "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                        "finality_model": "TonMasterchain",
+                        "verifier_target": "TonContract",
+                        "submission_template": {
+                            "version": 1,
+                            "encoding": "ton_cell_v1",
+                            "submission_kind": "internal_message",
+                            "verifier_entrypoint": "op::submit_sccp_message_proof",
+                            "required_arguments": [
+                                {
+                                    "key": "proof_cell",
+                                    "description": (
+                                        "Transparent SCCP proof cell emitted by the TON prover "
+                                        "backend."
+                                    ),
+                                },
+                                {
+                                    "key": "public_inputs_cell",
+                                    "description": (
+                                        "Cell-encoded SCCP public inputs in manifest order."
+                                    ),
+                                },
+                                {
+                                    "key": "bundle_cell",
+                                    "description": (
+                                        "Cell-encoded Nexus SCCP message bundle for the TON "
+                                        "bridge contract."
+                                    ),
+                                },
+                            ],
+                        },
+                        "submission_package": {
+                            "version": 1,
+                            "proof_family": "stark-fri-v1",
+                            "verifier_backend": {"version": 1, "key": "ton-contract-v1"},
+                            "envelope_encoding": "ton_message_body_v1",
+                            "submission_kind": "internal_message",
+                            "verifier_entrypoint": "op::submit_sccp_message_proof",
+                            "platform_payload": {
+                                "platform": "ton_internal_message",
+                                "payload": {
+                                    "proof_cell": "aa55",
+                                    "public_inputs_cell": "cc77",
+                                    "bundle_cell": "dd88",
+                                },
+                            },
+                            "arguments": [
+                                {"key": "proof_cell", "encoding": "raw_bytes", "bytes": "aa55"},
+                                {"key": "public_inputs_cell", "encoding": "raw_bytes", "bytes": "cc77"},
+                                {"key": "bundle_cell", "encoding": "raw_bytes", "bytes": "dd88"},
+                            ],
+                            "envelope_bytes": "ee99",
+                        },
+                        "public_inputs": {
+                            "version": 1,
+                            "message_id": message_id,
+                            "payload_hash": "22" * 32,
+                            "target_domain": 4,
+                            "commitment_root": "33" * 32,
+                            "finality_height": "19",
+                            "finality_block_hash": "44" * 32,
+                        },
+                        "payload_kind": "transfer",
+                        "payload_projection": {
+                            "Transfer": {
+                                "version": 1,
+                                "source_domain": 0,
+                                "dest_domain": 4,
+                                "nonce": "21",
+                                "asset_home_domain": 0,
+                                "asset_id": {"TextUtf8": {"value": "xor#universal"}},
+                                "amount": "77",
+                                "sender": {"TextUtf8": {"value": "nexus:soraswap"}},
+                                "recipient": {
+                                    "TonRaw": {
+                                        "workchain": 0,
+                                        "account": (
+                                            "0123456789abcdef0123456789abcdef0123456789abcdef"
+                                            "0123456789abcdef"
+                                        ),
+                                    }
+                                },
+                                "route_id": {"TextUtf8": {"value": "nexus:ton:xor"}},
+                            }
+                        },
+                        "bundle": {
+                            "version": 1,
+                            "commitment_root": "33" * 32,
+                            "commitment": {
+                                "version": 1,
+                                "kind": "Transfer",
+                                "target_domain": 4,
+                                "message_id": message_id,
+                                "payload_hash": "22" * 32,
+                                "parliament_certificate_hash": None,
+                            },
+                            "merkle_proof": {"steps": []},
+                            "payload": {"Transfer": {"version": 1, "amount": "77"}},
+                            "finality_proof": "bb66",
+                        },
+                    }
+                }
+            },
+            timeout=5.0,
+        )
+        response.raise_for_status()
+
+        client = ToriiClient(server.base_url)
+        job = client.get_sccp_message_proof_job(message_id)
+
+        assert job.chain == "ton"
+        assert job.payload_projection.kind == "Transfer"
+        assert job.payload_projection.value["amount"] == 77
+        assert job.submission_package.platform_payload.kind == "ton_internal_message"
+        assert job.submission_template.verifier_entrypoint == "op::submit_sccp_message_proof"
+    finally:
+        server.stop()
+
+
+def test_contract_helpers_against_mock_server() -> None:
+    server = ToriiMockServer().start()
+    contract_address = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    try:
+        response = requests.post(
+            f"{server.base_url.rstrip('/')}/__mock__/gov/config",
+            json={
+                "gov_contracts": {
+                    contract_address: {
+                        "found": True,
+                        "dataspace": "universal",
+                        "code_hash_hex": "22" * 32,
+                    }
+                },
+                "contract_deploy_response": {
+                    "ok": True,
+                    "bundle_name": "single-contract-deploy",
+                    "bundle_digest": "mock-single-contract-digest",
+                    "chain_fingerprint": "mock-chain@height-0",
+                    "dry_run": False,
+                    "completed_stages": ["plan", "deploy"],
+                    "failure_point": None,
+                    "contracts": [
+                        {
+                            "name": "router::universal",
+                            "contract_alias": "router::universal",
+                            "contract_address": contract_address,
+                            "previous_contract_address": None,
+                            "upgraded": False,
+                            "dataspace": "universal",
+                            "deploy_nonce": 1,
+                            "tx_hash_hex": "11" * 32,
+                            "code_hash_hex": "22" * 32,
+                            "abi_hash_hex": "33" * 32,
+                            "status": "submitted",
+                        }
+                    ],
+                    "init_calls": [],
+                    "assertions": [],
+                },
+                "contract_call_response": {
+                    "ok": True,
+                    "submitted": True,
+                    "dataspace": "universal",
+                    "code_hash_hex": "22" * 32,
+                    "abi_hash_hex": "33" * 32,
+                    "creation_time_ms": 9,
+                    "contract_address": contract_address,
+                    "tx_hash_hex": "44" * 32,
+                    "entrypoint": "ping",
+                    "transaction_scaffold_b64": "AQID",
+                    "signed_transaction_b64": "BAUG",
+                    "signing_message_b64": "BwgJ",
+                },
+            },
+            timeout=5.0,
+        )
+        response.raise_for_status()
+
+        client = ToriiClient(server.base_url)
+        deploy = client.deploy_contract(
+            authority=CANONICAL_OWNER,
+            private_key="00" * 32,
+            code_b64="AQID",
+            contract_alias="router::universal",
+        )
+        call = client.call_contract(
+            authority=CANONICAL_OWNER,
+            private_key="00" * 32,
+            contract_address=contract_address,
+            entrypoint="ping",
+            payload={"value": 1},
+            gas_limit=5000,
+        )
+        governed = client.get_governance_contract(contract_address)
+
+        assert deploy is not None
+        assert deploy.contracts[0].contract_address == contract_address
+        assert call.contract_address == contract_address
+        assert governed.contract_address == contract_address
+        assert governed.code_hash_hex == "22" * 32
+    finally:
+        server.stop()
+
+
+def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
+    server = ToriiMockServer().start()
+    try:
+        response = requests.get(f"{server.base_url.rstrip('/')}/v1/sumeragi/status", timeout=5.0)
+        response.raise_for_status()
+
+        payload = response.json()
+
+        assert payload["leader_index"] == 2
+        assert payload["gossip_fallback_total"] == 1
+        assert payload["rbc_store"]["persist_drops_total"] == 2
+    finally:
+        server.stop()
+
+
+def test_contract_bundle_helpers_against_mock_server() -> None:
+    server = ToriiMockServer().start()
+    try:
+        response = requests.post(
+            f"{server.base_url.rstrip('/')}/__mock__/contracts/config",
+            json={
+                "bundle_response": {
+                    "bundle_digest": "mock-bundle-digest",
+                    "completed_stages": ["plan", "deploy", "init_calls", "assertions"],
+                }
+            },
+            timeout=5.0,
+        )
+        response.raise_for_status()
+
+        request_payload = {
+            "bundle_name": "demo",
+            "authority": CANONICAL_OWNER,
+            "private_key": "00" * 32,
+            "contracts": [
+                {
+                    "name": "demo.greeter",
+                    "contract_alias": "greeter::universal",
+                    "code_b64": "AQID",
+                    "depends_on": [],
+                }
+            ],
+            "init_calls": [
+                {
+                    "id": "seed",
+                    "contract_alias": "greeter::universal",
+                    "entrypoint": "init",
+                    "gas_limit": 1000,
+                }
+            ],
+            "assertions": [
+                {
+                    "id": "status",
+                    "contract_alias": "greeter::universal",
+                    "entrypoint": "status",
+                    "gas_limit": 1000,
+                    "expected_result": 7,
+                }
+            ],
+        }
+
+        dry_run = requests.post(
+            f"{server.base_url.rstrip('/')}/v1/contracts/deploy-bundle?dry_run=true",
+            json=request_payload,
+            timeout=5.0,
+        )
+        dry_run.raise_for_status()
+        dry_run_payload = dry_run.json()
+        assert dry_run_payload["bundle_name"] == "demo"
+        assert dry_run_payload["dry_run"] is True
+        assert dry_run_payload["contracts"][0]["status"] == "planned"
+        assert dry_run_payload["init_calls"][0]["status"] == "pending"
+
+        submit = requests.post(
+            f"{server.base_url.rstrip('/')}/v1/contracts/deploy-bundle",
+            json=request_payload,
+            timeout=5.0,
+        )
+        submit.raise_for_status()
+        submit_payload = submit.json()
+        assert submit_payload["dry_run"] is False
+        assert submit_payload["contracts"][0]["status"] == "deployed"
+        assert submit_payload["contracts"][0]["tx_hash_hex"] == "01" * 32
+
+        status = requests.get(
+            f"{server.base_url.rstrip('/')}/v1/contracts/deploy-bundles/mock-bundle-digest",
+            timeout=5.0,
+        )
+        status.raise_for_status()
+        status_payload = status.json()
+        assert status_payload["bundle_digest"] == "mock-bundle-digest"
+        assert status_payload["completed_stages"] == [
+            "plan",
+            "deploy",
+            "init_calls",
+            "assertions",
+        ]
+    finally:
+        server.stop()
 
 
 def test_get_runtime_abi_active_parses_payload() -> None:
@@ -524,7 +1686,7 @@ def test_list_runtime_upgrades_parses_records() -> None:
                                 "end_height": 20,
                             },
                             "status": {"ActivatedAt": 12},
-                            "proposer": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+                            "proposer": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
                             "created_height": 8,
                         },
                     },
@@ -542,7 +1704,7 @@ def test_list_runtime_upgrades_parses_records() -> None:
                                 "end_height": 40,
                             },
                             "status": {"Proposed": None},
-                            "proposer": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+                            "proposer": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
                             "created_height": 25,
                         },
                     },
@@ -643,12 +1805,12 @@ def test_get_uaid_portfolio_parses_payload() -> None:
                         "dataspace_alias": "treasury",
                         "accounts": [
                             {
-                                "account_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+                                "account_id": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
                                 "label": "primary",
                                 "assets": [
                                     {
                                         "asset_id": CANONICAL_ASSET_ID,
-                                        "asset_definition_id": "xor#wonderland",
+                                        "asset_definition_id": CANONICAL_ASSET_ID.split("#", 1)[0],
                                         "quantity": "42",
                                     }
                                 ],
@@ -707,7 +1869,7 @@ def test_get_uaid_bindings_fetches_dataspace_accounts() -> None:
                     {
                         "dataspace_id": 9,
                         "dataspace_alias": "alpha",
-                        "accounts": ["6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", " 34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r "],
+                        "accounts": ["sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", " sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE "],
                     }
                 ],
             }
@@ -717,7 +1879,7 @@ def test_get_uaid_bindings_fetches_dataspace_accounts() -> None:
 
     bindings = client.get_uaid_bindings(uaid_literal)
 
-    assert bindings.dataspaces[0].accounts == ["6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"]
+    assert bindings.dataspaces[0].accounts == ["sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"]
     assert session.calls[0]["params"] == {}
 
 
@@ -739,7 +1901,7 @@ def test_get_uaid_manifests_parses_payload_and_filters() -> None:
                             "activated_epoch": 12,
                             "revocation": {"epoch": 44, "reason": "duplicate"},
                         },
-                        "accounts": ["6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"],
+                        "accounts": ["sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"],
                         "manifest": {
                             "version": "1.0",
                             "uaid": uaid_literal,
@@ -748,7 +1910,7 @@ def test_get_uaid_manifests_parses_payload_and_filters() -> None:
                             "activation_epoch": 12,
                             "entries": [
                                 {
-                                    "scope": {"accounts": ["6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"]},
+                                    "scope": {"accounts": ["sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"]},
                                     "effect": {"action": "allow"},
                                     "notes": "demo",
                                 }
@@ -955,6 +2117,11 @@ def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
     assert lane_gov.alias == "lane-alpha"
     assert lane_gov.runtime_upgrade is not None
     assert lane_gov.runtime_upgrade.allowed_ids == ["alpha"]
+    activation = second.status.governance.recent_manifest_activations[0]
+    assert (
+        activation.contract_address
+        == "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s"
+    )
     assert second.status.lane_governance_sealed_aliases == ["sealed-one"]
     assert "peers" in second.status.raw
 
@@ -995,8 +2162,7 @@ def _status_payload(
         },
         "recent_manifest_activations": [
             {
-                "namespace": "demo",
-                "contract_id": "contract.demo",
+                "contract_address": "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
                 "code_hash_hex": "deadbeef",
                 "abi_hash_hex": "cafebabe",
                 "height": 42,
@@ -1291,9 +2457,9 @@ def test_list_sumeragi_evidence_parses_records() -> None:
     invalid_proposal = page.items[1]
     assert invalid_proposal.payload_hash == "dd44"
     assert invalid_proposal.reason == "payload mismatch"
-    fallback = page.items[2]
-    assert fallback.kind == "UnknownEvidence"
-    assert fallback.detail == "unknown entry"
+    unknown = page.items[2]
+    assert unknown.kind == "UnknownEvidence"
+    assert unknown.detail == "unknown entry"
     call = session.calls[0]
     assert call["url"].endswith("/v1/sumeragi/evidence")
     assert call["params"] == {"limit": 5, "offset": 1, "kind": "DoublePrepare"}
@@ -1586,13 +2752,14 @@ def test_list_kaigi_relays_parses_summary() -> None:
 
 
 def test_get_kaigi_relay_returns_detail_and_none_on_404() -> None:
+    relay_id = CANONICAL_OWNER
     session = RecordingSession()
     session.queue(StubResponse(status_code=404))
     session.queue(
         StubResponse(
             payload={
                 "relay": {
-                    "relay_id": "relay-alpha",
+                    "relay_id": relay_id,
                     "domain": "kaigi.core",
                     "bandwidth_class": 3,
                     "hpke_fingerprint_hex": "cd" * 32,
@@ -1613,15 +2780,15 @@ def test_get_kaigi_relay_returns_detail_and_none_on_404() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    assert client.get_kaigi_relay("relay-alpha") is None
-    detail = client.get_kaigi_relay("relay-alpha")
+    assert client.get_kaigi_relay(relay_id) is None
+    detail = client.get_kaigi_relay(relay_id)
 
     assert detail is not None
     assert detail.relay.domain == "kaigi.core"
     assert detail.metrics is not None and detail.metrics.failovers_total == 1
     assert detail.reported_call is not None
     assert detail.reported_call.call_name == "register"
-    assert session.calls[1]["url"].endswith("/v1/kaigi/relays/relay-alpha")
+    assert session.calls[1]["url"].endswith(f"/v1/kaigi/relays/{quote(relay_id, safe='')}")
 
 
 def test_get_kaigi_relays_health_snapshot() -> None:
@@ -1731,9 +2898,25 @@ def test_get_connect_status_parses_payload() -> None:
                 "buffer_drops_total": 0,
                 "plaintext_control_drops_total": 0,
                 "monotonic_drops_total": 0,
+                "sequence_violation_closes_total": 1,
+                "role_direction_mismatch_total": 2,
                 "ping_miss_total": 0,
+                "p2p_rebroadcasts_total": 3,
+                "p2p_rebroadcast_skipped_total": 4,
+                "p2p_auth_failures_total": 5,
+                "p2p_ttl_drops_total": 6,
+                "p2p_unknown_session_drops_total": 7,
+                "p2p_session_claims_in_total": 8,
+                "p2p_session_claims_installed_total": 9,
+                "p2p_session_claim_conflicts_total": 10,
+                "p2p_role_consumed_total": 11,
+                "p2p_session_terminated_total": 12,
                 "policy": {
                     "relay_enabled": True,
+                    "relay_strategy": "broadcast",
+                    "relay_effective_strategy": "local_only",
+                    "relay_p2p_attached": False,
+                    "p2p_ttl_hops": 2,
                     "ws_max_sessions": 32,
                     "session_ttl_ms": 10000,
                     "heartbeat_interval_ms": 5000,
@@ -1752,6 +2935,12 @@ def test_get_connect_status_parses_payload() -> None:
     assert snapshot.per_ip_sessions[0].ip == "192.0.2.1"
     assert snapshot.policy is not None
     assert snapshot.policy.ws_max_sessions == 32
+    assert snapshot.policy.relay_strategy == "broadcast"
+    assert snapshot.policy.p2p_ttl_hops == 2
+    assert snapshot.sequence_violation_closes_total == 1
+    assert snapshot.p2p_auth_failures_total == 5
+    assert snapshot.p2p_session_claims_installed_total == 9
+    assert snapshot.p2p_session_terminated_total == 12
     assert snapshot.policy.heartbeat_interval_ms == 5000
     assert session.calls[0]["url"].endswith("/v1/connect/status")
 
@@ -1766,6 +2955,8 @@ def test_create_and_delete_connect_session() -> None:
                 "app_uri": "iroha://app",
                 "token_app": "app-token",
                 "token_wallet": "wallet-token",
+                "token_management": "management-token",
+                "token_relay": "relay-token",
                 "ttl": 30,
             }
         )
@@ -1774,15 +2965,18 @@ def test_create_and_delete_connect_session() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     session_info = client.create_connect_session({"scope": "demo"})
-    deleted = client.delete_connect_session("abc")
+    deleted = client.delete_connect_session("abc", session_info.token_management)
 
     assert session_info.sid == "abc"
+    assert session_info.token_relay == "relay-token"
     assert session_info.extra["ttl"] == 30
     assert deleted is True
     post_call = session.calls[0]
     assert post_call["method"] == "POST"
     assert post_call["url"].endswith("/v1/connect/session")
     assert json.loads(post_call["data"]) == {"scope": "demo"}
+    delete_call = session.calls[1]
+    assert delete_call["headers"] == {"Authorization": "Bearer management-token"}
 
 
 def test_connect_app_registry_and_policy_helpers() -> None:
@@ -2019,412 +3213,33 @@ def test_trigger_registration_deletion_and_query() -> None:
     }
 
 
-def test_list_offline_allowances_parses_payload() -> None:
+def test_get_offline_v2_readiness_parses_payload() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
-                "total": 1,
-                "items": [
-                    {
-                        "certificate_id_hex": "cafebabe",
-                        "controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-                        "controller_display": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-                        "asset_id": CANONICAL_ASSET_ID,
-                        "registered_at_ms": 10,
-                        "expires_at_ms": 20,
-                        "policy_expires_at_ms": 30,
-                        "refresh_at_ms": 40,
-                        "verdict_id_hex": "deadbeef",
-                        "attestation_nonce_hex": "feedface",
-                        "remaining_amount": "13",
-                        "deadline_kind": "policy",
-                        "deadline_state": "warning",
-                        "deadline_ms": 99,
-                        "deadline_ms_remaining": -5,
-                        "record": {"certificate": {"controller": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"}},
-                    }
-                ],
+                "offline_note_v2": True,
+                "offline_one_use_keys": True,
+                "offline_recursive_note_proof": False,
+                "offline_fountain_qr_v1": True,
+                "offline_sync_optional": True,
+                "offline_telemetry": True,
             }
         )
     )
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_offline_allowances(controller_id="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", include_expired=True)
+    readiness = client.get_offline_v2_readiness()
 
-    assert page.total == 1
-    assert len(page.items) == 1
-    item = page.items[0]
-    assert item.certificate_id_hex == "cafebabe"
-    assert item.deadline is not None
-    assert item.deadline.kind == "policy"
-    assert item.deadline.ms_remaining == -5
-    assert item.record["certificate"]["controller"] == "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
-    assert session.calls[0]["params"] == {
-        "controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-        "include_expired": True,
-    }
-
-
-def test_query_offline_allowances_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"items": [], "total": 0}))
-    client = ToriiClient("http://node.test", session=session)
-
-    page = client.query_offline_allowances({"filter": {"controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"}})
-
-    assert page.total == 0
+    assert readiness.offline_note_v2 is True
+    assert readiness.offline_one_use_keys is True
+    assert readiness.offline_recursive_note_proof is False
+    assert readiness.offline_fountain_qr_v1 is True
+    assert readiness.offline_sync_optional is True
+    assert readiness.offline_telemetry is True
     call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["url"].endswith("/v1/offline/allowances/query")
-    assert call["headers"]["Content-Type"] == "application/json"
-    assert json.loads(call["data"].decode("utf-8")) == {
-        "filter": {"controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"}
-    }
-
-
-def test_issue_offline_certificate_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "certificate_id_hex": "deadbeef",
-                "certificate": {
-                    "controller": CANONICAL_OWNER,
-                    "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
-                    "spend_public_key": "ed0120deadbeef",
-                    "attestation_report": [3, 4],
-                    "issued_at_ms": 100,
-                    "expires_at_ms": 200,
-                    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-                    "operator_signature": "AA",
-                    "metadata": {},
-                    "verdict_id": None,
-                    "attestation_nonce": None,
-                    "refresh_at_ms": None,
-                },
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-    draft = {
-        "controller": CANONICAL_OWNER,
-        "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
-        "spend_public_key": "ed0120deadbeef",
-        "attestation_report": [3, 4],
-        "issued_at_ms": 100,
-        "expires_at_ms": 200,
-        "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-        "metadata": {},
-        "verdict_id": None,
-        "attestation_nonce": None,
-        "refresh_at_ms": None,
-    }
-
-    response = client.issue_offline_certificate(draft)
-
-    assert response.certificate_id_hex == "deadbeef"
-    call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["url"].endswith("/v1/offline/certificates/issue")
-    assert json.loads(call["data"].decode("utf-8")) == {"certificate": draft}
-
-
-def test_register_offline_allowance_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"certificate_id_hex": "deadbeef"}))
-    client = ToriiClient("http://node.test", session=session)
-    certificate = {
-        "controller": CANONICAL_OWNER,
-        "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
-        "spend_public_key": "ed0120deadbeef",
-        "attestation_report": [3, 4],
-        "issued_at_ms": 100,
-        "expires_at_ms": 200,
-        "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-        "operator_signature": "AA",
-        "metadata": {},
-        "verdict_id": None,
-        "attestation_nonce": None,
-        "refresh_at_ms": None,
-    }
-
-    response = client.register_offline_allowance(
-        certificate=certificate,
-        authority=CANONICAL_OWNER,
-        private_key="deadbeef",
-    )
-
-    assert response.certificate_id_hex == "deadbeef"
-    call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["url"].endswith("/v1/offline/allowances")
-    assert json.loads(call["data"].decode("utf-8")) == {
-        "authority": CANONICAL_OWNER,
-        "private_key": "deadbeef",
-        "certificate": certificate,
-    }
-
-
-def test_renew_offline_allowance_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"certificate_id_hex": "deadbeef"}))
-    client = ToriiClient("http://node.test", session=session)
-    certificate = {
-        "controller": CANONICAL_OWNER,
-        "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
-        "spend_public_key": "ed0120deadbeef",
-        "attestation_report": [3, 4],
-        "issued_at_ms": 100,
-        "expires_at_ms": 200,
-        "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-        "operator_signature": "AA",
-        "metadata": {},
-        "verdict_id": None,
-        "attestation_nonce": None,
-        "refresh_at_ms": None,
-    }
-
-    client.renew_offline_allowance(
-        certificate_id_hex="deadbeef",
-        certificate=certificate,
-        authority=CANONICAL_OWNER,
-        private_key="deadbeef",
-    )
-
-    call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["url"].endswith("/v1/offline/allowances/deadbeef/renew")
-    assert json.loads(call["data"].decode("utf-8")) == {
-        "authority": CANONICAL_OWNER,
-        "private_key": "deadbeef",
-        "certificate": certificate,
-    }
-
-
-def test_top_up_offline_allowance_chains_issue_and_register() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "certificate_id_hex": "deadbeef",
-                "certificate": {
-                    "controller": CANONICAL_OWNER,
-                    "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
-                    "spend_public_key": "ed0120deadbeef",
-                    "attestation_report": [3, 4],
-                    "issued_at_ms": 100,
-                    "expires_at_ms": 200,
-                    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-                    "operator_signature": "AA",
-                    "metadata": {},
-                    "verdict_id": None,
-                    "attestation_nonce": None,
-                    "refresh_at_ms": None,
-                },
-            }
-        )
-    )
-    session.queue(StubResponse(payload={"certificate_id_hex": "deadbeef"}))
-    client = ToriiClient("http://node.test", session=session)
-    draft = {
-        "controller": CANONICAL_OWNER,
-        "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
-        "spend_public_key": "ed0120deadbeef",
-        "attestation_report": [3, 4],
-        "issued_at_ms": 100,
-        "expires_at_ms": 200,
-        "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-        "metadata": {},
-        "verdict_id": None,
-        "attestation_nonce": None,
-        "refresh_at_ms": None,
-    }
-
-    response = client.top_up_offline_allowance(
-        certificate=draft,
-        authority=CANONICAL_OWNER,
-        private_key="deadbeef",
-    )
-
-    assert response.certificate.certificate_id_hex == "deadbeef"
-    assert response.registration.certificate_id_hex == "deadbeef"
-    assert len(session.calls) == 2
-    assert session.calls[0]["url"].endswith("/v1/offline/certificates/issue")
-    assert session.calls[1]["url"].endswith("/v1/offline/allowances")
-    register_body = json.loads(session.calls[1]["data"].decode("utf-8"))
-    assert register_body["certificate"]["operator_signature"] == "AA"
-
-
-def test_top_up_offline_allowance_renewal_chains_issue_and_register() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "certificate_id_hex": "deadbeef",
-                "certificate": {
-                    "controller": CANONICAL_OWNER,
-                    "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
-                    "spend_public_key": "ed0120deadbeef",
-                    "attestation_report": [3, 4],
-                    "issued_at_ms": 100,
-                    "expires_at_ms": 200,
-                    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-                    "operator_signature": "AA",
-                    "metadata": {},
-                    "verdict_id": None,
-                    "attestation_nonce": None,
-                    "refresh_at_ms": None,
-                },
-            }
-        )
-    )
-    session.queue(StubResponse(payload={"certificate_id_hex": "deadbeef"}))
-    client = ToriiClient("http://node.test", session=session)
-    draft = {
-        "controller": CANONICAL_OWNER,
-        "allowance": {"asset": "rose#wonderland", "amount": "10", "commitment": [1, 2]},
-        "spend_public_key": "ed0120deadbeef",
-        "attestation_report": [3, 4],
-        "issued_at_ms": 100,
-        "expires_at_ms": 200,
-        "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-        "metadata": {},
-        "verdict_id": None,
-        "attestation_nonce": None,
-        "refresh_at_ms": None,
-    }
-
-    client.top_up_offline_allowance_renewal(
-        certificate_id_hex="deadbeef",
-        certificate=draft,
-        authority=CANONICAL_OWNER,
-        private_key="deadbeef",
-    )
-
-    assert len(session.calls) == 2
-    assert session.calls[0]["url"].endswith("/v1/offline/certificates/deadbeef/renew/issue")
-    assert session.calls[1]["url"].endswith("/v1/offline/allowances/deadbeef/renew")
-
-
-def test_list_offline_transfers_parses_payload() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "total": 1,
-                "items": [
-                    {
-                        "bundle_id_hex": "bead",
-                        "controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-                        "controller_display": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-                        "receiver_id": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-                        "receiver_display": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-                        "deposit_account_id": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
-                        "deposit_account_display": "3oE9sLeRGP49Cu7mQ1nF4wtKAm29BG4TGLiRsaXe7mhbMP5WZ113nNW1N6RbqF",
-                        "asset_id": CANONICAL_ASSET_ID,
-                        "certificate_id_hex": "cafebabe",
-                        "certificate_expires_at_ms": 100,
-                        "policy_expires_at_ms": 200,
-                        "refresh_at_ms": 300,
-                        "verdict_id_hex": "deadbeef",
-                        "attestation_nonce_hex": "feedface",
-                        "receipt_count": 2,
-                        "total_amount": "11",
-                        "status": "settled",
-                        "recorded_at_ms": 400,
-                        "recorded_at_height": 500,
-                        "archived_at_height": 600,
-                        "status_transitions": [
-                            {
-                                "status": "settled",
-                                "transitioned_at_ms": 410,
-                                "verdict_snapshot": {"certificate_id": "0x01"},
-                            }
-                        ],
-                        "claimed_delta": "5",
-                        "platform_policy": "play_integrity",
-                        "platform_token_snapshot": {
-                            "policy": "play_integrity",
-                            "attestation_jws_b64": "token",
-                        },
-                        "verdict_snapshot": {"certificate_id": "0x01"},
-                        "transfer": {"bundle_id": "bead"},
-                    }
-                ],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    page = client.list_offline_transfers(limit=1)
-
-    assert page.total == 1
-    item = page.items[0]
-    assert item.bundle_id_hex == "bead"
-    assert item.status_transitions[0].status == "settled"
-    assert item.platform_policy == "play_integrity"
-    assert item.transfer["bundle_id"] == "bead"
-    assert session.calls[0]["params"] == {"limit": 1}
-
-
-def test_query_offline_transfers_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"items": [], "total": 0}))
-    client = ToriiClient("http://node.test", session=session)
-
-    page = client.query_offline_transfers({"filter": {"status": "settled"}})
-
-    assert page.total == 0
-    call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["url"].endswith("/v1/offline/transfers/query")
-    assert call["headers"]["Content-Type"] == "application/json"
-    assert json.loads(call["data"].decode("utf-8")) == {"filter": {"status": "settled"}}
-
-
-def test_list_offline_summaries_parses_payload() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "total": 1,
-                "items": [
-                    {
-                        "certificate_id_hex": "c0de",
-                        "controller_id": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-                        "controller_display": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
-                        "summary_hash_hex": "f00d",
-                        "apple_key_counters": {"k1": 1},
-                        "android_series_counters": {"p0": 2},
-                    }
-                ],
-            }
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    page = client.list_offline_summaries()
-
-    assert page.total == 1
-    assert page.items[0].apple_key_counters == {"k1": 1}
-    assert page.items[0].android_series_counters["p0"] == 2
-
-
-def test_query_offline_summaries_posts_payload() -> None:
-    session = RecordingSession()
-    session.queue(StubResponse(payload={"items": [], "total": 0}))
-    client = ToriiClient("http://node.test", session=session)
-
-    page = client.query_offline_summaries({"filter": {"certificate_id_hex": "c0de"}})
-
-    assert page.total == 0
-    call = session.calls[0]
-    assert call["method"] == "POST"
-    assert call["url"].endswith("/v1/offline/summaries/query")
-    assert json.loads(call["data"].decode("utf-8")) == {
-        "filter": {"certificate_id_hex": "c0de"}
-    }
+    assert call["method"] == "GET"
+    assert call["url"].endswith("/v1/offline/v2/readiness")
 
 
 def test_status_snapshot_parses_mode_and_consensus_caps() -> None:
@@ -2507,7 +3322,7 @@ def test_decode_pdp_commitment_header_returns_none_when_missing() -> None:
     assert decode_pdp_commitment_header(None) is None
 
 
-def test_submit_zk_ballot_rejects_deprecated_public_inputs() -> None:
+def test_submit_zk_ballot_rejects_unsupported_public_inputs() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -2523,7 +3338,7 @@ def test_submit_zk_ballot_rejects_deprecated_public_inputs() -> None:
 
     with pytest.raises(RuntimeError, match="durationBlocks"):
         client.submit_zk_ballot(
-            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
@@ -2550,7 +3365,7 @@ def test_submit_zk_ballot_normalizes_public_inputs() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     client.submit_zk_ballot(
-        authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
         chain_id="chain",
         election_id="election-1",
         proof_b64="AAAA",
@@ -2576,7 +3391,7 @@ def test_submit_zk_ballot_rejects_invalid_hex_hints() -> None:
 
     with pytest.raises(RuntimeError, match="root_hint"):
         client.submit_zk_ballot(
-            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
@@ -2596,7 +3411,7 @@ def test_submit_zk_ballot_rejects_incomplete_lock_hints() -> None:
 
     with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
         client.submit_zk_ballot(
-            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
@@ -2609,9 +3424,9 @@ def test_submit_zk_ballot_rejects_noncanonical_owner() -> None:
     session.queue(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(RuntimeError, match="canonical account id"):
+    with pytest.raises(RuntimeError, match="canonical I105 account id"):
         client.submit_zk_ballot(
-            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
             chain_id="chain",
             election_id="election-1",
             proof_b64="AAAA",
@@ -2630,7 +3445,7 @@ def test_submit_zk_ballot_v1_rejects_incomplete_lock_hints() -> None:
 
     with pytest.raises(RuntimeError, match="owner, amount, duration_blocks"):
         client.submit_zk_ballot_v1(
-            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
             chain_id="chain",
             election_id="election-1",
             backend="halo2/ipa",
@@ -2644,9 +3459,9 @@ def test_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
     session.queue(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(RuntimeError, match="canonical account id"):
+    with pytest.raises(RuntimeError, match="canonical I105 account id"):
         client.submit_zk_ballot_v1(
-            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
             chain_id="chain",
             election_id="election-1",
             backend="halo2/ipa",
@@ -2663,7 +3478,7 @@ def test_submit_zk_ballot_v1_normalizes_hex_hints() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     client.submit_zk_ballot_v1(
-        authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
         chain_id="chain",
         election_id="election-1",
         backend="halo2/ipa",
@@ -2684,7 +3499,7 @@ def test_submit_zk_ballot_v1_rejects_invalid_hex_hints() -> None:
 
     with pytest.raises(RuntimeError, match="root_hint"):
         client.submit_zk_ballot_v1(
-            authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+            authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
             chain_id="chain",
             election_id="election-1",
             backend="halo2/ipa",
@@ -2701,7 +3516,7 @@ def test_list_subscription_plans_encodes_params() -> None:
                 "items": [
                     {
                         "plan_id": "plan#subs",
-                        "plan": {"provider": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", "pricing": {"kind": "fixed"}},
+                        "plan": {"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", "pricing": {"kind": "fixed"}},
                     }
                 ],
                 "total": 1,
@@ -2710,13 +3525,13 @@ def test_list_subscription_plans_encodes_params() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    page = client.list_subscription_plans(provider="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL", limit=10, offset=5)
+    page = client.list_subscription_plans(provider="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6", limit=10, offset=5)
 
     assert page.total == 1
     assert page.items[0].plan_id == "plan#subs"
-    assert page.items[0].plan["provider"] == "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
+    assert page.items[0].plan["provider"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
     assert session.calls[0]["params"] == {
-        "provider": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        "provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
         "limit": 10,
         "offset": 5,
     }
@@ -2736,19 +3551,19 @@ def test_create_subscription_plan_posts_payload() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     result = client.create_subscription_plan(
-        authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
         private_key="ed25519:priv",
         plan_id="plan#subs",
-        plan={"provider": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"},
+        plan={"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"},
     )
 
     assert result.ok is True
     assert result.plan_id == "plan#subs"
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["authority"] == "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
+    assert payload["authority"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
     assert payload["private_key"] == "ed25519:priv"
     assert payload["plan_id"] == "plan#subs"
-    assert payload["plan"]["provider"] == "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"
+    assert payload["plan"]["provider"] == "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 
 
 def test_list_subscriptions_encodes_params() -> None:
@@ -2761,7 +3576,7 @@ def test_list_subscriptions_encodes_params() -> None:
                         "subscription_id": "sub-1$subscriptions",
                         "subscription": {"status": "active"},
                         "invoice": {"amount": "120"},
-                        "plan": {"provider": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"},
+                        "plan": {"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"},
                     }
                 ],
                 "total": 1,
@@ -2771,8 +3586,8 @@ def test_list_subscriptions_encodes_params() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     page = client.list_subscriptions(
-        owned_by="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-        provider="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        owned_by="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+        provider="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
         status="ACTIVE",
         limit=25,
         offset=0,
@@ -2782,8 +3597,8 @@ def test_list_subscriptions_encodes_params() -> None:
     assert page.items[0].subscription_id == "sub-1$subscriptions"
     assert page.items[0].subscription["status"] == "active"
     assert session.calls[0]["params"] == {
-        "owned_by": "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
-        "provider": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        "owned_by": "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
+        "provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
         "status": "active",
         "limit": 25,
         "offset": 0,
@@ -2814,7 +3629,7 @@ def test_create_subscription_posts_payload() -> None:
     client = ToriiClient("http://node.test", session=session)
 
     result = client.create_subscription(
-        authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         private_key="ed25519:priv",
         subscription_id="sub-1$subscriptions",
         plan_id="plan#subs",
@@ -2826,7 +3641,7 @@ def test_create_subscription_posts_payload() -> None:
 
     assert result.subscription_id == "sub-1$subscriptions"
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["authority"] == "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"
+    assert payload["authority"] == "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
     assert payload["private_key"] == "ed25519:priv"
     assert payload["billing_trigger_id"] == "sub-bill"
     assert payload["usage_trigger_id"] == "sub-usage"
@@ -2841,7 +3656,7 @@ def test_get_subscription_encodes_path_and_parses_response() -> None:
             payload={
                 "subscription_id": "sub-1$subscriptions",
                 "subscription": {"status": "active"},
-                "plan": {"provider": "6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL"},
+                "plan": {"provider": "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"},
             }
         )
     )
@@ -2870,23 +3685,23 @@ def test_subscription_actions_post_payloads() -> None:
     session.queue(StubResponse(payload={"ok": True, "subscription_id": "sub-1", "tx_hash_hex": "d"}))
     client = ToriiClient("http://node.test", session=session)
 
-    client.pause_subscription("sub-1", authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", private_key="ed25519:priv")
+    client.pause_subscription("sub-1", authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE", private_key="ed25519:priv")
     client.resume_subscription(
         "sub-1",
-        authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         private_key="ed25519:priv",
         charge_at_ms=1_704_067_200_000,
     )
-    client.cancel_subscription("sub-1", authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r", private_key="ed25519:priv")
+    client.cancel_subscription("sub-1", authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE", private_key="ed25519:priv")
     client.charge_subscription_now(
         "sub-1",
-        authority="34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r",
+        authority="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         private_key="ed25519:priv",
         charge_at_ms=1_704_067_200_000,
     )
 
     pause_body = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert pause_body["authority"] == "34mSYnCXkCzHXm31UDHh7SJfGvC4QPEhwim8z7sys2iHqXpCwCQkjL8KHvkFLSs1vZdJcb37r"
+    assert pause_body["authority"] == "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE"
     resume_body = json.loads(session.calls[1]["data"].decode("utf-8"))
     assert resume_body["charge_at_ms"] == 1_704_067_200_000
     cancel_body = json.loads(session.calls[2]["data"].decode("utf-8"))
@@ -2902,7 +3717,7 @@ def test_record_subscription_usage_posts_payload() -> None:
 
     result = client.record_subscription_usage(
         "sub-1",
-        authority="6cmzPVPX4PK3NiYvG2FdPC5E9YVfkCYUXJCBpxzL71j1gsHxMkpCnGL",
+        authority="sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6",
         private_key="ed25519:priv",
         unit_key="compute_ms",
         delta=3600,

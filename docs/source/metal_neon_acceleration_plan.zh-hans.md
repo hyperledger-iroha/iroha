@@ -182,7 +182,7 @@ Rust IVM 团队、Swift 桥所有者和遥测工具的工件。
   Metal 与 CPU 的差异无需重新发明新的遥测源。
 
 ## WP2-B Poseidon 清单加载器和自检奇偶校验- `fastpq_prover::poseidon_manifest()` 现在嵌入和解析
-  `artifacts/offline_poseidon/constants.ron`，计算其 SHA-256
+  `artifacts/poseidon/constants.ron`，计算其 SHA-256
   (`poseidon_manifest_sha256()`)，并根据 CPU 验证快照
   在任何 GPU 工作运行之前的poseidon 表。 `build_metal_context()` 记录
   在预热期间进行摘要，以便遥测出口商可以发布

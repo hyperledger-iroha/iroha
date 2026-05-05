@@ -62,7 +62,7 @@ final class ConnectKeyStoreTests: XCTestCase {
         try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
                       "NoritoBridge connect crypto symbols not linked")
         let dir = try temporaryDirectory()
-        let store = ConnectKeyStore(directory: dir)
+        let store = ConnectKeyStore(directory: dir, configuration: .init(preferKeychain: false))
 
         _ = try store.generateOrLoad(label: "ephemeral")
         try store.delete(label: "ephemeral")
@@ -102,7 +102,7 @@ final class ConnectKeyStoreTests: XCTestCase {
         }
     }
 
-    func testLegacyHmacOrderingAccepted() throws {
+    func testNonCanonicalHmacOrderingRejected() throws {
         try XCTSkipIf(!NoritoNativeBridge.shared.isConnectCryptoAvailable,
                       "NoritoBridge connect crypto symbols not linked")
         let dir = try temporaryDirectory()
@@ -117,17 +117,19 @@ final class ConnectKeyStoreTests: XCTestCase {
         let envelope = try decoder.decode(TestEnvelope.self, from: Data(contentsOf: path))
 
         let integrityKey = try Data(contentsOf: dir.appendingPathComponent(".integrity.key"))
-        let legacyHmac = try makeLegacyHmac(label: label, key: integrityKey, payload: envelope.payload)
-        let rewritten = TestEnvelope(version: envelope.version, payload: envelope.payload, hmac: legacyHmac)
+        let nonCanonicalHmac = try makeNonCanonicalHmac(label: label, key: integrityKey, payload: envelope.payload)
+        let rewritten = TestEnvelope(version: envelope.version, payload: envelope.payload, hmac: nonCanonicalHmac)
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         try encoder.encode(rewritten).write(to: path)
 
-        let (pair, attestation) = try store.generateOrLoad(label: label)
-        XCTAssertEqual(pair.publicKey, envelope.payload.keyPair.publicKey)
-        XCTAssertEqual(pair.privateKey, envelope.payload.keyPair.privateKey)
-        XCTAssertEqual(attestation, envelope.payload.attestation)
+        XCTAssertThrowsError(try store.generateOrLoad(label: label)) { error in
+            guard case ConnectKeyStoreError.integrityMismatch = error else {
+                XCTFail("expected integrityMismatch, got \(error)")
+                return
+            }
+        }
     }
 
 }
@@ -143,7 +145,7 @@ private struct TestStoredKey: Codable {
     let attestation: ConnectKeyStore.Attestation
 }
 
-private func makeLegacyHmac(label: String, key: Data, payload: TestStoredKey) throws -> String {
+private func makeNonCanonicalHmac(label: String, key: Data, payload: TestStoredKey) throws -> String {
     let publicKey = try encodeJSONString(payload.keyPair.publicKey.base64EncodedString())
     let privateKey = try encodeJSONString(payload.keyPair.privateKey.base64EncodedString())
     let publicKeyDigest = try encodeJSONString(payload.attestation.publicKeyDigest.base64EncodedString())

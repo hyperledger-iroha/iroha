@@ -40,14 +40,19 @@ type ParseResult<T> = Result<T, ParseError>;
 type ForEachMapBinding = (String, Option<String>, Expr, Option<usize>);
 
 #[derive(Default)]
-struct AccessHints {
+struct FunctionAttributes {
     reads: Vec<String>,
     writes: Vec<String>,
+    is_test: bool,
+    test_fixture: Option<String>,
 }
 
-impl AccessHints {
+impl FunctionAttributes {
     fn is_empty(&self) -> bool {
-        self.reads.is_empty() && self.writes.is_empty()
+        self.reads.is_empty()
+            && self.writes.is_empty()
+            && !self.is_test
+            && self.test_fixture.is_none()
     }
 }
 
@@ -69,6 +74,8 @@ struct Parser<'a> {
     pos: usize,
     source: &'a str,
     contract_meta: Option<ContractMeta>,
+    test_target: Option<TestTargetDecl>,
+    fixtures: Vec<FixtureDecl>,
 }
 
 impl<'a> Parser<'a> {
@@ -78,6 +85,8 @@ impl<'a> Parser<'a> {
             pos: 0,
             source,
             contract_meta: None,
+            test_target: None,
+            fixtures: Vec::new(),
         }
     }
 
@@ -278,7 +287,7 @@ impl<'a> Parser<'a> {
     fn parse_program(&mut self) -> ParseResult<Program> {
         let mut items = Vec::new();
         while !self.peek(TokenKind::EOF) {
-            let access_hints = self.parse_access_attributes()?;
+            let attrs = self.parse_function_attributes()?;
             if self.peek(TokenKind::Fn) {
                 self.bump();
                 items.push(self.parse_fn_loose(
@@ -287,32 +296,42 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Free,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::Struct) {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_struct_def()?);
-            } else if self.peek(TokenKind::Seiyaku) {
-                if !access_hints.is_empty() {
+            } else if self.peek(TokenKind::Const) {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
+                    ));
+                }
+                items.push(self.parse_const_decl()?);
+            } else if self.peek(TokenKind::Seiyaku) {
+                if !attrs.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "function attributes must precede a function",
                     ));
                 }
                 let mut contract_items = self.parse_contract()?;
                 items.append(&mut contract_items);
             } else if self.peek(TokenKind::State) {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_state_decl()?);
@@ -325,8 +344,25 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Public,
                         kind: FunctionKind::Free,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
+                    },
+                )?);
+            } else if self.peek(TokenKind::View) && self.peek_n(1, TokenKind::Fn) {
+                self.bump(); // view
+                self.bump(); // fn
+                items.push(self.parse_fn_loose(
+                    None,
+                    FunctionModifiers {
+                        visibility: FunctionVisibility::Public,
+                        kind: FunctionKind::View,
+                        permission: None,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::Hajimari) {
@@ -337,8 +373,10 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Hajimari,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::Kaizen) {
@@ -349,15 +387,34 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Kaizen,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
-            } else if self.peek_ident_n(0, "kotoba") {
-                if !access_hints.is_empty() {
+            } else if self.peek_ident_n(0, "fixture") {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
+                    ));
+                }
+                let fixture = self.parse_fixture_decl()?;
+                self.fixtures.push(fixture);
+            } else if self.peek_ident_n(0, "koto_test") {
+                if !attrs.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "function attributes must precede a function",
+                    ));
+                }
+                self.parse_test_target_decl()?;
+            } else if self.peek_ident_n(0, "kotoba") {
+                if !attrs.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_kotoba_block()?);
@@ -369,6 +426,8 @@ impl<'a> Parser<'a> {
         Ok(Program {
             items,
             contract_meta: self.contract_meta.clone(),
+            test_target: self.test_target.clone(),
+            fixtures: self.fixtures.clone(),
         })
     }
 
@@ -378,36 +437,44 @@ impl<'a> Parser<'a> {
         self.expect(TokenKind::LBrace)?;
         let mut items = Vec::new();
         while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
-            let access_hints = self.parse_access_attributes()?;
+            let attrs = self.parse_function_attributes()?;
             if self.peek(TokenKind::Meta) {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 self.parse_meta_block()?;
             } else if self.peek(TokenKind::Struct) {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_struct_def()?);
-            } else if self.peek(TokenKind::State) {
-                if !access_hints.is_empty() {
+            } else if self.peek(TokenKind::Const) {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
+                    ));
+                }
+                items.push(self.parse_const_decl()?);
+            } else if self.peek(TokenKind::State) {
+                if !attrs.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_state_decl()?);
             } else if self.peek_ident_n(0, "register_trigger") || self.peek_ident_n(0, "trigger") {
-                if !access_hints.is_empty() {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_trigger_decl()?);
@@ -419,8 +486,10 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Contract,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::Kotoage) && self.peek_n(1, TokenKind::Fn) {
@@ -432,8 +501,25 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Public,
                         kind: FunctionKind::Contract,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
+                    },
+                )?);
+            } else if self.peek(TokenKind::View) && self.peek_n(1, TokenKind::Fn) {
+                self.bump(); // view
+                self.bump(); // fn
+                items.push(self.parse_fn_loose(
+                    None,
+                    FunctionModifiers {
+                        visibility: FunctionVisibility::Public,
+                        kind: FunctionKind::View,
+                        permission: None,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::Hajimari) {
@@ -444,8 +530,10 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Hajimari,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
             } else if self.peek(TokenKind::Kaizen) {
@@ -456,21 +544,32 @@ impl<'a> Parser<'a> {
                         visibility: FunctionVisibility::Internal,
                         kind: FunctionKind::Kaizen,
                         permission: None,
-                        access_reads: access_hints.reads,
-                        access_writes: access_hints.writes,
+                        access_reads: attrs.reads,
+                        access_writes: attrs.writes,
+                        is_test: attrs.is_test,
+                        test_fixture: attrs.test_fixture,
                     },
                 )?);
-            } else if self.peek_ident_n(0, "kotoba") {
-                if !access_hints.is_empty() {
+            } else if self.peek_ident_n(0, "fixture") {
+                if !attrs.is_empty() {
                     return Err(self.error(
                         self.tokens[self.pos].clone(),
-                        "access attributes must precede a function",
+                        "function attributes must precede a function",
+                    ));
+                }
+                let fixture = self.parse_fixture_decl()?;
+                self.fixtures.push(fixture);
+            } else if self.peek_ident_n(0, "kotoba") {
+                if !attrs.is_empty() {
+                    return Err(self.error(
+                        self.tokens[self.pos].clone(),
+                        "function attributes must precede a function",
                     ));
                 }
                 items.push(self.parse_kotoba_block()?);
             } else {
                 let tok = self.bump();
-                return Err(self.error(tok, "contract item (fn, struct, state, meta)"));
+                return Err(self.error(tok, "contract item (fn, struct, const, state, meta)"));
             }
         }
         self.expect(TokenKind::RBrace)?;
@@ -562,7 +661,9 @@ impl<'a> Parser<'a> {
                         return Err(self.error(field_tok, "duplicate `on` field"));
                     }
                     filter = Some(self.parse_trigger_filter()?);
-                    self.expect(TokenKind::Semicolon)?;
+                    if self.peek(TokenKind::Semicolon) {
+                        self.bump();
+                    }
                 }
                 "repeats" => {
                     if repeats.is_some() {
@@ -653,11 +754,53 @@ impl<'a> Parser<'a> {
         let kind = self.expect_ident()?;
         match kind.as_str() {
             "any" => Ok(TriggerDataFilter::Any),
+            _ => {
+                let family = self.parse_trigger_data_family_keyword(&kind)?;
+                let event = match self.expect_ident()?.as_str() {
+                    "any" => TriggerDataEventKind::Any,
+                    other => TriggerDataEventKind::Named(other.to_string()),
+                };
+                let matchers = self.parse_trigger_data_matcher_block()?;
+                Ok(TriggerDataFilter::Structured(TriggerStructuredDataFilter {
+                    family,
+                    event,
+                    matchers,
+                }))
+            }
+        }
+    }
+
+    fn parse_trigger_data_family_keyword(&self, family: &str) -> ParseResult<TriggerDataFamily> {
+        match family {
+            "peer" => Ok(TriggerDataFamily::Peer),
+            "domain" => Ok(TriggerDataFamily::Domain),
+            "account" => Ok(TriggerDataFamily::Account),
+            "asset" => Ok(TriggerDataFamily::Asset),
+            "asset_definition" => Ok(TriggerDataFamily::AssetDefinition),
+            "nft" => Ok(TriggerDataFamily::Nft),
+            "rwa" => Ok(TriggerDataFamily::Rwa),
+            "trigger" => Ok(TriggerDataFamily::Trigger),
+            "role" => Ok(TriggerDataFamily::Role),
+            "configuration" => Ok(TriggerDataFamily::Configuration),
+            "executor" => Ok(TriggerDataFamily::Executor),
             _ => Err(self.error(
                 self.tokens[self.pos.saturating_sub(1)].clone(),
-                "data filter (`any`)",
+                "data family (`any`, `peer`, `domain`, `account`, `asset`, `asset_definition`, `nft`, `rwa`, `trigger`, `role`, `configuration`, or `executor`)",
             )),
         }
+    }
+
+    fn parse_trigger_data_matcher_block(&mut self) -> ParseResult<Vec<TriggerDataMatcher>> {
+        self.expect(TokenKind::LBrace)?;
+        let mut matchers = Vec::new();
+        while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            let key = self.expect_ident()?;
+            let value = self.expect_ident_or_string()?;
+            self.expect(TokenKind::Semicolon)?;
+            matchers.push(TriggerDataMatcher { key, value });
+        }
+        self.expect(TokenKind::RBrace)?;
+        Ok(matchers)
     }
 
     fn parse_trigger_pipeline_filter(&mut self) -> ParseResult<TriggerPipelineFilter> {
@@ -763,8 +906,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_access_attributes(&mut self) -> ParseResult<AccessHints> {
-        let mut hints = AccessHints::default();
+    fn parse_function_attributes(&mut self) -> ParseResult<FunctionAttributes> {
+        let mut attrs = FunctionAttributes::default();
         while self.peek(TokenKind::Hash) {
             self.bump(); // '#'
             self.expect(TokenKind::LBracket)?;
@@ -774,44 +917,18 @@ impl<'a> Parser<'a> {
             } else {
                 return Err(self.error(attr_tok, "expected attribute identifier"));
             };
-            if attr_name != "access" {
-                return Err(self.error(attr_tok, "expected attribute `access`"));
-            }
-            self.expect(TokenKind::LParen)?;
-            let mut parsed_any = false;
-            while !self.peek(TokenKind::RParen) && !self.peek(TokenKind::EOF) {
-                let key = self.expect_ident()?;
-                self.expect(TokenKind::Equal)?;
-                let mut values = self.parse_access_value_list()?;
-                match key.as_str() {
-                    "read" => hints.reads.append(&mut values),
-                    "write" => hints.writes.append(&mut values),
-                    _ => {
-                        return Err(ParseError {
-                            message: format!("unknown access list `{key}`"),
-                            line: self.tokens[self.pos.saturating_sub(1)].line,
-                            column: self.tokens[self.pos.saturating_sub(1)].column,
-                            snippet: String::new(),
-                        });
-                    }
-                }
-                parsed_any = true;
-                if self.peek(TokenKind::Comma) {
-                    self.bump();
+            match attr_name.as_str() {
+                "access" => self.parse_access_attribute_body(&mut attrs)?,
+                "test" | "テスト" => self.parse_test_attribute_body(&mut attrs)?,
+                _ => {
+                    return Err(
+                        self.error(attr_tok, "expected attribute `access`, `test`, or `テスト`")
+                    );
                 }
             }
-            if !parsed_any {
-                return Err(ParseError {
-                    message: "access attribute must include read/write entries".into(),
-                    line: self.tokens[self.pos.saturating_sub(1)].line,
-                    column: self.tokens[self.pos.saturating_sub(1)].column,
-                    snippet: String::new(),
-                });
-            }
-            self.expect(TokenKind::RParen)?;
             self.expect(TokenKind::RBracket)?;
         }
-        Ok(hints)
+        Ok(attrs)
     }
 
     fn parse_access_value_list(&mut self) -> ParseResult<Vec<String>> {
@@ -838,6 +955,150 @@ impl<'a> Parser<'a> {
             TokenKind::String(s) => Ok(vec![s]),
             _ => Err(self.error(tok, "string literal")),
         }
+    }
+
+    fn parse_access_attribute_body(&mut self, attrs: &mut FunctionAttributes) -> ParseResult<()> {
+        self.expect(TokenKind::LParen)?;
+        let mut parsed_any = false;
+        while !self.peek(TokenKind::RParen) && !self.peek(TokenKind::EOF) {
+            let key = self.expect_ident()?;
+            self.expect(TokenKind::Equal)?;
+            let mut values = self.parse_access_value_list()?;
+            match key.as_str() {
+                "read" => attrs.reads.append(&mut values),
+                "write" => attrs.writes.append(&mut values),
+                _ => {
+                    return Err(ParseError {
+                        message: format!("unknown access list `{key}`"),
+                        line: self.tokens[self.pos.saturating_sub(1)].line,
+                        column: self.tokens[self.pos.saturating_sub(1)].column,
+                        snippet: String::new(),
+                    });
+                }
+            }
+            parsed_any = true;
+            if self.peek(TokenKind::Comma) {
+                self.bump();
+            }
+        }
+        if !parsed_any {
+            return Err(ParseError {
+                message: "access attribute must include read/write entries".into(),
+                line: self.tokens[self.pos.saturating_sub(1)].line,
+                column: self.tokens[self.pos.saturating_sub(1)].column,
+                snippet: String::new(),
+            });
+        }
+        self.expect(TokenKind::RParen)?;
+        Ok(())
+    }
+
+    fn parse_test_attribute_body(&mut self, attrs: &mut FunctionAttributes) -> ParseResult<()> {
+        attrs.is_test = true;
+        if !self.peek(TokenKind::LParen) {
+            return Ok(());
+        }
+        self.bump(); // '('
+        while !self.peek(TokenKind::RParen) && !self.peek(TokenKind::EOF) {
+            let key = self.expect_ident()?;
+            self.expect(TokenKind::Equal)?;
+            match key.as_str() {
+                "fixture" => {
+                    if attrs.test_fixture.is_some() {
+                        return Err(ParseError {
+                            message: "duplicate fixture binding in test attribute".into(),
+                            line: self.tokens[self.pos.saturating_sub(1)].line,
+                            column: self.tokens[self.pos.saturating_sub(1)].column,
+                            snippet: String::new(),
+                        });
+                    }
+                    attrs.test_fixture = Some(self.expect_ident_or_string()?);
+                }
+                _ => {
+                    return Err(ParseError {
+                        message: format!("unknown test attribute option `{key}`"),
+                        line: self.tokens[self.pos.saturating_sub(1)].line,
+                        column: self.tokens[self.pos.saturating_sub(1)].column,
+                        snippet: String::new(),
+                    });
+                }
+            }
+            if self.peek(TokenKind::Comma) {
+                self.bump();
+            } else {
+                break;
+            }
+        }
+        self.expect(TokenKind::RParen)?;
+        Ok(())
+    }
+
+    fn parse_test_target_decl(&mut self) -> ParseResult<()> {
+        let tok = self.bump();
+        if !matches!(tok.kind, TokenKind::Ident(ref s) if s == "koto_test") {
+            return Err(self.error(tok, "koto_test"));
+        }
+        self.expect(TokenKind::LBrace)?;
+        let mut target = None;
+        while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            let key = self.expect_ident()?;
+            self.expect(TokenKind::Colon)?;
+            match key.as_str() {
+                "target" => target = Some(self.expect_ident_or_string()?),
+                _ => {
+                    return Err(
+                        self.error(self.tokens[self.pos.saturating_sub(1)].clone(), "target")
+                    );
+                }
+            }
+            if self.peek(TokenKind::Semicolon) || self.peek(TokenKind::Comma) {
+                self.bump();
+            }
+        }
+        self.expect(TokenKind::RBrace)?;
+        let target = target.ok_or_else(|| ParseError {
+            message: "koto_test block requires `target: \"...\"`".into(),
+            line: tok.line,
+            column: tok.column,
+            snippet: String::new(),
+        })?;
+        self.test_target = Some(TestTargetDecl { target });
+        Ok(())
+    }
+
+    fn parse_fixture_decl(&mut self) -> ParseResult<FixtureDecl> {
+        let tok = self.bump();
+        if !matches!(tok.kind, TokenKind::Ident(ref s) if s == "fixture") {
+            return Err(self.error(tok, "fixture"));
+        }
+        let name = self.expect_ident()?;
+        self.expect(TokenKind::LBrace)?;
+        let mut actions = Vec::new();
+        while !self.peek(TokenKind::RBrace) && !self.peek(TokenKind::EOF) {
+            let action_name = self.expect_ident()?;
+            self.expect(TokenKind::LParen)?;
+            let mut args = Vec::new();
+            if !self.peek(TokenKind::RParen) {
+                loop {
+                    args.push(self.parse_expr()?);
+                    if self.peek(TokenKind::Comma) {
+                        self.bump();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.expect(TokenKind::RParen)?;
+            if self.peek(TokenKind::Semicolon) {
+                self.bump();
+            }
+            actions.push(FixtureAction {
+                name: action_name,
+                args,
+            });
+        }
+        self.expect(TokenKind::RBrace)?;
+        Ok(FixtureDecl { name, actions })
     }
 
     fn parse_meta_block(&mut self) -> ParseResult<()> {
@@ -1113,11 +1374,41 @@ impl<'a> Parser<'a> {
         Ok(Item::State(super::ast::StateDecl { name, ty }))
     }
 
+    fn parse_const_decl(&mut self) -> ParseResult<Item> {
+        self.expect(TokenKind::Const)?;
+        let name = self.expect_ident()?;
+        let ty = if self.peek(TokenKind::Colon) {
+            self.bump();
+            Some(self.parse_type_expr()?)
+        } else {
+            None
+        };
+        self.expect(TokenKind::Equal)?;
+        let value = self.parse_expr()?;
+        if self.peek(TokenKind::Semicolon) {
+            self.bump();
+        }
+        Ok(Item::Const(super::ast::ConstDecl { name, ty, value }))
+    }
+
     fn parse_fn_loose(
         &mut self,
         name_override: Option<String>,
         mut modifiers: FunctionModifiers,
     ) -> ParseResult<Item> {
+        let location = if name_override.is_some() {
+            let tok = &self.tokens[self.pos.saturating_sub(1)];
+            SourceLocation {
+                line: tok.line,
+                column: tok.column,
+            }
+        } else {
+            let tok = &self.tokens[self.pos];
+            SourceLocation {
+                line: tok.line,
+                column: tok.column,
+            }
+        };
         let name = match name_override {
             Some(n) => n,
             None => self.expect_ident()?,
@@ -1170,6 +1461,7 @@ impl<'a> Parser<'a> {
             ret_ty,
             body,
             modifiers,
+            location,
         }))
     }
 
@@ -1680,27 +1972,34 @@ impl<'a> Parser<'a> {
             if self.peek(TokenKind::Dot) {
                 self.bump();
                 // Accept `ident` or numeric tuple index after '.'
-                let field = if let Some(Token {
-                    kind: TokenKind::Ident(s),
-                    ..
-                }) = self.tokens.get(self.pos)
-                {
-                    let s = s.clone();
-                    self.bump();
-                    s
-                } else if let Some(token) = self.tokens.get(self.pos).cloned()
-                    && let TokenKind::Number(n) = token.kind.clone()
-                {
-                    self.bump();
-                    let index = self.number_to_usize(&token, n, "tuple index")?;
-                    index.to_string()
+                let (field, field_token) = if let Some(token) = self.tokens.get(self.pos).cloned() {
+                    match token.kind.clone() {
+                        TokenKind::Ident(s) => {
+                            self.bump();
+                            (s, Some(token))
+                        }
+                        TokenKind::Number(n) => {
+                            self.bump();
+                            let index = self.number_to_usize(&token, n, "tuple index")?;
+                            (index.to_string(), None)
+                        }
+                        _ => {
+                            // Avoid borrowing self immutably and mutably in a single expression
+                            let tok = self.bump();
+                            return Err(self.error(tok, "identifier or tuple index"));
+                        }
+                    }
                 } else {
-                    // Avoid borrowing self immutably and mutably in a single expression
                     let tok = self.bump();
                     return Err(self.error(tok, "identifier or tuple index"));
                 };
                 // Method-call sugar: `expr.method(args...)` -> `Call { name: method, args: [expr, args...] }`
                 if self.peek(TokenKind::LParen) {
+                    if let Some(token) = field_token.as_ref()
+                        && let Some(message) = removed_method_helper_message(&field)
+                    {
+                        return Err(self.error(token.clone(), message));
+                    }
                     self.bump();
                     let mut args = Vec::new();
                     if !self.peek(TokenKind::RParen) {
@@ -1777,6 +2076,9 @@ impl<'a> Parser<'a> {
                     return self.parse_macro_invocation(ident_token, name);
                 }
                 if self.peek(TokenKind::LParen) {
+                    if let Some(message) = removed_free_helper_message(&name) {
+                        return Err(self.error(ident_token, message));
+                    }
                     self.bump();
                     let mut args = Vec::new();
                     if !self.peek(TokenKind::RParen) {
@@ -1828,6 +2130,7 @@ impl<'a> Parser<'a> {
             TokenKind::Ident(name) => Ok(name.clone()),
             TokenKind::Hajimari => Ok(String::from("hajimari")),
             TokenKind::Kaizen => Ok(String::from("kaizen")),
+            TokenKind::View => Ok(String::from("view")),
             _ => Err(self.error(tok, "identifier")),
         }
     }
@@ -1980,8 +2283,21 @@ impl<'a> Parser<'a> {
         Ok(Some(bound))
     }
 
+    fn parse_param_type_annotation(&mut self) -> ParseResult<(bool, TypeExpr)> {
+        let is_state = if self.peek(TokenKind::State) {
+            self.bump();
+            true
+        } else {
+            false
+        };
+        let ty = self.parse_type_expr()?;
+        Ok((is_state, ty))
+    }
+
     fn parse_param(&mut self) -> ParseResult<Param> {
         // Support both `Type name` and `name: Type` forms, or bare `name`.
+        // Typed parameters may be prefixed with `state` to request a durable
+        // state-map handle (for example `state Map<Name, int> balances`).
         let save = self.pos;
         // Try `Type name`
         if let Ok(ty) = self.try_parse_type_then_name() {
@@ -1990,19 +2306,24 @@ impl<'a> Parser<'a> {
         self.pos = save;
         // Fallback `name [: Type]?`
         let name = self.expect_ident()?;
-        let ty = if self.peek(TokenKind::Colon) {
+        let (is_state, ty) = if self.peek(TokenKind::Colon) {
             self.bump();
-            Some(self.parse_type_expr()?)
+            let (is_state, ty) = self.parse_param_type_annotation()?;
+            (is_state, Some(ty))
         } else {
-            None
+            (false, None)
         };
-        Ok(Param { ty, name })
+        Ok(Param { ty, name, is_state })
     }
 
     fn try_parse_type_then_name(&mut self) -> ParseResult<Param> {
-        let ty = self.parse_type_expr()?;
+        let (is_state, ty) = self.parse_param_type_annotation()?;
         let name = self.expect_ident()?;
-        Ok(Param { ty: Some(ty), name })
+        Ok(Param {
+            ty: Some(ty),
+            name,
+            is_state,
+        })
     }
 
     fn expect(&mut self, kind: TokenKind) -> ParseResult<()> {
@@ -2128,9 +2449,102 @@ impl<'a> Parser<'a> {
     }
 }
 
+fn removed_method_helper_message(name: &str) -> Option<&'static str> {
+    match name {
+        "has" => Some("`map.has(key)` was removed; use `map.contains(key)`"),
+        "get_or_insert_default" => Some(
+            "`map.get_or_insert_default(key, default)` was removed; use `map.ensure(key, default)`",
+        ),
+        "path_map_key" | "path_map_key_norito" => {
+            Some("`base.path_map_key(segment)` was removed; use `base.path(segment)`")
+        }
+        "json_get_int" => Some("`json.json_get_int(key)` was removed; use `json.get_int(key)`"),
+        "json_get_numeric" => {
+            Some("`json.json_get_numeric(key)` was removed; use `json.get_numeric(key)`")
+        }
+        "json_get_json" => Some("`json.json_get_json(key)` was removed; use `json.get_json(key)`"),
+        "json_get_name" => Some("`json.json_get_name(key)` was removed; use `json.get_name(key)`"),
+        "json_get_account_id" => {
+            Some("`json.json_get_account_id(key)` was removed; use `json.get_account_id(key)`")
+        }
+        "json_get_asset_definition_id" => Some(
+            "`json.json_get_asset_definition_id(key)` was removed; use `json.get_asset_definition_id(key)`",
+        ),
+        "json_get_nft_id" => {
+            Some("`json.json_get_nft_id(key)` was removed; use `json.get_nft_id(key)`")
+        }
+        "json_get_blob_hex" => {
+            Some("`json.json_get_blob_hex(key)` was removed; use `json.get_blob_hex(key)`")
+        }
+        _ => None,
+    }
+}
+
+fn removed_free_helper_message(name: &str) -> Option<&'static str> {
+    match name {
+        "contains" | "std::map::contains" | "has" | "std::map::has" => {
+            Some("`contains(...)` was removed; use `map.contains(key)`")
+        }
+        "get_or" | "std::map::get_or" => {
+            Some("`get_or(...)` was removed; use `map.get_or(key, default)`")
+        }
+        "get_or_insert_default"
+        | "std::map::get_or_insert_default"
+        | "ensure"
+        | "std::map::ensure" => {
+            Some("`ensure(...)` was removed as a free helper; use `map.ensure(key, default)`")
+        }
+        "path"
+        | "path_map_key"
+        | "path_map_key_norito"
+        | "host::path"
+        | "host::path_map_key"
+        | "host::path_map_key_norito" => {
+            Some("`path(...)` was removed as a free helper; use `base.path(segment)`")
+        }
+        "get_int" | "json_get_int" | "json::get_int" => {
+            Some("`get_int(...)` was removed as a free helper; use `json.get_int(key)`")
+        }
+        "get_numeric" | "json_get_numeric" | "json::get_numeric" => {
+            Some("`get_numeric(...)` was removed as a free helper; use `json.get_numeric(key)`")
+        }
+        "get_json" | "json_get_json" | "json::get_json" => {
+            Some("`get_json(...)` was removed as a free helper; use `json.get_json(key)`")
+        }
+        "get_name" | "json_get_name" | "json::get_name" => {
+            Some("`get_name(...)` was removed as a free helper; use `json.get_name(key)`")
+        }
+        "get_account_id" | "json_get_account_id" | "json::get_account_id" => Some(
+            "`get_account_id(...)` was removed as a free helper; use `json.get_account_id(key)`",
+        ),
+        "get_asset_definition_id"
+        | "json_get_asset_definition_id"
+        | "json::get_asset_definition_id" => Some(
+            "`get_asset_definition_id(...)` was removed as a free helper; use `json.get_asset_definition_id(key)`",
+        ),
+        "get_nft_id" | "json_get_nft_id" | "json::get_nft_id" => {
+            Some("`get_nft_id(...)` was removed as a free helper; use `json.get_nft_id(key)`")
+        }
+        "get_blob_hex" | "json_get_blob_hex" | "json::get_blob_hex" => {
+            Some("`get_blob_hex(...)` was removed as a free helper; use `json.get_blob_hex(key)`")
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::DomainId;
+
+    fn sample_account_literal() -> String {
+        iroha_data_model::account::AccountId::new(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                .parse()
+                .expect("public key"),
+        )
+        .to_string()
+    }
 
     #[test]
     fn parse_return_statements() {
@@ -2429,6 +2843,74 @@ mod tests {
     }
 
     #[test]
+    fn parse_state_map_parameter_annotations() {
+        let src = r#"
+        fn helper(state Map<Name, int> balances, key: Name, owners: state Map<int, AccountId>) {}
+        "#;
+        let prog = parse(src).expect("parse state params");
+        let func = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("function present");
+        assert_eq!(func.params.len(), 3);
+        assert!(func.params[0].is_state);
+        assert_eq!(func.params[0].name, "balances");
+        assert!(func.params[1].ty.is_some());
+        assert!(!func.params[1].is_state);
+        assert!(func.params[2].is_state);
+        assert_eq!(func.params[2].name, "owners");
+    }
+
+    #[test]
+    fn parse_rejects_removed_free_map_helpers() {
+        let err = parse("fn f(m: Map<int, int>) { let _x = get_or(m, 1, 7); }")
+            .expect_err("free get_or should be rejected");
+        assert!(
+            err.contains("map.get_or(key, default)"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_removed_free_json_helpers() {
+        let err = parse("fn f(ev: Json) { let _x = get_int(ev, name(\"n\")); }")
+            .expect_err("free get_int should be rejected");
+        assert!(err.contains("json.get_int(key)"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn parse_rejects_removed_method_map_aliases() {
+        let err = parse("fn f(m: Map<int, int>) { let _x = m.has(1); }")
+            .expect_err("method has should be rejected");
+        assert!(err.contains("map.contains(key)"), "unexpected error: {err}");
+
+        let err = parse("fn f(m: Map<int, int>) { let _x = m.get_or_insert_default(1, 7); }")
+            .expect_err("method get_or_insert_default should be rejected");
+        assert!(
+            err.contains("map.ensure(key, default)"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_removed_method_path_and_json_aliases() {
+        let err = parse("fn f(base: Name) { let _x = base.path_map_key(7); }")
+            .expect_err("method path_map_key should be rejected");
+        assert!(
+            err.contains("base.path(segment)"),
+            "unexpected error: {err}"
+        );
+
+        let err = parse("fn f(ev: Json) { let _x = ev.json_get_int(name(\"n\")); }")
+            .expect_err("method json_get_int should be rejected");
+        assert!(err.contains("json.get_int(key)"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn parse_kotoba_block_collects_entries() {
         let src = r#"
         kotoba {
@@ -2455,19 +2937,22 @@ mod tests {
 
     #[test]
     fn parse_trigger_decl() {
-        let src = r#"
-        seiyaku C {
-            kotoage fn run() {}
-            register_trigger wake {
+        let authority = sample_account_literal();
+        let src = format!(
+            r#"
+        seiyaku C {{
+            kotoage fn run() {{}}
+            register_trigger wake {{
                 call run;
                 on time pre_commit;
                 repeats 3;
-                authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-                metadata { tag: "alpha"; count: 1; enabled: true; }
-            }
-        }
-        "#;
-        let prog = parse(src).expect("parse trigger decl");
+                authority "{authority}";
+                metadata {{ tag: "alpha"; count: 1; enabled: true; }}
+            }}
+        }}
+        "#
+        );
+        let prog = parse(&src).expect("parse trigger decl");
         let trigger = prog
             .items
             .iter()
@@ -2479,10 +2964,7 @@ mod tests {
         assert_eq!(trigger.name, "wake");
         assert_eq!(trigger.call.entrypoint, "run");
         assert!(matches!(trigger.filter, TriggerFilter::Time(_)));
-        assert_eq!(
-            trigger.authority.as_deref(),
-            Some("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
-        );
+        assert_eq!(trigger.authority.as_deref(), Some(authority.as_str()));
         assert_eq!(trigger.metadata.len(), 3);
     }
 
@@ -2509,6 +2991,181 @@ mod tests {
         assert!(matches!(trigger.filter, TriggerFilter::Data(_)));
     }
 
+    fn sample_asset_definition_literal() -> String {
+        iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("name"),
+        )
+        .to_string()
+    }
+
+    #[test]
+    fn parse_trigger_decl_with_structured_data_filter() {
+        let asset_definition = sample_asset_definition_literal();
+        let src = format!(
+            r#"
+        seiyaku C {{
+            kotoage fn run() {{}}
+            register_trigger wake {{
+                call run;
+                on data asset added {{
+                    asset_definition "{asset_definition}";
+                }}
+            }}
+        }}
+        "#
+        );
+        let prog = parse(&src).expect("parse trigger decl");
+        let trigger = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Trigger(t) => Some(t),
+                _ => None,
+            })
+            .expect("trigger present");
+        let TriggerFilter::Data(TriggerDataFilter::Structured(filter)) = &trigger.filter else {
+            panic!("expected structured data filter");
+        };
+        assert_eq!(filter.family, TriggerDataFamily::Asset);
+        assert_eq!(
+            filter.event,
+            TriggerDataEventKind::Named("added".to_string())
+        );
+        assert_eq!(filter.matchers.len(), 1);
+        assert_eq!(filter.matchers[0].key, "asset_definition");
+        assert_eq!(filter.matchers[0].value, asset_definition);
+    }
+
+    #[test]
+    fn parse_trigger_decl_with_structured_data_filters_for_core_families() {
+        let account = sample_account_literal();
+        let peer =
+            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D".to_string();
+        let domain = "wonderland".to_string();
+        let asset_definition = sample_asset_definition_literal();
+        let nft = "n0$wonderland.universal".to_string();
+        let rwa = format!(
+            "{}$wonderland.universal",
+            iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
+        );
+        let trigger = "wake".to_string();
+        let role = "auditor".to_string();
+        let asset = {
+            let account_id = iroha_data_model::account::AccountId::parse_encoded(&account)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .expect("account");
+            let definition_id: iroha_data_model::asset::AssetDefinitionId =
+                asset_definition.parse().expect("asset definition");
+            iroha_data_model::asset::AssetId::new(definition_id, account_id).canonical_literal()
+        };
+
+        let cases = vec![
+            (
+                TriggerDataFamily::Peer,
+                "added",
+                vec![("peer".to_string(), peer)],
+            ),
+            (
+                TriggerDataFamily::Domain,
+                "created",
+                vec![("domain".to_string(), domain)],
+            ),
+            (
+                TriggerDataFamily::Account,
+                "created",
+                vec![("account".to_string(), account.clone())],
+            ),
+            (
+                TriggerDataFamily::Asset,
+                "added",
+                vec![
+                    ("asset".to_string(), asset),
+                    ("asset_definition".to_string(), asset_definition.clone()),
+                ],
+            ),
+            (
+                TriggerDataFamily::AssetDefinition,
+                "created",
+                vec![("asset_definition".to_string(), asset_definition)],
+            ),
+            (
+                TriggerDataFamily::Nft,
+                "created",
+                vec![("nft".to_string(), nft)],
+            ),
+            (
+                TriggerDataFamily::Rwa,
+                "created",
+                vec![("rwa".to_string(), rwa)],
+            ),
+            (
+                TriggerDataFamily::Trigger,
+                "created",
+                vec![("trigger".to_string(), trigger)],
+            ),
+            (
+                TriggerDataFamily::Role,
+                "created",
+                vec![("role".to_string(), role)],
+            ),
+            (TriggerDataFamily::Configuration, "changed", vec![]),
+            (TriggerDataFamily::Executor, "upgraded", vec![]),
+        ];
+
+        for (family, event, expected_matchers) in cases {
+            let family_literal = match family {
+                TriggerDataFamily::Peer => "peer",
+                TriggerDataFamily::Domain => "domain",
+                TriggerDataFamily::Account => "account",
+                TriggerDataFamily::Asset => "asset",
+                TriggerDataFamily::AssetDefinition => "asset_definition",
+                TriggerDataFamily::Nft => "nft",
+                TriggerDataFamily::Rwa => "rwa",
+                TriggerDataFamily::Trigger => "trigger",
+                TriggerDataFamily::Role => "role",
+                TriggerDataFamily::Configuration => "configuration",
+                TriggerDataFamily::Executor => "executor",
+            };
+            let matcher_block = expected_matchers
+                .iter()
+                .map(|(key, value)| format!("                    {key} \"{value}\";\n"))
+                .collect::<String>();
+            let src = format!(
+                r#"
+                seiyaku C {{
+                    kotoage fn run() {{}}
+                    register_trigger wake {{
+                        call run;
+                        on data {family_literal} {event} {{
+{matcher_block}                        }}
+                    }}
+                }}
+                "#
+            );
+            let prog = parse(&src).expect("parse trigger decl");
+            let trigger = prog
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Item::Trigger(t) => Some(t),
+                    _ => None,
+                })
+                .expect("trigger present");
+            let TriggerFilter::Data(TriggerDataFilter::Structured(filter)) = &trigger.filter else {
+                panic!("expected structured data filter");
+            };
+            assert_eq!(filter.family, family);
+            assert_eq!(filter.event, TriggerDataEventKind::Named(event.to_string()));
+            let actual_matchers = filter
+                .matchers
+                .iter()
+                .map(|matcher| (matcher.key.clone(), matcher.value.clone()))
+                .collect::<Vec<_>>();
+            assert_eq!(actual_matchers, expected_matchers);
+        }
+    }
+
     #[test]
     fn parse_trigger_decl_with_pipeline_filter() {
         let src = r#"
@@ -2530,5 +3187,60 @@ mod tests {
             })
             .expect("trigger present");
         assert!(matches!(trigger.filter, TriggerFilter::Pipeline(_)));
+    }
+
+    #[test]
+    fn parse_koto_test_target_fixture_and_test_binding() {
+        let src = r#"
+        koto_test { target: "contracts/demo.ko" }
+
+        fixture seeded {
+            caller(account!("alice@wonderland"));
+            grant_permission("register_domain");
+        }
+
+        #[test(fixture="seeded")]
+        fn smoke() {}
+        "#;
+        let prog = parse(src).expect("parse koto_test program");
+        assert_eq!(
+            prog.test_target
+                .as_ref()
+                .map(|target| target.target.as_str()),
+            Some("contracts/demo.ko")
+        );
+        assert_eq!(prog.fixtures.len(), 1);
+        assert_eq!(prog.fixtures[0].name, "seeded");
+        assert_eq!(prog.fixtures[0].actions.len(), 2);
+
+        let func = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("function present");
+        assert!(func.modifiers.is_test);
+        assert_eq!(func.modifiers.test_fixture.as_deref(), Some("seeded"));
+    }
+
+    #[test]
+    fn parse_unicode_test_attribute() {
+        let src = r#"
+        #[テスト]
+        fn smoke() {}
+        "#;
+        let prog = parse(src).expect("parse unicode test attribute");
+        let func = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("function present");
+        assert!(func.modifiers.is_test);
+        assert_eq!(func.modifiers.test_fixture, None);
     }
 }

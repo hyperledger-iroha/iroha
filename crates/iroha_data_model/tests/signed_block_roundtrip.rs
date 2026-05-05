@@ -17,7 +17,8 @@ fn sample_signed_block_with_empty_instructions() -> (SignedBlock, Vec<SignedTran
     let chain: ChainId = "constvec-roundtrip-chain"
         .parse()
         .expect("chain id for sample block");
-    let _domain: DomainId = "wonderland".parse().expect("domain for sample block");
+    let _domain: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain for sample block");
     let authority: AccountId = AccountId::new(keypair.public_key().clone());
 
     let txs = vec![
@@ -111,7 +112,7 @@ fn signed_block_roundtrip_via_norito() {
 }
 
 #[test]
-fn canonical_signed_block_wire_roundtrip_is_sequential() {
+fn canonical_signed_block_wire_roundtrip_uses_default_layout_flags() {
     let (block, _) = sample_signed_block_with_empty_instructions();
     let wire = block.canonical_wire().expect("canonical wire encoding");
     let framed = wire.as_framed();
@@ -121,8 +122,14 @@ fn canonical_signed_block_wire_roundtrip_is_sequential() {
     );
     let header_flags = framed[1 + norito::core::Header::SIZE - 1];
     assert_eq!(
-        header_flags, 0,
-        "canonical header must not advertise layout flags"
+        header_flags,
+        norito::core::default_encode_flags(),
+        "canonical header must advertise the current Norito default layout flags"
+    );
+    assert_eq!(
+        header_flags & norito::core::header_flags::COMPACT_LEN,
+        norito::core::header_flags::COMPACT_LEN,
+        "canonical header must advertise compact lengths"
     );
     let decoded = decode_framed_signed_block(framed).expect("decode framed block");
     assert_eq!(

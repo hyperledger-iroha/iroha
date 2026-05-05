@@ -108,17 +108,17 @@ Struct ReservedAssignmentRequestV1 {
 
 | Төгсгөлийн цэг | арга | Ачаалал | Тодорхойлолт |
 |----------|--------|---------|-------------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Нэрээ бүртгүүлэх эсвэл дахин нээх. Үнийн түвшнийг шийдэж, төлбөр/засаглалын нотолгоог баталгаажуулж, бүртгэлийн үйл явдлуудыг гаргадаг. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Хугацаа сунгах. Бодлогын хөнгөлөлт/зөлөөллийн цонхыг хэрэгжүүлдэг. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Засаглалын зөвшөөрлийг хавсаргасны дараа өмчлөлийг шилжүүлнэ. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Хянагчийн багцыг солих; гарын үсэг зурсан дансны хаягуудыг баталгаажуулдаг. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Асран хамгаалагч/зөвлөл хөлддөг. Асран хамгаалагчийн тасалбар, засаглалын баримт бичгийн лавлагаа шаардлагатай. |
-| `/v1/sns/registrations/{selector}/freeze` | УСТГАХ | `GovernanceHookV1` | Засвар хийсний дараа хөлдөөх; зөвлөлийн дарангуйллыг бүртгэхийг баталгаажуулдаг. |
+| `/v1/sns/names` | POST | `RegisterNameRequestV1` | Нэрээ бүртгүүлэх эсвэл дахин нээх. Үнийн түвшнийг шийдэж, төлбөр/засаглалын нотолгоог баталгаажуулж, бүртгэлийн үйл явдлуудыг гаргадаг. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POST | `RenewNameRequestV1` | Хугацаа сунгах. Бодлогын хөнгөлөлт/зөлөөллийн цонхыг хэрэгжүүлдэг. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POST | `TransferNameRequestV1` | Засаглалын зөвшөөрлийг хавсаргасны дараа өмчлөлийг шилжүүлнэ. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | PUT | `UpdateControllersRequestV1` | Хянагчийн багцыг солих; гарын үсэг зурсан дансны хаягуудыг баталгаажуулдаг. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POST | `FreezeNameRequestV1` | Асран хамгаалагч/зөвлөл хөлддөг. Асран хамгаалагчийн тасалбар, засаглалын баримт бичгийн лавлагаа шаардлагатай. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | УСТГАХ | `GovernanceHookV1` | Засвар хийсний дараа хөлдөөх; зөвлөлийн дарангуйллыг бүртгэхийг баталгаажуулдаг. |
 | `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Нөөцлөгдсөн нэрсийн нярав/зөвлөлийн томилгоо. |
 | `/v1/sns/policies/{suffix_id}` | АВАХ | — | `SuffixPolicyV1` гүйдлийг татах (кэш хийх боломжтой). |
-| `/v1/sns/registrations/{selector}` | АВАХ | — | Одоогийн `NameRecordV1` + үр дүнтэй төлөвийг буцаана (Идэвхтэй, Грейс гэх мэт). |
+| `/v1/sns/names/{namespace}/{literal}` | АВАХ | — | Одоогийн `NameRecordV1` + үр дүнтэй төлөвийг буцаана (Идэвхтэй, Грейс гэх мэт). |
 
-**Сонгонлогчийн кодчилол:** `{selector}` замын сегмент нь ADDR-5-д I105 (давуу), шахсан (`sora`, хоёрдугаарт) эсвэл каноник зургаан өнцөгтийг хүлээн зөвшөөрдөг; Torii үүнийг `NameSelectorV1`-ээр хэвийн болгодог.
+**Сонгонлогчийн кодчилол:** `{selector}` замын сегмент нь ADDR-5-д i105 (давуу), шахсан (`sora`, хоёрдугаарт) эсвэл каноник зургаан өнцөгтийг хүлээн зөвшөөрдөг; Torii үүнийг `NameSelectorV1`-ээр хэвийн болгодог.
 
 **Алдааны загвар:** бүх төгсгөлийн цэгүүд нь `code`, `message`, `details`-тай Norito JSON-ийг буцаана. Кодуудад `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` орно.
 
@@ -131,7 +131,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -156,7 +156,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -164,7 +164,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -179,7 +179,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` нь хүчинтэй `GovernanceHookV1` бичлэг (саналын ID, саналын хэш, нярав/асран хамгаалагчийн гарын үсэг) агуулсан байх ёстой. Тушаал бүр нь харгалзах `/v1/sns/registrations/{selector}/…` төгсгөлийн цэгийг тусгадаг тул бета операторууд SDK-ийн дуудах Torii гадаргууг яг таг давтах боломжтой.
+`--governance-json` нь хүчинтэй `GovernanceHookV1` бичлэг (саналын ID, саналын хэш, нярав/асран хамгаалагчийн гарын үсэг) агуулсан байх ёстой. Тушаал бүр нь харгалзах `/v1/sns/names/{namespace}/{literal}/…` төгсгөлийн цэгийг тусгадаг тул бета операторууд SDK-ийн дуудах Torii гадаргууг яг таг давтах боломжтой.
 
 ## 4. gRPC үйлчилгээ
 
@@ -226,7 +226,7 @@ Torii нь дараахь зүйлийг шалгаж нотлох баримт�
 
 1. Үйлчлүүлэгч `/v1/sns/policies/{suffix_id}`-ээс үнэ, хөнгөлөлт, боломжит түвшний мэдээллийг авахын тулд асуудаг.
 2. Үйлчлүүлэгч `RegisterNameRequestV1`:
-   - `selector` нь илүүд үздэг I105 буюу хоёр дахь хамгийн сайн шахсан (`sora`) шошгоноос гаралтай.
+   - `selector` нь илүүд үздэг i105 буюу хоёр дахь хамгийн сайн шахсан (`sora`) шошгоноос гаралтай.
    - Бодлогын хүрээнд `term_years`.
    - `payment` төрийн сан/дамшуулагч задлагч шилжүүлгийг иш татсан.
 3. Torii баталгаажуулна:
@@ -251,7 +251,7 @@ Torii нь дараахь зүйлийг шалгаж нотлох баримт�
 
 1. Асран хамгаалагч `FreezeNameRequestV1`-г тасалбарын лавлагааны ослын ID-тай хамт илгээнэ.
 2. Torii бичлэгийг `NameStatus::Frozen` руу шилжүүлж, `NameFrozen` ялгаруулдаг.
-3. Засвар хийсний дараа зөвлөлийн асуудлыг шийдвэрлэх; оператор DELETE `/v1/sns/registrations/{selector}/freeze`-г `GovernanceHookV1`-ээр илгээдэг.
+3. Засвар хийсний дараа зөвлөлийн асуудлыг шийдвэрлэх; оператор DELETE `/v1/sns/names/{namespace}/{literal}/freeze`-г `GovernanceHookV1`-ээр илгээдэг.
 4. Torii нь хүчингүй болгохыг баталгаажуулж, `NameUnfrozen` ялгаруулдаг.
 
 ## 7. Баталгаажуулалт & Алдааны кодууд

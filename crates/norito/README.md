@@ -81,7 +81,9 @@ Norito uses explicit header flags for layout selection. Header-framed helpers
 validate the header (major/minor) and apply the header flag byte as the
 authoritative layout selection; unknown bits are rejected. Bare decoders
 (`codec::Decode`) are internal-only for hashing/bench scenarios and always use
-the fixed v1 default flags (`0x00`) with no heuristics.
+the v1 default layout (`COMPACT_LEN`, `0x02`) with no heuristics. Use
+`norito::core::DecodeFlagsGuard::enter(0)` only when encoding or decoding
+legacy fixed-width length-prefix payloads.
 
 Decoding details:
 - `from_compressed_bytes` returns an owning `ArchivedBox<T>` so archived payload
@@ -97,22 +99,24 @@ path while keeping outputs deterministic:
 
 - `to_bytes_auto(&T) -> Vec<u8>`: adaptively selects compression (None/CPU zstd/GPU zstd)
   based on payload size and hardware availability. The on-wire format remains the
-  same; only the `compression` header byte differs. Layout flags remain the v1
-  defaults unless explicitly set and framed by the caller.
+  same; only the `compression` header byte differs. Layout flags remain the
+  compact v1 default (`COMPACT_LEN`, `0x02`) unless explicitly set and framed
+  by the caller.
 - Headerless (bare) codec: `norito::codec::encode_adaptive(&T) -> Vec<u8>` and
-  `norito::codec::decode_adaptive::<T>(&[u8])` use the fixed v1 layout
-  (`flags = 0x00`). Use `encode_with_header_flags` and
-  `norito::core::frame_bare_with_header_flags` when you must preserve explicit layout
-  flags alongside bare payloads.
+  `norito::codec::decode_adaptive::<T>(&[u8])` use the compact sequential v1
+  layout (`flags = 0x02`). Use `encode_with_header_flags` and
+  `norito::core::frame_bare_with_header_flags` when you must preserve explicit
+  layout flags alongside bare payloads.
 - CPU SIMD: CRC64 uses CLMUL (x86_64) or PMULL (aarch64) when available; JSON string escaping uses AVX2/NEON fast paths when supported, with safe scalar fallbacks.
-- GPU CRC64: with `metal-crc64`/`cuda-crc64`, `hardware_crc64` attempts the GPU helper for payloads above the configured cutoff (default 192 KiB via `NORITO_GPU_CRC64_MIN_BYTES`, helper path override via `NORITO_CRC64_GPU_LIB`), then falls back to SIMD/CPU.
-- GPU compression: with the `gpu-compression` feature, zstd is offloaded to Metal (macOS/aarch64) or CUDA (other platforms) when a backend is present and the payload exceeds the GPU cutoff (defaults to 1 MiB); falls back to CPU otherwise. On Apple Silicon builds in this workspace, `gpuzstd_metal` is linked as a target dependency and built automatically while compiling `norito`. On Unix/Windows CUDA paths, Norito looks for `libgpuzstd_cuda.so` / `gpuzstd_cuda.dll` at runtime. On Windows the loader locks DLL resolution down to `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)` and then calls `LoadLibraryExW`. Place a trusted `gpuzstd_cuda.dll` alongside the Norito binaries or in `%SystemRoot%\\System32` (or add an explicit directory via `AddDllDirectory`) so it is picked up by the restricted search path. Failures to load a GPU helper emit a warning on stderr and automatically fall back to the CPU backend.
+- GPU CRC64: with `metal-crc64`/`cuda-crc64`, `hardware_crc64` attempts the GPU helper for payloads above the configured cutoff (default 192 KiB via `NORITO_GPU_CRC64_MIN_BYTES`, helper path override via `NORITO_CRC64_GPU_LIB`), then falls back to SIMD/CPU when the helper is unavailable or returns an error. The CUDA helper now reports unavailable instead of silently computing CRC64 on the CPU when CUDA kernels are not built or no CUDA device is present.
+- GPU compression: with the `gpu-compression` feature, zstd is offloaded to Metal (macOS/aarch64) or CUDA (other platforms) when a backend is present and the payload exceeds the GPU cutoff (defaults to 16 MiB); falls back to CPU otherwise. On Apple Silicon builds in this workspace, `gpuzstd_metal` is linked as a target dependency and built automatically while compiling `norito`. On Unix/Windows non-macOS paths, the workspace ships a dedicated `gpuzstd_cuda` helper crate, so `cargo build -p gpuzstd_cuda` produces `libgpuzstd_cuda.so` / `gpuzstd_cuda.dll` in-tree; Norito loads only the CUDA-named helper for CUDA mode, and the helper must pass a real compression self-test before the backend is registered. CUDA detection is helper-driven, so Norito does not require `nvidia-smi` before loading the helper. On Windows the loader locks DLL resolution down to `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32 | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS)` and then calls `LoadLibraryExW`. Place a trusted helper DLL alongside the Norito binaries or in `%SystemRoot%\\System32` (or add an explicit directory via `AddDllDirectory`) so it is picked up by the restricted search path. Failures to load a GPU helper emit a warning on stderr and automatically fall back to the CPU backend.
   - Metal helper behavior: `gpuzstd_metal` runs GPU match-finding/sequence generation and uses the in-crate deterministic zstd frame encoder (Huffman/FSE + frame assembly) on the host; decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames until GPU block decode is wired in.
+  - CUDA helper behavior: `gpuzstd_cuda` runs CUDA match-finding/sequence generation and uses the same deterministic zstd frame encoder as the Metal helper. If the CUDA kernels are not built or no CUDA device is present, compression returns `gpu_unavailable` so Norito selects the CPU backend instead of treating a CPU-only helper as GPU acceleration. CUDA or frame-assembly errors are returned to Norito; the CUDA helper does not CPU-encode zstd frames internally.
 - Stage‑2 metadata: enabling `metal-stage2` attempts to load `libjsonstage2_metal.dylib` (falling back to scalar metadata if missing) to cache structural character kinds alongside the Stage‑1 tape.
-- Stage‑1 GPU threshold: Stage‑1 builders (Metal/CUDA) are gated by a 192 KiB default cutoff to amortize launch overhead; override with `NORITO_STAGE1_GPU_MIN_BYTES`. Scalar/CPU SIMD paths remain the fallback and produce identical tapes.
-- Heuristics (defaults): skip compression for payloads < 256 bytes; prefer GPU for ≥ 1 MiB; use zstd level 1 for 256 bytes–32 KiB and level 3 for larger CPU payloads. These are conservative defaults and can be overridden programmatically for benchmarking.
+- Stage‑1 GPU threshold: Stage‑1 builders (Metal/CUDA) are gated by a 192 KiB default cutoff to amortize launch overhead; override with `NORITO_STAGE1_GPU_MIN_BYTES`. The CUDA Stage‑1 helper classifies quotes, backslashes, and structural characters on CUDA, finalizes the tape with quote-parity handling on the host, and reports unavailable when CUDA kernels are not built or no CUDA device is present. Scalar/CPU SIMD paths remain the fallback and produce identical tapes.
+- Heuristics (defaults): skip compression for payloads < 256 bytes; prefer GPU for >= 16 MiB; use zstd level 1 for 256 bytes-32 KiB and level 3 for larger CPU payloads. The GPU cutoff is intentionally above the current CUDA benchmark window because the 2026-04-25 RTX 3080 Laptop/WSL run showed CUDA zstd slower than CPU through 8 MiB.
 
-Determinism: All accelerated paths produce bit-for-bit identical bytes to their portable counterparts. Hardware differences only affect performance, never encoded content.
+Determinism: CRC64 and JSON Stage-1 accelerated paths produce bit-for-bit identical results to their portable counterparts. GPU zstd helpers emit deterministic standard zstd frames that decode to identical payload bytes; compressed frame bytes may differ from the CPU zstd encoder because match finding is backend-specific. Hardware differences only affect performance, never decoded content.
 
 ## Header Format
 
@@ -148,8 +152,9 @@ The trailing header byte encodes feature/layout flags for the payload and is app
 
 Flags are set explicitly by the encoder and recorded in the header. The
 default v1 helpers (`to_bytes`, `to_compressed_bytes`, `to_bytes_auto`) emit
-`flags = 0x00` unless you opt into a layout and frame those bytes with the
-corresponding header flags.
+`flags = 0x02` (`COMPACT_LEN`) unless you opt into another layout and frame
+those bytes with the corresponding header flags. The minor version remains
+`0x00`; the header flag byte advertises compact length prefixes.
 
 Flag scoping:
 - `COMPACT_LEN` affects per-value length prefixes only.
@@ -432,6 +437,7 @@ When `stage1-validate` is active in debug builds, Norito emits a one-time banner
   - Windows: ensure `jsonstage1_cuda.dll` is on `PATH` or alongside the binary.
 - In debug builds, Norito prints which backend was selected (e.g., `norito/json: stage1 backend = cuda`). If it always says `scalar`, the helper library likely wasn’t found or declined the input.
 - To cross-check accelerator correctness during development, enable validation: `--features stage1-validate` and build with debug assertions (`RUSTFLAGS='-C debug-assertions=yes'`).
+- To make CUDA helper tests fail instead of skipping when CUDA is unavailable, set `GPUZSTD_CUDA_REQUIRE=1` for `gpuzstd_cuda` and `JSONSTAGE1_CUDA_REQUIRE=1` for `jsonstage1_cuda`.
 
 ## Encoded Length Hints
 
@@ -449,3 +455,16 @@ For faster serialization without reallocations, Norito adds `encoded_len_exact(&
 - Returns the precise number of bytes that `serialize()` will write for the value (payload only).
 - Implemented for primitives, strings/`&str`/`Box<str>`, `Option<T>`, `Result<T,E>`, arrays `[T; N]`, and `Vec<T>` (packed‑seq), and is derived for structs/enums by summing field exact sizes plus their per‑field length prefixes.
 - `to_bytes()` and `to_compressed_bytes()` now prefer `encoded_len_exact()` and fall back to `encoded_len_hint()` when unavailable, improving buffer preallocation and reducing copies.
+
+## Exact Slice Decoding
+
+For hot paths that already hold a complete bare payload in memory, use
+`norito::codec::decode_exact_from_slice::<T>(&bytes)` when `T` implements
+`DecodeFromSlice`.
+
+- It avoids the `Read::read_to_end` copy used by the generic streaming
+  `Decode` facade.
+- It rejects truncated and trailing data through the type's exact
+  `DecodeFromSlice` implementation.
+- It uses the compact v1 default layout flags for headerless payloads, matching
+  `codec::encode_adaptive`/`Encode` (`COMPACT_LEN`, `0x02`).

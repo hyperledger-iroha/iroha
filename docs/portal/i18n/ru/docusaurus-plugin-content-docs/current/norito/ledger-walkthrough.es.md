@@ -30,8 +30,8 @@ translation_last_reviewed: 2026-02-07
 Демо-версия Derivadas de las claves:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Подтвердите список значений в списке первых чисел:
@@ -50,7 +50,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dentro de wonderland (reemplaza --limit por un numero mayor si hace falta)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions que ya existen
@@ -66,7 +66,7 @@ Crea un nuevo activo infinitamente acuable llamado `coffee` dentro del dominio
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI отображает хеш отправленной транзакции (например, `0x5f...`). Охраняйтесь, чтобы проконсультироваться по поводу состояния здоровья.
@@ -74,7 +74,7 @@ CLI отображает хеш отправленной транзакции (�
 ## 3. Acuna unidades en la cuenta deloperador
 
 Las cantidades de activos viven bajo el par `(asset definition, account)`. Акуна
-250 единиц `coffee#wonderland` и `$ADMIN_ACCOUNT`:
+250 единиц `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` и `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

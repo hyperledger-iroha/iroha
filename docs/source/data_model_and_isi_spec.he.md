@@ -1,14 +1,15 @@
-<!-- Hebrew translation of docs/source/data_model_and_isi_spec.md -->
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
 
 ---
 lang: he
 direction: rtl
 source: docs/source/data_model_and_isi_spec.md
 status: complete
+generator: scripts/sync_docs_i18n.py
+source_hash: a8d13f6d206f60d31217ed093a5bbedd7946d27b644f9b3321a577cc6065a901
+source_last_modified: "2026-03-30T18:22:55.965549+00:00"
+translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
-source_hash: 2077d985b10b26b29b821646b435cc8850cbc6c842d372de6c9c4523ee95a5b7
-source_last_modified: "2026-03-12T11:24:34.970622+00:00"
-translation_last_reviewed: 2026-03-12
 ---
 
 # Iroha v2 מודל נתונים ו-ISI — מפרט נגזר מיישום
@@ -27,20 +28,22 @@ translation_last_reviewed: 2026-03-12
 ## ישויות ומזהים
 לזהות יש צורות מחרוזות יציבות עם `Display`/`FromStr` הלוך ושוב. כללי השמות אוסרים על רווח לבן ועל תווי `@ # $` השמורים.- `Name` - מזהה טקסטואלי מאומת. כללים: `crates/iroha_data_model/src/name.rs`.
 - `DomainId` — `name`. דומיין: `{ id, logo, metadata, owned_by }`. בונים: `NewDomain`. קוד: `crates/iroha_data_model/src/domain.rs`.
-- `AccountId` — כתובות קנוניות מופקות באמצעות `AccountAddress` (I105 / hex) ו-Torii מנרמל כניסות דרך `AccountAddress::parse_encoded`. I105 הוא פורמט החשבון המועדף; טופס I105 מיועד ל-Sora בלבד UX. המחרוזת המוכרת `alias` (טופס מדור קודם) נשמרת ככינוי ניתוב בלבד. חשבון: `{ id, metadata }`. קוד: `crates/iroha_data_model/src/account.rs`.- מדיניות כניסת חשבון - דומיינים שולטים ביצירת חשבון מרומז על ידי אחסון Norito-JSON `AccountAdmissionPolicy` תחת מפתח מטא נתונים `iroha:account_admission_policy`. כאשר המפתח נעדר, הפרמטר המותאם אישית ברמת השרשרת `iroha:default_account_admission_policy` מספק את ברירת המחדל; כאשר זה גם נעדר, ברירת המחדל הקשה היא `ImplicitReceive` (מהדורה ראשונה). תגי המדיניות `mode` (`ExplicitOnly` או `ImplicitReceive`) בתוספת אופציונליים לכל עסקה (ברירת מחדל `16`) ומכסי יצירה לכל בלוק, חשבון `mode` אופציונלי (I0burn או 8NI40X) הגדרת נכס, ו-`default_role_on_create` אופציונלי (ניתן לאחר `AccountCreated`, נדחה עם `DefaultRoleError` אם חסר). בראשית אין אפשרות להצטרף; מדיניות מושבתת/לא חוקית דוחה הוראות בסגנון קבלה עבור חשבונות לא ידועים עם `InstructionExecutionError::AccountAdmission`. חשבונות מרומזים חותמים מטא נתונים `iroha:created_via="implicit"` לפני `AccountCreated`; תפקידי ברירת המחדל מוציאים מעקב `AccountRoleGranted`, וכללי הבסיס של הבעלים המוציאים לפועל מאפשרים לחשבון החדש להוציא את הנכסים/NFT שלו ללא תפקידים נוספים. קוד: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.
-- `AssetDefinitionId` - `aid:<32-lower-hex-no-dash>` קנוני (UUID-v4 בתים). הגדרה: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. ספרות `alias` חייבות להיות `<name>#<domain>@<dataspace>` או `<name>#<dataspace>`, כאשר `<name>` שווה לשם הגדרת הנכס. קוד: `crates/iroha_data_model/src/asset/definition.rs`.
-- `AssetId`: מילולית מקודדת קנונית `norito:<hex>` (טפסים טקסטואליים מדור קודם אינם נתמכים במהדורה הראשונה).- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. קוד: `crates/iroha_data_model/src/nft.rs`.
-- `RoleId` — `name`. תפקיד: `{ id, permissions: BTreeSet<Permission> }` עם Builder `NewRole { inner: Role, grant_to }`. קוד: `crates/iroha_data_model/src/role.rs`.
+- `AccountId` - כתובות קנוניות מופקות באמצעות `AccountAddress` כאשר I105 ו-Torii מנרמלים כניסות דרך `AccountAddress::parse_encoded`. ניתוח קפדני של זמן ריצה מקבל I105 קנוני בלבד. כינויים של חשבון בשרשרת משתמשים ב-`name@domain.dataspace` או `name@dataspace` ופותרים לערכי `AccountId` קנוניים; הם אינם מתקבלים על ידי מנתחי `AccountId` קפדניים. חשבון: `{ id, metadata }`. קוד: `crates/iroha_data_model/src/account.rs`.- מדיניות כניסת חשבון - דומיינים שולטים ביצירת חשבון מרומז על ידי אחסון Norito-JSON `AccountAdmissionPolicy` תחת מפתח מטא נתונים `iroha:account_admission_policy`. כאשר המפתח נעדר, הפרמטר המותאם אישית ברמת השרשרת `iroha:default_account_admission_policy` מספק את ברירת המחדל; כאשר זה גם נעדר, ברירת המחדל הקשה היא `ImplicitReceive` (מהדורה ראשונה). תגי המדיניות `mode` (`ExplicitOnly` או `ImplicitReceive`) בתוספת אופציונליים לכל עסקה (ברירת מחדל `16`) ומכסי יצירה לכל בלוק, חשבון אופציונלי `implicit_creation_fee` (I0burn או 8NI50X) הגדרת נכס, ו-`default_role_on_create` אופציונלי (ניתן לאחר `AccountCreated`, נדחה עם `DefaultRoleError` אם חסר). בראשית אין אפשרות להצטרף; מדיניות מושבתת/לא חוקית דוחה הוראות בסגנון קבלה עבור חשבונות לא ידועים עם `InstructionExecutionError::AccountAdmission`. חשבונות מרומזים חותמים מטא נתונים `iroha:created_via="implicit"` לפני `AccountCreated`; תפקידי ברירת המחדל פולטים מעקב `AccountRoleGranted`, וכללי הבסיס של הבעלים המוציאים לפועל מאפשרים לחשבון החדש לבזבז נכסים/NFT משלו ללא תפקידים נוספים. קוד: `crates/iroha_data_model/src/account/admission.rs`, `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`.- `AssetDefinitionId` - כתובת Base58 קנונית ללא קידומת על פני בתים קנוניים של הגדרת הנכס. זהו מזהה הנכס הציבורי. הגדרה: `{ id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo, metadata, owned_by, total_quantity }`. מילותי `alias` חייבות להיות `<name>#<domain>.<dataspace>` או `<name>#<dataspace>`, כאשר `<name>` שווה לשם הגדרת הנכס, והם ניתנים רק למזהה הנכס הקנוני Base58. קוד: `crates/iroha_data_model/src/asset/definition.rs`.
+  - מטא נתונים של חכירה כינוי נשמרים בנפרד משורת הגדרת הנכס המאוחסן. Core/Torii מתממשים `alias` מהרשומה המחייבת כאשר הגדרות נקראות.
+  - תגובות Torii להגדרת נכס חושפות את `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`, כאשר `status` הוא `permanent`, `leased_active`, Norito, או I0100007070X, או I010000070X.
+  - בוררי כינוי פותרים מול זמן יצירת הבלוק המחויב האחרון. לאחר `grace_until_ms`, בוררי כינוי מפסיקים להיפתר גם אם ניקוי הרקע עדיין לא הסיר את הכריכה המעופשת; קריאות הגדרה ישירה עדיין עשויות לדווח על הכריכה המעופשת כ-`expired_pending_cleanup`.
+- `AssetId`: מזהה נכס ציבורי בצורה קנונית חשופה Base58. כינויים של נכסים כמו `name#dataspace` או `name#domain.dataspace` נפתרים ל-`AssetId`. אחזקות ספר חשבונות פנימיות עשויות לחשוף בנוסף שדות `asset + account + optional dataspace` מפוצלים במידת הצורך, אך הצורה המרוכבת הזו אינה ה-`AssetId` הציבורי.
+- `NftId` — `nft$domain`. NFT: `{ id, content: Metadata, owned_by }`. קוד: `crates/iroha_data_model/src/nft.rs`.- `RoleId` — `name`. תפקיד: `{ id, permissions: BTreeSet<Permission> }` עם Builder `NewRole { inner: Role, grant_to }`. קוד: `crates/iroha_data_model/src/role.rs`.
 - `Permission` — `{ name: Ident, payload: Json }`. קוד: `crates/iroha_data_model/src/permission.rs`.
 - `PeerId`/`Peer` - זהות עמיתים (מפתח ציבורי) וכתובת. קוד: `crates/iroha_data_model/src/peer.rs`.
 - `TriggerId` — `name`. טריגר: `{ id, action }`. פעולה: `{ executable, repeats, authority, filter, metadata }`. קוד: `crates/iroha_data_model/src/trigger/`.
 - `Metadata` — `BTreeMap<Name, Json>` עם הוספה/הסרה מסומנת. קוד: `crates/iroha_data_model/src/metadata.rs`.
-- דפוס מנוי (שכבת אפליקציה): התוכניות הן ערכי `AssetDefinition` עם מטא נתונים `subscription_plan`; המנויים הם רשומות `Nft` עם מטא נתונים של `subscription`; החיוב מבוצע על ידי מפעילי זמן המתייחסים ל-NFT של מנויים. ראה `docs/source/subscriptions_api.md` ו-`crates/iroha_data_model/src/subscription.rs`.
+- דפוס מנוי (שכבת יישום): התוכניות הן ערכי `AssetDefinition` עם מטא נתונים `subscription_plan`; המנויים הם רשומות `Nft` עם מטא נתונים של `subscription`; החיוב מבוצע על ידי מפעילי זמן המתייחסים ל-NFT של מנויים. ראה `docs/source/subscriptions_api.md` ו-`crates/iroha_data_model/src/subscription.rs`.
 - **פרימיטיבים קריפטוגרפיים** (תכונה `sm`):
-  - `Sm2PublicKey` / `Sm2Signature` משקפים את נקודת SEC1 הקנונית + קידוד `r∥s` ברוחב קבוע עבור SM2. הבנאים אוכפים חברות בעקומה וסמנטיקה מבדלת של מזהה (`DEFAULT_DISTID`), בעוד שהאימות דוחה סקלרים עם מבנה שגוי או בטווח גבוה. קוד: `crates/iroha_crypto/src/sm.rs` ו-`crates/iroha_data_model/src/crypto/mod.rs`.
+  - `Sm2PublicKey` / `Sm2Signature` משקפים את נקודת SEC1 הקנונית + קידוד `r∥s` ברוחב קבוע עבור SM2. הבנאים אוכפים חברות בעקומה וסמנטיקה מבדלת של מזהה (`DEFAULT_DISTID`), בעוד שהאימות דוחה סקלרים עם צורה שגויה או בטווח גבוה. קוד: `crates/iroha_crypto/src/sm.rs` ו-`crates/iroha_data_model/src/crypto/mod.rs`.
   - `Sm3Hash` חושף את תקציר ה-GM/T 0004 כסוג חדש מסוג `[u8; 32]` הניתן להמשכה Norito בשימוש בכל מקום שבו מופיעים גיבובים במניפסטים או בטלמטריה. קוד: `crates/iroha_data_model/src/crypto/hash.rs`.- `Sm4Key` מייצג מפתחות SM4 של 128 סיביות ומשותף בין מערכות מערכות מארח ותקני מודל נתונים. קוד: `crates/iroha_data_model/src/crypto/symmetric.rs`.
   סוגים אלה יושבים לצד הפרימיטיבים הקיימים של Ed25519/BLS/ML-DSA וזמינים לצרכנים של מודל נתונים (Torii, SDKs, כלי בראשית) ברגע שתכונת `sm` מופעלת.
-- מאגרי קשרים הנגזרים ממרחב נתונים (`space_directory_manifests`, `uaid_dataspaces`, `axt_policies`, `axt_replay_ledger`, רישום חירום של ממסר נתיב) והרשאות יעדי מרחב נתונים (I101rol1100 מותרות באחסון בחשבון) ב-`State::set_nexus(...)` כאשר מרחבי נתונים נעלמים מה-`dataspace_catalog` הפעיל, מונע הפניות מיושנות למרחבי נתונים לאחר עדכוני קטלוג זמן ריצה. מטמון DA/ממסר בהיקף נתיב (`lane_relays`, `da_commitments`, `da_confidential_compute`, `da_pin_intents`) נגזמים גם כאשר נתיב מופסק או מוקצה מחדש למרחב נתונים אחר ולכן לא ניתן להעביר נתיב בין מצב נתונים מקומי. ISIs של מדריך החלל (`PublishSpaceDirectoryManifest`, `RevokeSpaceDirectoryManifest`, `ExpireSpaceDirectoryManifest`) מאמתים גם את `dataspace` מול הקטלוג הפעיל ודוחים מזהים לא ידועים עם `InvalidParameter`.
+- מאגרי קשרים הנגזרים ממרחב נתונים (`space_directory_manifests`, `uaid_dataspaces`, `axt_policies`, `axt_replay_ledger`, רישום חירום של ממסר נתיב) והרשאות יעדי מרחב נתונים (I101rol2900 הרשאות לחשבון מורשות) ב-`State::set_nexus(...)` כאשר מרחבי נתונים נעלמים מה-`dataspace_catalog` הפעיל, מונע הפניות מיושנות למרחבי נתונים לאחר עדכוני קטלוג זמן ריצה. מטמון DA/ממסר בהיקף נתיב (`lane_relays`, `da_commitments`, `da_confidential_compute`, `da_pin_intents`) נגזמים גם כאשר נתיב מופסק או מוקצה מחדש למרחב נתונים אחר ולכן לא ניתן להעביר נתיב בין מצב נתונים מקומי. ISIs של מדריך החלל (`PublishSpaceDirectoryManifest`, `RevokeSpaceDirectoryManifest`, `ExpireSpaceDirectoryManifest`) מאמתים גם את `dataspace` מול הקטלוג הפעיל ודוחים מזהים לא ידועים עם `InvalidParameter`.
 
 תכונות חשובות: `Identifiable`, `Registered`/`Registrable` (תבנית בונה), `HasMetadata`, `IntoKeyValue`. קוד: `crates/iroha_data_model/src/lib.rs`.
 
@@ -48,7 +51,7 @@ translation_last_reviewed: 2026-03-12
 
 ---## פרמטרים (תצורת שרשרת)
 - משפחות: `SumeragiParameters { block_time_ms, commit_time_ms, min_finality_ms, pacing_factor_bps, max_clock_drift_ms, collectors_k, collectors_redundant_send_r }`, `BlockParameters { max_transactions }`, `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`, `SmartContractParameters { fuel, memory, execution_depth }`, בתוספת `custom: BTreeMap`.
-- תקנות בודדות ל-Diffs: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter`. אגרגטור: `Parameters`. קוד: `crates/iroha_data_model/src/parameter/system.rs`.
+- תקלות בודדות ל-Diffs: `SumeragiParameter`, `BlockParameter`, `TransactionParameter`, `SmartContractParameter`. אגרגטור: `Parameters`. קוד: `crates/iroha_data_model/src/parameter/system.rs`.
 
 הגדרת פרמטרים (ISI): `SetParameter(Parameter)` מעדכן את השדה המתאים ופולט `ConfigurationEvent::Changed`. קוד: `crates/iroha_data_model/src/isi/transparent.rs`, מבצע ב-`crates/iroha_core/src/smartcontracts/isi/world.rs`.
 
@@ -57,7 +60,7 @@ translation_last_reviewed: 2026-03-12
 ## הסדרת הוראות ורישום
 - תכונת ליבה: `Instruction: Send + Sync + 'static` עם `dyn_encode()`, `as_any()`, `id()` יציב (ברירת המחדל של שם סוג הבטון).
 - `InstructionBox`: עטיפה `Box<dyn Instruction>`. Clone/Eq/Ord פועלים על `(type_id, encoded_bytes)` כך שהשוויון הוא לפי ערך.
-- Norito serde עבור `InstructionBox` מסודרת כ-`(String wire_id, Vec<u8> payload)` (נופל בחזרה ל-`type_name` אם אין מזהה חוט). דה-סריאליזציה משתמשת במזהי מיפוי גלובלי של `InstructionRegistry` לבנאים. רישום ברירת המחדל כולל את כל ה-ISI המובנה. קוד: `crates/iroha_data_model/src/isi/{mod.rs,registry.rs}`.
+- Norito serde עבור `InstructionBox` מסודרת כ-`(String wire_id, Vec<u8> payload)` (נופל בחזרה ל-`type_name` אם אין מזהה חוט). דה-סריאליזציה משתמשת במזהי `InstructionRegistry` גלובלי למיפוי לבנאים. רישום ברירת המחדל כולל את כל ה-ISI המובנה. קוד: `crates/iroha_data_model/src/isi/{mod.rs,registry.rs}`.
 
 ---
 
@@ -96,7 +99,7 @@ translation_last_reviewed: 2026-03-12
 - Register Trigger: מאחסן את הטריגר בטריגר המתאים שנקבע לפי סוג המסנן.
   - תנאים מוקדמים: אם המסנן אינו ניתן להטבעה, `action.repeats` חייב להיות `Exactly(1)` (אחרת `MathError::Overflow`). אסור לשכפל תעודות זהות.
   - אירועים: `TriggerEvent::Created(TriggerId)`.
-  - שגיאות: `Repetition(Register, TriggerId)`, `InvalidParameterError::SmartContract(..)` על כשלי המרה/אימות. קוד: `core/.../isi/triggers/mod.rs`.- בטל רישום של עמית/דומיין/חשבון/נכס הגדרה/NFT/תפקיד/טריגר: מסיר את היעד; פולט אירועי מחיקה. הסרות מדורגות נוספות:- בטל רישום דומיין: מסיר את ישות הדומיין בתוספת מצב הבורר/הסמכה שלה; מוחק הגדרות נכסים בדומיין (ומצב צדדי סודי `zk_assets` המבוסס על הגדרות אלו), נכסים של הגדרות אלו (ומטא-נתונים לכל נכס), NFTs בדומיין ותחזיות תווית חשבון/כינוי בהיקף של תחום. זה גם מבטל את הקישור של חשבונות שרדו מהדומיין שהוסר וגזם ערכי הרשאות בהיקף חשבון/תפקיד המתייחסים לדומיין שהוסר או למשאבים שנמחקו איתו (הרשאות דומיין, הרשאות הגדרת נכס/נכס עבור הגדרות שהוסרו והרשאות NFT עבור מזהי NFT שהוסרו). הסרת הדומיין אינה מוחקת את ה-`AccountId` העולמי, מצב ה-TX-sequence/UAID שלו, בעלות על נכס זר או NFT, סמכות מפעילה או אזכורים חיצוניים לביקורת/תצורה חיצונית המצביעים על החשבון שנשאר בחיים. מעקות שמירה: דוחה כאשר כל הגדרת נכס בדומיין עדיין מוזכרת על ידי הסכם ריפו, פנקס חשבונות, תגמול/תביעה במסלול ציבורי, קצבה/העברה לא מקוונת, ברירת מחדל של ריפו של התנחלות (`settlement.repo.eligible_collateral`, `settlement.repo.collateral_substitution_matrix`), רשות ממשלתית/התאמת-התנחלות הפניות להגדרת נכסים, הפניות להגדרת תגמול/חותך/מחלוקת בהגדרת נכסים של נכסים, או הפניות להגדרת עמלת Nexus/הגדרת נכסים (`nexus.fees.fee_asset_id`, `nexus.staking.stake_asset_id`). אירועים: `DomainEvent::Deleted`, בתוספת מחיקה לכל פריטעל אירועים עבור משאבים בהיקף של דומיין שהוסרו. שגיאות: `FindError::Domain` אם חסר; `InvariantViolation` על התנגשויות התייחסות להגדרה של נכס שנשאר. קוד: `core/.../isi/world.rs`.- בטל רישום חשבון: מסיר את ההרשאות, התפקידים, מונה ה-tx-sequence של החשבון, מיפוי תוויות החשבון וקשרי UAID; מוחק נכסים שבבעלות החשבון (ומטא נתונים לכל נכס); מוחק NFTs בבעלות החשבון; מסיר טריגרים שסמכותם היא החשבון הזה; גזם ערכי הרשאות בחשבון/תפקידים המתייחסים לחשבון שהוסר, הרשאות יעדי NFT בהיקף חשבון/תפקיד עבור מזהי NFT שבבעלותם שהוסרו, והרשאות יעדי טריגר בהיקף חשבון/תפקיד עבור טריגרים שהוסרו. מעקות שמירה: דוחה אם החשבון עדיין מחזיק בדומיין, הגדרת נכס, כריכת ספק SoraFS, רשומת אזרחות פעילה, מצב הימור/תגמול בנתיב ציבורי (כולל מפתחות תביעת פרס כאשר החשבון מופיע כתובע או בעל נכס פרס), מדינת אורקל פעילה (כולל ספק פיד או twitter, ספק פיד או twitter הפניות לחשבון תגמול/נתח שמוגדר ב-oracle-economics), הפניות פעילות של Nexus עמלות/חשבון הימור (`nexus.fees.fee_sink_account_id`, `nexus.staking.stake_escrow_account_id`, `nexus.staking.slash_sink_account_id`; מנותח כ-Nexus פעילים ב-`nexus.fees.fee_sink_account_id`, ב-`nexus.staking.stake_escrow_account_id`, מדינה, מצב פנקס חשבונות פעיל, קצבה/העברה לא מקוונת פעילה או מצב ביטול פסק דין לא מקוון, הפניות פעילות של תצורת חשבון נאמנות לא מקוון עבור הגדרות נכסים פעילים (`settlement.offline.escrow_accounts`), מצב ממשל פעיל (הצעה/אישור שלבals/locks/slashes/council/parliment lists, תמונות מצב של הצעות לפרלמנט, רשומות מגישי הצעות שדרוג בזמן ריצה, הפניות לחשבון נאמנות/slash-receiver/viral-pool בתצורת ממשל, ממשל SoraFS הפניות למגישי טלמטריה דרך /I102NI100X0 / I102NI100X0 `gov.sorafs_telemetry.per_provider_submitters`, או הפניות לבעלים של SoraFS עם תצורת ממשל באמצעות `gov.sorafs_provider_owners`), תוכן מוגדר פרסם הפניות לחשבון רשימת היתרים (`content.publish_allow_accounts`), שולח נאמנות חברתי פעיל מדינה, יוצר מצב חירום פעיל מצב חירום, יוצר מצב חירום פעיל חבילה מצב עקיפה של validator, או SoraFS רשומות מנפיק/קלסר סיכות (מניפסטי סיכה, כינויים של מניפסט, סדרי שכפול) פעילים. אירועים: `AccountEvent::Deleted`, בתוספת `NftEvent::Deleted` לכל NFT שהוסר. שגיאות: `FindError::Account` אם חסר; `InvariantViolation` על יתומי בעלות. קוד: `core/.../isi/domain.rs`.- Unregister AssetDefinition: מוחק את כל הנכסים של הגדרה זו ואת המטא נתונים שלהם לכל נכס, ומסיר מצב צדדי סודי `zk_assets` שנקבע על ידי הגדרה זו; חותך גם את הערך התואם `settlement.offline.escrow_accounts` ואת ערכי ההרשאה בהיקף חשבון/תפקיד המתייחסים להגדרת הנכס שהוסר או למופעי הנכס שלו. מעקות שמירה: דוחה כאשר ההגדרה עדיין מוזכרת על ידי הסכם ריפו, ספר התנחלויות, תגמול/תביעה במסלול ציבורי, קצבה לא מקוונת/מצב העברה, ברירות מחדל של ריפו של התנחלויות (`settlement.repo.eligible_collateral`, `settlement.repo.collateral_substitution_matrix`), זכות-הצבעה/אזרח-הצבעה בתצורת ממשל הפניות, אזכורים של תגמול/חיתוך/מחלוקת בהגדרת נכסים ב-oracle-economics, או הפניות ל-Nexus עמלה/הגדרת נכס הימור (`nexus.fees.fee_asset_id`, `nexus.staking.stake_asset_id`). אירועים: `AssetDefinitionEvent::Deleted` ו-`AssetEvent::Deleted` לכל נכס. שגיאות: `FindError::AssetDefinition`, `InvariantViolation` על התנגשויות התייחסות. קוד: `core/.../isi/domain.rs`.
+  - שגיאות: `Repetition(Register, TriggerId)`, `InvalidParameterError::SmartContract(..)` על כשלי המרה/אימות. קוד: `core/.../isi/triggers/mod.rs`.- בטל רישום של עמית/דומיין/חשבון/נכס הגדרה/NFT/תפקיד/טריגר: מסיר את היעד; פולט אירועי מחיקה. הסרות מדורגות נוספות:- בטל רישום של דומיין: מסיר את ישות הדומיין בתוספת מצב הבורר/המלצה-מדיניות שלה; מוחק הגדרות נכסים בדומיין (ומצב צדדי סודי `zk_assets` המבוסס על הגדרות אלו), נכסים של הגדרות אלו (ומטא-נתונים לכל נכס), NFTs בדומיין ותחזיות חשבון כינוי המושרשות בדומיין שהוסר. זה גם גזום ערכי הרשאות בהיקף חשבון/תפקיד המתייחס לדומיין שהוסר או למשאבים שנמחקו איתו (הרשאות דומיין, הרשאות הגדרת נכס/נכס עבור הגדרות שהוסרו והרשאות NFT עבור מזהי NFT שהוסרו). הסרת דומיין אינה מוחקת או משכתבת את `AccountId` העולמי, מצב ה-TX-sequence/UAID שלו, נכס זר או בעלות על NFT, סמכות טריגר או אזכורים חיצוניים לביקורת/תצורה חיצונית המצביעים על החשבון שנשאר בחיים. מעקות שמירה: דוחה כאשר כל הגדרת נכס בתחום עדיין מוזכרת על ידי הסכם ריפו, ספר חשבונות, תגמול/תביעה במסלול ציבורי, קצבה/העברה לא מקוונת, ברירת מחדל של ריפו של התנחלויות (`settlement.repo.eligible_collateral`, `settlement.repo.collateral_substitution_matrix`), רשות ממשלתית/התאמת-התנחלות הפניות להגדרת נכסים, הפניות להגדרת תגמול/חותך/מחלוקת בהגדרת נכסים של נכסים, או הפניות להגדרת עמלת Nexus/הימור של נכסים (`nexus.fees.fee_asset_id`, `nexus.staking.stake_asset_id`). אירועים: `DomainEvent::Deleted`, בתוספת אירועי מחיקה לכל פריט עבור משאב דומיין שהוסרces. שגיאות: `FindError::Domain` אם חסר; `InvariantViolation` על התנגשויות התייחסות להגדרה של נכס שנשאר. קוד: `core/.../isi/world.rs`.- בטל רישום חשבון: מסיר את ההרשאות, התפקידים, מונה ה-tx-sequence של החשבון, מיפוי תוויות החשבון וקשרי UAID; מוחק נכסים שבבעלות החשבון (ומטא נתונים לכל נכס); מוחק NFTs בבעלות החשבון; מסיר טריגרים שסמכותם היא החשבון הזה; גזם ערכי הרשאות בחשבון/תפקידים המתייחסים לחשבון שהוסר, הרשאות יעדי NFT בהיקף חשבון/תפקיד עבור מזהי NFT שבבעלותם שהוסרו, והרשאות יעדי טריגר בהיקף חשבון/תפקיד עבור טריגרים שהוסרו. מעקות שמירה: דוחה אם החשבון עדיין מחזיק בדומיין, הגדרת נכס, כריכת ספק SoraFS, רשומת אזרחות פעילה, מצב הימור/תגמול בנתיב ציבורי (כולל מפתחות תביעת פרס כאשר החשבון מופיע כתובע או בעל נכס פרס), מדינת אורקל פעילה (כולל ספק פיד או twitter, ספק פיד או twitter הפניות לחשבון תגמול/לכסון מוגדר ב-oracle-economics), הפניות פעילות של Nexus עמלות/חשבון הימור (`nexus.fees.fee_sink_account_id`, `nexus.staking.stake_escrow_account_id`, `nexus.staking.slash_sink_account_id`; מנותח כ-Canonical domainjected in accounts failed in accounts re-cloaments activites on-cloaments) מדינה, מצב פנקס חשבונות פעיל, קצבה/העברה לא מקוונת פעילה או מצב ביטול פסק דין לא מקוון, הפניות פעילות של תצורת חשבון נאמנות לא מקוון עבור הגדרות נכסים פעילים (`settlement.offline.escrow_accounts`), מצב ממשל פעיל (הצעה/אישור שלבals/locks/slashes/council/parliment lists, תמונות מצב של הצעות לפרלמנט, רשומות מגישי הצעות שדרוג בזמן ריצה, הפניות לחשבון נאמנות/slash-receiver/viral-pool בתצורת ממשל, ממשל SoraFS הפניות למגישי טלמטריה באמצעות I08NI300X0 / I102300X0 `gov.sorafs_telemetry.per_provider_submitters`, או הפניות לבעלים של SoraFS בתצורת ממשל באמצעות `gov.sorafs_provider_owners`), תוכן מוגדר פרסם הפניות לחשבון רשימת היתרים (`content.publish_allow_accounts`), שולח נאמנות חברתי פעיל מדינה, יוצר מצב חירום פעיל מצב חירום, יוצר מצב חירום פעיל חבילה מצב עקיפה של validator, או SoraFS רשומות מנפיק/קלסר סיכות (מניפסטי סיכה, כינויים של מניפסט, סדרי שכפול) פעילים. אירועים: `AccountEvent::Deleted`, בתוספת `NftEvent::Deleted` לכל NFT שהוסר. שגיאות: `FindError::Account` אם חסר; `InvariantViolation` על יתומי בעלות. קוד: `core/.../isi/domain.rs`.- Unregister AssetDefinition: מוחק את כל הנכסים בהגדרה זו ואת המטא-נתונים שלהם לכל נכס, ומסיר מצב צדדי סודי `zk_assets` שנקבע לפי הגדרה זו; חותך גם את הערך התואם `settlement.offline.escrow_accounts` ואת ערכי ההרשאה בהיקף חשבון/תפקיד המתייחסים להגדרת הנכס שהוסר או למופעי הנכס שלו. מעקות שמירה: דוחה כאשר ההגדרה עדיין מוזכרת על ידי הסכם ריפו, ספר התנחלויות, תגמול/תביעה במסלול ציבורי, קצבה לא מקוונת/מצב העברה, ברירות מחדל של ריפו של התנחלויות (`settlement.repo.eligible_collateral`, `settlement.repo.collateral_substitution_matrix`), אישור-הצבעה/אזרח בהגדרת ממשל. הפניות, אזכורים של תגמול/חיתוך/מחלוקת בהגדרת נכסים ב-Oracle-economics, או הפניות להגדרת עמלת Nexus/הגדרת נכס הימור (`nexus.fees.fee_asset_id`, `nexus.staking.stake_asset_id`). אירועים: `AssetDefinitionEvent::Deleted` ו-`AssetEvent::Deleted` לכל נכס. שגיאות: `FindError::AssetDefinition`, `InvariantViolation` על התנגשויות התייחסות. קוד: `core/.../isi/domain.rs`.
   - בטל רישום של NFT: מסיר NFT וגזום ערכי הרשאות בהיקף חשבון/תפקיד המתייחסים ל-NFT שהוסר. אירועים: `NftEvent::Deleted`. שגיאות: `FindError::Nft`. קוד: `core/.../isi/nft.rs`.
   - בטל רישום תפקיד: מבטל את התפקיד מכל החשבונות תחילה; לאחר מכן מסיר את התפקיד. אירועים: `RoleEvent::Deleted`. שגיאות: `FindError::Role`. קוד: `core/.../isi/world.rs`.- בטל רישום טריגר: מסיר טריגר אם קיים וגזום ערכי הרשאות בהיקף חשבון/תפקיד המתייחסים לטריגר שהוסר; ביטול רישום כפול מניב `Repetition(Unregister, TriggerId)`. אירועים: `TriggerEvent::Deleted`. קוד: `core/.../isi/triggers/mod.rs`.
 
@@ -111,7 +114,7 @@ translation_last_reviewed: 2026-03-12
     - `Not`: שגיאה `MintabilityError::MintUnmintable`.
   - שינויים במדינה: יוצר נכס אם חסר במטבעה; מסיר את הזנת הנכס אם היתרה הופכת לאפס בצריבה.
   - אירועים: `AssetEvent::Added`/`AssetEvent::Removed`, `AssetDefinitionEvent::MintabilityChanged` (כאשר `Once` או `Limited(n)` ממצה את הקצבה).
-  - שגיאות: `TypeError::AssetNumericSpec(Mismatch)`, `MathError::Overflow`/`NotEnoughQuantity`. קוד: `core/.../isi/asset.rs`.- טריגר חזרות מנטה/צריבה: משנה את ספירת `action.repeats` עבור טריגר.
+  - שגיאות: `TypeError::AssetNumericSpec(Mismatch)`, `MathError::Overflow`/`NotEnoughQuantity`. קוד: `core/.../isi/asset.rs`.- טריגר חזרות מנטה/צריבה: משנה ספירת `action.repeats` עבור טריגר.
   - תנאים מוקדמים: על מנטה, המסנן חייב להיות ניתן לטבעה; אריתמטיקה לא חייבת לעלות על גדותיה/להתפרק.
   - אירועים: `TriggerEvent::Extended`/`TriggerEvent::Shortened`.
   - שגיאות: `MathError::Overflow` על מנטה לא חוקית; `FindError::Trigger` אם חסר. קוד: `core/.../isi/triggers/mod.rs`.
@@ -146,36 +149,36 @@ translation_last_reviewed: 2026-03-12
 - שגיאות: `FindError::<Target>` אם היעד אינו קיים; `FindError::MetadataKey` על מפתח חסר להסרה. קוד: `crates/iroha_data_model/src/isi/transparent.rs` ו-executor impls לכל יעד.
 
 ### הרשאות ותפקידים: הענק/בטל
-סוגים: `Grant<O, D>` ו-`Revoke<O, D>`, עם רשומות אריזות עבור `Permission`/`Role` עד/מ `Account`, ו-`Role` עד `Role`.- הענק הרשאה לחשבון: מוסיף את `Permission` אלא אם כבר אינהרנטית. אירועים: `AccountEvent::PermissionAdded`. שגיאות: `Repetition(Grant, Permission)` אם שכפול. קוד: `core/.../isi/account.rs`.
+סוגים: `Grant<O, D>` ו-`Revoke<O, D>`, עם רשומות אריזות עבור `Permission`/`Role` עד/מ `Account`, ו-`Permission` עד `Permission`.- הענק הרשאה לחשבון: מוסיף את `Permission` אלא אם כבר קיים. אירועים: `AccountEvent::PermissionAdded`. שגיאות: `Repetition(Grant, Permission)` אם שכפול. קוד: `core/.../isi/account.rs`.
 - בטל הרשאה מהחשבון: מסיר אם קיים. אירועים: `AccountEvent::PermissionRemoved`. שגיאות: `FindError::Permission` אם נעדר. קוד: `core/.../isi/account.rs`.
 - הענק תפקיד לחשבון: מוסיף מיפוי `(account, role)` אם נעדר. אירועים: `AccountEvent::RoleGranted`. שגיאות: `Repetition(Grant, RoleId)`. קוד: `core/.../isi/account.rs`.
 - בטל תפקיד מחשבון: מסיר מיפוי אם קיים. אירועים: `AccountEvent::RoleRevoked`. שגיאות: `FindError::Role` אם נעדר. קוד: `core/.../isi/account.rs`.
 - הענק הרשאה לתפקיד: בונה מחדש את התפקיד עם הרשאה נוספת. אירועים: `RoleEvent::PermissionAdded`. שגיאות: `Repetition(Grant, Permission)`. קוד: `core/.../isi/world.rs`.
 - בטל הרשאה מתפקיד: בונה מחדש את התפקיד ללא הרשאה זו. אירועים: `RoleEvent::PermissionRemoved`. שגיאות: `FindError::Permission` אם נעדר. קוד: `core/.../isi/world.rs`.### טריגרים: בצע
 סוג: `ExecuteTrigger { trigger: TriggerId, args: Json }`.
-- התנהגות: מעמיד בתור `ExecuteTriggerEvent { trigger_id, authority, args }` עבור תת-מערכת ההדק. הפעלה ידנית מותרת רק עבור מפעילי קריאת עזר (מסנן `ExecuteTrigger`); המסנן חייב להתאים והמתקשר חייב להיות הרשות לפעולת ההפעלה או להחזיק `CanExecuteTrigger` עבור אותה סמכות. כאשר מבצע שסופק על ידי משתמש פעיל, ביצוע הטריגר מאומת על ידי מבצע זמן הריצה וצורך את תקציב הדלק של מבצע העסקה (בסיס `executor.fuel` בתוספת מטא נתונים אופציונליים `additional_fuel`).
+- התנהגות: מעמיד בתור `ExecuteTriggerEvent { trigger_id, authority, args }` עבור תת-מערכת ההדק. הפעלה ידנית מותרת רק עבור מפעילי קריאת עזר (מסנן `ExecuteTrigger`); המסנן חייב להתאים והמתקשר חייב להיות הרשות לפעולה המפעילה או להחזיק `CanExecuteTrigger` עבור אותה סמכות. כאשר מבצע שסופק על ידי המשתמש פעיל, ביצוע הטריגר מאומת על ידי מבצע זמן הריצה וצורך את תקציב הדלק של מבצע העסקה (בסיס `executor.fuel` בתוספת מטא נתונים אופציונליים `additional_fuel`).
 - שגיאות: `FindError::Trigger` אם לא רשום; `InvariantViolation` אם התקשרו ללא רשות. קוד: `core/.../isi/triggers/mod.rs` (ובדיקות ב-`core/.../smartcontracts/isi/mod.rs`).
 
 ### שדרוג והתחבר
-- `Upgrade { executor }`: מעביר את המבצע באמצעות קוד בתים `Executor` שסופק, מעדכן את המבצע ואת מודל הנתונים שלו, פולט `ExecutorEvent::Upgraded`. שגיאות: עטוף כ-`InvalidParameterError::SmartContract` על כשל הגירה. קוד: `core/.../isi/world.rs`.
-- `Log { level, msg }`: פולט יומן צומת עם הרמה הנתונה; ללא שינויי מדינה. קוד: `core/.../isi/world.rs`.
+- `Upgrade { executor }`: מעביר את המבצע באמצעות קוד בתים `Executor` שסופק, מעדכן את המבצע ואת מודל הנתונים שלו, פולט `ExecutorEvent::Upgraded`. שגיאות: עטוף כ-`InvalidParameterError::SmartContract` על כישלון הגירה. קוד: `core/.../isi/world.rs`.
+- `Log { level, msg }`: פולט יומן צומת ברמה הנתונה; ללא שינויי מדינה. קוד: `core/.../isi/world.rs`.
 
 ### מודל שגיאה
 מעטפה נפוצה: `InstructionExecutionError` עם גרסאות לשגיאות הערכה, כשלים בשאילתה, המרות, ישות לא נמצאה, חזרה, יכולת טביעה, מתמטיקה, פרמטר לא חוקי והפרה בלתי משתנה. ספירות ועוזרים נמצאים ב-`crates/iroha_data_model/src/isi/mod.rs` תחת `pub mod error`.
 
 ---## עסקאות ואפשרויות הפעלה
 - `Executable`: או `Instructions(ConstVec<InstructionBox>)` או `Ivm(IvmBytecode)`; bytecode מסתמן כ-base64. קוד: `crates/iroha_data_model/src/transaction/executable.rs`.
-- `TransactionBuilder`/`SignedTransaction`: בונה, מסמן ואורז קובץ הפעלה עם מטא נתונים, `chain_id`, `authority`, `creation_time_ms`, אופציונלי `chain_id`, `authority`, `creation_time_ms`, `chain_id`, אופציונלי `nonce`. קוד: `crates/iroha_data_model/src/transaction/`.
+- `TransactionBuilder`/`SignedTransaction`: בונה, מסמן ואורז קובץ הפעלה עם מטא נתונים, `chain_id`, `authority`, `creation_time_ms`, אופציונלי `chain_id`, `authority`, `creation_time_ms`, אופציונלי `chain_id` `nonce`. קוד: `crates/iroha_data_model/src/transaction/`.
 - בזמן ריצה, `iroha_core` מבצע אצווה `InstructionBox` באמצעות `Execute for InstructionBox`, מורידה להוראת `*Box` המתאימה או קונקרטית. קוד: `crates/iroha_core/src/smartcontracts/isi/mod.rs`.
 - תקציב אימות מבצעים בזמן ריצה (מבצע שסופק על ידי המשתמש): בסיס `executor.fuel` מפרמטרים בתוספת מטא נתונים אופציונליים של עסקאות `additional_fuel` (`u64`), משותף בין אימותי הוראות/טריגרים בתוך העסקה.
 
 ---## אינוריאנטים והערות (מבדיקות ושומרים)
-- הגנות בראשית: אין אפשרות לרשום את הדומיין `genesis` או חשבונות בדומיין `genesis`; לא ניתן לרשום חשבון `genesis`. קוד/בדיקות: `core/.../isi/world.rs`, `core/.../smartcontracts/isi/mod.rs`.
-- נכסים מספריים חייבים לעמוד ב-`NumericSpec` שלהם על מטבעות/העברה/צריבה; אי התאמה של המפרט מניב `TypeError::AssetNumericSpec`.
+- הגנות בראשית: לא יכול לרשום את הדומיין `genesis` או חשבונות בדומיין `genesis`; לא ניתן לרשום חשבון `genesis`. קוד/בדיקות: `core/.../isi/world.rs`, `core/.../smartcontracts/isi/mod.rs`.
+- הנכסים המספריים חייבים לעמוד ב-`NumericSpec` שלהם על מטבעות/העברה/צריבה; אי התאמה של המפרט מניב `TypeError::AssetNumericSpec`.
 - יכולת טביעה: `Once` מאפשר מנטה בודדת ולאחר מכן מתהפך ל-`Not`; `Limited(n)` מאפשר בדיוק `n` מנטה לפני היפוך ל-`Not`. ניסיונות לאסור טביעה על `Infinitely` גורמים ל-`MintabilityError::ForbidMintOnMintable`, והגדרת `Limited(0)` מניבה `MintabilityError::InvalidMintabilityTokens`.
 - פעולות המטא-נתונים הן המפתח-מדויק; הסרת מפתח לא קיים היא שגיאה.
 - מסנני טריגר יכולים להיות בלתי ניתנים להטבעה; אז `Register<Trigger>` מאפשר רק חזרות של `Exactly(1)`.
-- הפעל מפתח מטא נתונים `__enabled` (bool) שערי ביצוע; ברירות מחדל חסרות לאפשרות, וטריגרים מושבתים מדלגים בנתיבי נתונים/זמן/לפי שיחה.
+- הפעל מפתח מטא נתונים `__enabled` (bool) לביצוע שערים; ברירות מחדל חסרות לאפשרות, וטריגרים מושבתים מדלגים בנתיבי נתונים/זמן/לפי שיחה.
 - דטרמיניזם: כל האריתמטיקה משתמשת בפעולות מסומנות; under/overflow מחזיר שגיאות מתמטיות מוקלדות; אפס יתרות מורידות כניסות נכסים (ללא מצב נסתר).
 
 ---## דוגמאות מעשיות
@@ -188,24 +191,25 @@ translation_last_reviewed: 2026-03-12
   - `Grant::account_role(role_id, account)`, `Grant::role_permission(perm, role)`, ועמיתיהם `Revoke`.
 - מחזור חיי טריגר:
   - `Register::trigger(Trigger::new(id, Action::new(exec, repeats, authority, filter)))` עם בדיקת יכולת הטביעה המשתמעת על ידי מסנן; `ExecuteTrigger::new(id).with_args(&args)` חייב להתאים לסמכות שהוגדרה.
-  - ניתן להשבית טריגרים על ידי הגדרת מפתח מטא נתונים `__enabled` ל-`false` (חסרות ברירת מחדל למופעלת); החלף דרך `SetKeyValue::trigger` או IVM `set_trigger_enabled`.
+  - ניתן להשבית טריגרים על ידי הגדרת מפתח מטא-נתונים `__enabled` ל-`false` (חסרות ברירת מחדל ל-Enabled); החלף דרך `SetKeyValue::trigger` או IVM `set_trigger_enabled`.
   - אחסון טריגרים מתוקן בעת ​​טעינה: מזהים כפולים, מזהים לא תואמים וטריגרים המתייחסים לקוד בתים חסר נשמטים; ספירת הפניות של קוד בתים מחושבת מחדש.
   - אם קוד הבתים IVM של טריגר חסר בזמן הביצוע, הטריגר מוסר והביצוע יטופל כאי-אופ עם תוצאה של כשל.
   - טריגרים מדולדלים מוסרים מיד; אם נתקלים בכניסה מדולדלת במהלך הביצוע היא נגזמת ומטופלת כחסרה.
 - עדכון פרמטר:
-  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` מעדכן ופולט `ConfigurationEvent::Changed`.CLI / Torii `aid` + דוגמאות כינוי:
-- הרשמה בסיוע קנוני + שם מפורש + כינוי ארוך:
-  - `iroha ledger asset definition register --id aid:2f17c72466f84a4bb8a8e24884fdcd2f --name pkr --alias pkr#ubl@sbp`
-- הרשמה בסיוע קנוני + שם מפורש + כינוי קצר:
-  - `iroha ledger asset definition register --id aid:550e8400e29b41d4a7164466554400dd --name pkr --alias pkr#sbp`
+  - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` מעדכן ופולט `ConfigurationEvent::Changed`.CLI / Torii מזהה הגדרת נכס + דוגמאות כינוי:
+- הרשמה עם מזהה Base58 הקנוני + שם מפורש + כינוי ארוך:
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.paynet`
+- הרשמה עם מזהה Base58 הקנוני + שם מפורש + כינוי קצר:
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#paynet`
 - נטבע בכינוי + רכיבי חשבון:
-  - `iroha ledger asset mint --definition-alias pkr#ubl@sbp --account <i105> --quantity 500`
-- פתרון כינוי לסיוע קנוני:
-  - `POST /v1/assets/aliases/resolve` עם JSON `{ "alias": "pkr#ubl@sbp" }`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.paynet --account <i105> --quantity 500`
+- פתרון כינוי למזהה קנוני Base58:
+  - `POST /v1/assets/aliases/resolve` עם JSON `{ "alias": "pkr#bankb.paynet" }`
 
 הערת הגירה:
-- מזהי `name#domain` הגדרת נכסים טקסטואליים אינם נתמכים בכוונה במהדורה הראשונה.
-- מזהי נכסים בגבולות הטבעה/שריפה/העברה נשארים קנוניים `norito:<hex>`; השתמש ב-`iroha tools encode asset-id` עם `--definition aid:...` או `--alias ...` בתוספת `--account`.
+- מזהי `name#domain` הגדרת נכסים טקסטואליים נותרו ללא תמיכה במכוון במהדורה הראשונה; השתמש במזהי Base58 קנוניים או פתרון כינוי מנוקד.
+- בוררי נכסים ציבוריים משתמשים במזהי הגדרת נכסים קנוניים של Base58 בתוספת שדות בעלות מפוצלים (`account`, אופציונלי `scope`). מילולי `AssetId` מקודדים גולמיים נשארים עוזרים פנימיים ואינם חלק ממשטח הבורר Torii/CLI.
+- מסננים ומיון של רשימת הגדרות/שאילתות נכסים מקבלים בנוסף `alias_binding.status`, `alias_binding.lease_expiry_ms`, `alias_binding.grace_until_ms` ו-`alias_binding.bound_at_ms`.
 
 ---
 
@@ -216,4 +220,4 @@ translation_last_reviewed: 2026-03-12
  - אירועים: `crates/iroha_data_model/src/events/**`.
  - עסקאות: `crates/iroha_data_model/src/transaction/**`.
 
-אם ברצונך להרחיב את המפרט הזה ל-API/טבלת התנהגות מעובדת או לצלב קישור לכל אירוע/שגיאה קונקרטיים, אמור את המילה ואני ארחיב אותה.
+אם אתה רוצה להרחיב את המפרט הזה ל-API/טבלת התנהגות מעובדת או לצלב קישור לכל אירוע/שגיאה קונקרטיים, אמור את המילה ואני ארחיב אותה.

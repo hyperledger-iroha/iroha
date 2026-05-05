@@ -1002,8 +1002,8 @@ fn manifest_root_array(handle: &AssetHandle) -> Result<[u8; 32], VMError> {
 mod tests {
     use super::*;
 
-    const ACCOUNT_FROM_LITERAL: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-    const ACCOUNT_TO_LITERAL: &str = "6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU";
+    const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const ACCOUNT_TO_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
 
     #[test]
     fn expiry_slot_with_skew_respects_caps() {
@@ -1093,6 +1093,7 @@ mod tests {
             manifest_root: [0xAB; 32],
             da_commitment: None,
             proof: vec![0x01, 0x02],
+            fastpq_binding: None,
             committed_amount,
             amount_commitment,
         })

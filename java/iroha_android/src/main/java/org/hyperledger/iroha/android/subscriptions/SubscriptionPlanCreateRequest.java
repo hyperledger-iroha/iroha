@@ -12,23 +12,17 @@ import org.hyperledger.iroha.android.client.JsonParser;
 public final class SubscriptionPlanCreateRequest {
 
   private final String authority;
-  private final String privateKey;
   private final String planId;
   private final Map<String, Object> plan;
 
   private SubscriptionPlanCreateRequest(final Builder builder) {
     this.authority = requireNonBlank(builder.authority, "authority");
-    this.privateKey = requireNonBlank(builder.privateKey, "private_key");
     this.planId = requireNonBlank(builder.planId, "plan_id");
     this.plan = requirePlan(builder.plan, "plan");
   }
 
   public String authority() {
     return authority;
-  }
-
-  public String privateKey() {
-    return privateKey;
   }
 
   public String planId() {
@@ -42,7 +36,6 @@ public final class SubscriptionPlanCreateRequest {
   public Map<String, Object> toJsonMap() {
     final Map<String, Object> json = new LinkedHashMap<>();
     json.put("authority", authority);
-    json.put("private_key", privateKey);
     json.put("plan_id", planId);
     json.put("plan", plan);
     return Collections.unmodifiableMap(json);
@@ -58,7 +51,6 @@ public final class SubscriptionPlanCreateRequest {
 
   public static final class Builder {
     private String authority;
-    private String privateKey;
     private String planId;
     private Map<String, Object> plan;
 
@@ -66,11 +58,6 @@ public final class SubscriptionPlanCreateRequest {
 
     public Builder authority(final String authority) {
       this.authority = authority;
-      return this;
-    }
-
-    public Builder privateKey(final String privateKey) {
-      this.privateKey = privateKey;
       return this;
     }
 

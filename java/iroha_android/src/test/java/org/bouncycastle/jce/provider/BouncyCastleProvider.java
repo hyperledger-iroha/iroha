@@ -9,7 +9,7 @@ import java.security.SecureRandom;
 import java.security.spec.AlgorithmParameterSpec;
 import java.util.Arrays;
 
-/** Minimal BouncyCastle provider stub used for SoftwareKeyProvider fallback tests. */
+/** Minimal BouncyCastle provider stub used for SoftwareKeyProvider tests. */
 public final class BouncyCastleProvider extends Provider {
   private static final long serialVersionUID = 1L;
 

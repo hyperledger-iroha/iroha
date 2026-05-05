@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -165,82 +165,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## آف لائن الاؤنسز اور ورڈکٹ میٹا ڈیٹا
+## Offline V2 readiness
 
-آف لائن الاؤنس کے ردعمل افزودہ لیجر میٹا ڈیٹا اپ فرنٹ کو بے نقاب کرتے ہیں۔
-`expires_at_ms` ، `policy_expires_at_ms` ، `refresh_at_ms` ، `verdict_id_hex` ،
-`attestation_nonce_hex` ، اور `remaining_amount` خام کے ساتھ ساتھ واپس کردیئے گئے ہیں
-ریکارڈ کریں لہذا ڈیش بورڈز کو ایمبیڈڈ Norito پے لوڈ کو ڈی کوڈ کرنے کی ضرورت نہیں ہے۔ نیا
-الٹی گنتی مددگار (`deadline_kind` ، `deadline_state` ، `deadline_ms` ،
-`deadline_ms_remaining`) اگلی میعاد ختم ہونے والی آخری تاریخ (ریفریش → پالیسی کو اجاگر کریں
-→ سرٹیفکیٹ) لہذا جب بھی الاؤنس ہوتا ہے تو UI بیج آپریٹرز کو متنبہ کرسکتے ہیں
-<24h باقی۔ ایس ڈی کے
-`/v1/offline/allowances` کے ذریعہ بے نقاب باقی فلٹرز کی آئینہ دار:
-`certificateExpiresBeforeMs/AfterMs` ، `policyExpiresBeforeMs/AfterMs` ،
-`verdictIdHex` ، `attestationNonceHex` ، `refreshBeforeMs/AfterMs` ، اور The
-`requireVerdict` / `onlyMissingVerdict` بولینز۔ غلط امتزاج (کے لئے
-مثال `onlyMissingVerdict` + `verdictIdHex`) Torii سے پہلے مقامی طور پر مسترد کردی گئی ہے
-کہا جاتا ہے۔
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## آف لائن ٹاپ اپ (جاری کریں + رجسٹر)جب آپ سرٹیفکیٹ جاری کرنا چاہتے ہیں اور فوری طور پر ٹاپ اپ مددگار استعمال کریں
-اس کو لیجر پر رجسٹر کریں۔ ایس ڈی کے جاری کردہ اور رجسٹرڈ سرٹیفکیٹ کی تصدیق کرتا ہے
-آئی ڈی واپس آنے سے پہلے میچ کرتے ہیں ، اور جواب میں دونوں پے لوڈ شامل ہیں۔ وہاں ہے
-کوئی سرشار ٹاپ اپ اختتامی نقطہ نہیں۔ مددگار زنجیروں میں اس مسئلے کو + رجسٹر کال کرتا ہے۔ اگر
-آپ کے پاس پہلے ہی دستخط شدہ سرٹیفکیٹ ہے ، `registerOfflineAllowance` پر کال کریں (یا
-`renewOfflineAllowance`) براہ راست۔
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii سوالات اور اسٹریمنگ (ویب ساکٹس)
 
 استفسار مددگار حیثیت ، Prometheus میٹرکس ، ٹیلی میٹری اسنیپ شاٹس ، اور واقعہ کو بے نقاب کرتے ہیں
@@ -275,7 +224,7 @@ abort.abort(); // closes the underlying WebSocket cleanly
 `/v1/explorer/accounts/{account_id}/qr` اختتامی نکات تاکہ ڈیش بورڈز دوبارہ چلاسکیں
 وہی سنیپ شاٹس جو پورٹل کو طاقت دیتے ہیں۔ `getExplorerMetrics()` کو معمول بناتا ہے
 جب راستہ غیر فعال ہوتا ہے تو پے لوڈ اور واپسی `null`۔ اس کے ساتھ جوڑ
-`getExplorerAccountQr()` جب بھی آپ کو I105 (ترجیحی)/سورہ (دوسرا بہترین) لٹریلس پلس ان لائن کی ضرورت ہو
+`getExplorerAccountQr()` جب بھی آپ کو i105 (ترجیحی)/سورہ (دوسرا بہترین) لٹریلس پلس ان لائن کی ضرورت ہو
 شیئر بٹنوں کے لئے ایس وی جی۔
 
 ```ts
@@ -290,7 +239,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -298,8 +247,8 @@ console.log(
 );
 ```
 
-پاسنگ `I105` ایکسپلورر کے پہلے سے طے شدہ کمپریسڈ آئینہ
-سلیکٹرز ؛ ترجیحی I105 آؤٹ پٹ کے لئے اوور رائڈ کو چھوڑ دیں یا `i105_qr` کی درخواست کریں
+پاسنگ `i105` ایکسپلورر کے پہلے سے طے شدہ کمپریسڈ آئینہ
+سلیکٹرز ؛ ترجیحی i105 آؤٹ پٹ کے لئے اوور رائڈ کو چھوڑ دیں یا `i105_qr` کی درخواست کریں
 جب آپ کو QR-SAFE آپشن کی ضرورت ہو۔ کمپریسڈ لفظی دوسرا بہترین ہے
 UX کے لئے صرف SORA- آپشن۔ مددگار ہمیشہ کیننیکل شناخت کنندہ کو لوٹاتا ہے ،
 منتخب لفظی ، اور میٹا ڈیٹا (نیٹ ورک کا سابقہ ​​، QR ورژن/ماڈیول ، خرابی
@@ -514,7 +463,7 @@ for await (const event of torii.streamEvents({
   کیننیکل اکاؤنٹ IDs کے ذریعہ اثاثوں کے حصول کو گروپ کرنا ؛ فلٹر کرنے کے لئے `assetId` پاس کریں
   ایک ہی اثاثہ مثال کے طور پر پورٹ فولیو۔
 - `getUaidBindings(uaid)` ہر ڈیٹا اسپیس ↔ اکاؤنٹ کی گنتی کرتا ہے
-  بائنڈنگ (`I105` `i105` لفظی لوٹاتا ہے)۔
+  بائنڈنگ (`i105` `i105` لفظی لوٹاتا ہے)۔
 - `getUaidManifests(uaid, { dataspaceId })` ہر صلاحیت کو ظاہر کرتا ہے ،
   لائف سائیکل کی حیثیت ، اور آڈٹ کے لئے پابند اکاؤنٹس۔
 
@@ -559,7 +508,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -569,7 +518,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

@@ -12,7 +12,7 @@ fn guard_chain_discriminant() -> address::ChainDiscriminantGuard {
 
 #[test]
 fn asset_definition_id_of_matches_parse() {
-    let domain: DomainId = "soramitsu".parse().unwrap();
+    let domain: DomainId = DomainId::try_new("soramitsu", "universal").unwrap();
     let name: Name = "xor".parse().unwrap();
 
     let via_of = AssetDefinitionId::of(domain.clone(), name.clone());
@@ -25,13 +25,13 @@ fn asset_definition_id_of_matches_parse() {
 #[test]
 fn asset_id_of_matches_parse() {
     let _guard = guard_chain_discriminant();
-    let domain: DomainId = "wonderland".parse().unwrap();
+    let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let kp = KeyPair::random();
     let account = AccountId::of(kp.public_key().clone());
     let def = AssetDefinitionId::of(domain, "rose".parse().unwrap());
     let via_of = AssetId::of(def.clone(), account);
 
-    let parsed = AssetId::parse_encoded(&via_of.to_string()).unwrap();
+    let parsed: AssetId = via_of.to_string().parse().unwrap();
 
     assert_eq!(parsed, via_of);
     assert_eq!(format!("{parsed}"), format!("{via_of}"));
@@ -39,11 +39,11 @@ fn asset_id_of_matches_parse() {
 
 #[test]
 fn nft_id_of_matches_parse() {
-    let domain: DomainId = "art".parse().unwrap();
+    let domain: DomainId = DomainId::try_new("art", "universal").unwrap();
     let name: Name = "mona_lisa".parse().unwrap();
 
-    let parsed: NftId = "mona_lisa$art".parse().unwrap();
     let via_of = NftId::of(domain, name);
+    let parsed: NftId = via_of.to_string().parse().unwrap();
 
     assert_eq!(parsed, via_of);
     assert_eq!(format!("{parsed}"), format!("{via_of}"));

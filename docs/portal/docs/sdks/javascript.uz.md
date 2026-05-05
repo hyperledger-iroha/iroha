@@ -68,15 +68,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -164,84 +164,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Oflayn imtiyozlar va hukm metamaʼlumotlari
+## Offline V2 readiness
 
-Oflayn to'lov javoblari boyitilgan daftar metama'lumotlarini oldindan ochib beradi -
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex` va `remaining_amount` xom ashyo bilan birga qaytariladi
-yozib oling, shuning uchun asboblar paneli o'rnatilgan Norito foydali yuklarini dekodlashi shart emas. Yangi
-orqaga hisoblash yordamchilari (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) keyingi tugash muddatini belgilang (yangilash → siyosat
-→ sertifikat) shuning uchun foydalanuvchi interfeysi nishonlari operatorlarni har doim ruxsat berilganda ogohlantirishi mumkin
-<24 soat qoldi. SDK
-`/v1/offline/allowances` tomonidan ta'sirlangan REST filtrlarini aks ettiradi:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` va
-`requireVerdict` / `onlyMissingVerdict` mantiqiy. Yaroqsiz kombinatsiyalar (uchun
-misol `onlyMissingVerdict` + `verdictIdHex`) Torii dan oldin mahalliy ravishda rad etiladi
-deyiladi.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## Oflayn to'ldirish (muammo + ro'yxatdan o'tish)
-
-Sertifikat bermoqchi bo'lganingizda va darhol to'ldirish yordamchilaridan foydalaning
-uni daftarda ro'yxatdan o'tkazing. SDK berilgan va ro'yxatdan o'tgan sertifikatni tekshiradi
-Qaytishdan oldin identifikatorlar mos keladi va javob ikkala foydali yukni ham o'z ichiga oladi. bor
-maxsus to'ldirish so'nggi nuqtasi yo'q; yordamchi muammoni zanjirlaydi + qo'ng'iroqlarni ro'yxatdan o'tkazish. Agar
-Sizda allaqachon imzolangan sertifikat bor, `registerOfflineAllowance` (yoki
-`renewOfflineAllowance`) to'g'ridan-to'g'ri.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii so'rovlar va oqim (WebSockets)
 
 So‘rov yordamchilari holat, Prometheus ko‘rsatkichlari, telemetriya suratlari va voqeani ko‘rsatadi.
@@ -276,7 +223,7 @@ Explorer telemetriyasi `/v1/explorer/metrics` va uchun yozilgan yordamchilarni t
 `/v1/explorer/accounts/{account_id}/qr` so'nggi nuqtalari, shuning uchun asboblar paneli qayta o'ynashi mumkin
 portalni quvvatlaydigan bir xil suratlar. `getExplorerMetrics()` normallashtiradi
 foydali yuk va marshrut o'chirilganida `null` ni qaytaradi. U bilan bog'lang
-`getExplorerAccountQr()` I105 (afzal)/sora (ikkinchi-eng yaxshi) literallar va inline kerak boʻlganda
+`getExplorerAccountQr()` i105 (afzal)/sora (ikkinchi-eng yaxshi) literallar va inline kerak boʻlganda
 Ulashish tugmalari uchun SVG.
 
 ```ts
@@ -291,7 +238,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -299,8 +246,8 @@ console.log(
 );
 ```
 
-`I105` dan o'tish Explorerning standart siqilganini aks ettiradi
-selektorlar; afzal qilingan I105 chiqishi yoki `i105_qr` so'rovi uchun bekor qilishni o'tkazib yubormang
+`i105` dan o'tish Explorerning standart siqilganini aks ettiradi
+selektorlar; afzal qilingan i105 chiqishi yoki `i105_qr` so'rovi uchun bekor qilishni o'tkazib yubormang
 QR-xavfsiz variant kerak bo'lganda. Siqilgan literal ikkinchi eng yaxshisidir
 UX uchun faqat Sora varianti. Yordamchi har doim kanonik identifikatorni qaytaradi,
 tanlangan literal va metadata (tarmoq prefiksi, QR versiyasi/modullar, xato
@@ -519,7 +466,7 @@ so'rovlarni yuborishdan oldin ularni kanoniklashtiring:
   aktivlarni kanonik hisob identifikatorlari bo'yicha guruhlash; filtrlash uchun `assetId` dan o'ting
   portfelni bitta aktiv misoliga tushiring.
 - `getUaidBindings(uaid)` har bir maʼlumot maydoni ↔ hisobini sanab beradi
-  majburiy (`I105` `i105` harflarini qaytaradi).
+  majburiy (`i105` `i105` harflarini qaytaradi).
 - `getUaidManifests(uaid, { dataspaceId })` har bir qobiliyat manifestini qaytaradi,
   hayot aylanishi holati va audit uchun bog'langan hisoblar.Operator dalillar paketlari, manifest nashri/bekor qilish oqimlari va SDK migratsiyasi uchun
 yo'l-yo'riq, Universal Account Guide (`docs/source/universal_accounts_guide.md`) ga amal qiling
@@ -562,7 +509,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -572,7 +519,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

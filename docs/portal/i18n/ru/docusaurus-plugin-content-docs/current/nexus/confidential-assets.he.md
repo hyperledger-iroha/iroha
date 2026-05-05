@@ -95,7 +95,7 @@ Swift SDKs теперь могут выдавать shield-инструкции 
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -252,7 +252,7 @@ Observer узлы, намеренно пропускающие проверку 
 - Иерархия derivation ключей на аккаунт:
   - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
 - Зашифрованные payloads notes используют AEAD с ECDH-derived shared keys; опциональные auditor view keys могут быть прикреплены к outputs в соответствии с политикой актива.
-- Дополнения CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, аудит-инструменты для расшифровки memo и helper `iroha app zk envelope` для создания/инспекции Norito memo envelopes офлайн. Torii предоставляет тот же flow derivation через `POST /v1/confidential/derive-keyset`, возвращая hex и base64 формы, чтобы кошельки могли программно получать иерархии ключей.
+- Дополнения CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, аудит-инструменты для расшифровки memo и helper `iroha app zk envelope` для создания/инспекции Norito memo envelopes офлайн.
 
 ## Газ, лимиты и DoS-контроли
 - Детерминированный gas schedule:

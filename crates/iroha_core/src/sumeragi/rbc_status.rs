@@ -13,7 +13,7 @@ use std::{
 };
 
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::BlockHeader;
+use iroha_data_model::block::{BlockHeader, consensus::RbcEncoding};
 use iroha_logger::prelude::*;
 use norito::codec::{Decode, Encode};
 use norito::{decode_from_bytes, to_bytes};
@@ -31,7 +31,7 @@ fn active_slot() -> &'static Mutex<Option<Arc<Store>>> {
 #[derive(Default)]
 struct Inner {
     map: BTreeMap<(HashOf<BlockHeader>, u64, u64), Entry>,
-    disk: Option<DiskStore>,
+    disk: Option<DiskPersistenceState>,
 }
 
 #[derive(Clone)]
@@ -43,6 +43,12 @@ struct Entry {
 struct Store {
     inner: Mutex<Inner>,
     active_count: AtomicU64,
+}
+
+struct DiskPersistenceState {
+    store: DiskStore,
+    disabled: bool,
+    disable_logged: bool,
 }
 
 impl Default for Store {
@@ -69,6 +75,16 @@ impl Store {
     }
 }
 
+impl DiskPersistenceState {
+    fn new(store: DiskStore) -> Self {
+        Self {
+            store,
+            disabled: false,
+            disable_logged: false,
+        }
+    }
+}
+
 /// Handle bound to a single Sumeragi instance.
 #[derive(Clone, Default)]
 pub struct Handle {
@@ -92,10 +108,9 @@ impl Handle {
             Some(cfg) => match DiskStore::new(&cfg) {
                 Ok(disk) => {
                     load_into_map(&disk, &mut inner.map);
-                    if let Err(err) = disk.persist(&inner.map) {
-                        warn!(?err, "failed to persist RBC session store during configure");
-                    }
-                    inner.disk = Some(disk);
+                    inner.disk = Some(DiskPersistenceState::new(disk));
+                    set_persistence_disabled_metric(false);
+                    persist_if_needed(&mut inner, "configure");
                 }
                 Err(err) => {
                     warn!(
@@ -103,10 +118,12 @@ impl Handle {
                         "failed to initialise RBC session store; persistence disabled"
                     );
                     inner.disk = None;
+                    set_persistence_disabled_metric(false);
                 }
             },
             None => {
                 inner.disk = None;
+                set_persistence_disabled_metric(false);
             }
         }
         self.store
@@ -139,19 +156,12 @@ impl Handle {
         let disk_config = inner
             .disk
             .as_ref()
-            .map(|disk| (disk.file.clone(), disk.ttl, disk.capacity));
-        if let Some((file, ttl, capacity)) = disk_config {
+            .map(|disk| (disk.store.ttl, disk.store.capacity));
+        if let Some((ttl, capacity)) = disk_config {
             let should_persist = persist_needed || ttl > Duration::ZERO || capacity > 0;
             if should_persist {
                 enforce_map_limits(&mut inner.map, ttl, capacity);
-                let disk = DiskStore {
-                    file,
-                    ttl,
-                    capacity,
-                };
-                if let Err(err) = disk.persist(&inner.map) {
-                    warn!(?err, "failed to persist RBC session store after update");
-                }
+                persist_if_needed(&mut inner, "update");
             }
         }
         self.store
@@ -221,14 +231,10 @@ impl Handle {
                     .disk
                     .as_ref()
                     .expect("disk store should exist when checked");
-                (disk.ttl, disk.capacity)
+                (disk.store.ttl, disk.store.capacity)
             };
             enforce_map_limits(&mut inner.map, ttl, capacity);
-            if let Some(disk) = inner.disk.as_ref() {
-                if let Err(err) = disk.persist(&inner.map) {
-                    warn!(?err, "failed to persist RBC session store after remove");
-                }
-            }
+            persist_if_needed(&mut inner, "remove");
         }
         self.store
             .active_count
@@ -239,11 +245,7 @@ impl Handle {
     pub fn clear(&self) {
         let mut inner = self.store.inner.lock().expect("rbc status lock poisoned");
         inner.map.clear();
-        if let Some(disk) = inner.disk.as_ref() {
-            if let Err(err) = disk.persist(&inner.map) {
-                warn!(?err, "failed to persist RBC session store after clear");
-            }
-        }
+        persist_if_needed(&mut inner, "clear");
         self.store.active_count.store(0, Ordering::Relaxed);
     }
 
@@ -287,6 +289,27 @@ impl Handle {
         })
     }
 
+    /// Check whether a specific session key has a complete local chunk set that matches the
+    /// provided payload, regardless of whether DELIVER has been observed yet.
+    pub fn complete_payload_matches(
+        &self,
+        block_hash: &HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        payload_hash: &Hash,
+    ) -> bool {
+        let inner = self.store.inner.lock().expect("rbc status lock poisoned");
+        inner
+            .map
+            .get(&(*block_hash, height, view))
+            .is_some_and(|entry| {
+                let summary = &entry.summary;
+                !summary.invalid
+                    && summary.received_chunks == summary.total_chunks
+                    && matches!(summary.payload_hash, Some(hash) if &hash == payload_hash)
+            })
+    }
+
     /// Test-only helper that overwrites the in-memory summary for a given
     /// `(block_hash, height, view)` tuple without touching the persisted store.
     #[cfg(test)]
@@ -312,23 +335,24 @@ impl Handle {
                     height,
                     view,
                     total_chunks,
+                    encoding: RbcEncoding::Plain,
+                    data_shards: 0,
+                    parity_shards: 0,
                     received_chunks,
                     ready_count,
                     delivered,
                     payload_hash,
                     recovered_from_disk,
                     invalid: false,
+                    reconstructed_stripes: 0,
+                    reconstructable_stripes: 0,
                     lane_backlog: Vec::new(),
                     dataspace_backlog: Vec::new(),
                 },
                 updated_at,
             },
         );
-        if let Some(disk) = inner.disk.as_ref()
-            && let Err(err) = disk.persist(&inner.map)
-        {
-            warn!(?err, "failed to persist RBC session store after update_at");
-        }
+        persist_if_needed(&mut inner, "update_at");
         self.store
             .active_count
             .store(inner.map.len() as u64, Ordering::Relaxed);
@@ -366,6 +390,12 @@ pub struct Summary {
     pub view: u64,
     /// Total number of chunks expected in the RBC payload.
     pub total_chunks: u32,
+    /// Payload encoding used by the session.
+    pub encoding: RbcEncoding,
+    /// Number of RS16 data shards per stripe (`0` for plain sessions).
+    pub data_shards: u16,
+    /// Number of RS16 parity shards per stripe (`0` for plain sessions).
+    pub parity_shards: u16,
     /// Number of chunks received so far.
     pub received_chunks: u32,
     /// Number of READY messages observed (for threshold heuristics).
@@ -378,6 +408,10 @@ pub struct Summary {
     pub recovered_from_disk: bool,
     /// True when the session detected an integrity failure (chunk-root mismatch, etc.).
     pub invalid: bool,
+    /// Number of RS16 stripes fully reconstructed from parity.
+    pub reconstructed_stripes: u32,
+    /// Number of RS16 stripes that are reconstructable with the currently buffered shards.
+    pub reconstructable_stripes: u32,
     /// Aggregated per-lane backlog snapshot for this session.
     pub lane_backlog: Vec<LaneRbcSnapshot>,
     /// Aggregated per-dataspace backlog snapshot for this session.
@@ -417,10 +451,13 @@ pub fn read_persisted_snapshot(dir: impl AsRef<Path>) -> Vec<Summary> {
 
 const FILE_NAME: &str = "sessions.norito";
 
+#[derive(Clone)]
 struct DiskStore {
     file: PathBuf,
     ttl: Duration,
     capacity: usize,
+    #[cfg(test)]
+    fail_persist_with: Option<io::ErrorKind>,
 }
 
 #[derive(Clone, Encode, Decode)]
@@ -436,6 +473,8 @@ impl DiskStore {
             file: cfg.dir.join(FILE_NAME),
             ttl: cfg.ttl,
             capacity: cfg.capacity,
+            #[cfg(test)]
+            fail_persist_with: None,
         })
     }
 
@@ -443,6 +482,10 @@ impl DiskStore {
         &self,
         map: &BTreeMap<(HashOf<BlockHeader>, u64, u64), Entry>,
     ) -> std::io::Result<()> {
+        #[cfg(test)]
+        if let Some(kind) = self.fail_persist_with {
+            return Err(io::Error::from(kind));
+        }
         let mut entries: Vec<StoredEntry> = map
             .values()
             .map(|entry| StoredEntry {
@@ -476,6 +519,70 @@ impl DiskStore {
             }
         }
         Ok(())
+    }
+}
+
+fn is_fatal_persist_error(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::StorageFull
+            | io::ErrorKind::WriteZero
+            | io::ErrorKind::OutOfMemory
+            | io::ErrorKind::FileTooLarge
+            | io::ErrorKind::QuotaExceeded
+    )
+}
+
+fn set_persistence_disabled_metric(disabled: bool) {
+    #[cfg(feature = "telemetry")]
+    if let Some(metrics) = iroha_telemetry::metrics::global() {
+        metrics
+            .sumeragi_rbc_status_persistence_disabled
+            .set(u64::from(disabled));
+    }
+    #[cfg(not(feature = "telemetry"))]
+    let _ = disabled;
+}
+
+fn record_fatal_persist_failure() {
+    #[cfg(feature = "telemetry")]
+    if let Some(metrics) = iroha_telemetry::metrics::global() {
+        metrics.sumeragi_rbc_status_persist_failures_total.inc();
+    }
+}
+
+fn persist_if_needed(inner: &mut Inner, context: &'static str) {
+    let Some(disk_state) = inner.disk.as_ref() else {
+        return;
+    };
+    if disk_state.disabled {
+        return;
+    }
+    let disk = disk_state.store.clone();
+
+    if let Err(err) = disk.persist(&inner.map) {
+        if is_fatal_persist_error(&err) {
+            if let Some(disk_state) = inner.disk.as_mut() {
+                disk_state.disabled = true;
+                if !disk_state.disable_logged {
+                    disk_state.disable_logged = true;
+                    warn!(
+                        ?err,
+                        context = context,
+                        "fatal RBC status persist error; disabling disk persistence and keeping in-memory status snapshots active"
+                    );
+                }
+            }
+            record_fatal_persist_failure();
+            set_persistence_disabled_metric(true);
+            return;
+        }
+
+        warn!(
+            ?err,
+            context = context,
+            "failed to persist RBC session store"
+        );
     }
 }
 
@@ -522,8 +629,22 @@ fn read_entries_with_fallback(path: &Path) -> Vec<StoredEntry> {
     }
 
     let mut selected = None;
+    if let Some(bytes) = main_bytes.as_deref() {
+        match decode_entries(bytes) {
+            Ok(entries) => {
+                selected = Some(entries);
+            }
+            Err(err) => {
+                warn!(?err, ?path, "failed to decode RBC session store");
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
     let mut used_tmp = false;
-    if let Some(bytes) = tmp_bytes.as_deref() {
+    if selected.is_none()
+        && let Some(bytes) = tmp_bytes.as_deref()
+    {
         match decode_entries(bytes) {
             Ok(entries) => {
                 selected = Some(entries);
@@ -532,20 +653,6 @@ fn read_entries_with_fallback(path: &Path) -> Vec<StoredEntry> {
             Err(err) => {
                 warn!(?err, ?tmp_path, "failed to decode RBC session temp store");
                 let _ = fs::remove_file(&tmp_path);
-            }
-        }
-    }
-
-    if selected.is_none() {
-        if let Some(bytes) = main_bytes.as_deref() {
-            match decode_entries(bytes) {
-                Ok(entries) => {
-                    selected = Some(entries);
-                }
-                Err(err) => {
-                    warn!(?err, ?path, "failed to decode RBC session store");
-                    let _ = fs::remove_file(path);
-                }
             }
         }
     }
@@ -715,12 +822,17 @@ mod tests {
             height: 7,
             view: 0,
             total_chunks: 3,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
             received_chunks: 1,
             ready_count: 0,
             delivered: false,
             payload_hash: None,
             recovered_from_disk: false,
             invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };
@@ -741,6 +853,71 @@ mod tests {
     }
 
     #[test]
+    fn persisted_snapshot_prefers_main_store_over_temp_file() {
+        let dir = tempdir().expect("tempdir");
+        let main_summary = Summary {
+            block_hash: hash(8),
+            height: 8,
+            view: 0,
+            total_chunks: 4,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 4,
+            ready_count: 3,
+            delivered: true,
+            payload_hash: Some(Hash::new(b"main")),
+            recovered_from_disk: false,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        let tmp_summary = Summary {
+            block_hash: hash(8),
+            height: 8,
+            view: 0,
+            total_chunks: 4,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 2,
+            ready_count: 1,
+            delivered: false,
+            payload_hash: Some(Hash::new(b"tmp")),
+            recovered_from_disk: false,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        let file = dir.path().join(FILE_NAME);
+        let tmp = temp_store_path(&file);
+        let main_encoded = to_bytes(&vec![StoredEntry {
+            summary: main_summary.clone(),
+            updated_at_ms: 200,
+        }])
+        .expect("encode main store");
+        let tmp_encoded = to_bytes(&vec![StoredEntry {
+            summary: tmp_summary,
+            updated_at_ms: 100,
+        }])
+        .expect("encode temp store");
+        fs::write(&file, main_encoded).expect("write main store");
+        fs::write(&tmp, tmp_encoded).expect("write temp store");
+
+        let snapshot = read_persisted_snapshot(dir.path());
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0], main_summary);
+        assert!(
+            tmp.exists(),
+            "valid main store should not require temp promotion"
+        );
+    }
+
+    #[test]
     fn persistence_roundtrip() {
         let dir = tempdir().expect("tempdir");
         let handle = register_handle();
@@ -755,12 +932,17 @@ mod tests {
             height: 1,
             view: 0,
             total_chunks: 4,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
             received_chunks: 2,
             ready_count: 1,
             delivered: false,
             payload_hash: None,
             recovered_from_disk: false,
             invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };
@@ -792,12 +974,17 @@ mod tests {
             height: 1,
             view: 0,
             total_chunks: 0,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
             received_chunks: 0,
             ready_count: 0,
             delivered: false,
             payload_hash: None,
             recovered_from_disk: false,
             invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };
@@ -806,12 +993,17 @@ mod tests {
             height: 2,
             view: 0,
             total_chunks: 0,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
             received_chunks: 0,
             ready_count: 0,
             delivered: false,
             payload_hash: None,
             recovered_from_disk: false,
             invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };
@@ -841,12 +1033,17 @@ mod tests {
             height: 9,
             view: 0,
             total_chunks: 2,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
             received_chunks: 1,
             ready_count: 0,
             delivered: true,
             payload_hash: Some(payload_hash),
             recovered_from_disk: false,
             invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };
@@ -884,12 +1081,17 @@ mod tests {
             height,
             view,
             total_chunks: 3,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
             received_chunks: 2,
             ready_count: 1,
             delivered: false,
             payload_hash: None,
             recovered_from_disk: false,
             invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };
@@ -933,12 +1135,17 @@ mod tests {
             height: 2,
             view: 0,
             total_chunks: 1,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
             received_chunks: 1,
             ready_count: 0,
             delivered: true,
             payload_hash: None,
             recovered_from_disk: false,
             invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };
@@ -966,12 +1173,17 @@ mod tests {
             height: 1,
             view: 0,
             total_chunks: 1,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
             received_chunks: 1,
             ready_count: 0,
             delivered: false,
             payload_hash: None,
             recovered_from_disk: false,
             invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };
@@ -981,12 +1193,17 @@ mod tests {
             height: 2,
             view: 0,
             total_chunks: 1,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
             received_chunks: 1,
             ready_count: 0,
             delivered: false,
             payload_hash: None,
             recovered_from_disk: false,
             invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };
@@ -996,12 +1213,17 @@ mod tests {
             height: 3,
             view: 0,
             total_chunks: 1,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
             received_chunks: 1,
             ready_count: 0,
             delivered: false,
             payload_hash: None,
             recovered_from_disk: false,
             invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
             lane_backlog: Vec::new(),
             dataspace_backlog: Vec::new(),
         };
@@ -1016,5 +1238,181 @@ mod tests {
         let heights: Vec<u64> = items.iter().map(|s| s.height).collect();
         assert!(heights.contains(&2));
         assert!(heights.contains(&3));
+    }
+
+    #[test]
+    fn fatal_persist_error_disables_disk_but_keeps_memory_snapshot() {
+        let dir = tempdir().expect("tempdir");
+        let handle = register_handle();
+        handle.configure(Some(StoreConfig {
+            dir: dir.path().to_path_buf(),
+            ttl: Duration::from_secs(60),
+            capacity: 8,
+        }));
+        let key = (hash(7), 7, 0);
+        let summary = Summary {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            total_chunks: 4,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 2,
+            ready_count: 1,
+            delivered: false,
+            payload_hash: None,
+            recovered_from_disk: false,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        handle.update(summary.clone(), SystemTime::now());
+        let path = dir.path().join(FILE_NAME);
+        let persisted_before_fault = fs::read(&path).expect("persisted snapshot");
+
+        {
+            let mut inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+            inner
+                .disk
+                .as_mut()
+                .expect("disk store configured")
+                .store
+                .fail_persist_with = Some(io::ErrorKind::StorageFull);
+        }
+
+        let updated = Summary {
+            received_chunks: 3,
+            ..summary
+        };
+        handle.update(updated.clone(), SystemTime::now() + Duration::from_secs(1));
+
+        assert_eq!(handle.get(&key), Some(updated));
+        let inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+        assert!(
+            inner.disk.as_ref().is_some_and(|disk| disk.disabled),
+            "fatal persist errors must disable future disk writes"
+        );
+        drop(inner);
+
+        let persisted_after_fault = fs::read(&path).expect("persisted snapshot");
+        assert_eq!(
+            persisted_after_fault, persisted_before_fault,
+            "fatal persist errors must not clobber the last successful on-disk snapshot"
+        );
+    }
+
+    #[test]
+    fn disabled_persistence_stops_future_disk_writes_until_reconfigure() {
+        let dir = tempdir().expect("tempdir");
+        let handle = register_handle();
+        handle.configure(Some(StoreConfig {
+            dir: dir.path().to_path_buf(),
+            ttl: Duration::from_secs(60),
+            capacity: 8,
+        }));
+        let key = (hash(8), 8, 0);
+        let summary = Summary {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            total_chunks: 2,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 1,
+            ready_count: 0,
+            delivered: false,
+            payload_hash: None,
+            recovered_from_disk: false,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        handle.update(summary.clone(), SystemTime::now());
+        let path = dir.path().join(FILE_NAME);
+
+        {
+            let mut inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+            inner
+                .disk
+                .as_mut()
+                .expect("disk store configured")
+                .store
+                .fail_persist_with = Some(io::ErrorKind::WriteZero);
+        }
+        handle.update(
+            Summary {
+                received_chunks: 2,
+                ..summary.clone()
+            },
+            SystemTime::now() + Duration::from_secs(1),
+        );
+        let persisted_after_disable = fs::read(&path).expect("persisted snapshot");
+
+        handle.update(
+            Summary {
+                delivered: true,
+                ..summary.clone()
+            },
+            SystemTime::now() + Duration::from_secs(2),
+        );
+        handle.remove(&key);
+        assert_eq!(
+            fs::read(&path).expect("persisted snapshot"),
+            persisted_after_disable,
+            "memory-only mode must stop future persist attempts until reconfigured"
+        );
+
+        handle.configure(Some(StoreConfig {
+            dir: dir.path().to_path_buf(),
+            ttl: Duration::from_secs(60),
+            capacity: 8,
+        }));
+        {
+            let inner = handle.store.inner.lock().expect("rbc status lock poisoned");
+            assert!(
+                inner.disk.as_ref().is_some_and(|disk| !disk.disabled),
+                "explicit configure(Some(...)) must re-enable persistence"
+            );
+        }
+
+        let replacement = Summary {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            total_chunks: 3,
+            encoding: RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 3,
+            ready_count: 2,
+            delivered: true,
+            payload_hash: Some(Hash::new(b"re-enabled")),
+            recovered_from_disk: false,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        };
+        handle.update(
+            replacement.clone(),
+            SystemTime::now() + Duration::from_secs(3),
+        );
+
+        assert!(
+            read_persisted_snapshot(dir.path())
+                .iter()
+                .any(|entry| entry.block_hash == replacement.block_hash
+                    && entry.height == replacement.height
+                    && entry.received_chunks == replacement.received_chunks
+                    && entry.delivered == replacement.delivered),
+            "reconfigured persistence should write fresh snapshots again"
+        );
     }
 }

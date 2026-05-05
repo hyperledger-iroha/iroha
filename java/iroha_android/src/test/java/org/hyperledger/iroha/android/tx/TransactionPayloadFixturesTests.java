@@ -4,9 +4,12 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.junit.Test;
 
 public final class TransactionPayloadFixturesTests {
+
+  private static final String SAMPLE_AUTHORITY = TestAccountIds.ed25519Authority(0x2E);
 
   @Test
   public void toPayloadRejectsMissingWireInstructionFields() {
@@ -21,7 +24,7 @@ public final class TransactionPayloadFixturesTests {
 
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("chain", "00000002");
-    payload.put("authority", "alice@wonderland");
+    payload.put("authority", SAMPLE_AUTHORITY);
     payload.put("creation_time_ms", 1_735_000_000_000L);
     payload.put("executable", executable);
     payload.put("metadata", new LinkedHashMap<>());
@@ -29,7 +32,7 @@ public final class TransactionPayloadFixturesTests {
     final Map<String, Object> fixture = new LinkedHashMap<>();
     fixture.put("name", "missing-wire-fields");
     fixture.put("chain", "00000002");
-    fixture.put("authority", "alice@wonderland");
+    fixture.put("authority", SAMPLE_AUTHORITY);
     fixture.put("creation_time_ms", 1_735_000_000_000L);
     fixture.put("payload", payload);
 

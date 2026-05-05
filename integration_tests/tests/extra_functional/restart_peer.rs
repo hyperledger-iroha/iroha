@@ -21,7 +21,10 @@ use toml::Table;
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn restarted_peer_should_restore_its_state() -> Result<()> {
-    let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "xor".parse()?);
+    let asset_definition_id = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "xor".parse()?,
+    );
     let quantity = numeric!(200);
 
     let Some(network) = sandbox::start_network_async_or_skip(

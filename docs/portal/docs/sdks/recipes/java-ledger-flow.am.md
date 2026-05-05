@@ -29,7 +29,7 @@ translator: machine-google-reviewed
 ## 1. የንብረት ፍቺ (CLI) ይመዝገቡ
 
 ```bash
-iroha --config defaults/client.toml asset definition register --id coffee#wonderland
+iroha --config defaults/client.toml asset definition register --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 ## 2. ምስክርነቶችን ወደ ውጭ ላክ
@@ -37,8 +37,8 @@ iroha --config defaults/client.toml asset definition register --id coffee#wonder
 ```bash
 # raw 32-byte Ed25519 private key in hex (without multicodec prefix)
 export ADMIN_PRIVATE_KEY_RAW="4f94...<64 hex chars>..."
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 > እርስዎ ከሆኑ `iroha_cli tools crypto private-key export --raw --private-key <multihash>` ይጠቀሙ

@@ -7,16 +7,22 @@ set -euo pipefail
 #   IROHA_DIR        Path to the workspace root (default: repository root).
 #   CARGO_TARGET_DIR Cargo target directory override (default: <IROHA_DIR>/target).
 #   KAGAMI_BIN       Path to the `kagami` binary (default: <target-dir>/<profile>/kagami).
-#   IROHAD_BIN       Path to the `irohad` binary (default: <IROHA_DIR>/target/<profile>/irohad).
-#   IROHA_CLI_BIN    Path to the `iroha` CLI binary (default: <IROHA_DIR>/target/<profile>/iroha).
+#   IROHAD_BIN       Path to the `irohad` binary (default: <target-dir>/<profile>/irohad).
+#   IROHA_CLI_BIN    Path to the `iroha` CLI binary (default: <target-dir>/<profile>/iroha).
+#   SKIP_TOOL_BUILD  Skip cargo build and reuse existing binaries (default: false).
 #   IROHA_LOCALNET_NOFILE_MIN Minimum RLIMIT_NOFILE for localnet peers (default: 4096).
+#   IROHA_LOCALNET_GUEST_STACK_BYTES Override [concurrency].guest_stack_bytes in generated peer configs.
+#   IROHA_LOCALNET_GAS_TO_STACK_MULTIPLIER Override [concurrency].gas_to_stack_multiplier in generated peer configs.
+#   IROHA_LOCALNET_MEMORY_BUDGET_PROFILE Override [ivm].memory_budget_profile in generated peer configs.
+#   IROHA_LOCALNET_MAX_STACK_BYTES Add/update a compute resource profile with this max_stack_bytes value.
+#   IROHA_LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS Override [sumeragi.persistence].commit_inflight_timeout_ms in generated peer configs.
 
 usage() {
   cat <<'EOF'
 Usage: deploy_localnet.sh [OPTIONS]
 
 Builds `kagami`, `irohad`, and `iroha`, generates a fresh localnet, starts peers,
-waits for readiness, and optionally registers an asset definition.
+waits for readiness, and verifies the built-in offline-note asset alias.
 
 Options:
   --iroha-dir <DIR>          Workspace root (default: repo root)
@@ -37,10 +43,17 @@ Options:
   --base-p2p-port <PORT>     Base P2P port (default: 33337)
   --bind-host <HOST>         Bind host (default: 127.0.0.1)
   --public-host <HOST>       Public host (default: 127.0.0.1)
+  --target-dir <DIR>         Set CARGO_TARGET_DIR for builds and binary reuse
+  --fast                     Run cargo via scripts/cargo_fast.sh when available
+  --fast-zero-debug          With --fast, set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
+  --fast-no-incremental      With --fast, set CARGO_INCREMENTAL=0
   --release                  Build and run release binaries
-  --no-sample-asset          Do not include kagami's sample asset
-  --asset-id <ID>            Asset definition to register (default: rose#wonderland)
-  --skip-asset-register      Skip asset definition registration
+  --no-build                 Skip cargo build and require prebuilt binaries
+  --no-sample-asset          Do not include kagami's extra sample asset
+  --asset-id <ID>            Built-in offline-note asset id to verify (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
+  --asset-name <NAME>        Built-in offline-note asset name to verify (default: usd)
+  --asset-alias <ALIAS>      Built-in offline-note alias to verify (default: usd#wonderland)
+  --skip-asset-check         Skip built-in offline-note verification
   --telemetry-profile <NAME> Set telemetry_profile in generated peer configs (e.g., extended)
   --timeout <SECS>           Seconds to wait for readiness (default: 30)
   --force                    Remove existing out-dir before regenerating
@@ -50,6 +63,30 @@ EOF
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IROHA_DIR="${IROHA_DIR:-"$(cd "${SCRIPT_DIR}/.." && pwd)"}"
+
+require_option_value() {
+  local flag="$1"
+  local value="${2-}"
+  if [[ -z "$value" ]] || [[ "$value" == --* ]]; then
+    echo "Missing value for ${flag}" >&2
+    exit 2
+  fi
+}
+
+resolve_dir() {
+  local path="$1"
+  local candidate
+  if [[ "${path}" = /* ]]; then
+    candidate="${path}"
+  else
+    candidate="${IROHA_DIR}/${path}"
+  fi
+  mkdir -p "${candidate}"
+  (
+    cd "${candidate}"
+    pwd
+  )
+}
 
 OUT_DIR="/tmp/iroha-localnet"
 PEERS=4
@@ -61,8 +98,10 @@ BIND_HOST="127.0.0.1"
 PUBLIC_HOST="127.0.0.1"
 PROFILE="debug"
 SAMPLE_ASSET=true
-ASSET_ID="rose#wonderland"
-SKIP_ASSET_REGISTER=false
+ASSET_ID="7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+ASSET_NAME="usd"
+ASSET_ALIAS="usd#wonderland"
+SKIP_ASSET_CHECK=false
 TELEMETRY_PROFILE=""
 TIMEOUT_SECS=30
 FORCE=false
@@ -77,7 +116,17 @@ LOGGER_LEVEL=""
 LOGGER_FILTER=""
 CURL_TIMEOUT_SECS=2
 PORT_SCAN_MAX_TRIES=200
+SKIP_TOOL_BUILD="${SKIP_TOOL_BUILD:-false}"
+TARGET_DIR_OVERRIDE=""
+USE_CARGO_FAST=false
+FAST_ZERO_DEBUG=false
+FAST_NO_INCREMENTAL=false
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+LOCALNET_GUEST_STACK_BYTES="${IROHA_LOCALNET_GUEST_STACK_BYTES:-}"
+LOCALNET_GAS_TO_STACK_MULTIPLIER="${IROHA_LOCALNET_GAS_TO_STACK_MULTIPLIER:-}"
+LOCALNET_MEMORY_BUDGET_PROFILE="${IROHA_LOCALNET_MEMORY_BUDGET_PROFILE:-}"
+LOCALNET_MAX_STACK_BYTES="${IROHA_LOCALNET_MAX_STACK_BYTES:-${LOCALNET_GUEST_STACK_BYTES:-}}"
+LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS="${IROHA_LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -153,8 +202,29 @@ while [[ $# -gt 0 ]]; do
       PUBLIC_HOST="$2"
       shift 2
       ;;
+    --target-dir)
+      require_option_value "--target-dir" "${2-}"
+      TARGET_DIR_OVERRIDE="$2"
+      shift 2
+      ;;
+    --fast)
+      USE_CARGO_FAST=true
+      shift
+      ;;
+    --fast-zero-debug)
+      FAST_ZERO_DEBUG=true
+      shift
+      ;;
+    --fast-no-incremental)
+      FAST_NO_INCREMENTAL=true
+      shift
+      ;;
     --release)
       PROFILE="release"
+      shift
+      ;;
+    --no-build|--skip-build)
+      SKIP_TOOL_BUILD=true
       shift
       ;;
     --no-sample-asset)
@@ -165,8 +235,16 @@ while [[ $# -gt 0 ]]; do
       ASSET_ID="$2"
       shift 2
       ;;
-    --skip-asset-register)
-      SKIP_ASSET_REGISTER=true
+    --asset-name)
+      ASSET_NAME="$2"
+      shift 2
+      ;;
+    --asset-alias)
+      ASSET_ALIAS="$2"
+      shift 2
+      ;;
+    --skip-asset-check|--skip-asset-register)
+      SKIP_ASSET_CHECK=true
       shift
       ;;
     --telemetry-profile)
@@ -236,6 +314,32 @@ if [[ ! -d "$IROHA_DIR" ]]; then
   echo "IROHA_DIR does not exist: $IROHA_DIR" >&2
   exit 1
 fi
+
+cargo_runner=(cargo)
+if [[ "${USE_CARGO_FAST}" == true ]]; then
+  cargo_fast_script="${IROHA_DIR}/scripts/cargo_fast.sh"
+  if [[ ! -x "${cargo_fast_script}" ]]; then
+    echo "scripts/cargo_fast.sh is not available or not executable" >&2
+    exit 2
+  fi
+  cargo_runner=("${cargo_fast_script}")
+  if [[ "${FAST_ZERO_DEBUG}" == true ]]; then
+    cargo_runner+=("--zero-debug")
+  fi
+  if [[ "${FAST_NO_INCREMENTAL}" == true ]]; then
+    cargo_runner+=("--no-incremental")
+  fi
+  echo "Using scripts/cargo_fast.sh for cargo commands."
+elif [[ "${FAST_ZERO_DEBUG}" == true || "${FAST_NO_INCREMENTAL}" == true ]]; then
+  echo "--fast-zero-debug and --fast-no-incremental require --fast" >&2
+  exit 2
+fi
+
+if [[ -n "${TARGET_DIR_OVERRIDE}" ]]; then
+  export CARGO_TARGET_DIR="$(resolve_dir "${TARGET_DIR_OVERRIDE}")"
+fi
+TARGET_DIR="$(resolve_dir "${CARGO_TARGET_DIR:-target}")"
+export CARGO_TARGET_DIR="${TARGET_DIR}"
 
 if [[ -d "$OUT_DIR" ]]; then
   if [[ -f "$OUT_DIR/stop.sh" ]]; then
@@ -320,20 +424,23 @@ fi
 
 echo "Building Iroha tools ($PROFILE)..."
 cd "$IROHA_DIR"
-if [[ "$PROFILE" == "release" ]]; then
-  cargo build --release --bin kagami --bin irohad --bin iroha
+if [[ "$SKIP_TOOL_BUILD" == "true" ]]; then
+  echo "Skipping Iroha tool build; using existing binaries."
+elif [[ "$PROFILE" == "release" ]]; then
+  "${cargo_runner[@]}" build --release --bin kagami --bin irohad --bin iroha
 else
-  cargo build --bin kagami --bin irohad --bin iroha
-fi
-
-TARGET_DIR="${CARGO_TARGET_DIR:-"$IROHA_DIR/target"}"
-if [[ "$TARGET_DIR" != /* ]]; then
-  TARGET_DIR="$IROHA_DIR/$TARGET_DIR"
+  "${cargo_runner[@]}" build --bin kagami --bin irohad --bin iroha
 fi
 
 KAGAMI_BIN="${KAGAMI_BIN:-"$TARGET_DIR/$PROFILE/kagami"}"
 IROHAD_BIN="${IROHAD_BIN:-"$TARGET_DIR/$PROFILE/irohad"}"
 CLI_BIN="${IROHA_CLI_BIN:-"$TARGET_DIR/$PROFILE/iroha"}"
+for bin_path in "$KAGAMI_BIN" "$IROHAD_BIN" "$CLI_BIN"; do
+  if [[ ! -x "$bin_path" ]]; then
+    echo "Required binary is missing or not executable: $bin_path" >&2
+    exit 1
+  fi
+done
 
 echo "Generating localnet in $OUT_DIR..."
 KAGAMI_ARGS=(
@@ -528,6 +635,83 @@ if [[ -n "$LOGGER_LEVEL" || -n "$LOGGER_FILTER" ]]; then
   done
 fi
 
+if [[ -n "$LOCALNET_GUEST_STACK_BYTES" || -n "$LOCALNET_GAS_TO_STACK_MULTIPLIER" || -n "$LOCALNET_MEMORY_BUDGET_PROFILE" || -n "$LOCALNET_MAX_STACK_BYTES" ]]; then
+  if [[ -z "$LOCALNET_GUEST_STACK_BYTES" || -z "$LOCALNET_GAS_TO_STACK_MULTIPLIER" || -z "$LOCALNET_MEMORY_BUDGET_PROFILE" || -z "$LOCALNET_MAX_STACK_BYTES" ]]; then
+    echo "IROHA localnet stack overrides require guest stack bytes, gas-to-stack multiplier, memory budget profile, and max stack bytes together." >&2
+    exit 2
+  fi
+
+  echo "Applying IVM stack overrides in peer configs..."
+  for cfg in "$OUT_DIR"/peer*.toml; do
+    [[ -f "$cfg" ]] || continue
+    cat >> "$cfg" <<EOF
+
+[ivm]
+memory_budget_profile = "$LOCALNET_MEMORY_BUDGET_PROFILE"
+
+[concurrency]
+guest_stack_bytes = $LOCALNET_GUEST_STACK_BYTES
+gas_to_stack_multiplier = $LOCALNET_GAS_TO_STACK_MULTIPLIER
+
+[compute]
+default_resource_profile = "$LOCALNET_MEMORY_BUDGET_PROFILE"
+
+[compute.resource_profiles."$LOCALNET_MEMORY_BUDGET_PROFILE"]
+max_cycles = 10000000
+max_memory_bytes = 268435456
+max_stack_bytes = $LOCALNET_MAX_STACK_BYTES
+max_io_bytes = 25165824
+max_egress_bytes = 12582912
+allow_gpu_hints = true
+allow_wasi = true
+EOF
+  done
+fi
+
+if [[ -n "$LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS" ]]; then
+  echo "Applying commit inflight timeout override in peer configs..."
+  for cfg in "$OUT_DIR"/peer*.toml; do
+    [[ -f "$cfg" ]] || continue
+    awk -v timeout="$LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS" '
+      function flush_persistence() {
+        if (in_persistence && !seen_timeout) {
+          print "commit_inflight_timeout_ms = " timeout
+        }
+        in_persistence = 0
+      }
+      /^\[[^]]+\]$/ {
+        flush_persistence()
+        if ($0 == "[sumeragi.persistence]") {
+          in_persistence = 1
+          saw_persistence = 1
+          seen_timeout = 0
+        }
+        print
+        next
+      }
+      {
+        if (in_persistence && $1 == "commit_inflight_timeout_ms") {
+          print "commit_inflight_timeout_ms = " timeout
+          seen_timeout = 1
+          next
+        }
+        print
+      }
+      END {
+        if (in_persistence) {
+          if (!seen_timeout) {
+            print "commit_inflight_timeout_ms = " timeout
+          }
+        } else if (!saw_persistence) {
+          print ""
+          print "[sumeragi.persistence]"
+          print "commit_inflight_timeout_ms = " timeout
+        }
+      }
+    ' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
+  done
+fi
+
 echo "Starting Iroha peers..."
 cd "$OUT_DIR"
 chmod +x start.sh stop.sh
@@ -610,12 +794,42 @@ else
 fi
 
 CFG="$OUT_DIR/client.toml"
-if [[ "$SKIP_ASSET_REGISTER" != true ]]; then
+if [[ "$SKIP_ASSET_CHECK" != true ]]; then
   echo ""
-  echo "Registering asset definition $ASSET_ID..."
-  "$CLI_BIN" --config "$CFG" asset definition register --id "$ASSET_ID"
+  echo "Verifying built-in offline-note alias $ASSET_ALIAS..."
+  asset_alias_request="$(printf '{\"alias\":\"%s\"}' "$ASSET_ALIAS")"
+  asset_alias_response="$(
+    curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
+      -H "Content-Type: application/json" \
+      -d "$asset_alias_request" \
+      "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/assets/aliases/resolve"
+  )" || {
+    echo "Failed to resolve built-in offline-note alias $ASSET_ALIAS." >&2
+    exit 1
+  }
+  ASSET_ALIAS_RESPONSE="$asset_alias_response" \
+  "$PYTHON_BIN" - "$ASSET_ID" "$ASSET_NAME" "$ASSET_ALIAS" <<'PY'
+import json
+import os
+import sys
+
+expected_id, expected_name, expected_alias = sys.argv[1:4]
+payload = json.loads(os.environ["ASSET_ALIAS_RESPONSE"])
+actual_id = payload.get("asset_definition_id")
+actual_name = payload.get("asset_name")
+actual_alias = payload.get("alias")
+if actual_id != expected_id:
+    raise SystemExit(f"expected asset_definition_id {expected_id}, got {actual_id}")
+if actual_name != expected_name:
+    raise SystemExit(f"expected asset_name {expected_name}, got {actual_name}")
+if actual_alias != expected_alias:
+    raise SystemExit(f"expected alias {expected_alias}, got {actual_alias}")
+PY
 fi
 
 echo ""
 echo "Iroha localnet is running in $OUT_DIR."
+echo "CLI binary: $CLI_BIN"
+echo "Client config: $CFG"
+echo "Built-in offline note: $ASSET_NAME ($ASSET_ID) alias $ASSET_ALIAS"
 echo "To stop: cd $OUT_DIR && ./stop.sh"

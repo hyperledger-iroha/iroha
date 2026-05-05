@@ -1803,6 +1803,16 @@ impl TieredStateBackend {
             world.account_rekey_records
         );
         collect_map!(
+            TieredSegment::AccountRecoveryPolicies,
+            AccountRecoveryPolicy,
+            world.account_recovery_policies
+        );
+        collect_map!(
+            TieredSegment::AccountRecoveryRequests,
+            AccountRecoveryRequest,
+            world.account_recovery_requests
+        );
+        collect_map!(
             TieredSegment::AssetDefinitions,
             AssetDefinition,
             world.asset_definitions
@@ -1814,6 +1824,7 @@ impl TieredStateBackend {
             world.asset_metadata
         );
         collect_map!(TieredSegment::Nfts, Nft, world.nfts);
+        collect_map!(TieredSegment::Rwas, Rwa, world.rwas);
         collect_map!(TieredSegment::Roles, Role, world.roles);
         collect_map!(
             TieredSegment::AccountPermissions,
@@ -1854,8 +1865,7 @@ impl TieredStateBackend {
             let view = world.contract_instances.view();
             for (key, value) in view.iter() {
                 let key_handle = TieredKeyHandle::ContractInstance((*key).clone());
-                let key_payload = json::to_vec(&vec![key.0.clone(), key.1.clone()])
-                    .wrap_err("failed to encode contract instance key for tiered snapshot")?;
+                let key_payload = norito::codec::Encode::encode(key);
                 self.collect_entry_with_encoded_key(
                     TieredSegment::ContractInstances,
                     &key_handle,
@@ -1872,6 +1882,11 @@ impl TieredStateBackend {
         );
         collect_map!(TieredSegment::ZkAssets, ZkAsset, world.zk_assets);
         collect_map!(TieredSegment::Elections, Election, world.elections);
+        collect_map!(
+            TieredSegment::MinistryAgendaProposals,
+            MinistryAgendaProposal,
+            world.ministry_agenda_proposals
+        );
         collect_map!(
             TieredSegment::GovernanceProposals,
             GovernanceProposal,
@@ -1899,24 +1914,9 @@ impl TieredStateBackend {
             world.parliament_bodies
         );
         collect_map!(
-            TieredSegment::OfflineAllowances,
-            OfflineAllowance,
-            world.offline_allowances
-        );
-        collect_map!(
-            TieredSegment::OfflineVerdictRevocations,
-            OfflineVerdictRevocation,
-            world.offline_verdict_revocations
-        );
-        collect_map!(
-            TieredSegment::OfflineConsumedBuildClaimIds,
-            OfflineConsumedBuildClaimId,
-            world.offline_consumed_build_claim_ids
-        );
-        collect_map!(
-            TieredSegment::OfflineTransfers,
-            OfflineTransfer,
-            world.offline_to_online_transfers
+            TieredSegment::OfflineNoteV2ReplayKeys,
+            OfflineNoteV2ReplayKey,
+            world.offline_note_v2_replay_keys
         );
 
         Ok(())
@@ -2450,8 +2450,9 @@ mod measured_bytes_impls {
     };
     use iroha_data_model::{
         account::{
-            AccountController, AccountDetails, AccountId, AccountLabel, AccountRekeyRecord,
-            MultisigMember, MultisigPolicy, OpaqueAccountId,
+            AccountAlias, AccountController, AccountDetails, AccountId, AccountRecoveryPolicy,
+            AccountRecoveryRequest, AccountRecoveryStatus, AccountRekeyRecord, MultisigMember,
+            MultisigPolicy, OpaqueAccountId, RecoveryGuardian, rekey::AccountAliasDomain,
         },
         asset::{
             AssetDefinition, AssetDefinitionId, AssetId,
@@ -2484,15 +2485,6 @@ mod measured_bytes_impls {
             LanePrivacyWitness, UniversalAccountId,
         },
         nft::NftData,
-        offline::{
-            AggregateProofEnvelope, AndroidMarkerKeyProof, AndroidProvisionedProof,
-            AppleAppAttestProof, OfflineAllowanceCommitment, OfflineAllowanceRecord,
-            OfflineBalanceProof, OfflineCounterState, OfflinePlatformProof,
-            OfflinePlatformTokenSnapshot, OfflineSpendReceipt, OfflineToOnlineTransfer,
-            OfflineTransferLifecycleEntry, OfflineTransferRecord, OfflineTransferStatus,
-            OfflineVerdictRevocation, OfflineVerdictRevocationReason, OfflineVerdictSnapshot,
-            OfflineWalletCertificate, OfflineWalletPolicy, PoseidonDigest,
-        },
         peer::PeerId,
         permission::Permission,
         proof::{
@@ -2504,6 +2496,8 @@ mod measured_bytes_impls {
             RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord,
             RuntimeUpgradeSbomDigest, RuntimeUpgradeStatus,
         },
+        rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
+        smart_contract::ContractAddress,
         smart_contract::manifest::{
             AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
             KotobaTranslation, KotobaTranslationEntry, ManifestProvenance, TriggerCallback,
@@ -2588,8 +2582,6 @@ mod measured_bytes_impls {
         LaneCommitmentId,
         Mintable,
         NumericSpec,
-        OfflineTransferStatus,
-        OfflineVerdictRevocationReason,
         ParliamentBody,
         ProofStatus,
         QcRef,
@@ -2701,6 +2693,12 @@ mod measured_bytes_impls {
                 total = total.saturating_add(self.len());
             }
             total
+        }
+    }
+
+    impl MeasuredBytes for ContractAddress {
+        fn measured_bytes(&self) -> usize {
+            size_of::<ContractAddress>().saturating_add(self.as_ref().len())
         }
     }
 
@@ -2822,11 +2820,17 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for AccountLabel {
+    impl MeasuredBytes for AccountAliasDomain {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<AccountLabel>();
-            total = total.saturating_add(self.domain.measured_bytes_extra());
+            size_of::<AccountAliasDomain>().saturating_add(self.0.measured_bytes_extra())
+        }
+    }
+
+    impl MeasuredBytes for AccountAlias {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AccountAlias>();
             total = total.saturating_add(self.label.measured_bytes_extra());
+            total = total.saturating_add(self.domain.measured_bytes_extra());
             total
         }
     }
@@ -2877,8 +2881,12 @@ mod measured_bytes_impls {
     impl MeasuredBytes for AssetDefinitionId {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AssetDefinitionId>();
-            total = total.saturating_add(self.domain.measured_bytes_extra());
-            total = total.saturating_add(self.name.measured_bytes_extra());
+            if let Some(domain) = self.try_domain() {
+                total = total.saturating_add(domain.measured_bytes_extra());
+            }
+            if let Some(name) = self.try_name() {
+                total = total.saturating_add(name.measured_bytes_extra());
+            }
             total
         }
     }
@@ -2953,6 +2961,41 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for RecoveryGuardian {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RecoveryGuardian>();
+            total = total.saturating_add(self.account.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AccountRecoveryPolicy {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AccountRecoveryPolicy>();
+            total = total.saturating_add(self.guardians.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AccountRecoveryStatus {
+        fn measured_bytes(&self) -> usize {
+            size_of::<AccountRecoveryStatus>()
+        }
+    }
+
+    impl MeasuredBytes for AccountRecoveryRequest {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AccountRecoveryRequest>();
+            total = total.saturating_add(self.alias.measured_bytes_extra());
+            total = total.saturating_add(self.active_account_id_at_proposal.measured_bytes_extra());
+            total = total.saturating_add(self.proposed_controller.measured_bytes_extra());
+            total = total.saturating_add(self.approvals.measured_bytes_extra());
+            total = total.saturating_add(self.proposed_by.measured_bytes_extra());
+            total = total.saturating_add(self.status.measured_bytes_extra());
+            total
+        }
+    }
+
     impl MeasuredBytes for AssetConfidentialPolicy {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AssetConfidentialPolicy>();
@@ -2996,6 +3039,50 @@ mod measured_bytes_impls {
             let mut total = size_of::<NftData>();
             total = total.saturating_add(self.content.measured_bytes_extra());
             total = total.saturating_add(self.owned_by.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RwaParentRef {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RwaParentRef>();
+            total = total.saturating_add(self.rwa.measured_bytes_extra());
+            total = total.saturating_add(self.quantity.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RwaId {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RwaId>();
+            total = total.saturating_add(self.domain.measured_bytes_extra());
+            total = total.saturating_add(self.hash.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RwaControlPolicy {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RwaControlPolicy>();
+            total = total.saturating_add(self.controller_accounts.measured_bytes_extra());
+            total = total.saturating_add(self.controller_roles.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RwaData {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RwaData>();
+            total = total.saturating_add(self.quantity.measured_bytes_extra());
+            total = total.saturating_add(self.spec.measured_bytes_extra());
+            total = total.saturating_add(self.primary_reference.measured_bytes_extra());
+            total = total.saturating_add(self.status.measured_bytes_extra());
+            total = total.saturating_add(self.metadata.measured_bytes_extra());
+            total = total.saturating_add(self.parents.measured_bytes_extra());
+            total = total.saturating_add(self.controls.measured_bytes_extra());
+            total = total.saturating_add(self.owned_by.measured_bytes_extra());
+            total = total.saturating_add(self.is_frozen.measured_bytes_extra());
+            total = total.saturating_add(self.held_quantity.measured_bytes_extra());
             total
         }
     }
@@ -3355,8 +3442,7 @@ mod measured_bytes_impls {
     impl MeasuredBytes for DeployContractProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<DeployContractProposal>();
-            total = total.saturating_add(self.namespace.measured_bytes_extra());
-            total = total.saturating_add(self.contract_id.measured_bytes_extra());
+            total = total.saturating_add(self.contract_address.measured_bytes_extra());
             total = total.saturating_add(self.code_hash_hex.measured_bytes_extra());
             total = total.saturating_add(self.abi_hash_hex.measured_bytes_extra());
             total = total.saturating_add(self.abi_version.measured_bytes_extra());
@@ -3448,6 +3534,90 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalAction {
+        fn measured_bytes(&self) -> usize {
+            size_of::<iroha_data_model::ministry::AgendaProposalAction>()
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaEvidenceKind {
+        fn measured_bytes(&self) -> usize {
+            size_of::<iroha_data_model::ministry::AgendaEvidenceKind>()
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalSummary {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<iroha_data_model::ministry::AgendaProposalSummary>();
+            total = total.saturating_add(self.title.measured_bytes_extra());
+            total = total.saturating_add(self.motivation.measured_bytes_extra());
+            total = total.saturating_add(self.expected_impact.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalTarget {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<iroha_data_model::ministry::AgendaProposalTarget>();
+            total = total.saturating_add(self.label.measured_bytes_extra());
+            total = total.saturating_add(self.hash_family.measured_bytes_extra());
+            total = total.saturating_add(self.hash_hex.measured_bytes_extra());
+            total = total.saturating_add(self.reason.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaEvidenceAttachment {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<iroha_data_model::ministry::AgendaEvidenceAttachment>();
+            total = total.saturating_add(self.kind.measured_bytes_extra());
+            total = total.saturating_add(self.uri.measured_bytes_extra());
+            total = total.saturating_add(self.digest_blake3_hex.measured_bytes_extra());
+            total = total.saturating_add(self.description.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalSubmitter {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<iroha_data_model::ministry::AgendaProposalSubmitter>();
+            total = total.saturating_add(self.name.measured_bytes_extra());
+            total = total.saturating_add(self.contact.measured_bytes_extra());
+            total = total.saturating_add(self.organization.measured_bytes_extra());
+            total = total.saturating_add(self.pgp_fingerprint.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalV1 {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<iroha_data_model::ministry::AgendaProposalV1>();
+            total = total.saturating_add(self.version.measured_bytes_extra());
+            total = total.saturating_add(self.proposal_id.measured_bytes_extra());
+            total = total.saturating_add(self.submitted_at_unix_ms.measured_bytes_extra());
+            total = total.saturating_add(self.language.measured_bytes_extra());
+            total = total.saturating_add(self.action.measured_bytes_extra());
+            total = total.saturating_add(self.summary.measured_bytes_extra());
+            total = total.saturating_add(self.tags.measured_bytes_extra());
+            total = total.saturating_add(self.targets.measured_bytes_extra());
+            total = total.saturating_add(self.evidence.measured_bytes_extra());
+            total = total.saturating_add(self.submitter.measured_bytes_extra());
+            total = total.saturating_add(self.duplicates.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalRecordV1 {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<iroha_data_model::ministry::AgendaProposalRecordV1>();
+            total = total.saturating_add(self.proposal.measured_bytes_extra());
+            total = total.saturating_add(self.authority.measured_bytes_extra());
+            total = total.saturating_add(self.submitted_tx_hash_hex.measured_bytes_extra());
+            total = total.saturating_add(self.submitted_height.measured_bytes_extra());
+            total
+        }
+    }
+
     impl MeasuredBytes for GovernanceReferendumRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceReferendumRecord>();
@@ -3530,173 +3700,6 @@ mod measured_bytes_impls {
         }
     }
 
-    impl MeasuredBytes for PoseidonDigest {
-        fn measured_bytes(&self) -> usize {
-            size_of::<PoseidonDigest>()
-        }
-    }
-
-    impl MeasuredBytes for OfflineAllowanceCommitment {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineAllowanceCommitment>();
-            total = total.saturating_add(self.asset.measured_bytes_extra());
-            total = total.saturating_add(self.amount.measured_bytes_extra());
-            total = total.saturating_add(self.commitment.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for OfflineWalletPolicy {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineWalletPolicy>();
-            total = total.saturating_add(self.max_balance.measured_bytes_extra());
-            total = total.saturating_add(self.max_tx_value.measured_bytes_extra());
-            total = total.saturating_add(self.expires_at_ms.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for OfflineWalletCertificate {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineWalletCertificate>();
-            total = total.saturating_add(self.controller.measured_bytes_extra());
-            total = total.saturating_add(self.operator.measured_bytes_extra());
-            total = total.saturating_add(self.allowance.measured_bytes_extra());
-            total = total.saturating_add(self.spend_public_key.measured_bytes_extra());
-            total = total.saturating_add(self.attestation_report.measured_bytes_extra());
-            total = total.saturating_add(self.issued_at_ms.measured_bytes_extra());
-            total = total.saturating_add(self.expires_at_ms.measured_bytes_extra());
-            total = total.saturating_add(self.policy.measured_bytes_extra());
-            total = total.saturating_add(self.operator_signature.measured_bytes_extra());
-            total = total.saturating_add(self.metadata.measured_bytes_extra());
-            total = total.saturating_add(self.verdict_id.measured_bytes_extra());
-            total = total.saturating_add(self.attestation_nonce.measured_bytes_extra());
-            total = total.saturating_add(self.refresh_at_ms.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for OfflineCounterState {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineCounterState>();
-            total = total.saturating_add(self.apple_key_counters.measured_bytes_extra());
-            total = total.saturating_add(self.android_series_counters.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for OfflineAllowanceRecord {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineAllowanceRecord>();
-            total = total.saturating_add(self.certificate.measured_bytes_extra());
-            total = total.saturating_add(self.current_commitment.measured_bytes_extra());
-            total = total.saturating_add(self.registered_at_ms.measured_bytes_extra());
-            total = total.saturating_add(self.remaining_amount.measured_bytes_extra());
-            total = total.saturating_add(self.counter_state.measured_bytes_extra());
-            total = total.saturating_add(self.verdict_id.measured_bytes_extra());
-            total = total.saturating_add(self.attestation_nonce.measured_bytes_extra());
-            total = total.saturating_add(self.refresh_at_ms.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for AppleAppAttestProof {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<AppleAppAttestProof>();
-            total = total.saturating_add(self.key_id.measured_bytes_extra());
-            total = total.saturating_add(self.counter.measured_bytes_extra());
-            total = total.saturating_add(self.assertion.measured_bytes_extra());
-            total = total.saturating_add(self.challenge_hash.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for AndroidMarkerKeyProof {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<AndroidMarkerKeyProof>();
-            total = total.saturating_add(self.series.measured_bytes_extra());
-            total = total.saturating_add(self.counter.measured_bytes_extra());
-            total = total.saturating_add(self.marker_public_key.measured_bytes_extra());
-            total = total.saturating_add(self.marker_signature.measured_bytes_extra());
-            total = total.saturating_add(self.attestation.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for AndroidProvisionedProof {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<AndroidProvisionedProof>();
-            total = total.saturating_add(self.manifest_schema.measured_bytes_extra());
-            total = total.saturating_add(self.manifest_version.measured_bytes_extra());
-            total = total.saturating_add(self.manifest_issued_at_ms.measured_bytes_extra());
-            total = total.saturating_add(self.challenge_hash.measured_bytes_extra());
-            total = total.saturating_add(self.counter.measured_bytes_extra());
-            total = total.saturating_add(self.device_manifest.measured_bytes_extra());
-            total = total.saturating_add(self.inspector_signature.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for OfflinePlatformProof {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflinePlatformProof>();
-            match self {
-                OfflinePlatformProof::AppleAppAttest(payload) => {
-                    total = total.saturating_add(payload.measured_bytes_extra());
-                }
-                OfflinePlatformProof::AndroidMarkerKey(payload) => {
-                    total = total.saturating_add(payload.measured_bytes_extra());
-                }
-                OfflinePlatformProof::Provisioned(payload) => {
-                    total = total.saturating_add(payload.measured_bytes_extra());
-                }
-            }
-            total
-        }
-    }
-
-    impl MeasuredBytes for OfflineBalanceProof {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineBalanceProof>();
-            total = total.saturating_add(self.initial_commitment.measured_bytes_extra());
-            total = total.saturating_add(self.resulting_commitment.measured_bytes_extra());
-            total = total.saturating_add(self.claimed_delta.measured_bytes_extra());
-            total = total.saturating_add(self.zk_proof.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for OfflineSpendReceipt {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineSpendReceipt>();
-            total = total.saturating_add(self.tx_id.measured_bytes_extra());
-            total = total.saturating_add(self.from.measured_bytes_extra());
-            total = total.saturating_add(self.to.measured_bytes_extra());
-            total = total.saturating_add(self.asset.measured_bytes_extra());
-            total = total.saturating_add(self.amount.measured_bytes_extra());
-            total = total.saturating_add(self.issued_at_ms.measured_bytes_extra());
-            total = total.saturating_add(self.invoice_id.measured_bytes_extra());
-            total = total.saturating_add(self.platform_proof.measured_bytes_extra());
-            total = total.saturating_add(self.platform_snapshot.measured_bytes_extra());
-            total = total.saturating_add(self.sender_certificate_id.measured_bytes_extra());
-            total = total.saturating_add(self.sender_signature.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for AggregateProofEnvelope {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<AggregateProofEnvelope>();
-            total = total.saturating_add(self.version.measured_bytes_extra());
-            total = total.saturating_add(self.receipts_root.measured_bytes_extra());
-            total = total.saturating_add(self.proof_sum.measured_bytes_extra());
-            total = total.saturating_add(self.proof_counter.measured_bytes_extra());
-            total = total.saturating_add(self.proof_replay.measured_bytes_extra());
-            total = total.saturating_add(self.metadata.measured_bytes_extra());
-            total
-        }
-    }
-
     impl MeasuredBytes for ProofAttachment {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ProofAttachment>();
@@ -3758,83 +3761,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
-    impl MeasuredBytes for OfflinePlatformTokenSnapshot {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflinePlatformTokenSnapshot>();
-            total = total.saturating_add(self.policy.measured_bytes_extra());
-            total = total.saturating_add(self.attestation_jws_b64.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for OfflineVerdictSnapshot {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineVerdictSnapshot>();
-            total = total.saturating_add(self.certificate_id.measured_bytes_extra());
-            total = total.saturating_add(self.verdict_id.measured_bytes_extra());
-            total = total.saturating_add(self.attestation_nonce.measured_bytes_extra());
-            total = total.saturating_add(self.refresh_at_ms.measured_bytes_extra());
-            total = total.saturating_add(self.certificate_expires_at_ms.measured_bytes_extra());
-            total = total.saturating_add(self.policy_expires_at_ms.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for OfflineTransferLifecycleEntry {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineTransferLifecycleEntry>();
-            total = total.saturating_add(self.status.measured_bytes_extra());
-            total = total.saturating_add(self.transitioned_at_ms.measured_bytes_extra());
-            total = total.saturating_add(self.verdict_snapshot.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for OfflineToOnlineTransfer {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineToOnlineTransfer>();
-            total = total.saturating_add(self.bundle_id.measured_bytes_extra());
-            total = total.saturating_add(self.receiver.measured_bytes_extra());
-            total = total.saturating_add(self.deposit_account.measured_bytes_extra());
-            total = total.saturating_add(self.receipts.measured_bytes_extra());
-            total = total.saturating_add(self.balance_proof.measured_bytes_extra());
-            total = total.saturating_add(self.aggregate_proof.measured_bytes_extra());
-            total = total.saturating_add(self.attachments.measured_bytes_extra());
-            total = total.saturating_add(self.platform_snapshot.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for OfflineTransferRecord {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineTransferRecord>();
-            total = total.saturating_add(self.transfer.measured_bytes_extra());
-            total = total.saturating_add(self.controller.measured_bytes_extra());
-            total = total.saturating_add(self.status.measured_bytes_extra());
-            total = total.saturating_add(self.recorded_at_ms.measured_bytes_extra());
-            total = total.saturating_add(self.recorded_at_height.measured_bytes_extra());
-            total = total.saturating_add(self.archived_at_height.measured_bytes_extra());
-            total = total.saturating_add(self.history.measured_bytes_extra());
-            total = total.saturating_add(self.pos_verdict_snapshots.measured_bytes_extra());
-            total = total.saturating_add(self.verdict_snapshot.measured_bytes_extra());
-            total = total.saturating_add(self.platform_snapshot.measured_bytes_extra());
-            total
-        }
-    }
-
-    impl MeasuredBytes for OfflineVerdictRevocation {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<OfflineVerdictRevocation>();
-            total = total.saturating_add(self.verdict_id.measured_bytes_extra());
-            total = total.saturating_add(self.issuer.measured_bytes_extra());
-            total = total.saturating_add(self.revoked_at_ms.measured_bytes_extra());
-            total = total.saturating_add(self.reason.measured_bytes_extra());
-            total = total.saturating_add(self.note.measured_bytes_extra());
-            total = total.saturating_add(self.metadata.measured_bytes_extra());
-            total
-        }
-    }
 }
 
 fn lane_snapshot_dir(root: &Path, entry: &LaneConfigEntry) -> PathBuf {
@@ -3866,10 +3792,13 @@ enum TieredSegment {
     Domains,
     Accounts,
     AccountRekeyRecords,
+    AccountRecoveryPolicies,
+    AccountRecoveryRequests,
     AssetDefinitions,
     Assets,
     AssetMetadata,
     Nfts,
+    Rwas,
     Roles,
     AccountPermissions,
     AccountRoles,
@@ -3886,16 +3815,14 @@ enum TieredSegment {
     SmartContractState,
     ZkAssets,
     Elections,
+    MinistryAgendaProposals,
     GovernanceProposals,
     GovernanceReferenda,
     GovernanceLocks,
     GovernanceSlashes,
     Council,
     ParliamentBodies,
-    OfflineAllowances,
-    OfflineVerdictRevocations,
-    OfflineTransfers,
-    OfflineConsumedBuildClaimIds,
+    OfflineNoteV2ReplayKeys,
 }
 
 impl TieredSegment {
@@ -3904,10 +3831,13 @@ impl TieredSegment {
             TieredSegment::Domains => "domains",
             TieredSegment::Accounts => "accounts",
             TieredSegment::AccountRekeyRecords => "account_rekey_records",
+            TieredSegment::AccountRecoveryPolicies => "account_recovery_policies",
+            TieredSegment::AccountRecoveryRequests => "account_recovery_requests",
             TieredSegment::AssetDefinitions => "asset_definitions",
             TieredSegment::Assets => "assets",
             TieredSegment::AssetMetadata => "asset_metadata",
             TieredSegment::Nfts => "nfts",
+            TieredSegment::Rwas => "rwas",
             TieredSegment::Roles => "roles",
             TieredSegment::AccountPermissions => "account_permissions",
             TieredSegment::AccountRoles => "account_roles",
@@ -3924,16 +3854,14 @@ impl TieredSegment {
             TieredSegment::SmartContractState => "smart_contract_state",
             TieredSegment::ZkAssets => "zk_assets",
             TieredSegment::Elections => "elections",
+            TieredSegment::MinistryAgendaProposals => "ministry_agenda_proposals",
             TieredSegment::GovernanceProposals => "governance_proposals",
             TieredSegment::GovernanceReferenda => "governance_referenda",
             TieredSegment::GovernanceLocks => "governance_locks",
             TieredSegment::GovernanceSlashes => "governance_slashes",
             TieredSegment::Council => "council",
             TieredSegment::ParliamentBodies => "parliament_bodies",
-            TieredSegment::OfflineAllowances => "offline_allowances",
-            TieredSegment::OfflineVerdictRevocations => "offline_verdict_revocations",
-            TieredSegment::OfflineTransfers => "offline_transfers",
-            TieredSegment::OfflineConsumedBuildClaimIds => "offline_consumed_build_claim_ids",
+            TieredSegment::OfflineNoteV2ReplayKeys => "offline_note_v2_replay_keys",
         }
     }
 }
@@ -3953,10 +3881,13 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "domains" => TieredSegment::Domains,
             "accounts" => TieredSegment::Accounts,
             "account_rekey_records" => TieredSegment::AccountRekeyRecords,
+            "account_recovery_policies" => TieredSegment::AccountRecoveryPolicies,
+            "account_recovery_requests" => TieredSegment::AccountRecoveryRequests,
             "asset_definitions" => TieredSegment::AssetDefinitions,
             "assets" => TieredSegment::Assets,
             "asset_metadata" => TieredSegment::AssetMetadata,
             "nfts" => TieredSegment::Nfts,
+            "rwas" => TieredSegment::Rwas,
             "roles" => TieredSegment::Roles,
             "account_permissions" => TieredSegment::AccountPermissions,
             "account_roles" => TieredSegment::AccountRoles,
@@ -3973,16 +3904,14 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "smart_contract_state" => TieredSegment::SmartContractState,
             "zk_assets" => TieredSegment::ZkAssets,
             "elections" => TieredSegment::Elections,
+            "ministry_agenda_proposals" => TieredSegment::MinistryAgendaProposals,
             "governance_proposals" => TieredSegment::GovernanceProposals,
             "governance_referenda" => TieredSegment::GovernanceReferenda,
             "governance_locks" => TieredSegment::GovernanceLocks,
             "governance_slashes" => TieredSegment::GovernanceSlashes,
             "council" => TieredSegment::Council,
             "parliament_bodies" => TieredSegment::ParliamentBodies,
-            "offline_allowances" => TieredSegment::OfflineAllowances,
-            "offline_verdict_revocations" => TieredSegment::OfflineVerdictRevocations,
-            "offline_transfers" => TieredSegment::OfflineTransfers,
-            "offline_consumed_build_claim_ids" => TieredSegment::OfflineConsumedBuildClaimIds,
+            "offline_note_v2_replay_keys" => TieredSegment::OfflineNoteV2ReplayKeys,
             other => {
                 return Err(norito::json::Error::InvalidField {
                     field: "segment".into(),
@@ -4144,11 +4073,14 @@ impl EntryScore {
 pub(crate) enum TieredKeyHandle {
     Domain(iroha_data_model::domain::DomainId),
     Account(iroha_data_model::account::AccountId),
-    AccountRekey(iroha_data_model::account::rekey::AccountLabel),
+    AccountRekey(iroha_data_model::account::rekey::AccountAlias),
+    AccountRecoveryPolicy(iroha_data_model::account::AccountAlias),
+    AccountRecoveryRequest(iroha_data_model::account::AccountAlias),
     AssetDefinition(iroha_data_model::asset::AssetDefinitionId),
     Asset(iroha_data_model::asset::AssetId),
     AssetMetadata(iroha_data_model::asset::AssetId),
     Nft(iroha_data_model::nft::NftId),
+    Rwa(iroha_data_model::rwa::RwaId),
     Role(iroha_data_model::role::RoleId),
     AccountPermission(iroha_data_model::account::AccountId),
     AccountRole(crate::role::RoleIdWithOwner),
@@ -4161,20 +4093,18 @@ pub(crate) enum TieredKeyHandle {
     CommitQc(iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>),
     ContractManifest(iroha_crypto::Hash),
     ContractCode(iroha_crypto::Hash),
-    ContractInstance((String, String)),
+    ContractInstance(iroha_data_model::smart_contract::ContractAddress),
     SmartContractState(Name),
     ZkAsset(iroha_data_model::asset::AssetDefinitionId),
     Election(String),
+    MinistryAgendaProposal(String),
     GovernanceProposal([u8; 32]),
     GovernanceReferendum(String),
     GovernanceLock(String),
     GovernanceSlash(String),
     Council(u64),
     ParliamentBodies(u64),
-    OfflineAllowance(iroha_crypto::Hash),
-    OfflineVerdictRevocation(iroha_crypto::Hash),
-    OfflineTransfer(iroha_crypto::Hash),
-    OfflineConsumedBuildClaimId(iroha_crypto::Hash),
+    OfflineNoteV2ReplayKey(iroha_crypto::Hash),
 }
 
 impl TieredKeyHandle {
@@ -4183,10 +4113,13 @@ impl TieredKeyHandle {
             TieredKeyHandle::Domain(_) => TieredSegment::Domains,
             TieredKeyHandle::Account(_) => TieredSegment::Accounts,
             TieredKeyHandle::AccountRekey(_) => TieredSegment::AccountRekeyRecords,
+            TieredKeyHandle::AccountRecoveryPolicy(_) => TieredSegment::AccountRecoveryPolicies,
+            TieredKeyHandle::AccountRecoveryRequest(_) => TieredSegment::AccountRecoveryRequests,
             TieredKeyHandle::AssetDefinition(_) => TieredSegment::AssetDefinitions,
             TieredKeyHandle::Asset(_) => TieredSegment::Assets,
             TieredKeyHandle::AssetMetadata(_) => TieredSegment::AssetMetadata,
             TieredKeyHandle::Nft(_) => TieredSegment::Nfts,
+            TieredKeyHandle::Rwa(_) => TieredSegment::Rwas,
             TieredKeyHandle::Role(_) => TieredSegment::Roles,
             TieredKeyHandle::AccountPermission(_) => TieredSegment::AccountPermissions,
             TieredKeyHandle::AccountRole(_) => TieredSegment::AccountRoles,
@@ -4203,36 +4136,30 @@ impl TieredKeyHandle {
             TieredKeyHandle::SmartContractState(_) => TieredSegment::SmartContractState,
             TieredKeyHandle::ZkAsset(_) => TieredSegment::ZkAssets,
             TieredKeyHandle::Election(_) => TieredSegment::Elections,
+            TieredKeyHandle::MinistryAgendaProposal(_) => TieredSegment::MinistryAgendaProposals,
             TieredKeyHandle::GovernanceProposal(_) => TieredSegment::GovernanceProposals,
             TieredKeyHandle::GovernanceReferendum(_) => TieredSegment::GovernanceReferenda,
             TieredKeyHandle::GovernanceLock(_) => TieredSegment::GovernanceLocks,
             TieredKeyHandle::GovernanceSlash(_) => TieredSegment::GovernanceSlashes,
             TieredKeyHandle::Council(_) => TieredSegment::Council,
             TieredKeyHandle::ParliamentBodies(_) => TieredSegment::ParliamentBodies,
-            TieredKeyHandle::OfflineAllowance(_) => TieredSegment::OfflineAllowances,
-            TieredKeyHandle::OfflineVerdictRevocation(_) => {
-                TieredSegment::OfflineVerdictRevocations
-            }
-            TieredKeyHandle::OfflineTransfer(_) => TieredSegment::OfflineTransfers,
-            TieredKeyHandle::OfflineConsumedBuildClaimId(_) => {
-                TieredSegment::OfflineConsumedBuildClaimIds
-            }
+            TieredKeyHandle::OfflineNoteV2ReplayKey(_) => TieredSegment::OfflineNoteV2ReplayKeys,
         }
     }
 
     fn encode_key(&self) -> Result<Vec<u8>> {
         match self {
-            TieredKeyHandle::ContractInstance(key) => {
-                json::to_vec(&vec![key.0.clone(), key.1.clone()])
-                    .wrap_err("failed to encode contract instance key for tiered snapshot")
-            }
+            TieredKeyHandle::ContractInstance(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Domain(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Account(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRekey(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AccountRecoveryPolicy(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AccountRecoveryRequest(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AssetDefinition(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Asset(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AssetMetadata(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Nft(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::Rwa(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Role(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountPermission(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRole(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4248,20 +4175,14 @@ impl TieredKeyHandle {
             TieredKeyHandle::SmartContractState(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ZkAsset(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Election(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::MinistryAgendaProposal(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceProposal(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceReferendum(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceLock(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceSlash(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Council(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ParliamentBodies(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::OfflineAllowance(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::OfflineVerdictRevocation(key) => {
-                Ok(norito::codec::Encode::encode(key))
-            }
-            TieredKeyHandle::OfflineTransfer(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::OfflineConsumedBuildClaimId(key) => {
-                Ok(norito::codec::Encode::encode(key))
-            }
+            TieredKeyHandle::OfflineNoteV2ReplayKey(key) => Ok(norito::codec::Encode::encode(key)),
         }
     }
 
@@ -4290,10 +4211,17 @@ impl TieredKeyHandle {
             TieredKeyHandle::Domain(id) => fetch!(world.domains, id),
             TieredKeyHandle::Account(id) => fetch!(world.accounts, id),
             TieredKeyHandle::AccountRekey(id) => fetch!(world.account_rekey_records, id),
+            TieredKeyHandle::AccountRecoveryPolicy(id) => {
+                fetch!(world.account_recovery_policies, id)
+            }
+            TieredKeyHandle::AccountRecoveryRequest(id) => {
+                fetch!(world.account_recovery_requests, id)
+            }
             TieredKeyHandle::AssetDefinition(id) => fetch!(world.asset_definitions, id),
             TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
             TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
             TieredKeyHandle::Nft(id) => fetch!(world.nfts, id),
+            TieredKeyHandle::Rwa(id) => fetch!(world.rwas, id),
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
@@ -4310,19 +4238,17 @@ impl TieredKeyHandle {
             TieredKeyHandle::SmartContractState(key) => fetch!(world.smart_contract_state, key),
             TieredKeyHandle::ZkAsset(id) => fetch!(world.zk_assets, id),
             TieredKeyHandle::Election(id) => fetch!(world.elections, id),
+            TieredKeyHandle::MinistryAgendaProposal(id) => {
+                fetch!(world.ministry_agenda_proposals, id)
+            }
             TieredKeyHandle::GovernanceProposal(id) => fetch!(world.governance_proposals, id),
             TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
             TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
             TieredKeyHandle::Council(id) => fetch!(world.council, id),
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
-            TieredKeyHandle::OfflineAllowance(id) => fetch!(world.offline_allowances, id),
-            TieredKeyHandle::OfflineVerdictRevocation(id) => {
-                fetch!(world.offline_verdict_revocations, id)
-            }
-            TieredKeyHandle::OfflineTransfer(id) => fetch!(world.offline_to_online_transfers, id),
-            TieredKeyHandle::OfflineConsumedBuildClaimId(id) => {
-                fetch!(world.offline_consumed_build_claim_ids, id)
+            TieredKeyHandle::OfflineNoteV2ReplayKey(id) => {
+                fetch!(world.offline_note_v2_replay_keys, id)
             }
         }
     }
@@ -4345,10 +4271,17 @@ impl TieredKeyHandle {
             TieredKeyHandle::Domain(id) => fetch!(world.domains, id),
             TieredKeyHandle::Account(id) => fetch!(world.accounts, id),
             TieredKeyHandle::AccountRekey(id) => fetch!(world.account_rekey_records, id),
+            TieredKeyHandle::AccountRecoveryPolicy(id) => {
+                fetch!(world.account_recovery_policies, id)
+            }
+            TieredKeyHandle::AccountRecoveryRequest(id) => {
+                fetch!(world.account_recovery_requests, id)
+            }
             TieredKeyHandle::AssetDefinition(id) => fetch!(world.asset_definitions, id),
             TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
             TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
             TieredKeyHandle::Nft(id) => fetch!(world.nfts, id),
+            TieredKeyHandle::Rwa(id) => fetch!(world.rwas, id),
             TieredKeyHandle::Role(id) => fetch!(world.roles, id),
             TieredKeyHandle::AccountPermission(id) => fetch!(world.account_permissions, id),
             TieredKeyHandle::AccountRole(id) => fetch!(world.account_roles, id),
@@ -4365,19 +4298,17 @@ impl TieredKeyHandle {
             TieredKeyHandle::SmartContractState(key) => fetch!(world.smart_contract_state, key),
             TieredKeyHandle::ZkAsset(id) => fetch!(world.zk_assets, id),
             TieredKeyHandle::Election(id) => fetch!(world.elections, id),
+            TieredKeyHandle::MinistryAgendaProposal(id) => {
+                fetch!(world.ministry_agenda_proposals, id)
+            }
             TieredKeyHandle::GovernanceProposal(id) => fetch!(world.governance_proposals, id),
             TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
             TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
             TieredKeyHandle::GovernanceSlash(id) => fetch!(world.governance_slashes, id),
             TieredKeyHandle::Council(id) => fetch!(world.council, id),
             TieredKeyHandle::ParliamentBodies(id) => fetch!(world.parliament_bodies, id),
-            TieredKeyHandle::OfflineAllowance(id) => fetch!(world.offline_allowances, id),
-            TieredKeyHandle::OfflineVerdictRevocation(id) => {
-                fetch!(world.offline_verdict_revocations, id)
-            }
-            TieredKeyHandle::OfflineTransfer(id) => fetch!(world.offline_to_online_transfers, id),
-            TieredKeyHandle::OfflineConsumedBuildClaimId(id) => {
-                fetch!(world.offline_consumed_build_claim_ids, id)
+            TieredKeyHandle::OfflineNoteV2ReplayKey(id) => {
+                fetch!(world.offline_note_v2_replay_keys, id)
             }
         }
     }
@@ -4389,10 +4320,17 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::Domain(id) => write!(f, "domain:{id}"),
             TieredKeyHandle::Account(id) => write!(f, "account:{id}"),
             TieredKeyHandle::AccountRekey(id) => write!(f, "account_rekey:{id:?}"),
+            TieredKeyHandle::AccountRecoveryPolicy(id) => {
+                write!(f, "account_recovery_policy:{id:?}")
+            }
+            TieredKeyHandle::AccountRecoveryRequest(id) => {
+                write!(f, "account_recovery_request:{id:?}")
+            }
             TieredKeyHandle::AssetDefinition(id) => write!(f, "asset_definition:{id}"),
             TieredKeyHandle::Asset(id) => write!(f, "asset:{id}"),
             TieredKeyHandle::AssetMetadata(id) => write!(f, "asset_metadata:{id}"),
             TieredKeyHandle::Nft(id) => write!(f, "nft:{id}"),
+            TieredKeyHandle::Rwa(id) => write!(f, "rwa:{id}"),
             TieredKeyHandle::Role(id) => write!(f, "role:{id}"),
             TieredKeyHandle::AccountPermission(id) => write!(f, "account_permission:{id}"),
             TieredKeyHandle::AccountRole(id) => write!(f, "account_role:{id}"),
@@ -4409,19 +4347,17 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::SmartContractState(key) => write!(f, "smart_contract_state:{key}"),
             TieredKeyHandle::ZkAsset(id) => write!(f, "zk_asset:{id}"),
             TieredKeyHandle::Election(id) => write!(f, "election:{id}"),
+            TieredKeyHandle::MinistryAgendaProposal(id) => {
+                write!(f, "ministry_agenda_proposal:{id}")
+            }
             TieredKeyHandle::GovernanceProposal(id) => write!(f, "gov_proposal:{id:?}"),
             TieredKeyHandle::GovernanceReferendum(id) => write!(f, "gov_referendum:{id}"),
             TieredKeyHandle::GovernanceLock(id) => write!(f, "gov_lock:{id}"),
             TieredKeyHandle::GovernanceSlash(id) => write!(f, "gov_slash:{id}"),
             TieredKeyHandle::Council(id) => write!(f, "council:{id}"),
             TieredKeyHandle::ParliamentBodies(id) => write!(f, "parliament_bodies:{id}"),
-            TieredKeyHandle::OfflineAllowance(id) => write!(f, "offline_allowance:{id}"),
-            TieredKeyHandle::OfflineVerdictRevocation(id) => {
-                write!(f, "offline_verdict_revocation:{id}")
-            }
-            TieredKeyHandle::OfflineTransfer(id) => write!(f, "offline_transfer:{id}"),
-            TieredKeyHandle::OfflineConsumedBuildClaimId(id) => {
-                write!(f, "offline_consumed_build_claim_id:{id}")
+            TieredKeyHandle::OfflineNoteV2ReplayKey(id) => {
+                write!(f, "offline_note_v2_replay_key:{id}")
             }
         }
     }
@@ -4589,6 +4525,20 @@ mod tests {
         assert_eq!(
             MeasuredBytes::measured_bytes(&opaque),
             std::mem::size_of::<OpaqueAccountId>()
+        );
+    }
+
+    #[test]
+    fn measured_bytes_cover_opaque_asset_definition_id() {
+        use iroha_data_model::asset::AssetDefinitionId;
+
+        let opaque = AssetDefinitionId::from_uuid_bytes_unchecked([
+            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x4d, 0xef, 0x80, 0x11, 0x22, 0x33, 0x44, 0x55,
+            0x66, 0x77,
+        ]);
+        assert_eq!(
+            MeasuredBytes::measured_bytes(&opaque),
+            std::mem::size_of::<AssetDefinitionId>()
         );
     }
 

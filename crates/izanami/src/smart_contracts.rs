@@ -11,7 +11,7 @@ use iroha_data_model::transaction::IvmBytecode;
 use iroha_test_network::repo_root;
 use ivm::KotodamaCompiler;
 
-const IVM_TRIGGER_ARTIFACT: &str = "artifact_v1_0_mode03_vlen8_cycles1000_abi1";
+const IVM_TRIGGER_ARTIFACT: &str = "artifact_v1_1_mode03_vlen8_cycles1000_abi1";
 
 /// Compile a Kotodama sample from `crates/kotodama_lang/src/samples` into bytecode.
 ///
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn ivm_artifact_loads() {
-        let artifact = ivm_artifact("artifact_v1_7_mode00_vlen0_cycles0_abi1")
+        let artifact = ivm_artifact("artifact_v1_1_mode00_vlen0_cycles0_abi1")
             .expect("artifact should be readable");
         assert!(artifact.size_bytes() > 0);
     }
@@ -143,7 +143,7 @@ mod tests {
         let artifact = ivm_trigger_program().expect("trigger program should load");
         let parsed = ivm::ProgramMetadata::parse(artifact.as_ref()).expect("valid metadata");
         assert_eq!(parsed.metadata.version_major, 1);
-        assert_eq!(parsed.metadata.version_minor, 0);
+        assert_eq!(parsed.metadata.version_minor, 1);
         assert_eq!(parsed.metadata.abi_version, 1);
     }
 

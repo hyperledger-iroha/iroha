@@ -4,23 +4,30 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added signed Torii alias-resolution ergonomics: `resolveAlias`,
+  `resolveAliasByIndex`, and `lookupAliasesByAccount` now accept
+  `canonicalAuth`, and `buildCanonicalJsonRequest` builds a signed JSON request
+  from either private-key bytes or an async browser-wallet signer.
 - `ToriiClient.callContract` now requires a `gasLimit` in the request payload so
   callers always supply the on-chain gas cap; typings, README docs, and test
   coverage reflect the stricter contract.【javascript/iroha_js/src/toriiClient.js:15360】【javascript/iroha_js/index.d.ts:4477】【javascript/iroha_js/test/toriiClient.test.js:13919】【javascript/iroha_js/test/integrationTorii.test.js:2701】【javascript/iroha_js/README.md:1909】
+- Removed JS client helpers for non-V2 offline HTTP routes that Torii no longer
+  mounts. `getOfflineV2Readiness()` is
+  the supported readiness probe for `/v1/offline/v2/readiness`.
 - Constrained the JS SDK to the first-release surface: Connect WebSocket URLs no longer accept token
   query parameters, Torii health snapshots now only parse JSON responses, the `X-Iroha-API-Token`
-  alias is no longer emitted, offline summary counter aliases are dropped, and account address
+  alias is no longer emitted, V1 telemetry counter aliases are dropped, and account address
   decoding rejects extension-flag headers. Tests and docs now reflect the first-release surface.
 - Added `ToriiClient.iterateVerifyingKeys` and `iterateProverReports` plus
   iterator option whitelists so SoraFS/registry/prover paginators accept their
   filter fields alongside paging knobs; typings, README snippets, and Jest
   coverage close the remaining JS-04/JS-07 pagination gaps.【javascript/iroha_js/src/toriiClient.js:1181】【javascript/iroha_js/src/toriiClient.js:4671】【javascript/iroha_js/src/toriiClient.js:6949】【javascript/iroha_js/index.d.ts:5470】【javascript/iroha_js/test/toriiClient.test.js:761】【javascript/iroha_js/test/toriiClient.test.js:11493】【javascript/iroha_js/README.md:106】
-- Added `ToriiClient.iterateSnsGovernanceCases`, which follows the
-  `/v1/sns/governance/cases` `next_since` cursor automatically so JS-04/ADDR-6
-  automation can stream arbitration cases without bespoke pagination.
-  TypeScript declarations, README docs, and Jest coverage demonstrate the
-  iterator usage and confirm the `limit`/`status` filters stay intact across
-  pages.【javascript/iroha_js/src/toriiClient.js:3131】【javascript/iroha_js/index.d.ts:5673】【javascript/iroha_js/test/toriiClient.test.js:14354】【javascript/iroha_js/README.md:2564】
+- The JS SNS helpers now track the ledger-backed `/v1/sns/names...` Torii API.
+  `createSnsGovernanceCase`, `exportSnsGovernanceCases`, and
+  `iterateSnsGovernanceCases` are retained only as validation stubs that reject
+  because Torii removed `/v1/sns/governance/cases`; README guidance, typings,
+  and Jest coverage now point callers at inline governance hooks and the new
+  namespace-aware SNS routes.【javascript/iroha_js/src/toriiClient.js:4121】【javascript/iroha_js/index.d.ts:6578】【javascript/iroha_js/test/toriiClient.test.js:18238】【javascript/iroha_js/README.md:3226】
 - ISO bridge status normalization now constrains Torii responses to the
   expected `Pending`/`Accepted`/`Rejected` labels and validates `pacs002_code`
   against the standard `ACTC`/`ACSP`/`ACSC`/`ACWC`/`PDNG`/`RJCT` set so JS-06
@@ -53,10 +60,6 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   snippet, and Jest coverage so JS-04/DA-8 callers can mirror the
   `iroha da submit` payload (BLAKE3 digest, typed metadata, retention policy) directly from
   Node without shelling out to the CLI.【javascript/iroha_js/src/toriiClient.js:1163】【javascript/iroha_js/src/dataAvailability.js:22】【javascript/iroha_js/index.d.ts:4030】【javascript/iroha_js/README.md:770】【javascript/iroha_js/test/toriiClient.test.js:1408】
-- Added offline verdict revocation helpers (`listOfflineRevocations`,
-  `queryOfflineRevocations`, iterator variants, DTO normalisers, TypeScript definitions,
-  README docs, and Jest coverage) so JS-04 validation covers the OA7 revocation surfaces and
-  SDK consumers can inspect `/v1/offline/revocations{,/query}` without bespoke parsing.【javascript/iroha_js/src/toriiClient.js:408】【javascript/iroha_js/index.d.ts:2005】【javascript/iroha_js/README.md:1857】【javascript/iroha_js/test/toriiClient.test.js:8095】
 - Added `buildDaProofSummaryArtifact` and `emitDaProofSummaryArtifact` so DA-8 proof
   workflows can serialise PoR summaries into the same Norito JSON emitted by
   `iroha da prove-availability`, with README usage, typings, and Jest coverage to keep the

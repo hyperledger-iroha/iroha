@@ -1,74 +1,47 @@
 package org.hyperledger.iroha.android.client.websocket;
 
-/**
- * Factory that selects a WebSocket connector per runtime (OkHttp on Android, JDK connector on JVM).
- */
+/** Factory that constructs the canonical WebSocket connector for the current runtime. */
 public final class PlatformWebSocketConnector {
 
   private PlatformWebSocketConnector() {}
 
-  /** Returns a platform-appropriate connector (prefers OkHttp when available). */
+  /** Returns the canonical connector for Android or JVM. */
   public static ToriiWebSocketClient.WebSocketConnector createDefault() {
     return createDefault(PlatformWebSocketConnector.class.getClassLoader());
   }
 
   static ToriiWebSocketClient.WebSocketConnector createDefault(final ClassLoader loader) {
-    final ToriiWebSocketClient.WebSocketConnector okHttp = tryCreateOkHttpConnector(loader);
-    if (okHttp != null) {
-      return okHttp;
-    }
-    final ToriiWebSocketClient.WebSocketConnector jdk = tryCreateJdkConnector(loader);
-    if (jdk != null) {
-      return jdk;
-    }
-    throw new IllegalStateException("No WebSocket connector is available on the classpath.");
+    final String factory =
+        isAndroidRuntime()
+            ? "org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnectorFactory"
+            : "org.hyperledger.iroha.android.client.websocket.JdkWebSocketConnectorFactory";
+    return createFromFactory(loader, factory);
   }
 
-  private static ToriiWebSocketClient.WebSocketConnector tryCreateOkHttpConnector(
-      final ClassLoader loader) {
+  private static ToriiWebSocketClient.WebSocketConnector createFromFactory(
+      final ClassLoader loader, final String factoryName) {
     final ClassLoader effectiveLoader =
         loader == null ? PlatformWebSocketConnector.class.getClassLoader() : loader;
     try {
       final Class<?> factoryClass =
-          Class.forName(
-              "org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnectorFactory",
-              true,
-              effectiveLoader);
+          Class.forName(factoryName, true, effectiveLoader);
       final var method = factoryClass.getMethod("createDefault");
       final Object result = method.invoke(null);
       if (result instanceof ToriiWebSocketClient.WebSocketConnector connector) {
         return connector;
       }
-    } catch (final ClassNotFoundException ignored) {
-      return null;
-    } catch (final Exception ignored) {
-      // OkHttp present but failed to initialise; fall back to the JDK connector.
-      return null;
+      throw new IllegalStateException(factoryName + " did not return a WebSocket connector");
+    } catch (final ReflectiveOperationException ex) {
+      throw new IllegalStateException("Required WebSocket connector factory is unavailable", ex);
     }
-    return null;
   }
 
-  private static ToriiWebSocketClient.WebSocketConnector tryCreateJdkConnector(
-      final ClassLoader loader) {
-    final ClassLoader effectiveLoader =
-        loader == null ? PlatformWebSocketConnector.class.getClassLoader() : loader;
+  private static boolean isAndroidRuntime() {
     try {
-      final Class<?> factoryClass =
-          Class.forName(
-              "org.hyperledger.iroha.android.client.websocket.JdkWebSocketConnectorFactory",
-              true,
-              effectiveLoader);
-      final var method = factoryClass.getMethod("createDefault");
-      final Object result = method.invoke(null);
-      if (result instanceof ToriiWebSocketClient.WebSocketConnector connector) {
-        return connector;
-      }
+      Class.forName("android.os.Build");
+      return true;
     } catch (final ClassNotFoundException ignored) {
-      return null;
-    } catch (final Exception ignored) {
-      // JDK connector not available.
-      return null;
+      return false;
     }
-    return null;
   }
 }

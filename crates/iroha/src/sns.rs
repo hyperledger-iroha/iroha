@@ -1,15 +1,14 @@
 //! Rust client helpers for the Sora Name Service registrar routes.
 
 use eyre::Result;
-use norito::json::Value;
-use url::Url;
 
 use crate::{
     client::{Client, ResponseReport, join_torii_url},
     data_model::sns::{
+        ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
         FreezeNameRequestV1, GovernanceHookV1, NameRecordV1, RegisterNameRequestV1,
-        RegisterNameResponseV1, RenewNameRequestV1, SuffixPolicyV1, TransferNameRequestV1,
-        UpdateControllersRequestV1,
+        RegisterNameResponseV1, RenewNameRequestV1, SuffixId, SuffixPolicyV1,
+        TransferNameRequestV1, UpdateControllersRequestV1,
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
 };
@@ -36,18 +35,60 @@ pub struct SnsApi<'a> {
     client: &'a Client,
 }
 
+/// Namespace selector used by the ledger-backed SNS HTTP API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnsNamespacePath {
+    /// Full account-alias keys.
+    AccountAlias,
+    /// Domain-name literals.
+    Domain,
+    /// Dataspace-alias literals.
+    Dataspace,
+}
+
+impl SnsNamespacePath {
+    /// Stable Torii path segment for this namespace.
+    #[must_use]
+    pub const fn as_path(self) -> &'static str {
+        match self {
+            Self::AccountAlias => "account-alias",
+            Self::Domain => "domain",
+            Self::Dataspace => "dataspace",
+        }
+    }
+
+    /// Resolve the namespace from the fixed on-chain suffix id.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the suffix id does not map to one of the fixed
+    /// ledger-backed SNS namespaces.
+    pub fn from_suffix_id(suffix_id: SuffixId) -> eyre::Result<Self> {
+        match suffix_id {
+            ACCOUNT_ALIAS_SUFFIX_ID => Ok(Self::AccountAlias),
+            DOMAIN_NAME_SUFFIX_ID => Ok(Self::Domain),
+            DATASPACE_ALIAS_SUFFIX_ID => Ok(Self::Dataspace),
+            other => Err(eyre::eyre!("unsupported SNS namespace suffix id `{other}`")),
+        }
+    }
+}
+
+fn name_path(namespace: SnsNamespacePath, literal: &str) -> String {
+    format!("v1/sns/names/{}/{literal}", namespace.as_path())
+}
+
 impl<'a> SnsApi<'a> {
     pub(crate) fn new(client: &'a Client) -> Self {
         Self { client }
     }
 
-    /// POST `/v1/sns/registrations` to register a name.
+    /// POST `/v1/sns/names` to register a name.
     ///
     /// # Errors
     ///
     /// Returns an error if the request cannot be built, sent, or decoded.
     pub fn register(&self, payload: &RegisterNameRequestV1) -> Result<RegisterNameResponseV1> {
-        let url = join_torii_url(&self.client.torii_url, "v1/sns/registrations");
+        let url = join_torii_url(&self.client.torii_url, "v1/sns/names");
         let body = norito::json::to_vec(payload)?;
         let response = self
             .client
@@ -85,13 +126,13 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// GET `/v1/sns/registrations/{selector}`.
+    /// GET `/v1/sns/names/{namespace}/{literal}`.
     ///
     /// # Errors
     ///
     /// Returns an error if the registration lookup or decoding fails.
-    pub fn get_registration(&self, selector: &str) -> Result<NameRecordV1> {
-        let path = format!("v1/sns/registrations/{selector}");
+    pub fn get_name(&self, namespace: SnsNamespacePath, literal: &str) -> Result<NameRecordV1> {
+        let path = name_path(namespace, literal);
         let url = join_torii_url(&self.client.torii_url, &path);
         let response = self
             .client
@@ -107,13 +148,18 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// POST `/v1/sns/registrations/{selector}/renew`.
+    /// POST `/v1/sns/names/{namespace}/{literal}/renew`.
     ///
     /// # Errors
     ///
     /// Returns an error if the renewal request or response decoding fails.
-    pub fn renew(&self, selector: &str, payload: &RenewNameRequestV1) -> Result<NameRecordV1> {
-        let path = format!("v1/sns/registrations/{selector}/renew");
+    pub fn renew(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &RenewNameRequestV1,
+    ) -> Result<NameRecordV1> {
+        let path = format!("{}/renew", name_path(namespace, literal));
         let url = join_torii_url(&self.client.torii_url, &path);
         let body = norito::json::to_vec(payload)?;
         let response = self
@@ -128,17 +174,18 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// POST `/v1/sns/registrations/{selector}/transfer`.
+    /// POST `/v1/sns/names/{namespace}/{literal}/transfer`.
     ///
     /// # Errors
     ///
     /// Returns an error if the transfer request or response decoding fails.
     pub fn transfer(
         &self,
-        selector: &str,
+        namespace: SnsNamespacePath,
+        literal: &str,
         payload: &TransferNameRequestV1,
     ) -> Result<NameRecordV1> {
-        let path = format!("v1/sns/registrations/{selector}/transfer");
+        let path = format!("{}/transfer", name_path(namespace, literal));
         let url = join_torii_url(&self.client.torii_url, &path);
         let body = norito::json::to_vec(payload)?;
         let response = self
@@ -157,17 +204,18 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// POST `/v1/sns/registrations/{selector}/controllers`.
+    /// POST `/v1/sns/names/{namespace}/{literal}/controllers`.
     ///
     /// # Errors
     ///
     /// Returns an error if the update request or response decoding fails.
     pub fn update_controllers(
         &self,
-        selector: &str,
+        namespace: SnsNamespacePath,
+        literal: &str,
         payload: &UpdateControllersRequestV1,
     ) -> Result<NameRecordV1> {
-        let path = format!("v1/sns/registrations/{selector}/controllers");
+        let path = format!("{}/controllers", name_path(namespace, literal));
         let url = join_torii_url(&self.client.torii_url, &path);
         let body = norito::json::to_vec(payload)?;
         let response = self
@@ -186,13 +234,18 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// POST `/v1/sns/registrations/{selector}/freeze`.
+    /// POST `/v1/sns/names/{namespace}/{literal}/freeze`.
     ///
     /// # Errors
     ///
     /// Returns an error if the freeze request or response decoding fails.
-    pub fn freeze(&self, selector: &str, payload: &FreezeNameRequestV1) -> Result<NameRecordV1> {
-        let path = format!("v1/sns/registrations/{selector}/freeze");
+    pub fn freeze(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &FreezeNameRequestV1,
+    ) -> Result<NameRecordV1> {
+        let path = format!("{}/freeze", name_path(namespace, literal));
         let url = join_torii_url(&self.client.torii_url, &path);
         let body = norito::json::to_vec(payload)?;
         let response = self
@@ -207,13 +260,18 @@ impl<'a> SnsApi<'a> {
         Ok(norito::json::from_slice(response.body())?)
     }
 
-    /// DELETE `/v1/sns/registrations/{selector}/freeze`.
+    /// DELETE `/v1/sns/names/{namespace}/{literal}/freeze`.
     ///
     /// # Errors
     ///
     /// Returns an error if the unfreeze request or response decoding fails.
-    pub fn unfreeze(&self, selector: &str, payload: &GovernanceHookV1) -> Result<NameRecordV1> {
-        let path = format!("v1/sns/registrations/{selector}/freeze");
+    pub fn unfreeze(
+        &self,
+        namespace: SnsNamespacePath,
+        literal: &str,
+        payload: &GovernanceHookV1,
+    ) -> Result<NameRecordV1> {
+        let path = format!("{}/freeze", name_path(namespace, literal));
         let url = join_torii_url(&self.client.torii_url, &path);
         let body = norito::json::to_vec(payload)?;
         let response = self
@@ -231,91 +289,12 @@ impl<'a> SnsApi<'a> {
         )?;
         Ok(norito::json::from_slice(response.body())?)
     }
-
-    /// POST `/v1/sns/governance/cases` to create an arbitration record.
-    ///
-    /// Returns the created case envelope as raw JSON so CLI tools can attach it to
-    /// transparency artefacts without depending on generated structs.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request cannot be built or sent, or if the JSON
-    /// response fails to decode.
-    pub fn create_case(&self, payload: &Value) -> Result<Value> {
-        let url = join_torii_url(&self.client.torii_url, "v1/sns/governance/cases");
-        let body = norito::json::to_vec(payload)?;
-        let response = self
-            .client
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        ensure_status(
-            &response,
-            StatusCode::OK,
-            "unexpected SNS governance case create response",
-        )?;
-        Ok(norito::json::from_slice(response.body())?)
-    }
-
-    /// GET `/v1/sns/governance/cases` with optional filters to export disputes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the export request cannot be built or sent, or if the
-    /// response payload fails JSON decoding.
-    pub fn export_cases(&self, query: CaseExportQuery<'_>) -> Result<Value> {
-        let mut url = join_torii_url(&self.client.torii_url, "v1/sns/governance/cases");
-        query.apply(&mut url);
-        let response = self
-            .client
-            .default_request(HttpMethod::GET, url)
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()?;
-        ensure_status(
-            &response,
-            StatusCode::OK,
-            "unexpected SNS governance case export response",
-        )?;
-        Ok(norito::json::from_slice(response.body())?)
-    }
 }
 
 impl Client {
     /// Access the SNS registrar helper.
     pub fn sns(&self) -> SnsApi<'_> {
         SnsApi::new(self)
-    }
-}
-
-/// Query parameters accepted by [`SnsApi::export_cases`].
-#[derive(Debug, Default, Clone, Copy)]
-pub struct CaseExportQuery<'a> {
-    /// ISO-8601 timestamp; filters cases updated after the instant provided.
-    pub since: Option<&'a str>,
-    /// Optional status filter (`open`, `decision`, `closed`, etc.).
-    pub status: Option<&'a str>,
-    /// Optional max number of cases to return.
-    pub limit: Option<u32>,
-}
-
-impl CaseExportQuery<'_> {
-    fn apply(self, url: &mut Url) {
-        {
-            let mut qp = url.query_pairs_mut();
-            if let Some(since) = self.since {
-                qp.append_pair("since", since);
-            }
-            if let Some(status) = self.status {
-                qp.append_pair("status", status);
-            }
-            if let Some(limit) = self.limit {
-                qp.append_pair("limit", &limit.to_string());
-            }
-        }
     }
 }
 

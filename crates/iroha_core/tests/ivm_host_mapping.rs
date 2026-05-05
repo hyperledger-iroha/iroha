@@ -52,16 +52,16 @@ fn seeded_account(seed: u8) -> AccountId {
 
 fn seeded_account_in(seed: u8, domain_name: &str) -> AccountId {
     let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-    let _domain: DomainId = domain_name.parse().unwrap();
+    let _domain = DomainId::try_new(domain_name, "universal").unwrap();
     AccountId::new(keypair.public_key().clone())
 }
 
-fn new_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> NewAccount {
-    NewAccount::new_in_domain(account_id.clone(), domain_id.clone())
+fn new_account_in_domain(account_id: &AccountId) -> NewAccount {
+    NewAccount::new(account_id.clone())
 }
 
-fn built_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> Account {
-    new_account_in_domain(account_id, domain_id).build(account_id)
+fn built_account_in_domain(account_id: &AccountId) -> Account {
+    new_account_in_domain(account_id).build(account_id)
 }
 
 fn make_header() -> Vec<u8> {
@@ -142,14 +142,11 @@ fn host_bridges_nft_mint_and_transfer() {
     {
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let domain_id: DomainId = "wonder".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonder", "universal").unwrap();
         let new_domain = Domain::new(domain_id.clone());
         let reg_domain = RegisterBox::from(Register::domain(new_domain));
-        let reg_owner =
-            RegisterBox::from(Register::account(new_account_in_domain(&owner, &domain_id)));
-        let reg_recipient = RegisterBox::from(Register::account(new_account_in_domain(
-            &recipient, &domain_id,
-        )));
+        let reg_owner = RegisterBox::from(Register::account(new_account_in_domain(&owner)));
+        let reg_recipient = RegisterBox::from(Register::account(new_account_in_domain(&recipient)));
         let executor = tx.world.executor().clone();
         for instr in [
             InstructionBox::from(reg_domain),
@@ -222,7 +219,7 @@ fn host_rejects_insufficient_asset_transfer() {
     let from = seeded_account(3);
     let to = seeded_account(4);
     let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonder".parse().unwrap(),
+        DomainId::try_new("wonder", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
 
@@ -267,11 +264,11 @@ fn host_rejects_insufficient_asset_transfer() {
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-    let domain_id: DomainId = "wonder".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonder", "universal").unwrap();
     let new_domain = Domain::new(domain_id.clone());
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
-    let reg_from = RegisterBox::from(Register::account(new_account_in_domain(&from, &domain_id)));
-    let reg_to = RegisterBox::from(Register::account(new_account_in_domain(&to, &domain_id)));
+    let reg_from = RegisterBox::from(Register::account(new_account_in_domain(&from)));
+    let reg_to = RegisterBox::from(Register::account(new_account_in_domain(&to)));
     let new_asset_def =
         AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string());
     let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
@@ -301,15 +298,15 @@ fn host_batches_transfer_v1_calls() {
     let from = seeded_account(5);
     let to_a = seeded_account(6);
     let to_b = seeded_account(7);
-    let domain_id: DomainId = "wonder".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonder", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonder".parse().unwrap(),
+        DomainId::try_new("wonder", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let domain = Domain::new(domain_id.clone()).build(&from);
-    let from_account = built_account_in_domain(&from, &domain_id);
-    let first_recipient_account = built_account_in_domain(&to_a, &domain_id);
-    let second_recipient_account = built_account_in_domain(&to_b, &domain_id);
+    let from_account = built_account_in_domain(&from);
+    let first_recipient_account = built_account_in_domain(&to_a);
+    let second_recipient_account = built_account_in_domain(&to_b);
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&from);
     let from_asset = Asset::new(
         AssetId::new(asset_def_id.clone(), from.clone()),
@@ -455,13 +452,11 @@ fn host_rejects_nft_transfer_from_non_owner() {
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-    let domain_id: DomainId = "wonder".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonder", "universal").unwrap();
     let reg_domain = RegisterBox::from(Register::domain(Domain::new(domain_id.clone())));
-    let reg_alice = RegisterBox::from(Register::account(new_account_in_domain(&alice, &domain_id)));
-    let reg_bob = RegisterBox::from(Register::account(new_account_in_domain(&bob, &domain_id)));
-    let reg_charlie = RegisterBox::from(Register::account(new_account_in_domain(
-        &charlie, &domain_id,
-    )));
+    let reg_alice = RegisterBox::from(Register::account(new_account_in_domain(&alice)));
+    let reg_bob = RegisterBox::from(Register::account(new_account_in_domain(&bob)));
+    let reg_charlie = RegisterBox::from(Register::account(new_account_in_domain(&charlie)));
     // Prepare NewNft to be registered by bob as the owner (authority = bob)
     let new_nft = Nft::new(nft_id.clone(), Metadata::default());
     let reg_nft = RegisterBox::from(Register::nft(new_nft));
@@ -528,12 +523,10 @@ fn host_bridges_set_account_detail() {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        let domain_id: DomainId = "wonder".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonder", "universal").unwrap();
         let new_domain = Domain::new(domain_id.clone());
         let reg_domain = RegisterBox::from(Register::domain(new_domain));
-        let reg_acc = RegisterBox::from(Register::account(new_account_in_domain(
-            &authority, &domain_id,
-        )));
+        let reg_acc = RegisterBox::from(Register::account(new_account_in_domain(&authority)));
         let executor = tx.world.executor().clone();
         for instr in [
             InstructionBox::from(reg_domain),
@@ -563,7 +556,7 @@ fn host_bridges_mint_asset() {
     // Build program: mint_asset(authority(), asset_definition("coin#wonder"), 123); HALT
     let authority = seeded_account(12);
     let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonder".parse().unwrap(),
+        DomainId::try_new("wonder", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let authority_tlv = tlv_blob(&authority, PointerType::AccountId as u16);
@@ -601,12 +594,10 @@ fn host_bridges_mint_asset() {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        let domain_id: DomainId = "wonder".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonder", "universal").unwrap();
         let new_domain = Domain::new(domain_id.clone());
         let reg_domain = RegisterBox::from(Register::domain(new_domain));
-        let reg_acc = RegisterBox::from(Register::account(new_account_in_domain(
-            &authority, &domain_id,
-        )));
+        let reg_acc = RegisterBox::from(Register::account(new_account_in_domain(&authority)));
         let new_asset_def =
             AssetDefinition::numeric(asset_def.clone()).with_name(asset_def.name().to_string());
         let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
@@ -689,10 +680,9 @@ fn host_bridges_nft_set_metadata_and_burn() {
     {
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        let domain_id: DomainId = "wonder".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonder", "universal").unwrap();
         let reg_domain = RegisterBox::from(Register::domain(Domain::new(domain_id.clone())));
-        let reg_owner =
-            RegisterBox::from(Register::account(new_account_in_domain(&owner, &domain_id)));
+        let reg_owner = RegisterBox::from(Register::account(new_account_in_domain(&owner)));
         let executor = tx.world.executor().clone();
         for instr in [
             InstructionBox::from(reg_domain),
@@ -721,7 +711,7 @@ fn transfer_batch_apply_syscall_enqueues_batch() {
     let to_a = seeded_account(15);
     let to_b = seeded_account(16);
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonder".parse().unwrap(),
+        DomainId::try_new("wonder", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
 

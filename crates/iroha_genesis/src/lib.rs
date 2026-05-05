@@ -24,9 +24,10 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::LazyLock,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use base64::Engine as _;
 use derive_more::Constructor;
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::{
@@ -67,7 +68,8 @@ use norito::{
 };
 
 /// Domain of the genesis account, technically required for the pre-genesis state
-pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> = LazyLock::new(|| "genesis".parse().unwrap());
+pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> =
+    LazyLock::new(|| DomainId::parse_fully_qualified("genesis.universal").unwrap());
 
 /// Construct an [`InstructionRegistry`] with all built-in Iroha instructions and
 /// set it as the global registry.
@@ -110,6 +112,8 @@ pub struct GenesisBlock(pub SignedBlock);
 pub struct RawGenesisTransaction {
     /// Unique chain identifier of the blockchain instance.
     chain: ChainId,
+    /// Chain discriminant / i105 network prefix used to encode account literals in this manifest.
+    chain_discriminant: u16,
     /// Optional path to the IVM executor bytecode file (`.to`). If omitted,
     /// no executor upgrade is included in genesis.
     #[norito(default)]
@@ -511,16 +515,16 @@ pub mod genesis_instructions_json {
     use std::{collections::BTreeMap, str::FromStr};
 
     use iroha_data_model::{
-        account::NewAccount,
+        account::{NewAccount, OpaqueAccountId},
         asset::definition::NewAssetDefinition,
         domain::NewDomain,
         isi::{
-            ActivatePublicLaneValidator, Grant, GrantBox, InstructionBox, Mint, MintBox, Register,
-            RegisterPublicLaneValidator, SetParameter, Transfer, TransferBox,
-            register::RegisterBox,
+            ActivatePublicLaneValidator, CustomInstruction, Grant, GrantBox, InstructionBox, Mint,
+            MintBox, Register, RegisterPublicLaneValidator, SetAssetDefinitionAlias, SetParameter,
+            Transfer, TransferBox, domain_link::SetAccountAliasBinding, register::RegisterBox,
         },
         metadata::Metadata,
-        nexus::LaneId,
+        nexus::{LaneId, UniversalAccountId},
         parameter::Parameter,
         permission::Permission,
         prelude::{AccountId, AssetDefinitionId, AssetId, DomainId},
@@ -611,10 +615,7 @@ pub mod genesis_instructions_json {
                 "genesis instructions must be structured objects; byte arrays are unsupported"
                     .to_string(),
             )),
-            Value::String(_) => Err(json::Error::Message(
-                "genesis instructions must be structured objects; base64 strings are unsupported"
-                    .to_string(),
-            )),
+            Value::String(encoded) => decode_base64_instruction(&encoded),
             Value::Object(map) => {
                 if map.len() == 1 {
                     if let Some((kind, inner)) = map.iter().next() {
@@ -624,6 +625,13 @@ pub mod genesis_instructions_json {
                             "Transfer" => try_decode_transfer(inner.clone())?,
                             "SetParameter" => try_decode_set_parameter(inner.clone())?,
                             "Grant" => try_decode_grant(inner.clone())?,
+                            "SetAssetDefinitionAlias" => {
+                                try_decode_set_asset_definition_alias(inner.clone())?
+                            }
+                            "SetAccountAliasBinding" => {
+                                try_decode_set_account_alias_binding(inner.clone())?
+                            }
+                            "Custom" => try_decode_custom(inner.clone())?,
                             "RegisterPublicLaneValidator" => {
                                 try_decode_register_public_lane_validator(inner.clone())?
                             }
@@ -651,6 +659,24 @@ pub mod genesis_instructions_json {
         }
     }
 
+    fn decode_base64_instruction(encoded: &str) -> Result<InstructionBox, json::Error> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|err| {
+                json::Error::Message(format!("invalid base64 genesis instruction: {err}"))
+            })?;
+        let archived = norito::from_bytes::<InstructionBox>(&bytes).map_err(|err| {
+            json::Error::Message(format!(
+                "failed to decode base64 genesis instruction: {err}"
+            ))
+        })?;
+        norito::core::NoritoDeserialize::try_deserialize(archived).map_err(|err| {
+            json::Error::Message(format!(
+                "failed to deserialize base64 genesis instruction: {err}"
+            ))
+        })
+    }
+
     fn try_decode_register(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
         let map = match inner {
             Value::Object(map) => map,
@@ -666,7 +692,37 @@ pub mod genesis_instructions_json {
                 InstructionBox::from(Register::domain(new_domain))
             }
             "Account" => {
-                let new_account: NewAccount = norito::json::value::from_value(payload)?;
+                let mut fields = match payload {
+                    Value::Object(map) => map,
+                    other => {
+                        return Err(json::Error::Message(format!(
+                            "expected object for Register::Account fields, found {other:?}"
+                        )));
+                    }
+                };
+                let id = parse_account_id(&take_string(&mut fields, "id")?, "register account")?;
+                let metadata = match fields.remove("metadata") {
+                    None | Some(Value::Null) => Metadata::default(),
+                    Some(value) => norito::json::value::from_value(value)?,
+                };
+                let label = match fields.remove("label") {
+                    None | Some(Value::Null) => None,
+                    Some(value) => Some(parse_account_alias(value, "Register.Account.label")?),
+                };
+                let uaid: Option<UniversalAccountId> = match fields.remove("uaid") {
+                    None | Some(Value::Null) => None,
+                    Some(value) => Some(norito::json::value::from_value(value)?),
+                };
+                let opaque_ids: Vec<OpaqueAccountId> = match fields.remove("opaque_ids") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(value) => norito::json::value::from_value(value)?,
+                };
+                ensure_no_extra_fields(&fields)?;
+                let new_account = NewAccount::new(id)
+                    .with_metadata(metadata)
+                    .with_label(label)
+                    .with_uaid(uaid)
+                    .with_opaque_ids(opaque_ids);
                 InstructionBox::from(Register::account(new_account))
             }
             "AssetDefinition" => {
@@ -743,7 +799,7 @@ pub mod genesis_instructions_json {
                 let source_str = take_string(&mut fields, "source")?;
                 let source: AccountId = parse_account_id(&source_str, "transfer source account")?;
                 let domain_str = take_string(&mut fields, "object")?;
-                let domain: DomainId = parse_id(&domain_str, "domain")?;
+                let domain = parse_domain_id(&domain_str, "domain")?;
                 let destination_str = take_string(&mut fields, "destination")?;
                 let destination: AccountId =
                     parse_account_id(&destination_str, "transfer destination account")?;
@@ -823,6 +879,139 @@ pub mod genesis_instructions_json {
         Ok(Some(instruction))
     }
 
+    fn try_decode_set_asset_definition_alias(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = match inner {
+            Value::Object(map) => map,
+            _ => return Ok(None),
+        };
+        let asset_definition_id = match fields.remove("asset_definition_id") {
+            Some(Value::String(value)) => AssetDefinitionId::from_str(&value).map_err(|err| {
+                json::Error::Message(format!(
+                    "invalid SetAssetDefinitionAlias.asset_definition_id `{value}`: {err}"
+                ))
+            })?,
+            Some(other) => {
+                return Err(json::Error::Message(format!(
+                    "expected string for SetAssetDefinitionAlias.asset_definition_id, found {other:?}"
+                )));
+            }
+            None => {
+                return Err(json::Error::Message(
+                    "missing SetAssetDefinitionAlias.asset_definition_id".to_string(),
+                ));
+            }
+        };
+
+        let alias = match fields.remove("alias") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(value)) => Some(value.parse().map_err(|err| {
+                json::Error::Message(format!(
+                    "invalid SetAssetDefinitionAlias.alias `{value}`: {err}"
+                ))
+            })?),
+            Some(other) => {
+                return Err(json::Error::Message(format!(
+                    "expected string or null for SetAssetDefinitionAlias.alias, found {other:?}"
+                )));
+            }
+        };
+
+        let lease_expiry_ms = match fields.remove("lease_expiry_ms") {
+            None | Some(Value::Null) => None,
+            Some(Value::Number(Number::U64(value))) => Some(value),
+            Some(Value::Number(Number::I64(value))) if value >= 0 => Some(value.cast_unsigned()),
+            Some(other) => {
+                return Err(json::Error::Message(format!(
+                    "expected unsigned integer or null for SetAssetDefinitionAlias.lease_expiry_ms, found {other:?}"
+                )));
+            }
+        };
+
+        if !fields.is_empty() {
+            return Err(json::Error::Message(format!(
+                "unexpected SetAssetDefinitionAlias fields: {}",
+                fields.keys().cloned().collect::<Vec<_>>().join(",")
+            )));
+        }
+
+        let instruction = match alias {
+            Some(alias) => {
+                SetAssetDefinitionAlias::bind(asset_definition_id, alias, lease_expiry_ms)
+            }
+            None => SetAssetDefinitionAlias::clear(asset_definition_id),
+        };
+        Ok(Some(InstructionBox::from(instruction)))
+    }
+
+    fn try_decode_set_account_alias_binding(
+        inner: Value,
+    ) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = match inner {
+            Value::Object(map) => map,
+            _ => return Ok(None),
+        };
+        let account = match fields.remove("account") {
+            Some(Value::String(value)) => {
+                parse_account_id(&value, "SetAccountAliasBinding.account")?
+            }
+            Some(other) => {
+                return Err(json::Error::Message(format!(
+                    "expected string for SetAccountAliasBinding.account, found {other:?}"
+                )));
+            }
+            None => {
+                return Err(json::Error::Message(
+                    "missing SetAccountAliasBinding.account".to_string(),
+                ));
+            }
+        };
+
+        let alias = match fields.remove("alias") {
+            None | Some(Value::Null) => None,
+            Some(value) => Some(parse_account_alias(value, "SetAccountAliasBinding.alias")?),
+        };
+
+        let lease_expiry_ms = match fields.remove("lease_expiry_ms") {
+            None | Some(Value::Null) => None,
+            Some(Value::Number(Number::U64(value))) => Some(value),
+            Some(Value::Number(Number::I64(value))) if value >= 0 => Some(value.cast_unsigned()),
+            Some(other) => {
+                return Err(json::Error::Message(format!(
+                    "expected unsigned integer or null for SetAccountAliasBinding.lease_expiry_ms, found {other:?}"
+                )));
+            }
+        };
+
+        if !fields.is_empty() {
+            return Err(json::Error::Message(format!(
+                "unexpected SetAccountAliasBinding fields: {}",
+                fields.keys().cloned().collect::<Vec<_>>().join(",")
+            )));
+        }
+
+        let instruction = match alias {
+            Some(alias) => SetAccountAliasBinding::bind(account, alias, lease_expiry_ms),
+            None => SetAccountAliasBinding::clear(account),
+        };
+        Ok(Some(InstructionBox::from(instruction)))
+    }
+
+    fn try_decode_custom(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
+        let mut fields = match inner {
+            Value::Object(map) => map,
+            _ => return Ok(None),
+        };
+        let payload = fields
+            .remove("payload")
+            .ok_or_else(|| json::Error::missing_field("payload"))?;
+        ensure_no_extra_fields(&fields)?;
+        Ok(Some(InstructionBox::from(CustomInstruction::new(
+            iroha_primitives::json::Json::new(payload),
+        ))))
+    }
+
     fn try_decode_register_public_lane_validator(
         inner: Value,
     ) -> Result<Option<InstructionBox>, json::Error> {
@@ -840,6 +1029,12 @@ pub mod genesis_instructions_json {
         let lane_id = LaneId::from(parse_u32(lane_value, "lane_id")?);
         let validator_str = take_string(&mut fields, "validator")?;
         let validator: AccountId = parse_account_id(&validator_str, "validator")?;
+        let peer_id_str = take_string(&mut fields, "peer_id")?;
+        let peer_id: PeerId = peer_id_str.parse().map_err(|_| {
+            json::Error::Message(format!(
+                "invalid peer id for RegisterPublicLaneValidator: {peer_id_str}"
+            ))
+        })?;
         let stake_account_str = take_string(&mut fields, "stake_account")?;
         let stake_account: AccountId = parse_account_id(&stake_account_str, "stake_account")?;
         let stake_value = fields
@@ -855,6 +1050,7 @@ pub mod genesis_instructions_json {
         let register = RegisterPublicLaneValidator::new(
             lane_id,
             validator,
+            peer_id,
             stake_account,
             initial_stake,
             metadata,
@@ -927,8 +1123,17 @@ pub mod genesis_instructions_json {
     }
 
     fn parse_account_id(value: &str, label: &'static str) -> Result<AccountId, json::Error> {
-        AccountId::parse_encoded(value)
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        match AccountId::parse_encoded(value) {
+            Ok(parsed) => Ok(parsed.into_account_id()),
+            Err(err) => value
+                .parse::<iroha_crypto::PublicKey>()
+                .map(AccountId::new)
+                .map_err(|_| json::Error::Message(format!("invalid {label}: {err}"))),
+        }
+    }
+
+    fn parse_domain_id(value: &str, label: &'static str) -> Result<DomainId, json::Error> {
+        DomainId::parse_fully_qualified(value)
             .map_err(|err| json::Error::Message(format!("invalid {label}: {err}")))
     }
 
@@ -947,6 +1152,60 @@ pub mod genesis_instructions_json {
                 "expected numeric {label} value, found {other:?}"
             ))),
         }
+    }
+
+    fn parse_account_alias(
+        value: Value,
+        label: &'static str,
+    ) -> Result<iroha_data_model::account::rekey::AccountAlias, json::Error> {
+        let mut fields = match value {
+            Value::Object(map) => map,
+            other => {
+                return Err(json::Error::Message(format!(
+                    "expected object for {label}, found {other:?}"
+                )));
+            }
+        };
+
+        let alias_label = match fields.remove("label") {
+            Some(Value::String(value)) => value
+                .parse()
+                .map_err(|_| json::Error::Message(format!("invalid {label}.label `{value}`")))?,
+            Some(other) => {
+                return Err(json::Error::Message(format!(
+                    "expected string for {label}.label, found {other:?}"
+                )));
+            }
+            None => return Err(json::Error::Message(format!("missing {label}.label"))),
+        };
+
+        let domain = match fields.remove("domain") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(value)) => Some(value.parse().map_err(|err| {
+                json::Error::Message(format!("invalid {label}.domain `{value}`: {err}"))
+            })?),
+            Some(other) => {
+                return Err(json::Error::Message(format!(
+                    "expected string or null for {label}.domain, found {other:?}"
+                )));
+            }
+        };
+
+        let dataspace = match fields.remove("dataspace") {
+            Some(value) => iroha_data_model::nexus::DataSpaceId::new(u64::from(parse_u32(
+                value,
+                "account alias dataspace",
+            )?)),
+            None => return Err(json::Error::Message(format!("missing {label}.dataspace"))),
+        };
+
+        ensure_no_extra_fields(&fields)?;
+
+        Ok(iroha_data_model::account::rekey::AccountAlias::new(
+            alias_label,
+            domain,
+            dataspace,
+        ))
     }
 
     fn parse_numeric(value: Value) -> Result<Numeric, json::Error> {
@@ -974,7 +1233,7 @@ pub mod genesis_instructions_json {
     }
 
     fn asset_literal(asset: &AssetId) -> String {
-        asset.canonical_encoded()
+        asset.canonical_literal()
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1058,6 +1317,84 @@ pub mod genesis_instructions_json {
                 });
         }
 
+        if let Some(set_asset_definition_alias) = instruction
+            .as_any()
+            .downcast_ref::<SetAssetDefinitionAlias>()
+        {
+            let mut fields = Map::new();
+            fields.insert(
+                "asset_definition_id".to_string(),
+                Value::String(set_asset_definition_alias.asset_definition_id().to_string()),
+            );
+            fields.insert(
+                "alias".to_string(),
+                set_asset_definition_alias
+                    .alias()
+                    .as_ref()
+                    .map_or(Value::Null, |alias| Value::String(alias.to_string())),
+            );
+            fields.insert(
+                "lease_expiry_ms".to_string(),
+                set_asset_definition_alias
+                    .lease_expiry_ms()
+                    .as_ref()
+                    .map_or(Value::Null, |value| Value::Number(Number::U64(*value))),
+            );
+            let mut outer = Map::new();
+            outer.insert("SetAssetDefinitionAlias".to_string(), Value::Object(fields));
+            return Some(Value::Object(outer));
+        }
+
+        if let Some(set_account_alias_binding) = instruction
+            .as_any()
+            .downcast_ref::<SetAccountAliasBinding>()
+        {
+            let mut fields = Map::new();
+            let account = account_literal(set_account_alias_binding.account())?;
+            fields.insert("account".to_string(), Value::String(account));
+            let alias = set_account_alias_binding
+                .alias()
+                .as_ref()
+                .map_or(Value::Null, |alias| {
+                    let mut alias_fields = Map::new();
+                    alias_fields.insert(
+                        "label".to_string(),
+                        Value::String(alias.label.as_ref().to_owned()),
+                    );
+                    alias_fields.insert(
+                        "domain".to_string(),
+                        alias.domain.as_ref().map_or(Value::Null, |domain| {
+                            Value::String(domain.name().as_ref().to_owned())
+                        }),
+                    );
+                    alias_fields.insert(
+                        "dataspace".to_string(),
+                        Value::Number(Number::U64(alias.dataspace.as_u64())),
+                    );
+                    Value::Object(alias_fields)
+                });
+            fields.insert("alias".to_string(), alias);
+            fields.insert(
+                "lease_expiry_ms".to_string(),
+                set_account_alias_binding
+                    .lease_expiry_ms()
+                    .as_ref()
+                    .map_or(Value::Null, |value| Value::Number(Number::U64(*value))),
+            );
+            let mut outer = Map::new();
+            outer.insert("SetAccountAliasBinding".to_string(), Value::Object(fields));
+            return Some(Value::Object(outer));
+        }
+
+        if let Some(custom) = instruction.as_any().downcast_ref::<CustomInstruction>() {
+            let payload = norito::json::parse_value(custom.payload().get()).ok()?;
+            let mut inner = Map::new();
+            inner.insert("payload".to_string(), payload);
+            let mut outer = Map::new();
+            outer.insert("Custom".to_string(), Value::Object(inner));
+            return Some(Value::Object(outer));
+        }
+
         if let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() {
             return match grant {
                 GrantBox::Permission(grant_perm) => {
@@ -1088,6 +1425,10 @@ pub mod genesis_instructions_json {
             );
             let validator = account_literal(register.validator())?;
             fields.insert("validator".to_string(), Value::String(validator));
+            fields.insert(
+                "peer_id".to_string(),
+                Value::String(register.peer_id().to_string()),
+            );
             let stake_account = account_literal(register.stake_account())?;
             fields.insert("stake_account".to_string(), Value::String(stake_account));
             fields.insert(
@@ -1166,6 +1507,7 @@ pub mod genesis_instructions_json {
 
         #[allow(unused_imports)]
         use iroha_data_model::{
+            asset::AssetDefinitionAlias,
             domain::Domain,
             isi::{
                 GrantBox, Log, MintBox, RegisterBox, SetParameter, TransferBox,
@@ -1188,7 +1530,8 @@ pub mod genesis_instructions_json {
 
         #[test]
         fn instructions_to_value_keeps_structure() {
-            let domain = Register::domain(Domain::new("demo".parse().unwrap()));
+            let domain =
+                Register::domain(Domain::new(DomainId::try_new("demo", "universal").unwrap()));
             let value = instructions_to_value(&[InstructionBox::from(domain)]);
             let arr = value.as_array().expect("array");
             assert_eq!(arr.len(), 1);
@@ -1198,7 +1541,9 @@ pub mod genesis_instructions_json {
 
         #[test]
         fn serialize_register_uses_structured_json() {
-            let domain = Register::domain(Domain::new("structured".parse().unwrap()));
+            let domain = Register::domain(Domain::new(
+                DomainId::try_new("structured", "universal").unwrap(),
+            ));
             let instruction: InstructionBox = domain.into();
             let mut out = String::new();
             serialize(&[instruction], &mut out);
@@ -1215,20 +1560,52 @@ pub mod genesis_instructions_json {
         }
 
         #[test]
-        fn value_to_instruction_rejects_base64_string() {
-            let value = Value::String("deadbeef".to_string());
-            let err = value_to_instruction(value).expect_err("strings should be rejected");
-            assert!(err.to_string().contains("base64 strings"));
+        fn value_to_instruction_rejects_invalid_base64_string() {
+            let value = Value::String("***".to_string());
+            let err = value_to_instruction(value).expect_err("invalid base64 should fail");
+            assert!(err.to_string().contains("invalid base64"));
+        }
+
+        #[test]
+        fn value_to_instruction_accepts_base64_string_for_custom_instruction() {
+            let asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("zk", "universal").expect("domain"),
+                "xor".parse().expect("asset name"),
+            );
+            let instruction =
+                InstructionBox::from(iroha_data_model::isi::zk::RegisterZkAsset::new(
+                    asset_definition_id,
+                    iroha_data_model::isi::zk::ZkAssetMode::Hybrid,
+                    true,
+                    true,
+                    None,
+                    None,
+                    None,
+                ));
+
+            let value = instruction_value(&instruction);
+            assert!(
+                value.is_string(),
+                "custom instruction should fall back to base64"
+            );
+
+            let decoded =
+                value_to_instruction(value).expect("base64-encoded instruction should decode");
+            assert_eq!(
+                norito::codec::encode_adaptive(&decoded),
+                norito::codec::encode_adaptive(&instruction)
+            );
         }
 
         #[test]
         fn deserialize_structured_instructions_roundtrip() {
             let account_id = ALICE_ID.clone();
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             let domain = Domain::new(domain_id.clone());
             let asset_def_id: AssetDefinitionId =
                 AssetDefinitionId::new(domain_id.clone(), "coin".parse().unwrap());
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
+            let asset_alias: AssetDefinitionAlias = "coin#wonderland.universal".parse().unwrap();
 
             let parameter = Parameter::Transaction(TransactionParameter::MaxInstructions(
                 NonZeroU64::new(64).unwrap(),
@@ -1245,6 +1622,8 @@ pub mod genesis_instructions_json {
                 .into(),
                 Grant::account_permission(CanSetParameters, account_id.clone()).into(),
                 SetParameter::new(parameter.clone()).into(),
+                SetAssetDefinitionAlias::bind(asset_def_id.clone(), asset_alias.clone(), None)
+                    .into(),
             ];
 
             let mut json_text = String::new();
@@ -1252,7 +1631,7 @@ pub mod genesis_instructions_json {
             let parsed =
                 norito::json::from_str::<Value>(&json_text).expect("parse serialized JSON");
             let instructions = from_value(&parsed).expect("deserialize instructions");
-            assert_eq!(instructions.len(), 5);
+            assert_eq!(instructions.len(), 6);
 
             match instructions[0].as_any().downcast_ref::<RegisterBox>() {
                 Some(RegisterBox::Domain(reg)) => assert_eq!(reg.object(), &domain),
@@ -1283,6 +1662,118 @@ pub mod genesis_instructions_json {
                 Some(set_param) => assert_eq!(set_param.inner(), &parameter),
                 other => panic!("unexpected set-parameter instruction: {other:?}"),
             }
+            match instructions[5]
+                .as_any()
+                .downcast_ref::<SetAssetDefinitionAlias>()
+            {
+                Some(set_alias) => {
+                    assert_eq!(set_alias.asset_definition_id(), &asset_def_id);
+                    assert_eq!(set_alias.alias().as_ref(), Some(&asset_alias));
+                    assert_eq!(set_alias.lease_expiry_ms(), &None);
+                }
+                other => panic!("unexpected set-asset-definition-alias instruction: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn deserialize_structured_alias_binding_and_custom_roundtrip() {
+            let account_id = ALICE_ID.clone();
+            let alias = iroha_data_model::account::rekey::AccountAlias::new(
+                "admin1".parse().expect("alias label"),
+                Some("hbl".parse().expect("alias domain")),
+                iroha_data_model::nexus::DataSpaceId::new(10),
+            );
+            let account_literal = account_literal(&account_id).expect("account literal");
+            let custom_payload: Value = norito::json::from_str(&format!(
+                r#"{{
+                    "Register": {{
+                        "account": "{account_literal}",
+                        "home_domain": "hbl.paynet",
+                        "spec": {{
+                            "signatories": ["{account_literal}"],
+                            "quorum": 1,
+                            "transaction_ttl_ms": 3600000
+                        }}
+                    }}
+                }}"#
+            ))
+            .expect("custom payload JSON");
+            let instructions: Vec<InstructionBox> = vec![
+                SetAccountAliasBinding::bind(account_id.clone(), alias.clone(), None).into(),
+                CustomInstruction::new(iroha_primitives::json::Json::new(custom_payload.clone()))
+                    .into(),
+            ];
+
+            let mut json_text = String::new();
+            serialize(&instructions, &mut json_text);
+            let parsed =
+                norito::json::from_str::<Value>(&json_text).expect("parse serialized JSON");
+            let instructions = from_value(&parsed).expect("deserialize instructions");
+            assert_eq!(instructions.len(), 2);
+
+            match instructions[0]
+                .as_any()
+                .downcast_ref::<SetAccountAliasBinding>()
+            {
+                Some(binding) => {
+                    assert_eq!(binding.account(), &account_id);
+                    assert_eq!(binding.alias().as_ref(), Some(&alias));
+                    assert_eq!(binding.lease_expiry_ms(), &None);
+                }
+                other => panic!("unexpected alias binding instruction: {other:?}"),
+            }
+
+            match instructions[1].as_any().downcast_ref::<CustomInstruction>() {
+                Some(custom) => {
+                    let payload: Value = norito::json::parse_value(custom.payload().get())
+                        .expect("custom payload must parse");
+                    assert_eq!(payload, custom_payload);
+                }
+                other => panic!("unexpected custom instruction: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn deserialize_structured_register_account_with_label() {
+            let account_id = ALICE_ID.clone();
+            let account_literal = account_literal(&account_id).expect("account literal");
+            let expected_label = iroha_data_model::account::rekey::AccountAlias::new(
+                "admin1".parse().expect("alias label"),
+                Some("hbl".parse().expect("alias domain")),
+                iroha_data_model::nexus::DataSpaceId::new(10),
+            );
+            let register_json = format!(
+                r#"{{
+                    "Register": {{
+                        "Account": {{
+                            "id": "{account_literal}",
+                            "label": {{
+                                "label": "admin1",
+                                "domain": "hbl",
+                                "dataspace": 10
+                            }},
+                            "metadata": {{}},
+                            "opaque_ids": [],
+                            "uaid": null
+                        }}
+                    }}
+                }}"#
+            );
+            let register_value =
+                norito::json::from_str(&register_json).expect("parse register instruction");
+
+            let instruction =
+                super::value_to_instruction(register_value).expect("structured account decodes");
+            let RegisterBox::Account(account) = instruction
+                .as_any()
+                .downcast_ref::<RegisterBox>()
+                .expect("RegisterBox variant")
+            else {
+                panic!("expected account registration");
+            };
+
+            assert_eq!(account.object().id(), &account_id);
+            assert_eq!(account.object().label(), Some(&expected_label));
         }
 
         #[test]
@@ -1312,9 +1803,11 @@ pub mod genesis_instructions_json {
         #[test]
         fn deserialize_structured_instructions_supports_npos_bootstrap() {
             let validator_id = ALICE_ID.clone();
+            let validator_peer_id = PeerId::from(validator_id.signatory().clone());
             let register = RegisterPublicLaneValidator::new(
                 LaneId::SINGLE,
                 validator_id.clone(),
+                validator_peer_id.clone(),
                 validator_id.clone(),
                 Numeric::from(10_u64),
                 Metadata::default(),
@@ -1339,6 +1832,7 @@ pub mod genesis_instructions_json {
                 Some(register) => {
                     assert_eq!(*register.lane_id(), LaneId::SINGLE);
                     assert_eq!(register.validator(), &validator_id);
+                    assert_eq!(register.peer_id(), &validator_peer_id);
                     assert_eq!(register.stake_account(), &validator_id);
                     assert_eq!(register.initial_stake(), &Numeric::from(10_u64));
                     assert!(register.metadata().is_empty());
@@ -1364,6 +1858,16 @@ pub mod genesis_instructions_json {
                 PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../defaults/genesis.json");
             let raw = std::fs::read_to_string(&path).expect("read defaults/genesis.json");
             let value: Value = norito::json::from_str(&raw).expect("parse defaults genesis JSON");
+            let chain_discriminant = value
+                .as_object()
+                .and_then(|obj| obj.get("chain_discriminant"))
+                .cloned()
+                .and_then(|value| norito::json::value::from_value::<u16>(value).ok())
+                .expect("chain_discriminant");
+            let _chain_discriminant =
+                iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                    chain_discriminant,
+                );
             let transactions = value
                 .as_object()
                 .and_then(|obj| obj.get("transactions"))
@@ -1396,6 +1900,13 @@ pub mod genesis_instructions_json {
         fn parse_allows_null_executor_in_canonical_manifest() {
             let mut manifest_fields = norito::json::Map::new();
             manifest_fields.insert("chain".to_string(), Value::String("test-chain".to_string()));
+            manifest_fields.insert(
+                "chain_discriminant".to_string(),
+                norito::json::value::to_value(
+                    &iroha_data_model::account::address::chain_discriminant(),
+                )
+                .expect("serialize chain discriminant"),
+            );
             manifest_fields.insert("executor".to_string(), Value::Null);
             manifest_fields.insert("ivm_dir".to_string(), Value::String(".".to_string()));
             manifest_fields.insert(
@@ -1614,6 +2125,8 @@ fn normalize_pop_hex(raw: &str) -> Result<String, norito::json::Error> {
 pub struct NormalizedGenesis {
     /// Unique chain identifier.
     pub chain: ChainId,
+    /// Chain discriminant / i105 network prefix used to encode account literals in this manifest.
+    pub chain_discriminant: u16,
     /// Optional path to the executor bytecode.
     pub executor: Option<IvmPath>,
     /// Directory containing IVM bytecode libraries.
@@ -1642,6 +2155,11 @@ impl NormalizedGenesis {
         map.insert(
             "chain".to_string(),
             norito::json::value::to_value(&self.chain).expect("serialize chain id"),
+        );
+        map.insert(
+            "chain_discriminant".to_string(),
+            norito::json::value::to_value(&self.chain_discriminant)
+                .expect("serialize chain_discriminant"),
         );
         if let Some(path) = &self.executor {
             map.insert(
@@ -1761,10 +2279,40 @@ fn has_set_parameter(instructions: &[InstructionBox], parameter: &Parameter) -> 
     })
 }
 
+fn parameter_generation_priority(parameter: &Parameter, current: &Parameters) -> u8 {
+    match parameter {
+        // Preserve Sumeragi timing invariants while structured parameter blocks are
+        // expanded into sequential `SetParameter` instructions.
+        Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(value)) => {
+            if *value > current.sumeragi().commit_time_ms() {
+                0
+            } else {
+                50
+            }
+        }
+        Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(value)) => {
+            if *value > current.sumeragi().min_finality_ms() {
+                40
+            } else {
+                10
+            }
+        }
+        Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(value)) => {
+            if *value > current.sumeragi().block_time_ms() {
+                20
+            } else {
+                30
+            }
+        }
+        _ => 25,
+    }
+}
+
 fn collect_parameter_instructions(
     parameters: &Parameters,
     existing: &[InstructionBox],
     manual: &[Parameter],
+    current: &Parameters,
 ) -> Vec<InstructionBox> {
     let mut generated = Vec::new();
     for parameter in parameters_with_staging(parameters) {
@@ -1777,14 +2325,22 @@ fn collect_parameter_instructions(
                 {
                     continue;
                 }
-                if has_set_parameter(existing, &other) || has_set_parameter(&generated, &other) {
+                if has_set_parameter(existing, &other)
+                    || generated
+                        .iter()
+                        .any(|existing| parameter_targets_same_slot(existing, &other))
+                {
                     continue;
                 }
-                generated.push(InstructionBox::from(SetParameter::new(other)));
+                generated.push(other);
             }
         }
     }
+    generated.sort_by_key(|parameter| parameter_generation_priority(parameter, current));
     generated
+        .into_iter()
+        .map(|parameter| InstructionBox::from(SetParameter::new(parameter)))
+        .collect()
 }
 
 fn collect_manual_set_parameters(transactions: &[RawGenesisTx]) -> Vec<Parameter> {
@@ -2045,6 +2601,7 @@ impl RawGenesisTransaction {
     fn from_json_value(value: norito::json::Value) -> Result<Self, norito::json::Error> {
         let mut map = Self::expect_object(value, "RawGenesisTransaction")?;
         let chain = Self::take_required_field::<ChainId>(&mut map, "chain")?;
+        let chain_discriminant = Self::take_required_field::<u16>(&mut map, "chain_discriminant")?;
         let executor = Self::take_optional_field::<IvmPath>(&mut map, "executor")?;
         let ivm_dir = map
             .remove("ivm_dir")
@@ -2058,6 +2615,8 @@ impl RawGenesisTransaction {
         let transactions_value = map
             .remove("transactions")
             .unwrap_or_else(|| norito::json::Value::Array(Vec::new()));
+        let _chain_discriminant =
+            iroha_data_model::account::address::ChainDiscriminantGuard::enter(chain_discriminant);
         let transactions =
             Self::decode_value::<Vec<RawGenesisTx>>(transactions_value, "transactions")?;
         Self::reject_set_parameter_instructions(&transactions)?;
@@ -2082,6 +2641,7 @@ impl RawGenesisTransaction {
         }
         Ok(Self {
             chain,
+            chain_discriminant,
             executor,
             ivm_dir,
             transactions,
@@ -2104,9 +2664,12 @@ impl RawGenesisTransaction {
         let mut aggregated = Parameters::default();
         for tx in &self.transactions {
             if let Some(params) = &tx.parameters {
-                for instruction in
-                    collect_parameter_instructions(params, &tx.instructions, &manual_parameters)
-                {
+                for instruction in collect_parameter_instructions(
+                    params,
+                    &tx.instructions,
+                    &manual_parameters,
+                    &aggregated,
+                ) {
                     if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
                         aggregated.set_parameter(set_param.inner().clone());
                     }
@@ -2280,6 +2843,7 @@ impl RawGenesisTransaction {
         })?;
 
         let chain = manifest.chain.clone();
+        let chain_discriminant = manifest.chain_discriminant;
         let executor = manifest.executor.clone();
         let ivm_dir = manifest.ivm_dir.as_path().to_path_buf();
         let wire_proto_versions = manifest.wire_proto_versions.clone();
@@ -2288,6 +2852,7 @@ impl RawGenesisTransaction {
 
         Ok(NormalizedGenesis {
             chain,
+            chain_discriminant,
             executor,
             ivm_dir,
             consensus_mode,
@@ -2303,6 +2868,19 @@ impl RawGenesisTransaction {
     #[must_use]
     pub fn chain_id(&self) -> &ChainId {
         &self.chain
+    }
+
+    /// Chain discriminant / i105 network prefix advertised in the manifest.
+    #[must_use]
+    pub const fn chain_discriminant(&self) -> u16 {
+        self.chain_discriminant
+    }
+
+    /// Override the chain discriminant used when rendering this manifest.
+    #[must_use]
+    pub fn with_chain_discriminant(mut self, chain_discriminant: u16) -> Self {
+        self.chain_discriminant = chain_discriminant;
+        self
     }
 
     /// Raw genesis transactions preserved in the manifest.
@@ -2379,11 +2957,17 @@ mod tests2 {
 
     use super::*;
 
+    fn manifest_chain_discriminant_value() -> norito::json::Value {
+        norito::json::value::to_value(&iroha_data_model::account::address::chain_discriminant())
+            .expect("serialize chain discriminant")
+    }
+
     #[test]
     fn with_consensus_meta_adds_fields_and_stable_fingerprint() {
         let chain = ChainId::from("iroha:test:genesismeta");
         let tx = RawGenesisTransaction {
             chain: chain.clone(),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
@@ -2439,6 +3023,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx {
@@ -2519,6 +3104,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx {
@@ -2554,6 +3140,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx {
@@ -2609,6 +3196,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain: chain.clone(),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![tx],
@@ -2658,12 +3246,13 @@ mod tests2 {
     }
 
     #[test]
-    fn build_and_sign_is_deterministic() {
+    fn build_and_sign_uses_stable_internal_creation_times() {
         init_instruction_registry();
 
         let chain = ChainId::from("iroha:test:deterministic");
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
@@ -2676,17 +3265,13 @@ mod tests2 {
 
         let keypair = KeyPair::random();
 
-        let genesis_a = manifest
-            .clone()
-            .build_and_sign(&keypair)
-            .expect("sign genesis");
-        let genesis_b = manifest.build_and_sign(&keypair).expect("sign genesis");
+        let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
 
-        let bytes_a = genesis_a.0.encode_wire().expect("encode canonical genesis");
-        let bytes_b = genesis_b.0.encode_wire().expect("encode canonical genesis");
+        let bytes_a = genesis.0.encode_wire().expect("encode canonical genesis");
+        let bytes_b = genesis.0.encode_wire().expect("encode canonical genesis");
         assert_eq!(bytes_a, bytes_b, "Genesis encoding must be deterministic");
 
-        let tx_times: Vec<u64> = genesis_a
+        let tx_times: Vec<u64> = genesis
             .0
             .external_transactions()
             .map(|tx| {
@@ -2701,7 +3286,7 @@ mod tests2 {
             "transaction creation times must be non-decreasing"
         );
         if let Some(last_tx) = tx_times.last() {
-            let block_time = genesis_a.0.header().creation_time().as_millis();
+            let block_time = genesis.0.header().creation_time().as_millis();
             let block_time = u64::try_from(block_time).expect("block creation time fits into u64");
             assert_eq!(
                 block_time,
@@ -2717,7 +3302,8 @@ mod tests2 {
 
         let parameters = Parameters::default();
         let manual = vec![Parameter::Sumeragi(SumeragiParameter::DaEnabled(true))];
-        let generated = collect_parameter_instructions(&parameters, &[], &manual);
+        let generated =
+            collect_parameter_instructions(&parameters, &[], &manual, &Parameters::default());
         let has_conflict = generated.iter().any(|instruction| {
             instruction
                 .as_any()
@@ -2732,6 +3318,44 @@ mod tests2 {
         assert!(
             !has_conflict,
             "manual Sumeragi overrides must suppress default value reinsertion"
+        );
+    }
+
+    #[test]
+    fn collect_parameter_instructions_orders_sumeragi_timing_updates_safely() {
+        use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
+
+        let mut current = Parameters::default();
+        current.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)));
+        current.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)));
+        current.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)));
+
+        let mut target = current.clone();
+        target.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)));
+        target.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)));
+
+        let generated = collect_parameter_instructions(&target, &[], &[], &current);
+        let mut commit_idx = None;
+        let mut block_idx = None;
+
+        for (idx, instruction) in generated.iter().enumerate() {
+            let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() else {
+                continue;
+            };
+            match set_param.inner() {
+                Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)) => commit_idx = Some(idx),
+                Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)) => block_idx = Some(idx),
+                _ => {}
+            }
+        }
+
+        assert!(
+            commit_idx.is_some() && block_idx.is_some(),
+            "generated instructions must contain the requested Sumeragi timing overrides"
+        );
+        assert!(
+            commit_idx < block_idx,
+            "commit_time_ms must be emitted before block_time_ms when both are raised"
         );
     }
 
@@ -2755,6 +3379,7 @@ mod tests2 {
         let chain = ChainId::from("iroha:test:confdigest");
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
@@ -2786,6 +3411,7 @@ mod tests2 {
         let chain = ChainId::from("iroha:test:wire-digest");
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
@@ -2838,6 +3464,7 @@ mod tests2 {
         };
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![tx],
@@ -2891,6 +3518,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![tx_manual, tx_defaults],
@@ -2904,6 +3532,201 @@ mod tests2 {
         let effective = manifest.effective_parameters();
         assert_eq!(effective.sumeragi().block_time_ms(), 333);
         assert_eq!(effective.sumeragi().commit_time_ms(), 667);
+    }
+
+    #[test]
+    fn parse_orders_structured_sumeragi_timing_updates_across_transactions() -> Result<()> {
+        init_instruction_registry();
+        use iroha_data_model::parameter::{Parameters, system::SumeragiParameter};
+
+        let chain = ChainId::from("iroha:test:paramparse-order");
+
+        let mut base = Parameters::default();
+        base.set_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)));
+        base.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)));
+        base.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)));
+
+        let mut updated = base.clone();
+        updated.set_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)));
+        updated.set_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)));
+
+        let manifest = RawGenesisTransaction {
+            chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
+            executor: None,
+            ivm_dir: IvmPath::default(),
+            transactions: vec![
+                RawGenesisTx {
+                    parameters: Some(base),
+                    ..RawGenesisTx::default()
+                },
+                RawGenesisTx::default(),
+                RawGenesisTx {
+                    parameters: Some(updated),
+                    ..RawGenesisTx::default()
+                },
+            ],
+            consensus_mode: None,
+            bls_domain: None,
+            wire_proto_versions: vec![],
+            consensus_fingerprint: None,
+            crypto: ManifestCrypto::default(),
+        };
+
+        let batches = manifest.parse()?;
+        let (commit_idx, block_idx) = batches
+            .iter()
+            .find_map(|batch| {
+                let mut commit = None;
+                let mut block = None;
+                for (idx, instruction) in batch.iter().enumerate() {
+                    let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
+                    else {
+                        continue;
+                    };
+                    match set_parameter.inner() {
+                        Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)) => {
+                            commit = Some(idx);
+                        }
+                        Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)) => {
+                            block = Some(idx);
+                        }
+                        _ => {}
+                    }
+                }
+                commit.zip(block)
+            })
+            .expect("parsed batches should contain the updated Sumeragi timing instructions");
+
+        assert!(
+            commit_idx < block_idx,
+            "parse() must emit commit_time_ms before block_time_ms when a later structured section raises both"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "debug helper for inspecting parsed genesis instruction order"]
+    fn debug_dump_set_parameter_order_for_manifest_path() -> Result<()> {
+        use std::env;
+
+        init_instruction_registry();
+
+        let path = env::var("IROHA_DEBUG_GENESIS_PATH")
+            .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
+        let manifest = RawGenesisTransaction::from_path(&path)?;
+        let batches = manifest.parse()?;
+
+        eprintln!("manifest={path}");
+        for (batch_idx, batch) in batches.iter().enumerate() {
+            eprintln!("BATCH {batch_idx}");
+            for (instr_idx, instruction) in batch.iter().enumerate() {
+                let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>()
+                else {
+                    continue;
+                };
+                eprintln!("  {instr_idx}: {:?}", set_parameter.inner());
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "debug helper for inspecting signed genesis instruction order"]
+    fn debug_dump_set_parameter_order_for_signed_genesis_path() -> Result<()> {
+        use std::{env, fs};
+
+        use iroha_data_model::{block::decode_framed_signed_block, transaction::Executable};
+
+        init_instruction_registry();
+
+        let path = env::var("IROHA_DEBUG_SIGNED_GENESIS_PATH")
+            .wrap_err("IROHA_DEBUG_SIGNED_GENESIS_PATH must point to a signed genesis .nrt")?;
+        let bytes = fs::read(&path).wrap_err_with(|| format!("read signed genesis {path}"))?;
+        let block = decode_framed_signed_block(&bytes)
+            .wrap_err_with(|| format!("decode signed genesis {path}"))?;
+
+        eprintln!("signed_genesis={path}");
+        for (batch_idx, tx) in block.external_transactions().enumerate() {
+            let Executable::Instructions(batch) = tx.instructions() else {
+                eprintln!("BATCH {batch_idx} <non-instruction-executable>");
+                continue;
+            };
+            eprintln!("BATCH {batch_idx}");
+            for (instr_idx, instruction) in batch.iter().enumerate() {
+                if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() {
+                    eprintln!("  {instr_idx}: {:?}", set_parameter.inner());
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "debug helper for inspecting build_and_sign instruction order before encoding"]
+    fn debug_dump_set_parameter_order_for_built_manifest_path() -> Result<()> {
+        use std::env;
+
+        use iroha_data_model::transaction::Executable;
+
+        init_instruction_registry();
+
+        let path = env::var("IROHA_DEBUG_GENESIS_PATH")
+            .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
+        let manifest = RawGenesisTransaction::from_path(&path)?;
+        let block = manifest.build_and_sign(&KeyPair::random())?;
+
+        eprintln!("built_manifest={path}");
+        for (batch_idx, tx) in block.0.external_transactions().enumerate() {
+            let Executable::Instructions(batch) = tx.instructions() else {
+                eprintln!("BATCH {batch_idx} <non-instruction-executable>");
+                continue;
+            };
+            eprintln!("BATCH {batch_idx}");
+            for (instr_idx, instruction) in batch.iter().enumerate() {
+                if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() {
+                    eprintln!("  {instr_idx}: {:?}", set_parameter.inner());
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "debug helper for inspecting build_and_sign instruction order after encode_wire roundtrip"]
+    fn debug_dump_set_parameter_order_for_encoded_manifest_path() -> Result<()> {
+        use std::env;
+
+        use iroha_data_model::{block::decode_framed_signed_block, transaction::Executable};
+
+        init_instruction_registry();
+
+        let path = env::var("IROHA_DEBUG_GENESIS_PATH")
+            .wrap_err("IROHA_DEBUG_GENESIS_PATH must point to a genesis manifest JSON")?;
+        let manifest = RawGenesisTransaction::from_path(&path)?;
+        let block = manifest.build_and_sign(&KeyPair::random())?;
+        let encoded = block.0.encode_wire()?;
+        let decoded = decode_framed_signed_block(&encoded)?;
+
+        eprintln!("encoded_manifest={path}");
+        for (batch_idx, tx) in decoded.external_transactions().enumerate() {
+            let Executable::Instructions(batch) = tx.instructions() else {
+                eprintln!("BATCH {batch_idx} <non-instruction-executable>");
+                continue;
+            };
+            eprintln!("BATCH {batch_idx}");
+            for (instr_idx, instruction) in batch.iter().enumerate() {
+                if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() {
+                    eprintln!("  {instr_idx}: {:?}", set_parameter.inner());
+                }
+            }
+        }
+
+        Ok(())
     }
 
     #[test]
@@ -2923,6 +3746,10 @@ mod tests2 {
         manifest_fields.insert(
             "chain".to_string(),
             norito::json::Value::String("test-chain".into()),
+        );
+        manifest_fields.insert(
+            "chain_discriminant".to_string(),
+            manifest_chain_discriminant_value(),
         );
         manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
         manifest_fields.insert(
@@ -2956,6 +3783,10 @@ mod tests2 {
             "chain".to_string(),
             norito::json::Value::String("test-chain".into()),
         );
+        manifest_fields.insert(
+            "chain_discriminant".to_string(),
+            manifest_chain_discriminant_value(),
+        );
         manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
         manifest_fields.insert(
             "ivm_dir".to_string(),
@@ -2973,6 +3804,56 @@ mod tests2 {
             err.to_string().contains("consensus_mode"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn raw_genesis_requires_chain_discriminant() {
+        init_instruction_registry();
+
+        let mut manifest_fields = norito::json::Map::new();
+        manifest_fields.insert(
+            "chain".to_string(),
+            norito::json::Value::String("test-chain".into()),
+        );
+        manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
+        manifest_fields.insert(
+            "ivm_dir".to_string(),
+            norito::json::Value::String(".".into()),
+        );
+        manifest_fields.insert(
+            "consensus_mode".to_string(),
+            norito::json::Value::String("Permissioned".into()),
+        );
+        manifest_fields.insert(
+            "transactions".to_string(),
+            norito::json::Value::Array(vec![norito::json::Value::Object(norito::json::Map::new())]),
+        );
+
+        let manifest = norito::json::Value::Object(manifest_fields);
+        let err = RawGenesisTransaction::from_json_value(manifest)
+            .expect_err("missing chain_discriminant should be rejected");
+        assert!(
+            err.to_string().contains("chain_discriminant"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn raw_genesis_roundtrip_uses_manifest_chain_discriminant_for_account_literals() -> Result<()> {
+        init_instruction_registry();
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+        let manifest = GenesisBuilder::new_without_executor(
+            ChainId::from("iroha:test:testnet-prefix"),
+            PathBuf::from("."),
+        )
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned)
+        .with_chain_discriminant(369);
+
+        let json = norito::json::to_json(&manifest)?;
+        let decoded: RawGenesisTransaction = norito::json::from_str(&json)?;
+        assert_eq!(decoded.chain_discriminant(), 369);
+        Ok(())
     }
 
     #[test]
@@ -3000,6 +3881,10 @@ mod tests2 {
         manifest_fields.insert(
             "chain".to_string(),
             norito::json::Value::String("test-chain".into()),
+        );
+        manifest_fields.insert(
+            "chain_discriminant".to_string(),
+            manifest_chain_discriminant_value(),
         );
         manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
         manifest_fields.insert(
@@ -3065,6 +3950,10 @@ mod tests2 {
             "chain".to_string(),
             norito::json::Value::String("test-chain".into()),
         );
+        manifest_fields.insert(
+            "chain_discriminant".to_string(),
+            manifest_chain_discriminant_value(),
+        );
         manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
         manifest_fields.insert(
             "ivm_dir".to_string(),
@@ -3105,6 +3994,10 @@ mod tests2 {
         manifest_fields.insert(
             "chain".to_string(),
             norito::json::Value::String("test-chain".into()),
+        );
+        manifest_fields.insert(
+            "chain_discriminant".to_string(),
+            manifest_chain_discriminant_value(),
         );
         manifest_fields.insert("executor".to_string(), norito::json::Value::Null);
         manifest_fields.insert(
@@ -3155,6 +4048,7 @@ mod tests2 {
     fn builder_preserves_consensus_metadata() {
         let manifest = RawGenesisTransaction {
             chain: ChainId::from("iroha:test:builder-meta"),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
@@ -3168,7 +4062,7 @@ mod tests2 {
         let rebuilt = manifest
             .clone()
             .into_builder()
-            .domain("example".parse().expect("domain name"))
+            .domain(DomainId::try_new("example", "universal").expect("domain id"))
             .finish_domain()
             .build_raw();
 
@@ -3195,6 +4089,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain: ChainId::from("iroha:test:normalize"),
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx::default()],
@@ -3350,6 +4245,7 @@ mod tests2 {
 
             RawGenesisTransaction {
                 chain,
+                chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
                 executor: None,
                 ivm_dir: IvmPath::default(),
                 transactions: vec![RawGenesisTx {
@@ -3410,6 +4306,7 @@ mod tests2 {
 
         let manifest = RawGenesisTransaction {
             chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: None,
             ivm_dir: IvmPath::default(),
             transactions: vec![RawGenesisTx {
@@ -3667,6 +4564,12 @@ impl RawGenesisTransaction {
         let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
         let instruction_batches = self.parse()?;
 
+        let genesis_creation_base_ms: u64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .wrap_err("system clock is before UNIX_EPOCH")?
+            .as_millis()
+            .try_into()
+            .wrap_err("current UNIX timestamp does not fit into u64 milliseconds")?;
         let mut transactions = Vec::new();
         for (tx_index, instructions) in instruction_batches.into_iter().enumerate() {
             #[cfg(debug_assertions)]
@@ -3681,9 +4584,9 @@ impl RawGenesisTransaction {
             let mut builder = TransactionBuilder::new(chain.clone(), genesis_account.clone())
                 .with_instructions(instructions);
             builder.set_creation_time(Duration::from_millis(
-                u64::try_from(tx_index)
-                    .expect("too many genesis transactions")
-                    .saturating_add(1),
+                genesis_creation_base_ms.saturating_add(
+                    u64::try_from(tx_index).expect("too many genesis transactions"),
+                ),
             ));
             let transaction = builder.sign(genesis_key_pair.private_key());
             transactions.push(transaction);
@@ -3707,7 +4610,7 @@ impl RawGenesisTransaction {
     ///
     /// Fails if `self.executor` path fails to load [`Executor`].
     #[allow(clippy::too_many_lines)]
-    fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
+    pub fn parse(self) -> Result<Vec<Vec<InstructionBox>>> {
         let explicit_handshake_meta = parse_consensus_handshake_metadata(&self.transactions);
         let mut manifest = self.with_consensus_meta();
         if let Some(handshake_meta) = explicit_handshake_meta {
@@ -3729,6 +4632,7 @@ impl RawGenesisTransaction {
 
         let RawGenesisTransaction {
             chain: _,
+            chain_discriminant: _,
             executor,
             ivm_dir: _,
             mut transactions,
@@ -3743,8 +4647,8 @@ impl RawGenesisTransaction {
             tx.instructions
                 .retain(|instruction| !is_consensus_handshake_metadata_instruction(instruction));
             if let Some(parameters) = &mut tx.parameters {
-                let filtered_parameters = parameters
-                    .parameters()
+                let filtered_parameters = parameters_with_staging(parameters)
+                    .into_iter()
                     .filter(|parameter| {
                         !matches!(
                             parameter,
@@ -3775,6 +4679,7 @@ impl RawGenesisTransaction {
         };
 
         let mut instructions_list = Vec::new();
+        let mut aggregated_parameters = Parameters::default();
 
         if let Some(executor_path) = executor {
             let upgrade_executor = Upgrade::new(Executor::new(executor_path.try_into()?)).into();
@@ -3785,14 +4690,26 @@ impl RawGenesisTransaction {
             let mut instructions = Vec::new();
 
             if let Some(parameters) = tx.parameters {
-                instructions.extend(collect_parameter_instructions(
+                let generated = collect_parameter_instructions(
                     &parameters,
                     &tx.instructions,
                     &manual_parameters,
-                ));
+                    &aggregated_parameters,
+                );
+                for instruction in &generated {
+                    if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
+                        aggregated_parameters.set_parameter(set_param.inner().clone());
+                    }
+                }
+                instructions.extend(generated);
             }
 
             if !tx.instructions.is_empty() {
+                for instruction in &tx.instructions {
+                    if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
+                        aggregated_parameters.set_parameter(set_param.inner().clone());
+                    }
+                }
                 instructions.extend(tx.instructions);
             }
 
@@ -4193,17 +5110,16 @@ impl GenesisBuilder {
     }
 
     /// Entry a domain registration and transition to [`GenesisDomainBuilder`].
-    pub fn domain(self, domain_name: Name) -> GenesisDomainBuilder {
-        self.domain_with_metadata(domain_name, Metadata::default())
+    pub fn domain(self, domain_id: DomainId) -> GenesisDomainBuilder {
+        self.domain_with_metadata(domain_id, Metadata::default())
     }
 
     /// Same as [`GenesisBuilder::domain`], but attach a metadata to the domain.
     pub fn domain_with_metadata(
         mut self,
-        domain_name: Name,
+        domain_id: DomainId,
         metadata: Metadata,
     ) -> GenesisDomainBuilder {
-        let domain_id = DomainId::new(domain_name);
         let new_domain = Domain::new(domain_id.clone()).with_metadata(metadata);
 
         self.current_tx_mut()
@@ -4297,12 +5213,19 @@ impl GenesisBuilder {
 
     /// Finish building and produce a [`RawGenesisTransaction`].
     pub fn build_raw(self) -> RawGenesisTransaction {
+        let mut parameter_snapshot = Parameters::default();
         let transactions = self
             .transactions
             .into_iter()
             .map(|tx| {
-                let parameters =
-                    (!tx.parameters.is_empty()).then(|| tx.parameters.into_iter().collect());
+                let parameters = if tx.parameters.is_empty() {
+                    None
+                } else {
+                    for parameter in &tx.parameters {
+                        parameter_snapshot.set_parameter(parameter.clone());
+                    }
+                    Some(parameter_snapshot.clone())
+                };
                 RawGenesisTx {
                     parameters,
                     instructions: tx.instructions,
@@ -4314,6 +5237,7 @@ impl GenesisBuilder {
 
         RawGenesisTransaction {
             chain: self.chain,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             executor: self.executor,
             ivm_dir: self.ivm_dir.into(),
             transactions,
@@ -4351,9 +5275,7 @@ impl GenesisDomainBuilder {
     /// Add an account (having provided `metadata`) to this domain.
     pub fn account_with_metadata(mut self, signatory: PublicKey, metadata: Metadata) -> Self {
         let account_id = AccountId::new(signatory);
-        let register = Register::account(
-            Account::new(account_id.to_account_id(self.domain_id.clone())).with_metadata(metadata),
-        );
+        let register = Register::account(Account::new(account_id.clone()).with_metadata(metadata));
         self.current_tx_mut().instructions.push(register.into());
         self
     }
@@ -4573,7 +5495,8 @@ mod tests {
         let executor_path = tmp_dir.path().join("executor.to");
         std::fs::write(&executor_path, dummy_bytecode).unwrap();
         let genesis = format!(
-            r#"{{"chain":"00000000-0000-0000-0000-000000000000","executor":"{}","consensus_mode":"Permissioned","transactions":[{{}}]}}"#,
+            r#"{{"chain":"00000000-0000-0000-0000-000000000000","chain_discriminant":{},"executor":"{}","consensus_mode":"Permissioned","transactions":[{{}}]}}"#,
+            iroha_data_model::account::address::chain_discriminant(),
             executor_path.file_name().unwrap().to_str().unwrap()
         );
         let genesis_path = tmp_dir.path().join("genesis.json");
@@ -4591,9 +5514,10 @@ mod tests {
         let (public_key, _) = KeyPair::random().into_parts();
         let domain_name: Name = "wonderland".parse()?;
         let account_id = AccountId::new(public_key.clone());
+        let domain_id = DomainId::try_new(&domain_name, "universal")?;
 
         let genesis = builder
-            .domain(domain_name)
+            .domain(domain_id)
             .account(public_key)
             .finish_domain()
             .build_raw()
@@ -4601,11 +5525,45 @@ mod tests {
         let json = norito::json::to_json_pretty(&genesis)?;
         assert!(
             json.contains(&account_id.to_string()),
-            "expected I105 account id in genesis JSON"
+            "expected i105 account id in genesis JSON"
         );
         let genesis_path = tmp_dir.path().join("genesis.json");
         std::fs::write(&genesis_path, json)?;
         RawGenesisTransaction::from_path(&genesis_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn parse_genesis_accepts_legacy_public_key_account_literals() -> Result<()> {
+        init_instruction_registry();
+
+        let public_key_literal = ALICE_KEYPAIR.public_key().to_string();
+        let account_id = AccountId::new(ALICE_KEYPAIR.public_key().clone());
+        let genesis = format!(
+            r#"{{
+                "chain":"00000000-0000-0000-0000-000000000000",
+                "chain_discriminant":{},
+                "executor":null,
+                "ivm_dir":".",
+                "consensus_mode":"Permissioned",
+                "transactions":[{{
+                    "instructions":[{{"Register":{{"Account":{{"id":"{public_key_literal}","metadata":{{}},"label":null,"uaid":null}}}}}}]
+                }}]
+            }}"#,
+            iroha_data_model::account::address::chain_discriminant(),
+        );
+
+        let decoded: RawGenesisTransaction = norito::json::from_str(&genesis)?;
+        let account = decoded.transactions[0].instructions[0]
+            .as_any()
+            .downcast_ref::<RegisterBox>()
+            .and_then(|register| match register {
+                RegisterBox::Account(account) => Some(account.object().id().clone()),
+                _ => None,
+            })
+            .expect("account registration");
+        assert_eq!(account, account_id);
+
         Ok(())
     }
 
@@ -4694,6 +5652,135 @@ mod tests {
                 .all(|instr| instr.as_any().downcast_ref::<SetParameter>().is_none()),
             "manifest instructions must not include SetParameter"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn shipped_genesis_assets_have_non_blank_human_names() -> Result<()> {
+        use iroha_data_model::asset::definition::validate_asset_name;
+
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifests = [
+            repo_root.join("defaults/genesis.json"),
+            repo_root.join("defaults/nexus/genesis.json"),
+            repo_root.join("defaults/kagami/iroha3-dev/genesis.json"),
+            repo_root.join("defaults/kagami/iroha3-nexus/genesis.json"),
+            repo_root.join("defaults/kagami/iroha3-taira/genesis.json"),
+            repo_root.join("configs/soranexus/nexus/genesis.json"),
+            repo_root.join("configs/soranexus/taira/genesis.json"),
+        ];
+
+        for manifest_path in manifests {
+            let raw = std::fs::read_to_string(&manifest_path)?;
+            let value = norito::json::parse_value(&raw)?;
+            let transactions = value
+                .get("transactions")
+                .and_then(norito::json::Value::as_array)
+                .ok_or_else(|| eyre!("{} missing transactions array", manifest_path.display()))?;
+            for instruction in transactions
+                .iter()
+                .filter_map(|tx| tx.get("instructions"))
+                .filter_map(norito::json::Value::as_array)
+                .flatten()
+            {
+                let Some(asset_definition) = instruction
+                    .get("Register")
+                    .and_then(|register| register.get("AssetDefinition"))
+                else {
+                    continue;
+                };
+                let name = asset_definition
+                    .get("name")
+                    .and_then(norito::json::Value::as_str)
+                    .unwrap_or_default();
+                let id = asset_definition
+                    .get("id")
+                    .and_then(norito::json::Value::as_str)
+                    .unwrap_or("<missing-id>");
+                validate_asset_name(name).map_err(|err| {
+                    eyre!(
+                        "{} contains invalid asset definition `{}`: {}",
+                        manifest_path.display(),
+                        id,
+                        err
+                    )
+                })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn shipped_genesis_manifests_advertise_current_npos_crypto_caps() -> Result<()> {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manifests = [
+            repo_root.join("defaults/genesis.json"),
+            repo_root.join("defaults/nexus/genesis.json"),
+            repo_root.join("defaults/kagami/iroha3-dev/genesis.json"),
+            repo_root.join("defaults/kagami/iroha3-nexus/genesis.json"),
+            repo_root.join("defaults/kagami/iroha3-taira/genesis.json"),
+            repo_root.join("configs/soranexus/nexus/genesis.json"),
+            repo_root.join("configs/soranexus/taira/genesis.json"),
+        ];
+
+        let bls_curve = iroha_data_model::account::curve::CurveId::try_from_algorithm(
+            iroha_crypto::Algorithm::BlsNormal,
+        )
+        .expect("bls curve id");
+
+        for manifest_path in manifests {
+            let raw = std::fs::read_to_string(&manifest_path)?;
+            let value = norito::json::parse_value(&raw)?;
+            let wire_proto_versions = value
+                .get("wire_proto_versions")
+                .and_then(norito::json::Value::as_array)
+                .ok_or_else(|| eyre!("{} missing wire_proto_versions", manifest_path.display()))?;
+            assert_eq!(
+                wire_proto_versions,
+                &vec![norito::json::Value::Number(
+                    u64::from(iroha_data_model::block::consensus::PROTO_VERSION).into()
+                )],
+                "{} must advertise the current consensus wire protocol",
+                manifest_path.display()
+            );
+            let crypto = value
+                .get("crypto")
+                .ok_or_else(|| eyre!("{} missing crypto section", manifest_path.display()))?;
+            let allowed_signing = crypto
+                .get("allowed_signing")
+                .and_then(norito::json::Value::as_array)
+                .ok_or_else(|| {
+                    eyre!("{} missing crypto.allowed_signing", manifest_path.display())
+                })?;
+            assert!(
+                allowed_signing
+                    .iter()
+                    .filter_map(norito::json::Value::as_str)
+                    .any(|algo| algo.eq_ignore_ascii_case("bls_normal")),
+                "{} must advertise bls_normal for NPoS bootstrap",
+                manifest_path.display()
+            );
+            let allowed_curve_ids = crypto
+                .get("allowed_curve_ids")
+                .and_then(norito::json::Value::as_array)
+                .ok_or_else(|| {
+                    eyre!(
+                        "{} missing crypto.allowed_curve_ids",
+                        manifest_path.display()
+                    )
+                })?;
+            assert!(
+                allowed_curve_ids.iter().any(|value| {
+                    value
+                        .as_u64()
+                        .is_some_and(|curve| curve == u64::from(bls_curve.as_u8()))
+                }),
+                "{} must advertise the BLS curve id for NPoS bootstrap",
+                manifest_path.display()
+            );
+        }
+
         Ok(())
     }
 
@@ -5301,7 +6388,7 @@ mod tests {
         let (_tmp_dir, builder) = test_builder();
 
         let _genesis_block = builder
-            .domain("wonderland".parse()?)
+            .domain(DomainId::try_new("wonderland", "universal")?)
             .account(alice_public_key)
             .finish_domain()
             .build_and_sign(&genesis_key_pair)?;
@@ -5342,14 +6429,14 @@ mod tests {
         let _executor_path = genesis_builder.executor.clone();
 
         genesis_builder = genesis_builder
-            .domain("wonderland".parse().unwrap())
+            .domain(DomainId::try_new("wonderland", "universal").unwrap())
             .account(public_key["alice"].clone())
             .account(public_key["bob"].clone())
             .finish_domain()
-            .domain("tulgey_wood".parse().unwrap())
+            .domain(DomainId::try_new("tulgey_wood", "universal").unwrap())
             .account(public_key["cheshire_cat"].clone())
             .finish_domain()
-            .domain("meadow".parse().unwrap())
+            .domain(DomainId::try_new("meadow", "universal").unwrap())
             .account(public_key["mad_hatter"].clone())
             .asset("hats".parse().unwrap(), NumericSpec::default())
             .finish_domain();
@@ -5381,7 +6468,7 @@ mod tests {
         };
 
         {
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             assert_eq!(
                 instructions[0],
                 Register::domain(Domain::new(domain_id.clone())).into()
@@ -5389,20 +6476,20 @@ mod tests {
             assert_eq!(
                 instructions[1],
                 Register::account(Account::new(
-                    AccountId::new(public_key["alice"].clone()).to_account_id(domain_id.clone()),
+                    AccountId::new(public_key["alice"].clone()).clone()
                 ))
                 .into()
             );
             assert_eq!(
                 instructions[2],
                 Register::account(Account::new(
-                    AccountId::new(public_key["bob"].clone()).to_account_id(domain_id.clone()),
+                    AccountId::new(public_key["bob"].clone()).clone()
                 ))
                 .into()
             );
         }
         {
-            let domain_id: DomainId = "tulgey_wood".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("tulgey_wood", "universal").unwrap();
             assert_eq!(
                 instructions[3],
                 Register::domain(Domain::new(domain_id.clone())).into()
@@ -5410,14 +6497,13 @@ mod tests {
             assert_eq!(
                 instructions[4],
                 Register::account(Account::new(
-                    AccountId::new(public_key["cheshire_cat"].clone())
-                        .to_account_id(domain_id.clone()),
+                    AccountId::new(public_key["cheshire_cat"].clone()).clone()
                 ))
                 .into()
             );
         }
         {
-            let domain_id: DomainId = "meadow".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("meadow", "universal").unwrap();
             assert_eq!(
                 instructions[5],
                 Register::domain(Domain::new(domain_id.clone())).into()
@@ -5425,8 +6511,7 @@ mod tests {
             assert_eq!(
                 instructions[6],
                 Register::account(Account::new(
-                    AccountId::new(public_key["mad_hatter"].clone())
-                        .to_account_id(domain_id.clone()),
+                    AccountId::new(public_key["mad_hatter"].clone()).clone()
                 ))
                 .into()
             );
@@ -5434,7 +6519,7 @@ mod tests {
                 instructions[7],
                 Register::asset_definition(
                     AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-                        "meadow".parse().unwrap(),
+                        DomainId::try_new("meadow", "universal").unwrap(),
                         "hats".parse().unwrap()
                     ),)
                     .with_name("hats".to_owned())
@@ -5456,6 +6541,56 @@ mod tests {
         let de: RawGenesisTransaction = norito::json::from_str(&json)?;
         let json2 = norito::json::to_json(&de)?;
         assert_eq!(json, json2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn build_raw_carries_forward_parameter_snapshots() -> Result<()> {
+        use iroha_data_model::parameter::system::SumeragiParameter;
+
+        let raw = GenesisBuilder::new_without_executor(
+            ChainId::from("iroha:test:build-raw-cumulative"),
+            ".",
+        )
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::MinFinalityMs(100)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(100)))
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(100)))
+        .next_transaction()
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::CommitTimeMs(667)))
+        .next_transaction()
+        .append_parameter(Parameter::Sumeragi(SumeragiParameter::BlockTimeMs(333)))
+        .build_raw()
+        .with_consensus_mode(SumeragiConsensusMode::Permissioned);
+
+        let transactions = &raw.transactions;
+        assert_eq!(transactions.len(), 3);
+
+        let tx1_params = transactions[1]
+            .parameters
+            .as_ref()
+            .expect("second transaction should carry cumulative params");
+        assert_eq!(tx1_params.sumeragi().block_time_ms(), 100);
+        assert_eq!(tx1_params.sumeragi().commit_time_ms(), 667);
+
+        let tx2_params = transactions[2]
+            .parameters
+            .as_ref()
+            .expect("third transaction should carry cumulative params");
+        assert_eq!(tx2_params.sumeragi().block_time_ms(), 333);
+        assert_eq!(tx2_params.sumeragi().commit_time_ms(), 667);
+
+        let json = norito::json::to_json(&raw)?;
+        let decoded: RawGenesisTransaction = norito::json::from_str(&json)?;
+        assert_eq!(
+            decoded.transactions[2]
+                .parameters
+                .as_ref()
+                .expect("decoded third transaction should carry params")
+                .sumeragi()
+                .commit_time_ms(),
+            667
+        );
 
         Ok(())
     }
@@ -5553,7 +6688,8 @@ mod tests {
     fn instruction_registry_decodes_register_domain() {
         let registry = default_instruction_registry();
         let name = core::any::type_name::<Register<Domain>>();
-        let instruction = Register::domain(Domain::new("test".parse().unwrap()));
+        let instruction =
+            Register::domain(Domain::new(DomainId::try_new("test", "universal").unwrap()));
         let bytes = norito::to_bytes(&instruction).expect("encode register-domain instruction");
         let decoded = registry.decode(name, &bytes).expect("entry");
         if let Err(err) = decoded {

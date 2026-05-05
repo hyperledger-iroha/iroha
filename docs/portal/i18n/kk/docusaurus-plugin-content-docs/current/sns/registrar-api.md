@@ -108,17 +108,17 @@ Struct ReservedAssignmentRequestV1 {
 
 | Соңғы нүкте | Әдіс | Жүктеме | Сипаттама |
 |----------|--------|---------|-------------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Тіркеу немесе атауды қайта ашыңыз. Баға деңгейін шешеді, төлем/басқару дәлелдерін тексереді, тізілім оқиғаларын шығарады. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Мерзімді ұзарту. Саясаттан жеңілдіктер/өткізу терезелерін қолданады. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Басқару мақұлдаулары тіркелгеннен кейін меншік құқығын беріңіз. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Контроллер жинағын ауыстырыңыз; қол қойылған тіркелгі мекенжайларын растайды. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Қамқоршы/кеңес қатып қалады. Қамқоршы билеті мен басқару құжатына сілтеме қажет. |
-| `/v1/sns/registrations/{selector}/freeze` | ЖОЮ | `GovernanceHookV1` | Қалпына келтіруден кейін мұздатыңыз; кеңестің алдын ала жазылуын қамтамасыз етеді. |
+| `/v1/sns/names` | POST | `RegisterNameRequestV1` | Тіркеу немесе атауды қайта ашыңыз. Баға деңгейін шешеді, төлем/басқару дәлелдерін тексереді, тізілім оқиғаларын шығарады. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POST | `RenewNameRequestV1` | Мерзімді ұзарту. Саясаттан жеңілдіктер/өткізу терезелерін қолданады. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POST | `TransferNameRequestV1` | Басқару мақұлдаулары тіркелгеннен кейін меншік құқығын беріңіз. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | PUT | `UpdateControllersRequestV1` | Контроллер жинағын ауыстырыңыз; қол қойылған тіркелгі мекенжайларын растайды. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POST | `FreezeNameRequestV1` | Қамқоршы/кеңес қатып қалады. Қамқоршы билеті мен басқару құжатына сілтеме қажет. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | ЖОЮ | `GovernanceHookV1` | Қалпына келтіруден кейін мұздатыңыз; кеңестің алдын ала жазылуын қамтамасыз етеді. |
 | `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Сақталған атауларды басқарушы/кеңес тағайындау. |
 | `/v1/sns/policies/{suffix_id}` | АЛУ | — | `SuffixPolicyV1` токты алу (кэштеуге болады). |
-| `/v1/sns/registrations/{selector}` | АЛУ | — | Ағымдағы `NameRecordV1` + тиімді күйді қайтарады (Белсенді, Grace, т.б.). |
+| `/v1/sns/names/{namespace}/{literal}` | АЛУ | — | Ағымдағы `NameRecordV1` + тиімді күйді қайтарады (Белсенді, Grace, т.б.). |
 
-**Таңдаушы кодтауы:** `{selector}` жол сегменті ADDR-5 үшін I105 (қалаулы), қысылған (`sora`, екінші ең жақсы) немесе канондық он алтылықты қабылдайды; Torii оны `NameSelectorV1` арқылы қалыпқа келтіреді.
+**Таңдаушы кодтауы:** `{selector}` жол сегменті ADDR-5 үшін i105 (қалаулы), қысылған (`sora`, екінші ең жақсы) немесе канондық он алтылықты қабылдайды; Torii оны `NameSelectorV1` арқылы қалыпқа келтіреді.
 
 **Қате үлгісі:** барлық соңғы нүктелер `code`, `message`, `details` бар Norito JSON қайтарады. Кодтарға `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` кіреді.
 
@@ -131,7 +131,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -156,7 +156,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -164,7 +164,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -179,7 +179,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` жарамды `GovernanceHookV1` жазбасын қамтуы керек (ұсыныс идентификаторы, дауыс хэштері, басқарушы/қамқоршы қолдары). Әрбір пәрмен жай ғана сәйкес `/v1/sns/registrations/{selector}/…` соңғы нүктесін көрсетеді, осылайша бета операторлары SDK шақыратын нақты Torii беттерін қайталай алады.
+`--governance-json` жарамды `GovernanceHookV1` жазбасын қамтуы керек (ұсыныс идентификаторы, дауыс хэштері, басқарушы/қамқоршы қолдары). Әрбір пәрмен жай ғана сәйкес `/v1/sns/names/{namespace}/{literal}/…` соңғы нүктесін көрсетеді, осылайша бета операторлары SDK шақыратын нақты Torii беттерін қайталай алады.
 
 ## 4. gRPC қызметі
 
@@ -226,7 +226,7 @@ Torii мыналарды тексеру арқылы дәлелдемелерд�
 
 1. Клиент бағаны, жеңілдікті және қолжетімді деңгейлерді алу үшін `/v1/sns/policies/{suffix_id}` сұрайды.
 2. Клиент `RegisterNameRequestV1` құрастырады:
-   - `selector` таңдаулы I105 немесе екінші ең жақсы қысылған (`sora`) жапсырмасынан алынған.
+   - `selector` таңдаулы i105 немесе екінші ең жақсы қысылған (`sora`) жапсырмасынан алынған.
    - `term_years` саясат шегінде.
    - `payment` қазынашылық/басқарушы сплиттерді аударуға сілтеме жасайды.
 3. Torii растайды:
@@ -251,7 +251,7 @@ Torii мыналарды тексеру арқылы дәлелдемелерд�
 
 1. Қамқоршы билет сілтемесі оқиға идентификаторымен `FreezeNameRequestV1` жібереді.
 2. Torii жазбаны `NameStatus::Frozen` параметріне жылжытады, `NameFrozen` шығарады.
-3. Түзеткеннен кейін кеңестің мәселелері шешіледі; оператор DELETE `/v1/sns/registrations/{selector}/freeze` жолын `GovernanceHookV1` арқылы жібереді.
+3. Түзеткеннен кейін кеңестің мәселелері шешіледі; оператор DELETE `/v1/sns/names/{namespace}/{literal}/freeze` жолын `GovernanceHookV1` арқылы жібереді.
 4. Torii қайта анықтауды растайды, `NameUnfrozen` шығарады.
 
 ## 7. Тексеру және қате кодтары

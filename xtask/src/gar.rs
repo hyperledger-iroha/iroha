@@ -493,11 +493,11 @@ mod tests {
         fs::create_dir_all(&acks_dir)?;
 
         let operator =
-            AccountId::parse_encoded("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn")
+            AccountId::parse_encoded("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .unwrap();
         let other_operator =
-            AccountId::parse_encoded("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU")
+            AccountId::parse_encoded("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76")
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .unwrap();
 

@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` يلف CLI الخاص بـ `iroha` لانتاج:
   - `audit.json` - منظم الصرف من `iroha tools address audit --format json`.
-  - `normalized.txt` -- literals I105 (المفضل) / مضغوط (`sora`) (الخيار الثاني) محولة لكل محدد من النطاق Local.
+  - `normalized.txt` -- literals i105 (المفضل) / مضغوط (`sora`) (الخيار الثاني) محولة لكل محدد من النطاق Local.
 - استخدم السكربت مع لوحة تناول الاناوين (`dashboards/grafana/address_ingest.json`)
   وقواعد Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) لاثبات ان Cutover Local-8 /
   محلي-12 امن. راقب لوحات التصادم Local-8 و Local-12 والتنبيهات
@@ -33,7 +33,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 الخيارات:
 
-- `--format I105` لخروج `sora...` بدلات من I105.
+- `--format i105` لخروج `sora...` بدلات من i105.
 - `domainless output (default)` لاصدار حرفي بدون نطاق.
 - `--audit-only` للتخطي خطوة للتحويل.
 - `--allow-errors` للاستمرار عند ظهور صفوف تالفة (وفقًا لسلوك CLI).

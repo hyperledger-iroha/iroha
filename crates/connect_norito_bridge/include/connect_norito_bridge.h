@@ -20,6 +20,10 @@ extern "C" {
 #define CONNECT_NORITO_ERR_OFFLINE_ASSET -301
 #define CONNECT_NORITO_ERR_OFFLINE_NONCE -303
 #define CONNECT_NORITO_ERR_OFFLINE_SERIALIZE -304
+#define CONNECT_NORITO_ERR_OFFLINE_NOTE_V2_PROVE -310
+
+// ---------------- Bridge ABI ----------------
+uint32_t connect_norito_bridge_abi_version(void);
 
 // ---------------- Chain discriminant helpers ----------------
 uint16_t connect_norito_get_chain_discriminant(void);
@@ -45,81 +49,8 @@ int32_t connect_norito_account_address_render(
     unsigned long* out_canonical_hex_len,
     uint8_t** out_i105_ptr,
     unsigned long* out_i105_len,
-    uint8_t** out_compressed_ptr,
-    unsigned long* out_compressed_len,
-    uint8_t** out_compressed_full_ptr,
-    unsigned long* out_compressed_full_len,
     uint8_t** out_error_json_ptr,
     unsigned long* out_error_json_len);
-
-// ---------------- Offline allowance helpers ----------------
-int32_t connect_norito_offline_receipt_challenge(
-    const char* chain_id,
-    unsigned long chain_id_len,
-    const char* invoice_id,
-    unsigned long invoice_len,
-    const char* receiver_account_id,
-    unsigned long receiver_len,
-    const char* asset_id,
-    unsigned long asset_len,
-    const char* amount,
-    unsigned long amount_len,
-    uint64_t issued_at_ms,
-    const char* sender_certificate_id_hex,
-    unsigned long sender_certificate_id_len,
-    const char* nonce_hex,
-    unsigned long nonce_len,
-    uint8_t** out_preimage_ptr,
-    unsigned long* out_preimage_len,
-    uint8_t* out_iroha_hash_ptr,
-    unsigned long out_iroha_hash_len,
-    uint8_t* out_client_hash_ptr,
-    unsigned long out_client_hash_len);
-
-int32_t connect_norito_offline_receipts_root(
-    const uint8_t* receipts_ptr,
-    unsigned long receipts_len,
-    uint8_t* out_root_ptr,
-    unsigned long out_root_len);
-
-int32_t connect_norito_offline_commitment_update(
-    const uint8_t* initial_commitment_ptr,
-    unsigned long initial_commitment_len,
-    const char* claimed_delta,
-    unsigned long claimed_delta_len,
-    const uint8_t* initial_blinding_ptr,
-    unsigned long initial_blinding_len,
-    const uint8_t* resulting_blinding_ptr,
-    unsigned long resulting_blinding_len,
-    uint8_t** out_commitment_ptr,
-    unsigned long* out_commitment_len);
-
-int32_t connect_norito_offline_blinding_from_seed(
-    const uint8_t* initial_blinding_ptr,
-    unsigned long initial_blinding_len,
-    const uint8_t* certificate_id_ptr,
-    unsigned long certificate_id_len,
-    uint64_t counter,
-    uint8_t** out_blinding_ptr,
-    unsigned long* out_blinding_len);
-
-int32_t connect_norito_offline_balance_proof(
-    const char* chain_id,
-    unsigned long chain_id_len,
-    const uint8_t* initial_commitment_ptr,
-    unsigned long initial_commitment_len,
-    const uint8_t* resulting_commitment_ptr,
-    unsigned long resulting_commitment_len,
-    const char* claimed_delta,
-    unsigned long claimed_delta_len,
-    const char* resulting_value,
-    unsigned long resulting_value_len,
-    const uint8_t* initial_blinding_ptr,
-    unsigned long initial_blinding_len,
-    const uint8_t* resulting_blinding_ptr,
-    unsigned long resulting_blinding_len,
-    uint8_t** out_proof_ptr,
-    unsigned long* out_proof_len);
 
 // ---------------- Ciphertext frame ----------------
 int32_t connect_norito_encode_ciphertext_frame(
@@ -131,6 +62,25 @@ int32_t connect_norito_decode_ciphertext_frame(
     const uint8_t* inp, unsigned long inp_len,
     uint8_t* out_sid, uint8_t* out_dir, uint64_t* out_seq,
     uint8_t** out_aead_ptr, unsigned long* out_aead_len);
+
+// ---------------- Offline Note V2 prover helpers ----------------
+// Generate a recursive Halo2/IPA proof for an Offline V2 redemption.
+// Input: Norito-archive bytes of `OfflineNoteRedeemV2` (recursive_proof field is ignored).
+// Output: Norito-archive bytes of `OfflineNoteRecursiveProofV2` (slot back into the redemption).
+int32_t connect_norito_offline_prove_note_v2_redeem(
+    const uint8_t* redeem_norito_ptr,
+    unsigned long redeem_norito_len,
+    uint8_t** out_recursive_proof_ptr,
+    unsigned long* out_recursive_proof_len);
+
+// Generate a recursive Halo2/IPA proof for an Offline V2 audit bundle.
+// Input: Norito-archive bytes of `OfflineNoteAuditBundleV2` (recursive_proof field is ignored).
+// Output: Norito-archive bytes of `OfflineNoteRecursiveProofV2` (slot back into the audit bundle).
+int32_t connect_norito_offline_prove_note_v2_audit(
+    const uint8_t* audit_norito_ptr,
+    unsigned long audit_norito_len,
+    uint8_t** out_recursive_proof_ptr,
+    unsigned long* out_recursive_proof_len);
 
 void connect_norito_free(uint8_t* ptr);
 
@@ -504,6 +454,22 @@ int32_t connect_norito_encode_transfer_signed_transaction(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
+int32_t connect_norito_encode_transfer_signed_transaction_with_fee_sponsor(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const char* asset_definition, unsigned long asset_definition_len,
+    const char* quantity, unsigned long quantity_len,
+    const char* destination, unsigned long destination_len,
+    const char* fee_sponsor, unsigned long fee_sponsor_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
 int32_t connect_norito_encode_transfer_signed_transaction_alg(
     const char* chain_id, unsigned long chain_len,
     const char* authority, unsigned long authority_len,
@@ -515,6 +481,23 @@ int32_t connect_norito_encode_transfer_signed_transaction_alg(
     const char* asset_definition, unsigned long asset_definition_len,
     const char* quantity, unsigned long quantity_len,
     const char* destination, unsigned long destination_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t algorithm,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+int32_t connect_norito_encode_transfer_signed_transaction_with_fee_sponsor_alg(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    uint32_t nonce,
+    uint8_t nonce_present,
+    const char* asset_definition, unsigned long asset_definition_len,
+    const char* quantity, unsigned long quantity_len,
+    const char* destination, unsigned long destination_len,
+    const char* fee_sponsor, unsigned long fee_sponsor_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -619,6 +602,31 @@ int32_t connect_norito_encode_zk_transfer_signed_transaction_alg(
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
 
+int32_t connect_norito_encode_claim_identifier_signed_transaction(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    const char* account_id, unsigned long account_id_len,
+    const char* receipt_json, unsigned long receipt_json_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+int32_t connect_norito_encode_claim_identifier_signed_transaction_alg(
+    const char* chain_id, unsigned long chain_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    const char* account_id, unsigned long account_id_len,
+    const char* receipt_json, unsigned long receipt_json_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t algorithm,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
 int32_t connect_norito_encode_set_key_value_signed_transaction(
     const char* chain_id, unsigned long chain_len,
     const char* authority, unsigned long authority_len,
@@ -681,8 +689,7 @@ int32_t connect_norito_encode_governance_propose_deploy_signed_transaction(
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
     uint8_t ttl_present,
-    const char* namespace_ptr, unsigned long namespace_len,
-    const char* contract_id, unsigned long contract_id_len,
+    const char* contract_address, unsigned long contract_address_len,
     const char* code_hash_hex, unsigned long code_hash_hex_len,
     const char* abi_hash_hex, unsigned long abi_hash_hex_len,
     const char* abi_version, unsigned long abi_version_len,
@@ -698,8 +705,7 @@ int32_t connect_norito_encode_governance_propose_deploy_signed_transaction_alg(
     uint64_t creation_time_ms,
     uint64_t ttl_ms,
     uint8_t ttl_present,
-    const char* namespace_ptr, unsigned long namespace_len,
-    const char* contract_id, unsigned long contract_id_len,
+    const char* contract_address, unsigned long contract_address_len,
     const char* code_hash_hex, unsigned long code_hash_hex_len,
     const char* abi_hash_hex, unsigned long abi_hash_hex_len,
     const char* abi_version, unsigned long abi_version_len,
@@ -914,11 +920,6 @@ int32_t connect_norito_encode_burn_signed_transaction_alg(
 int32_t connect_norito_decode_signed_transaction_json(
     const uint8_t* signed_bytes, unsigned long signed_len,
     uint8_t** out_json_ptr, unsigned long* out_json_len);
-
-int32_t connect_norito_encode_asset_id_literal(
-    const char* asset_definition, unsigned long asset_definition_len,
-    const char* account_id, unsigned long account_id_len,
-    uint8_t** out_asset_ptr, unsigned long* out_asset_len);
 
 int32_t connect_norito_decode_asset_id_json(
     const char* asset_literal, unsigned long asset_len,

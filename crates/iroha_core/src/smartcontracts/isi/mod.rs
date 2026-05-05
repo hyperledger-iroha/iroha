@@ -8,19 +8,31 @@ pub mod block;
 /// Content lane instruction handlers.
 pub mod content;
 pub mod domain;
+/// Native asset escrow instruction handlers.
+pub mod escrow;
 pub mod identifier;
 pub mod kaigi;
+/// Ministry agenda submission handlers.
+pub mod ministry;
 pub mod multisig;
+/// Musubi package registry instruction handlers.
+pub mod musubi;
 pub mod nft;
 /// Offline allowance settlement instruction handlers.
 pub mod offline;
 /// Oracle feed admission and aggregation instruction handlers.
 pub mod oracle;
 pub mod query;
+pub mod ram_lfe;
 pub mod repo;
+pub mod rwa;
 pub mod settlement;
+/// SNS-backed ownership query handlers.
+pub mod sns;
 /// Viral social incentive instruction handlers.
 pub mod social;
+/// Soracloud lifecycle and runtime-state instruction handlers.
+pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instruction handlers.
 pub mod sorafs;
@@ -80,6 +92,14 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<SetParameter>,
     dispatch_instruction::<Upgrade>,
     dispatch_instruction::<Log>,
+    dispatch_instruction::<iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease>,
+    dispatch_instruction::<iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease>,
+    dispatch_instruction::<iroha_data_model::isi::sns::RegisterSnsName>,
+    dispatch_instruction::<iroha_data_model::isi::sns::RenewSnsName>,
+    dispatch_instruction::<iroha_data_model::isi::sns::TransferSnsName>,
+    dispatch_instruction::<iroha_data_model::isi::sns::UpdateSnsNameControllers>,
+    dispatch_instruction::<iroha_data_model::isi::sns::FreezeSnsName>,
+    dispatch_instruction::<iroha_data_model::isi::sns::UnfreezeSnsName>,
     dispatch_instruction::<iroha_data_model::isi::InvalidInstruction>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::CreateKaigi>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::JoinKaigi>,
@@ -96,15 +116,37 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<Burn<Numeric, Asset>>,
     dispatch_instruction::<Transfer<Asset, Numeric, Account>>,
     dispatch_instruction::<TransferAssetBatch>,
+    dispatch_instruction::<iroha_data_model::isi::SetAssetTransferFreeze>,
+    dispatch_instruction::<iroha_data_model::isi::SetAssetTransferBlacklist>,
+    dispatch_instruction::<iroha_data_model::isi::SetAssetTransferControl>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoInstructionBox>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoIsi>,
     dispatch_instruction::<iroha_data_model::isi::repo::ReverseRepoIsi>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoMarginCallIsi>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::RwaInstructionBox>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::RegisterRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::TransferRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::MergeRwas>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::RedeemRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::FreezeRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::UnfreezeRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::HoldRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::ReleaseRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::ForceTransferRwa>,
+    dispatch_instruction::<iroha_data_model::isi::rwa::SetRwaControls>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ApprovePinManifest>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RetirePinManifest>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::BindManifestAlias>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterProviderOwner>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::UnregisterProviderOwner>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterCapacityDeclaration>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RecordCapacityTelemetry>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterCapacityDispute>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::IssueReplicationOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::CompleteReplicationOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetPricingSchedule>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::UpsertProviderCredit>,
     dispatch_instruction::<iroha_data_model::isi::content::PublishContentBundle>,
     dispatch_instruction::<iroha_data_model::isi::content::RetireContentBundle>,
     dispatch_instruction::<iroha_data_model::isi::soradns::SubmitDirectoryDraft>,
@@ -116,28 +158,111 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::soradns::SetDirectoryRotationPolicy>,
     dispatch_instruction::<iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest>,
-    dispatch_instruction::<iroha_data_model::isi::domain_link::LinkAccountDomain>,
-    dispatch_instruction::<iroha_data_model::isi::domain_link::BindAccountAlias>,
-    dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountLabel>,
-    dispatch_instruction::<iroha_data_model::isi::domain_link::UnlinkAccountDomain>,
+    dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountAliasBinding>,
+    dispatch_instruction::<iroha_data_model::isi::domain_link::SetPrimaryAccountAlias>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::ReplaceAccountController>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::SetAccountRecoveryPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::ClearAccountRecoveryPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::ProposeAccountRecovery>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::ApproveAccountRecovery>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::CancelAccountRecovery>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::FinalizeAccountRecovery>,
+    dispatch_instruction::<iroha_data_model::isi::contract_alias::SetContractAlias>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::PublishMusubiRelease>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::YankMusubiRelease>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::SetMusubiShortAlias>,
+    dispatch_instruction::<iroha_data_model::isi::musubi::AssertMusubiReleaseExists>,
     dispatch_instruction::<iroha_data_model::isi::identifier::RegisterIdentifierPolicy>,
     dispatch_instruction::<iroha_data_model::isi::identifier::ActivateIdentifierPolicy>,
     dispatch_instruction::<iroha_data_model::isi::identifier::ClaimIdentifier>,
     dispatch_instruction::<iroha_data_model::isi::identifier::RevokeIdentifier>,
+    dispatch_instruction::<iroha_data_model::isi::ram_lfe::RegisterRamLfeProgramPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
-    dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineAllowance>,
-    dispatch_instruction::<iroha_data_model::isi::offline::SubmitOfflineToOnlineTransfer>,
-    dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineVerdictRevocation>,
-    dispatch_instruction::<iroha_data_model::isi::offline::ReclaimExpiredOfflineAllowance>,
+    dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionBalancePolicy>,
+    dispatch_instruction::<iroha_data_model::isi::offline::IssueOfflineNoteV2>,
+    dispatch_instruction::<iroha_data_model::isi::offline::RedeemOfflineNoteV2>,
+    dispatch_instruction::<iroha_data_model::isi::offline::AuditOfflineNoteV2>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
     dispatch_instruction::<iroha_data_model::isi::social::SendToTwitter>,
     dispatch_instruction::<iroha_data_model::isi::social::CancelTwitterEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::OpenAssetEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::AcceptAssetEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::MarkEscrowPaymentSent>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::ReleaseAssetEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::CancelAssetEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::OpenEscrowDispute>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::ResolveEscrowDispute>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::OpenAnonymousAssetEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::AcceptAnonymousAssetEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::MarkAnonymousEscrowPaymentSent>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::ReleaseAnonymousAssetEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::CancelAnonymousAssetEscrow>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::OpenAnonymousEscrowDispute>,
+    dispatch_instruction::<iroha_data_model::isi::escrow::ResolveAnonymousEscrowDispute>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudService>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::UpgradeSoracloudService>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RollbackSoracloudService>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudServiceConfig>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::DeleteSoracloudServiceConfig>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudServiceSecret>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::DeleteSoracloudServiceSecret>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::MutateSoracloudState>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RunSoracloudFheJob>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudDecryptionRequest>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::LeaveSoracloudHfSharedLease>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RenewSoracloudHfSharedLease>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AdvertiseSoracloudModelHost>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::HeartbeatSoracloudModelHost>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::WithdrawSoracloudModelHost>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AdvertiseSoracloudInrouHost>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::WithdrawSoracloudInrouHost>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ReconcileSoracloudInrouPlacements>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudAgentApartment>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RenewSoracloudAgentLease>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RestartSoracloudAgentApartment>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RevokeSoracloudAgentPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RequestSoracloudAgentWalletSpend>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ApproveSoracloudAgentWalletSpend>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::EnqueueSoracloudAgentMessage>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AcknowledgeSoracloudAgentMessage>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AllowSoracloudAgentAutonomyArtifact>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RunSoracloudAgentAutonomy>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudAgentAutonomyExecution>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::StartSoracloudTrainingJob>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::CheckpointSoracloudTrainingJob>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RetrySoracloudTrainingJob>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudModelArtifact>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudModelWeight>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::PromoteSoracloudModelWeight>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RollbackSoracloudModelWeight>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RegisterSoracloudUploadedModelBundle>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AppendSoracloudUploadedModelChunk>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::FinalizeSoracloudUploadedModelBundle>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AdmitSoracloudPrivateCompileProfile>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AllowSoracloudUploadedModel>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::StartSoracloudPrivateInference>,
+    dispatch_instruction::<
+        iroha_data_model::isi::soracloud::RecordSoracloudPrivateInferenceCheckpoint,
+    >,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AdvanceSoracloudRollout>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudRuntimeState>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt>,
     dispatch_instruction::<iroha_data_model::isi::oracle::RegisterOracleFeed>,
     dispatch_instruction::<iroha_data_model::isi::oracle::SubmitOracleObservation>,
     dispatch_instruction::<iroha_data_model::isi::oracle::AggregateOracleFeed>,
     dispatch_instruction::<iroha_data_model::isi::staking::ActivatePublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::ExitPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay>,
     dispatch_instruction::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::BondPublicLaneStake>,
     dispatch_instruction::<iroha_data_model::isi::staking::SchedulePublicLaneUnbond>,
@@ -168,6 +293,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<zk::PruneProofs>,
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
+    dispatch_instruction::<iroha_data_model::isi::bridge::RecordSccpMessage>,
     dispatch_instruction::<confidential::PublishPedersenParams>,
     dispatch_instruction::<confidential::SetPedersenParamsLifecycle>,
     dispatch_instruction::<confidential::PublishPoseidonParams>,
@@ -178,6 +304,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::endorsement::RegisterDomainCommittee>,
     dispatch_instruction::<iroha_data_model::isi::endorsement::SetDomainEndorsementPolicy>,
     dispatch_instruction::<iroha_data_model::isi::endorsement::SubmitDomainEndorsement>,
+    dispatch_instruction::<iroha_data_model::isi::ministry::SubmitAgendaProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeDeployContract>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastZkBallot>,
@@ -349,6 +476,29 @@ impl Execute for RemoveKeyValueBox {
     }
 }
 
+impl Execute for iroha_data_model::isi::rwa::RwaInstructionBox {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        match self {
+            Self::Register(isi) => isi.execute(authority, state_transaction),
+            Self::Transfer(isi) => isi.execute(authority, state_transaction),
+            Self::Merge(isi) => isi.execute(authority, state_transaction),
+            Self::Redeem(isi) => isi.execute(authority, state_transaction),
+            Self::Freeze(isi) => isi.execute(authority, state_transaction),
+            Self::Unfreeze(isi) => isi.execute(authority, state_transaction),
+            Self::Hold(isi) => isi.execute(authority, state_transaction),
+            Self::Release(isi) => isi.execute(authority, state_transaction),
+            Self::ForceTransfer(isi) => isi.execute(authority, state_transaction),
+            Self::SetControls(isi) => isi.execute(authority, state_transaction),
+            Self::SetKeyValue(isi) => isi.execute(authority, state_transaction),
+            Self::RemoveKeyValue(isi) => isi.execute(authority, state_transaction),
+        }
+    }
+}
+
 impl Execute for GrantBox {
     #[iroha_logger::log(name = "grant", skip_all, fields(object))]
     fn execute(
@@ -390,7 +540,10 @@ mod tests {
 
     use iroha_crypto::KeyPair;
     use iroha_data_model::{
-        events::execute_trigger::ExecuteTriggerEventFilter, isi::error::InvalidParameterError,
+        block::consensus::LaneBlockCommitment,
+        events::execute_trigger::ExecuteTriggerEventFilter,
+        isi::error::InvalidParameterError,
+        nexus::{DataSpaceId, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob},
         permission,
     };
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
@@ -413,17 +566,19 @@ mod tests {
         let world = World::with([], [], []);
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura.clone(), query_handle);
-        let asset_definition_id =
-            iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let wonderland: DomainId = "wonderland".parse()?;
+        let wonderland: DomainId = DomainId::try_new("wonderland", "universal")?;
         Register::domain(Domain::new(wonderland.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        Register::account(Account::new(ALICE_ID.clone().to_account_id(wonderland)))
+        Register::account(Account::new(ALICE_ID.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         let trigger_perm: permission::Permission = CanRegisterTrigger {
             authority: ALICE_ID.clone(),
@@ -442,6 +597,57 @@ mod tests {
     }
 
     #[test]
+    async fn register_verified_lane_relay_instruction_box_is_registered() -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(&KeyPair::random().into_parts().1);
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+
+        let settlement_commitment = LaneBlockCommitment {
+            block_height: block_header.height().get(),
+            lane_id: LaneId::new(3),
+            dataspace_id: DataSpaceId::new(10),
+            tx_count: 1,
+            total_local_micro: 76,
+            total_xor_due_micro: 1,
+            total_xor_after_haircut_micro: 1,
+            total_xor_variance_micro: 0,
+            swap_metadata: None,
+            receipts: Vec::new(),
+        };
+        let manifest_root = [0x42; 32];
+        let envelope = LaneRelayEnvelope::new(block_header, None, None, settlement_commitment, 0)?
+            .with_manifest_root(Some(manifest_root));
+        let verified_at_height = Some(envelope.block_height);
+        let proof_digest = envelope.expected_fastpq_proof_digest(verified_at_height);
+        let envelope = envelope.with_fastpq_proof_material(Some(LaneFastpqProofMaterial {
+            proof_digest,
+            verified_at_height,
+        }));
+        let instruction =
+            InstructionBox::from(iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+                envelope,
+                proof_blob: ProofBlob {
+                    payload: manifest_root.to_vec(),
+                    expiry_slot: None,
+                },
+            });
+
+        let is_registered = INSTRUCTION_HANDLERS
+            .iter()
+            .any(|handler| handler(&instruction, &ALICE_ID, &mut state_transaction).is_some());
+
+        assert!(
+            is_registered,
+            "RegisterVerifiedLaneRelay must be wired into INSTRUCTION_HANDLERS"
+        );
+        Ok(())
+    }
+
+    #[test]
     async fn nft() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_test_domains(&kura)?;
@@ -451,7 +657,7 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
-        let nft_id: NftId = "rose$wonderland".parse()?;
+        let nft_id: NftId = "rose$wonderland.universal".parse()?;
         let key = "Bytes".parse::<Name>()?;
         Register::nft(Nft::new(nft_id.clone(), Metadata::default()))
             .execute(&account_id, &mut state_transaction)?;
@@ -534,11 +740,10 @@ mod tests {
     }
 
     #[test]
-    async fn register_contract_manifest_requires_permission_and_is_queryable() -> Result<()> {
+    async fn register_contract_manifest_is_queryable_without_permission() -> Result<()> {
         use iroha_crypto::Hash;
         use iroha_data_model::{
-            isi::smart_contract_code, permission, prelude as dm, query::smart_contract::prelude,
-            smart_contract::manifest,
+            isi::smart_contract_code, query::smart_contract::prelude, smart_contract::manifest,
         };
 
         let kura = Kura::blank_kura_for_testing();
@@ -563,22 +768,6 @@ mod tests {
             provenance: None,
         }
         .signed(&ALICE_KEYPAIR);
-
-        // Attempt to register without permission should fail
-        let res = smart_contract_code::RegisterSmartContractCode {
-            manifest: manifest.clone(),
-        }
-        .execute(&alice, &mut stx);
-        assert!(matches!(
-            res,
-            Err(Error::InvariantViolation(msg)) if msg.as_ref().contains("CanRegisterSmartContractCode")
-        ));
-
-        // Grant the permission to Alice and try again
-        let token =
-            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode;
-        let perm: permission::Permission = token.into();
-        dm::Grant::account_permission(perm, alice.clone()).execute(&alice, &mut stx)?;
 
         smart_contract_code::RegisterSmartContractCode {
             manifest: manifest.clone(),
@@ -828,7 +1017,10 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let account_id = ALICE_ID.clone();
         let key = "Bytes".parse::<Name>()?;
         SetKeyValue::asset_definition(
@@ -860,7 +1052,10 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
-        let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
         Mint::asset_numeric(numeric!(1), asset_id.clone())
             .execute(&account_id, &mut state_transaction)?;
@@ -890,7 +1085,7 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let domain_id = "wonderland".parse::<DomainId>()?;
+        let domain_id = DomainId::try_new("wonderland", "universal")?;
         let account_id = ALICE_ID.clone();
         let key = "Bytes".parse::<Name>()?;
         SetKeyValue::domain(domain_id.clone(), key.clone(), vec![1_u32, 2_u32, 3_u32])
@@ -943,14 +1138,11 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
-        let wonderland: DomainId = "wonderland".parse()?;
         let (fake_account_id, _fake_account_keypair) = gen_account_in("wonderland");
         let trigger_id = "test_trigger_id".parse::<TriggerId>()?;
 
         // register fake account
-        let register_account = Register::account(Account::new(
-            fake_account_id.clone().to_account_id(wonderland),
-        ));
+        let register_account = Register::account(Account::new(fake_account_id.clone()));
         register_account.execute(&account_id, &mut state_transaction)?;
 
         // register the trigger
@@ -1037,24 +1229,19 @@ mod tests {
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
         assert!(matches!(
-            Register::domain(Domain::new("genesis".parse()?))
+            Register::domain(Domain::new(DomainId::try_new("genesis", "universal")?))
                 .execute(&account_id, &mut state_transaction)
                 .expect_err("Error expected"),
             Error::InvariantViolation(_)
         ));
-        let wonderland: DomainId = "wonderland".parse()?;
-        Register::account(Account::new(
-            SAMPLE_GENESIS_ACCOUNT_ID
-                .clone()
-                .to_account_id(wonderland.clone()),
-        ))
-        .execute(&account_id, &mut state_transaction)?;
+        Register::account(Account::new(SAMPLE_GENESIS_ACCOUNT_ID.clone()))
+            .execute(&account_id, &mut state_transaction)?;
         let genesis_account = state_transaction
             .world
             .account(&SAMPLE_GENESIS_ACCOUNT_ID)?;
         assert!(
-            genesis_account.linked_domains().contains(&wonderland),
-            "genesis account should be materialized in the requested domain scope"
+            genesis_account.id() == &*SAMPLE_GENESIS_ACCOUNT_ID,
+            "genesis account should remain canonical after registration"
         );
         state_transaction.apply();
         state_block.commit().unwrap();

@@ -66,8 +66,7 @@ public final class GovernanceInstructionUtils {
 
   /** Derivation kind recorded for persisted councils. */
   public enum CouncilDerivationKind {
-    VRF("Vrf"),
-    FALLBACK("Fallback");
+    VRF("Vrf");
 
     private final String wireValue;
 
@@ -86,9 +85,6 @@ public final class GovernanceInstructionUtils {
       final String normalised = raw.trim().toLowerCase(Locale.ROOT);
       if ("vrf".equals(normalised)) {
         return VRF;
-      }
-      if ("fallback".equals(normalised)) {
-        return FALLBACK;
       }
       throw new IllegalArgumentException("Unknown council derivation: " + raw);
     }

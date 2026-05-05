@@ -17,20 +17,22 @@ use iroha_data_model::{
             LaneBlockCommitment, LaneSettlementReceipt, NposGenesisParams, PERMISSIONED_TAG,
             Proposal, Qc, QcAggregate, QcRef, QcVote, RbcChunk, RbcDeliver, RbcInit, RbcReady,
             RbcReadySignature, Reconfig, SumeragiBlockSyncRosterStatus,
-            SumeragiCommitInflightStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
-            SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
-            SumeragiDaGateReason, SumeragiDaGateSatisfaction, SumeragiDaGateStatus,
-            SumeragiDataspaceCommitment, SumeragiKuraStoreStatus, SumeragiLaneCommitment,
-            SumeragiLaneGovernance, SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
-            SumeragiMissingBlockFetchStatus, SumeragiNposTimeoutsStatus,
-            SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry, SumeragiPendingRbcStatus,
-            SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus, SumeragiRbcEvictedSession,
-            SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus, SumeragiRbcStoreStatus,
-            SumeragiRuntimeUpgradeHook, SumeragiStatusWire, SumeragiValidationRejectStatus,
-            SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
-            SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
-            SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
-            SumeragiWorkerQueueDiagnostics, SumeragiWorkerQueueTotals, VrfCommit, VrfReveal,
+            SumeragiCommitInflightStatus, SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus,
+            SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
+            SumeragiConsensusMessageHandlingStatus, SumeragiDaGateReason,
+            SumeragiDaGateSatisfaction, SumeragiDaGateStatus, SumeragiDataspaceCommitment,
+            SumeragiKuraStoreStatus, SumeragiLaneCommitment, SumeragiLaneGovernance,
+            SumeragiMembershipMismatchStatus, SumeragiMembershipStatus,
+            SumeragiMissingBlockFetchStatus, SumeragiNposRepairCoverageStatus,
+            SumeragiNposTimeoutsStatus, SumeragiPeerKeyPolicyStatus, SumeragiPendingRbcEntry,
+            SumeragiPendingRbcStatus, SumeragiQcEntry, SumeragiQcSnapshot, SumeragiQcStatus,
+            SumeragiRbcEvictedSession, SumeragiRbcMismatchEntry, SumeragiRbcMismatchStatus,
+            SumeragiRbcStoreStatus, SumeragiRoundGapStatus, SumeragiRuntimeUpgradeHook,
+            SumeragiStatusWire, SumeragiValidationRejectStatus, SumeragiViewChangeCauseStatus,
+            SumeragiVoteValidationDropEntry, SumeragiVoteValidationDropPeerEntry,
+            SumeragiVoteValidationDropReasonCount, SumeragiVoteValidationDropStatus,
+            SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths, SumeragiWorkerQueueDiagnostics,
+            SumeragiWorkerQueueTotals, VrfCommit, VrfReveal,
         },
     },
     da::commitment,
@@ -41,6 +43,7 @@ use norito::{
     NoritoDeserialize,
     codec::{Decode, Encode},
 };
+use tempfile::tempdir;
 
 fn sample_hash(seed: u8) -> Hash {
     let mut bytes = [0u8; Hash::LENGTH];
@@ -411,6 +414,16 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
     let height = rng.next_u64().max(1);
     let view = rng.next_u64();
     let total_chunks = u32::try_from(rng.range_inclusive(1, 8)).expect("range bound fits u32");
+    let chunk_size_bytes = u32::try_from(rng.range_inclusive(1, 128)).expect("range bound fits");
+    let payload_size_bytes = u64::from(chunk_size_bytes)
+        .saturating_mul(u64::from(total_chunks.saturating_sub(1)))
+        .saturating_add(
+            u64::try_from(rng.range_inclusive(
+                1,
+                usize::try_from(chunk_size_bytes).expect("u32 fits usize"),
+            ))
+            .expect("range bound fits"),
+        );
     let mut chunk_digests = Vec::with_capacity(total_chunks as usize);
     for _ in 0..total_chunks {
         chunk_digests.push(rng.array32());
@@ -441,6 +454,11 @@ fn rng_rbc_init(rng: &mut DeterministicRng) -> RbcInit {
         roster,
         roster_hash,
         total_chunks,
+        encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+        chunk_size_bytes,
+        payload_size_bytes,
+        data_shards: 0,
+        parity_shards: 0,
         chunk_digests,
         payload_hash: rng_hash(rng),
         chunk_root,
@@ -581,6 +599,15 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
             exec_ms: rng.next_u64(),
             witness_ms: rng.next_u64(),
         }),
+        npos_repair_coverage: rng.next_bool().then(|| SumeragiNposRepairCoverageStatus {
+            last_repair_height: rng.next_u64(),
+            last_repair_view: rng.next_u64(),
+            reason: rng_ascii_string(rng, 12),
+            selected_repair_peer_count: rng.next_u64(),
+            required_stake_quorum_bps: rng.next_u16(),
+            selected_stake_coverage_bps: rng.next_u16(),
+            reached_stake_quorum_coverage: rng.next_bool(),
+        }),
         effective_collectors_k: rng.next_u64(),
         effective_redundant_send_r: rng.next_u64(),
         leader_index: rng.next_u64(),
@@ -609,6 +636,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
             commit_failure_total: rng.next_u64(),
             quorum_timeout_total: rng.next_u64(),
             stake_quorum_timeout_total: rng.next_u64(),
+            roster_unavailable_total: rng.next_u64(),
             da_gate_total: rng.next_u64(),
             censorship_evidence_total: rng.next_u64(),
             missing_payload_total: rng.next_u64(),
@@ -623,6 +651,7 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
             last_commit_failure_timestamp_ms: rng.next_u64(),
             last_quorum_timeout_timestamp_ms: rng.next_u64(),
             last_stake_quorum_timeout_timestamp_ms: rng.next_u64(),
+            last_roster_unavailable_timestamp_ms: rng.next_u64(),
             last_da_gate_timestamp_ms: rng.next_u64(),
             last_censorship_evidence_timestamp_ms: rng.next_u64(),
             last_missing_payload_timestamp_ms: rng.next_u64(),
@@ -700,6 +729,18 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         commit_pipeline_tick_total: rng.next_u64(),
         da_reschedule_total: rng.next_u64(),
         missing_block_fetch: rng_missing_block_fetch(rng),
+        qc_deferred_missing_payload_total: rng.next_u64(),
+        qc_deferred_resolved_total: rng.next_u64(),
+        qc_deferred_expired_total: rng.next_u64(),
+        consensus_missing_qc_reacquire_attempt_total: rng.next_u64(),
+        consensus_missing_qc_reacquire_success_total: rng.next_u64(),
+        consensus_missing_qc_reacquire_exhausted_total: rng.next_u64(),
+        consensus_forced_proposal_attempt_total: rng.next_u64(),
+        consensus_forced_proposal_success_total: rng.next_u64(),
+        blocksync_range_pull_escalation_total: rng.next_u64(),
+        blocksync_range_pull_success_total: rng.next_u64(),
+        blocksync_range_pull_failure_total: rng.next_u64(),
+        blocksync_range_pull_candidate_exhausted_total: rng.next_u64(),
         committed_edge_conflict_obsolete_total: rng.next_u64(),
         roster_sidecar_mismatch_obsolete_total: rng.next_u64(),
         da_gate: rng_da_gate(rng),
@@ -739,6 +780,39 @@ fn rng_sumeragi_status(rng: &mut DeterministicRng) -> SumeragiStatusWire {
         lane_governance: vec![rng_lane_governance(rng)],
         worker_loop: rng_worker_loop_status(rng),
         commit_inflight: rng_commit_inflight_status(rng),
+        commit_pipeline: rng_commit_pipeline_status(rng),
+        round_gap: rng_round_gap_status(rng),
+    }
+}
+
+fn rng_commit_pipeline_status(rng: &mut DeterministicRng) -> SumeragiCommitPipelineStatus {
+    SumeragiCommitPipelineStatus {
+        last_total_ms: rng.next_u64(),
+        last_validation_ms: rng.next_u64(),
+        last_qc_rebuild_ms: rng.next_u64(),
+        last_gate_ms: rng.next_u64(),
+        last_finalize_ms: rng.next_u64(),
+        last_drain_results_ms: rng.next_u64(),
+        last_drain_qc_verify_ms: rng.next_u64(),
+        last_drain_persist_ms: rng.next_u64(),
+        last_drain_kura_store_ms: rng.next_u64(),
+        last_drain_state_apply_ms: rng.next_u64(),
+        last_drain_state_commit_ms: rng.next_u64(),
+        ema_total_ms: rng.next_u64(),
+        ema_validation_ms: rng.next_u64(),
+        ema_gate_ms: rng.next_u64(),
+        ema_finalize_ms: rng.next_u64(),
+    }
+}
+
+fn rng_round_gap_status(rng: &mut DeterministicRng) -> SumeragiRoundGapStatus {
+    SumeragiRoundGapStatus {
+        last_deliver_to_state_commit_ms: rng.next_u64(),
+        last_state_commit_to_next_propose_ms: rng.next_u64(),
+        last_deliver_to_next_propose_ms: rng.next_u64(),
+        ema_deliver_to_state_commit_ms: rng.next_u64(),
+        ema_state_commit_to_next_propose_ms: rng.next_u64(),
+        ema_deliver_to_next_propose_ms: rng.next_u64(),
     }
 }
 
@@ -930,11 +1004,25 @@ fn rng_sumeragi_qc_snapshot(rng: &mut DeterministicRng) -> SumeragiQcSnapshot {
 }
 
 fn rng_consensus_caps_status(rng: &mut DeterministicRng) -> SumeragiConsensusCapsStatus {
+    let rbc_encoding = if rng.next_bool() {
+        iroha_data_model::block::consensus::RbcEncoding::Plain
+    } else {
+        iroha_data_model::block::consensus::RbcEncoding::Rs16
+    };
+    let (rbc_rs16_data_shards, rbc_rs16_parity_shards) = match rbc_encoding {
+        iroha_data_model::block::consensus::RbcEncoding::Plain => (0, 0),
+        iroha_data_model::block::consensus::RbcEncoding::Rs16 => {
+            (rng.next_u16().max(1), rng.next_u16().max(1))
+        }
+    };
     SumeragiConsensusCapsStatus {
         collectors_k: rng.next_u16(),
         redundant_send_r: rng.next_u8(),
         da_enabled: rng.next_bool(),
         rbc_chunk_max_bytes: rng.next_u64(),
+        rbc_encoding,
+        rbc_rs16_data_shards,
+        rbc_rs16_parity_shards,
         rbc_session_ttl_ms: rng.next_u64(),
         rbc_store_max_sessions: rng.next_u32(),
         rbc_store_soft_sessions: rng.next_u32(),
@@ -1256,6 +1344,9 @@ fn sumeragi_wire_status_roundtrip() {
             redundant_send_r: 1,
             da_enabled: true,
             rbc_chunk_max_bytes: 65536,
+            rbc_encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            rbc_rs16_data_shards: 0,
+            rbc_rs16_parity_shards: 0,
             rbc_session_ttl_ms: 120_000,
             rbc_store_max_sessions: 1024,
             rbc_store_soft_sessions: 512,
@@ -1278,6 +1369,15 @@ fn sumeragi_wire_status_roundtrip() {
             aggregator_ms: 250,
             exec_ms: 260,
             witness_ms: 270,
+        }),
+        npos_repair_coverage: Some(SumeragiNposRepairCoverageStatus {
+            last_repair_height: 15,
+            last_repair_view: 6,
+            reason: "missing_commit_votes".to_string(),
+            selected_repair_peer_count: 2,
+            required_stake_quorum_bps: 6_667,
+            selected_stake_coverage_bps: 7_500,
+            reached_stake_quorum_coverage: true,
         }),
         effective_collectors_k: 1,
         effective_redundant_send_r: 1,
@@ -1318,6 +1418,7 @@ fn sumeragi_wire_status_roundtrip() {
             commit_failure_total: 1,
             quorum_timeout_total: 2,
             stake_quorum_timeout_total: 0,
+            roster_unavailable_total: 8,
             da_gate_total: 3,
             censorship_evidence_total: 7,
             missing_payload_total: 4,
@@ -1328,6 +1429,7 @@ fn sumeragi_wire_status_roundtrip() {
             last_commit_failure_timestamp_ms: 10,
             last_quorum_timeout_timestamp_ms: 11,
             last_stake_quorum_timeout_timestamp_ms: 0,
+            last_roster_unavailable_timestamp_ms: 17,
             last_da_gate_timestamp_ms: 12,
             last_censorship_evidence_timestamp_ms: 16,
             last_missing_payload_timestamp_ms: 13,
@@ -1424,6 +1526,18 @@ fn sumeragi_wire_status_roundtrip() {
             last_targets: 2,
             last_dwell_ms: 7,
         },
+        qc_deferred_missing_payload_total: 20,
+        qc_deferred_resolved_total: 21,
+        qc_deferred_expired_total: 22,
+        consensus_missing_qc_reacquire_attempt_total: 23,
+        consensus_missing_qc_reacquire_success_total: 24,
+        consensus_missing_qc_reacquire_exhausted_total: 25,
+        consensus_forced_proposal_attempt_total: 26,
+        consensus_forced_proposal_success_total: 27,
+        blocksync_range_pull_escalation_total: 28,
+        blocksync_range_pull_success_total: 29,
+        blocksync_range_pull_failure_total: 30,
+        blocksync_range_pull_candidate_exhausted_total: 31,
         committed_edge_conflict_obsolete_total: 9,
         roster_sidecar_mismatch_obsolete_total: 4,
         da_gate: SumeragiDaGateStatus {
@@ -1666,6 +1780,31 @@ fn sumeragi_wire_status_roundtrip() {
                 lane_relay_rx: 11,
                 background_rx: 12,
             },
+        },
+        commit_pipeline: SumeragiCommitPipelineStatus {
+            last_total_ms: 84,
+            last_validation_ms: 23,
+            last_qc_rebuild_ms: 7,
+            last_gate_ms: 11,
+            last_finalize_ms: 19,
+            last_drain_results_ms: 13,
+            last_drain_qc_verify_ms: 2,
+            last_drain_persist_ms: 3,
+            last_drain_kura_store_ms: 4,
+            last_drain_state_apply_ms: 5,
+            last_drain_state_commit_ms: 6,
+            ema_total_ms: 80,
+            ema_validation_ms: 20,
+            ema_gate_ms: 10,
+            ema_finalize_ms: 18,
+        },
+        round_gap: SumeragiRoundGapStatus {
+            last_deliver_to_state_commit_ms: 33,
+            last_state_commit_to_next_propose_ms: 12,
+            last_deliver_to_next_propose_ms: 45,
+            ema_deliver_to_state_commit_ms: 31,
+            ema_state_commit_to_next_propose_ms: 10,
+            ema_deliver_to_next_propose_ms: 42,
         },
     };
     assert_roundtrip(&status);
@@ -1940,6 +2079,11 @@ fn consensus_messages_norito_roundtrip() {
         roster,
         roster_hash,
         total_chunks: 3,
+        encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+        chunk_size_bytes: 128,
+        payload_size_bytes: 257,
+        data_shards: 0,
+        parity_shards: 0,
         chunk_digests,
         payload_hash: sample_hash(0x31),
         chunk_root,
@@ -2099,24 +2243,63 @@ fn lane_commitment_fixtures_roundtrip() {
         "lane commitment fixtures directory {fixtures_dir:?} must exist"
     );
 
+    let seen = process_lane_commitment_fixtures(&fixtures_dir, LaneCommitmentFixtureMode::Verify);
+
+    assert!(
+        seen > 0,
+        "expected at least one lane commitment fixture under {fixtures_dir:?}"
+    );
+}
+
+#[test]
+#[ignore = "regenerates lane commitment Norito fixtures"]
+fn regenerate_lane_commitment_fixtures() {
+    let fixtures_dir = workspace_root()
+        .join("fixtures")
+        .join("nexus")
+        .join("lane_commitments");
+    assert!(
+        fixtures_dir.is_dir(),
+        "lane commitment fixtures directory {fixtures_dir:?} must exist"
+    );
+
+    let seen =
+        process_lane_commitment_fixtures(&fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
+
+    assert!(
+        seen > 0,
+        "expected at least one lane commitment fixture under {fixtures_dir:?}"
+    );
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LaneCommitmentFixtureMode {
+    Verify,
+    Regenerate,
+}
+
+fn process_lane_commitment_fixtures(fixtures_dir: &Path, mode: LaneCommitmentFixtureMode) -> usize {
     let mut seen = 0usize;
-    for entry in fs::read_dir(&fixtures_dir).expect("read lane commitment fixtures") {
+    for entry in fs::read_dir(fixtures_dir).expect("read lane commitment fixtures") {
         let entry = entry.expect("fixture entry");
         let path = entry.path();
         if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
             continue;
         }
         let raw = fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("read lane commitment fixture {path:?}: {err}"));
-        let commitment: LaneBlockCommitment = norito::json::from_str(&raw)
-            .unwrap_or_else(|err| panic!("parse lane commitment fixture {path:?}: {err}"));
+            .unwrap_or_else(|err| panic!("read lane commitment fixture {}: {err}", path.display()));
+        let commitment: LaneBlockCommitment = norito::json::from_str(&raw).unwrap_or_else(|err| {
+            panic!("parse lane commitment fixture {}: {err}", path.display())
+        });
         let reserialized =
             norito::json::to_json_pretty(&commitment).expect("serialize commitment to JSON");
         let replay: LaneBlockCommitment =
             norito::json::from_str(&reserialized).expect("parse reserialized commitment");
         assert_eq!(
-            commitment, replay,
-            "JSON roundtrip mismatch for fixture {path:?}"
+            commitment,
+            replay,
+            "JSON roundtrip mismatch for fixture {}",
+            path.display()
         );
         let norito_bytes =
             norito::to_bytes(&commitment).expect("encode commitment to Norito bytes");
@@ -2125,36 +2308,265 @@ fn lane_commitment_fixtures_roundtrip() {
         let decoded = NoritoDeserialize::try_deserialize(archived)
             .expect("deserialize commitment from Norito bytes");
         assert_eq!(
-            commitment, decoded,
-            "Norito roundtrip mismatch for fixture {path:?}"
+            commitment,
+            decoded,
+            "Norito roundtrip mismatch for fixture {}",
+            path.display()
         );
         let stem = path
             .file_stem()
             .and_then(|name| name.to_str())
             .expect("fixture stem");
         let to_path = fixtures_dir.join(format!("{stem}.to"));
-        if to_path.is_file() {
-            let fixture_bytes = fs::read(&to_path)
-                .unwrap_or_else(|err| panic!("read Norito bytes {to_path:?}: {err}"));
-            let archived_file =
-                norito::from_bytes::<LaneBlockCommitment>(&fixture_bytes).expect("archive fixture");
-            let decoded_from_file = NoritoDeserialize::try_deserialize(archived_file)
-                .expect("deserialize fixture Norito bytes");
-            assert_eq!(
-                commitment, decoded_from_file,
-                "Norito fixture bytes mismatch for {to_path:?}"
-            );
-            assert_eq!(
-                norito_bytes, fixture_bytes,
-                "canonical Norito bytes do not match fixture {to_path:?}"
-            );
+        match mode {
+            LaneCommitmentFixtureMode::Verify => {
+                if to_path.is_file() {
+                    let fixture_bytes = fs::read(&to_path).unwrap_or_else(|err| {
+                        panic!("read Norito bytes {}: {err}", to_path.display())
+                    });
+                    let archived_file = norito::from_bytes::<LaneBlockCommitment>(&fixture_bytes)
+                        .expect("archive fixture");
+                    let decoded_from_file = NoritoDeserialize::try_deserialize(archived_file)
+                        .expect("deserialize fixture Norito bytes");
+                    assert_eq!(
+                        commitment,
+                        decoded_from_file,
+                        "Norito fixture bytes mismatch for {}",
+                        to_path.display()
+                    );
+                    assert_eq!(
+                        norito_bytes,
+                        fixture_bytes,
+                        "canonical Norito bytes do not match fixture {}",
+                        to_path.display()
+                    );
+                }
+            }
+            LaneCommitmentFixtureMode::Regenerate => {
+                fs::write(&to_path, &norito_bytes).unwrap_or_else(|err| {
+                    panic!("write lane commitment fixture {}: {err}", to_path.display())
+                });
+            }
         }
         seen += 1;
     }
+    seen
+}
 
+fn sample_lane_commitment_fixture() -> LaneBlockCommitment {
+    let receipt = LaneSettlementReceipt {
+        source_id: [0xAB; 32],
+        local_amount_micro: 4_000_000,
+        xor_due_micro: 1_620_000,
+        xor_after_haircut_micro: 1_600_000,
+        xor_variance_micro: 20_000,
+        timestamp_ms: 1_726_296_400_000,
+    };
+
+    LaneBlockCommitment {
+        block_height: 8_642,
+        lane_id: LaneId::new(1),
+        dataspace_id: DataSpaceId::new(7),
+        tx_count: 1,
+        total_local_micro: receipt.local_amount_micro,
+        total_xor_due_micro: receipt.xor_due_micro,
+        total_xor_after_haircut_micro: receipt.xor_after_haircut_micro,
+        total_xor_variance_micro: receipt.xor_variance_micro,
+        swap_metadata: Some(iroha_data_model::block::consensus::LaneSwapMetadata {
+            epsilon_bps: 25,
+            twap_window_seconds: 60,
+            liquidity_profile: iroha_data_model::block::consensus::LaneLiquidityProfile::Tier1,
+            twap_local_per_xor: "8123.445500".to_owned(),
+            volatility_class: iroha_data_model::block::consensus::LaneVolatilityClass::Stable,
+        }),
+        receipts: vec![receipt],
+    }
+}
+
+fn sample_lane_commitment_fixture_without_metadata() -> LaneBlockCommitment {
+    LaneBlockCommitment {
+        block_height: 8_643,
+        lane_id: LaneId::new(2),
+        dataspace_id: DataSpaceId::new(9),
+        tx_count: 0,
+        total_local_micro: 0,
+        total_xor_due_micro: 0,
+        total_xor_after_haircut_micro: 0,
+        total_xor_variance_micro: 0,
+        swap_metadata: None,
+        receipts: Vec::new(),
+    }
+}
+
+fn write_lane_commitment_json_fixture(
+    fixtures_dir: &Path,
+    stem: &str,
+    commitment: &LaneBlockCommitment,
+) -> PathBuf {
+    let path = fixtures_dir.join(format!("{stem}.json"));
+    let json = norito::json::to_json_pretty(commitment).expect("serialize lane commitment fixture");
+    fs::write(&path, json)
+        .unwrap_or_else(|err| panic!("write lane commitment fixture {}: {err}", path.display()));
+    path
+}
+
+fn assert_lane_commitment_to_fixture_matches(
+    json_path: &Path,
+    commitment: &LaneBlockCommitment,
+    context: &str,
+) {
+    let to_path = json_path.with_extension("to");
+    let expected_bytes = norito::to_bytes(commitment).expect("encode canonical Norito bytes");
+    let actual_bytes = fs::read(&to_path).expect("read Norito fixture companion");
+    assert_eq!(
+        actual_bytes, expected_bytes,
+        "{context}: Norito companion bytes must match canonical encoding"
+    );
+}
+
+#[test]
+fn lane_commitment_fixture_helper_skips_non_json_and_missing_to() {
+    let dir = tempdir().expect("create temp dir");
+    let fixtures_dir = dir.path();
+    let commitment = sample_lane_commitment_fixture();
+    let json_path = write_lane_commitment_json_fixture(fixtures_dir, "lane", &commitment);
+    let ignored_path = fixtures_dir.join("notes.txt");
+    fs::write(&ignored_path, "not a fixture").expect("write ignored file");
+
+    let seen = process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
+    assert_eq!(seen, 1, "only JSON fixtures should be counted");
+
+    let to_path = json_path.with_extension("to");
     assert!(
-        seen > 0,
-        "expected at least one lane commitment fixture under {fixtures_dir:?}"
+        !to_path.exists(),
+        "verify mode must not create missing Norito fixture companions"
+    );
+}
+
+#[test]
+fn lane_commitment_fixture_helper_returns_zero_for_empty_directory() {
+    let dir = tempdir().expect("create temp dir");
+    let fixtures_dir = dir.path();
+
+    let verified =
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
+    let regenerated =
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
+
+    assert_eq!(
+        verified, 0,
+        "empty directories should not report fixtures in verify mode"
+    );
+    assert_eq!(
+        regenerated, 0,
+        "empty directories should not report fixtures in regenerate mode"
+    );
+}
+
+#[test]
+fn lane_commitment_fixture_helper_regenerate_overwrites_stale_to() {
+    let dir = tempdir().expect("create temp dir");
+    let fixtures_dir = dir.path();
+    let commitment = sample_lane_commitment_fixture();
+    let json_path = write_lane_commitment_json_fixture(fixtures_dir, "lane", &commitment);
+    let to_path = json_path.with_extension("to");
+    fs::write(&to_path, b"stale").expect("write stale Norito fixture");
+
+    let seen =
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
+    assert_eq!(seen, 1, "regenerate mode should process the JSON fixture");
+
+    assert_lane_commitment_to_fixture_matches(
+        &json_path,
+        &commitment,
+        "regenerate mode must overwrite stale Norito fixture bytes",
+    );
+
+    let verified =
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
+    assert_eq!(
+        verified, 1,
+        "regenerated fixture should verify successfully"
+    );
+}
+
+#[test]
+fn lane_commitment_fixture_helper_verify_panics_on_stale_but_decodable_to() {
+    let dir = tempdir().expect("create temp dir");
+    let fixtures_dir = dir.path();
+    let commitment = sample_lane_commitment_fixture();
+    let json_path = write_lane_commitment_json_fixture(fixtures_dir, "lane", &commitment);
+    let stale_commitment = sample_lane_commitment_fixture_without_metadata();
+    let to_path = json_path.with_extension("to");
+    let stale_bytes = norito::to_bytes(&stale_commitment).expect("encode stale Norito fixture");
+    fs::write(&to_path, stale_bytes).expect("write stale decodable Norito fixture");
+
+    let result = std::panic::catch_unwind(|| {
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify)
+    });
+    assert!(
+        result.is_err(),
+        "verify mode must fail when a decodable companion fixture is stale"
+    );
+}
+
+#[test]
+fn lane_commitment_fixture_helper_regenerate_creates_missing_to_for_multiple_fixtures() {
+    let dir = tempdir().expect("create temp dir");
+    let fixtures_dir = dir.path();
+    let with_metadata = sample_lane_commitment_fixture();
+    let without_metadata = sample_lane_commitment_fixture_without_metadata();
+    let with_metadata_path =
+        write_lane_commitment_json_fixture(fixtures_dir, "with_metadata", &with_metadata);
+    let without_metadata_path =
+        write_lane_commitment_json_fixture(fixtures_dir, "without_metadata", &without_metadata);
+
+    let regenerated =
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Regenerate);
+    assert_eq!(
+        regenerated, 2,
+        "regenerate mode should process every JSON lane commitment fixture"
+    );
+
+    assert_lane_commitment_to_fixture_matches(
+        &with_metadata_path,
+        &with_metadata,
+        "regenerate mode should create a .to companion for metadata fixtures",
+    );
+    assert_lane_commitment_to_fixture_matches(
+        &without_metadata_path,
+        &without_metadata,
+        "regenerate mode should create a .to companion for metadata-free fixtures",
+    );
+
+    let verified =
+        process_lane_commitment_fixtures(fixtures_dir, LaneCommitmentFixtureMode::Verify);
+    assert_eq!(
+        verified, 2,
+        "generated companions should verify for every fixture"
+    );
+}
+
+#[test]
+fn lane_block_commitment_roundtrips_without_metadata_or_receipts() {
+    let commitment = sample_lane_commitment_fixture_without_metadata();
+
+    let json = norito::json::to_json_pretty(&commitment).expect("serialize commitment to JSON");
+    let replay: LaneBlockCommitment =
+        norito::json::from_str(&json).expect("parse reserialized commitment");
+    assert_eq!(
+        replay, commitment,
+        "JSON roundtrip must preserve commitments without optional metadata"
+    );
+
+    let norito_bytes = norito::to_bytes(&commitment).expect("encode commitment to Norito bytes");
+    let archived = norito::from_bytes::<LaneBlockCommitment>(&norito_bytes)
+        .expect("archive metadata-free commitment");
+    let decoded =
+        NoritoDeserialize::try_deserialize(archived).expect("deserialize metadata-free commitment");
+    assert_eq!(
+        decoded, commitment,
+        "Norito roundtrip must preserve commitments without receipts"
     );
 }
 

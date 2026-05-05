@@ -41,7 +41,7 @@ quyida yoki PATHda mavjud:
 Repozitoriy ildizidan:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 Bu buyruq ikkala `mochi-core` va egui frontendini quradi. Tarqaladigan to'plamni ishlab chiqarish uchun quyidagilarni bajaring:
@@ -57,7 +57,7 @@ To'plam vazifasi `target/mochi-bundle` ostida ikkilik, manifest va konfiguratsiy
 UIni to'g'ridan-to'g'ri yukdan boshqaring:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 Odatiy bo'lib, MOCHI vaqtinchalik ma'lumotlar katalogida bitta peerli oldindan o'rnatishni yaratadi:
@@ -69,7 +69,7 @@ Odatiy bo'lib, MOCHI vaqtinchalik ma'lumotlar katalogida bitta peerli oldindan o
 Ishga tushirishda standart sozlamalarni bekor qilish uchun CLI bayroqlaridan foydalaning:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ qutilar:
 ./ci/check_mochi.sh
 ```
 
-Yordamchi `mochi-core`, `mochi-ui-egui` uchun `cargo check`/`cargo test` va
+Yordamchi `mochi-core`, `mochi-ui` uchun `cargo check`/`cargo test` va
 `mochi-integration`, bu armatura drifti (kanonik blok/hodisalarni suratga olish) va egui jabduqlarini ushlaydi
 bir zarbada regressiyalar. Agar skript eskirgan qurilmalar haqida xabar bersa, e'tibor berilmagan regeneratsiya sinovlarini qaytadan o'tkazing,
 masalan:

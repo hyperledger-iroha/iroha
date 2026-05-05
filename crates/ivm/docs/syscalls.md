@@ -78,6 +78,8 @@ Gas enforcement (CoreHost)
 - FASTPQ transfer batches are charged per entry (same as individual transfers).
 - ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
 - GET_PUBLIC_INPUT charges a base plus a per-byte cost based on the returned TLV length.
+- `JSON_OBJECT` helper — Gas: `G_json_object`.
+- `JSON_SET_I64`, `JSON_SET_ACCOUNT_ID`, and their direct variants — Gas: `G_json_set`.
 - SMARTCONTRACT_EXECUTE_QUERY charges base + per-item + per-byte; sorting multiplies per-item cost. Pagination offsets add an extra per-item penalty for unsorted queries; for sorted queries, the per-item charge is based on all items scanned before pagination (so offsets are already included). Query materialization aborts with OutOfGas when the per-item budget is exhausted, and responses that exceed the per-byte budget are rejected before encoding when exact Norito sizing is available (otherwise after encoding).
 
 Lifecycle / Utility
@@ -85,6 +87,7 @@ Lifecycle / Utility
 - 0x01 EXIT — Args: `r10=status:u64` → Return: `u64=status` — Gas: G_exit
 - 0x02 ABORT — Args: none → Return: `u64=0` — Gas: G_abort (halts and marks the run failed)
 - 0x03 DEBUG_LOG — Args: `r10=&Json|&Blob|&NoritoBytes` → Return: 0 — Gas: G_debug
+- 0xA8 CURRENT_TIME_MS — Args: none → Return: `u64=unix_time_ms` — Gas: -
 - 0xE0 INPUT_PUBLISH_TLV — Args: `r10=&Blob(TLV)` → Return: `ptr (r10)` — Gas: G_input_publish (rejects invalid TLV envelopes and disallowed pointer types)
 - 0x90 SM3_HASH — Args: `r10=&Blob(message)` → Return: `ptr (&Blob(digest))` — Gas: -
 - 0x91 SM2_VERIFY — Args: `r10=&Blob(msg)`, `r11=&Blob(sig)` (64-byte r∥s), `r12=&Blob(pubkey)` (SEC1), `r13=&Blob(distid)` *(optional, 0 for default)* → Return: `u64=0/1` — Gas: G_verify
@@ -104,6 +107,7 @@ For the SM4 calls, the host appends the authentication tag to the ciphertext out
 Kotodama intrinsics
 - ``sm::hash(msg: Blob) -> Blob`` mirrors `msg` into INPUT with `INPUT_PUBLISH_TLV` and issues `SM3_HASH`, returning a pointer to the digest Blob.
 - ``sm::verify(msg: Blob, sig: Blob, pk: Blob[, distid: Blob]) -> bool`` mirrors each Blob argument into INPUT, invokes `SM2_VERIFY`, and returns `true` for valid signatures. Omitting the fourth argument selects the runtime-configured default (``Sm2PublicKey::default_distid()``, sourced from `crypto.sm2_distid_default`); providing it enforces a custom distinguishing identifier.
+- ``current_time_ms() -> int`` issues `CURRENT_TIME_MS` and returns the host-provided Unix epoch time in milliseconds. `CoreHost` binds this to block time; test/default hosts use their configured or wall-clock time.
 
 Numeric helpers (Norito)
 - 0x69 NUMERIC_FROM_INT — Args: `r10=value:i64` (non‑negative) → `r10=&NoritoBytes(Numeric)` (scale = 0).
@@ -113,39 +117,37 @@ Numeric helpers (Norito)
 - Kotodama numeric aliases (`fixed_u128`, `Amount`, `Balance`) lower to these syscalls for deterministic unsigned, scale‑0 arithmetic.
 
 Domains / Peers
-- 0x10 REGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_reg_domain
-- 0x11 UNREGISTER_DOMAIN — Args: `r10=&DomainId` → 0 — Gas: G_unreg_domain
-- 0x12 TRANSFER_DOMAIN — Args: `r10=&DomainId, r11=&ScopedAccountId` → 0 — Gas: G_xfer_domain
+- 0x10..0x12 are unused in ABI v1 after removing domain ownership/registration syscalls.
 - 0x15 REGISTER_PEER — Args: `r10=&Json` (RegisterPeerWithPop) → 0 — Gas: G_reg_peer
   - JSON object: `{ "peer": "<public_key or public_key@addr>", "pop": [..], "activation_at": <u64?>, "expiry_at": <u64?>, "hsm": <HsmBinding?> }`
   - `peer` may be a string or an object with `public_key`/`publicKey`/`peer_id`/`peerId`/`key`; those keys are also accepted at top level.
 - 0x16 UNREGISTER_PEER — Args: `r10=&Json` (peer id string or object with `peer`/`peer_id`/`peerId`/`public_key`/`publicKey`/`key`) → 0 — Gas: G_unreg_peer
 
 Accounts
-- 0x13 REGISTER_ACCOUNT — Args: `r10=&ScopedAccountId` → 0 — Gas: G_reg_acct
-- 0x14 UNREGISTER_ACCOUNT — Args: `r10=&ScopedAccountId` → 0 — Gas: G_unreg_acct
-- 0x17 ADD_SIGNATORY — Args: `r10=&ScopedAccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_add_sig
-- 0x18 REMOVE_SIGNATORY — Args: `r10=&ScopedAccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_rm_sig
-- 0x19 SET_ACCOUNT_QUORUM — Args: `r10=&ScopedAccountId, r11=quorum:u64` → 0 — Gas: G_set_quorum
-- 0x1A SET_ACCOUNT_DETAIL — Args: `r10=&ScopedAccountId, r11=&Name, r12=&Json` → 0 — Gas: G_set_detail + bytes(val)
+- 0x13 REGISTER_ACCOUNT — Args: `r10=&AccountId` → 0 — Gas: G_reg_acct
+- 0x14 UNREGISTER_ACCOUNT — Args: `r10=&AccountId` → 0 — Gas: G_unreg_acct
+- 0x17 ADD_SIGNATORY — Args: `r10=&AccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_add_sig
+- 0x18 REMOVE_SIGNATORY — Args: `r10=&AccountId, r11=&Json` (pubkey string or object with `public_key`/`publicKey`/`key`) → 0 — Gas: G_rm_sig
+- 0x19 SET_ACCOUNT_QUORUM — Args: `r10=&AccountId, r11=quorum:u64` → 0 — Gas: G_set_quorum
+- 0x1A SET_ACCOUNT_DETAIL — Args: `r10=&AccountId, r11=&Name, r12=&Json` → 0 — Gas: G_set_detail + bytes(val)
 
 Notes:
 - Signatory/quorum syscalls update the multisig spec stored in account metadata key `multisig/spec`.
-  The public key is mapped to a `ScopedAccountId` in the same domain with weight 1; the signatory
-  account must exist and the resulting spec must remain acyclic with quorum reachable.
+  The target account is selected by canonical `AccountId`; signatory accounts must exist and the
+  resulting spec must remain acyclic with quorum reachable.
 - These syscalls update multisig roles and metadata and rekey the account controller to the
   canonical multisig id derived from the spec (signatories must be single-key accounts).
 
 Assets (FT)
 - 0x20 REGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_reg_asset
 - 0x21 UNREGISTER_ASSET — Args: `r10=&AssetDefinitionId` → 0 — Gas: G_unreg_asset
-- 0x22 MINT_ASSET — Args: `r10=&ScopedAccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_mint
-- 0x23 BURN_ASSET — Args: `r10=&ScopedAccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_burn
-- 0x24 TRANSFER_ASSET — Args: `r10=&ScopedAccountId(from), r11=&ScopedAccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)` → 0 — Gas: G_transfer
+- 0x22 MINT_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_mint
+- 0x23 BURN_ASSET — Args: `r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric)` → 0 — Gas: G_burn
+- 0x24 TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric)` → 0 — Gas: G_transfer
 
 NFTs
-- 0x25 NFT_MINT_ASSET — Args: `r10=&NftId, r11=&ScopedAccountId(owner)` → 0 — Gas: G_nft_mint_asset
-- 0x26 NFT_TRANSFER_ASSET — Args: `r10=&ScopedAccountId(from), r11=&NftId, r12=&ScopedAccountId(to)` → 0 — Gas: G_nft_transfer_asset
+- 0x25 NFT_MINT_ASSET — Args: `r10=&NftId, r11=&AccountId(owner)` → 0 — Gas: G_nft_mint_asset
+- 0x26 NFT_TRANSFER_ASSET — Args: `r10=&AccountId(from), r11=&NftId, r12=&AccountId(to)` → 0 — Gas: G_nft_transfer_asset
 - 0x27 NFT_SET_METADATA — Args: `r10=&NftId, r11=&Json` → 0 — Gas: G_nft_set_metadata
 - 0x28 NFT_BURN_ASSET — Args: `r10=&NftId` → 0 — Gas: G_nft_burn_asset
 
@@ -159,6 +161,10 @@ Zero‑knowledge (verification/state‑read)
 
 ZK gating & determinism
 - `CoreHost` performs full proof verification through the configured backend verifier (`iroha_core::zk::verify_backend_with_timing`), not the legacy polynomial-opening helper.
+- `DefaultHost` intentionally leaves `ZK_VERIFY_BATCH` disabled. The runtime
+  batch syscall lives on `CoreHost`, where each item is first bound to the VK
+  registry and then verified through
+  `iroha_core::zk::verify_backend_with_timing_guardrails`.
 - Verification is bound to the VK registry before cryptographic checks:
   - envelope/backend must be supported (`backend = halo2-ipa-pasta`), `vk_hash` must be present, and payload/proof sizes must respect config caps.
   - the referenced verifying key must be active and match circuit id, schema hash (`hash(public_inputs)`), namespace, and owner manifest.
@@ -172,10 +178,10 @@ Roles / Permissions
 - 0x30 CREATE_ROLE — Args: `r10=&Name, r11=&Json` (perm set) → 0 — Gas: G_create_role
   - Permissions JSON: array of permission strings/objects or `{ "permissions": [...] }` / `{ "perms": [...] }`.
 - 0x31 DELETE_ROLE — Args: `r10=&Name` → 0 — Gas: G_delete_role
-- 0x32 GRANT_ROLE — Args: `r10=&ScopedAccountId, r11=&Name` → 0 — Gas: G_grant_role
-- 0x33 REVOKE_ROLE — Args: `r10=&ScopedAccountId, r11=&Name` → 0 — Gas: G_revoke_role
-- 0x34 GRANT_PERMISSION — Args: `r10=&ScopedAccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_grant_perm
-- 0x35 REVOKE_PERMISSION — Args: `r10=&ScopedAccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_revoke_perm
+- 0x32 GRANT_ROLE — Args: `r10=&AccountId, r11=&Name` → 0 — Gas: G_grant_role
+- 0x33 REVOKE_ROLE — Args: `r10=&AccountId, r11=&Name` → 0 — Gas: G_revoke_role
+- 0x34 GRANT_PERMISSION — Args: `r10=&AccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_grant_perm
+- 0x35 REVOKE_PERMISSION — Args: `r10=&AccountId, r11=&Name|&Json(Permission)` → 0 — Gas: G_revoke_perm
 
 Triggers
 - 0x40 CREATE_TRIGGER — Args: `r10=&Json` (trigger spec) → 0 — Gas: G_create_trig
@@ -220,16 +226,18 @@ JSON envelope support for EXECUTE_INSTRUCTION
       `wsv.remove_trigger`, `wsv.set_trigger_enabled`, `wsv.register_peer`, `wsv.unregister_peer`
 - Payload examples:
   - Shield:
-    - `{"type":"zk.Shield","payload":{"asset":"rose#domain","from":"<account>","amount":3,"note_commitment":[7,...,7],"enc_payload":{"version":1,"ephemeral_pubkey":[0,...,0],"nonce":[0,...,0],"ciphertext":""}}}`
+    - `{"type":"zk.Shield","payload":{"asset":"<asset-definition-id>","from":"<account>","amount":3,"note_commitment":[7,...,7],"enc_payload":{"version":1,"ephemeral_pubkey":[0,...,0],"nonce":[0,...,0],"ciphertext":""}}}`
   - Mint asset:
-    - `{"type":"wsv.mint_asset","payload":{"account_id":"<account>","asset_id":"rose#domain","amount":100}}`
+    - `{"type":"wsv.mint_asset","payload":{"account_id":"<account>","asset_id":"<base58-asset-definition-id>","amount":100}}`
 - Notes:
   - The JSON envelope is intended for tests and developer tooling; production smart‑contracts should prefer Norito TLVs generated by the compiler.
+  - Public asset ids are bare Base58 asset-definition ids. Internal balance buckets may bind asset and account state together, but those are not public `asset_id` values.
   - The host enforces the same permission checks as the dedicated syscalls (`MINT_ASSET`, `BURN_ASSET`, etc.).
 - 0xA1 EXECUTE_QUERY — Args: `r10=&NoritoBytes(QueryRequest)` → `ptr` — Gas: G_scq
 - 0xA2 CREATE_NFTS_FOR_ALL_USERS — Args: none → `u64=count` — Gas: G_create_nfts_all
 - 0xA3 SET_SMARTCONTRACT_EXECUTION_DEPTH — Args: `r10=depth:u64` → `u64=prev` — Gas: G_sc_depth
-- 0xA4 GET_AUTHORITY — Args: none → `ptr` (ScopedAccountId in INPUT, `r10` points to it) — Gas: G_get_auth
+- 0xA4 GET_AUTHORITY — Args: none → `ptr` (AccountId in INPUT, `r10` points to it) — Gas: G_get_auth
+- 0xA7 RESOLVE_ACCOUNT_ALIAS — Args: `r10=&Blob(alias literal)` → `ptr` (AccountId in INPUT, `r10` points to it) — Gas: G_alias_resolve
 
 AXT host flow
 - 0xB0 AXT_BEGIN — Args: `r10=&AxtDescriptor`. Resets any in‑progress envelope and records the descriptor; hosts derive the canonical binding used by capability handles from this descriptor.
@@ -239,13 +247,43 @@ AXT host flow
 - 0xB4 USE_ASSET_HANDLE — Args: `r10=&AssetHandle`, `r11=&NoritoBytes(RemoteSpendIntent)`, `r12=&ProofBlob` (optional). Validates capability bindings/budgets and records spend intents for later commit checks.
 - Default and WSV hosts enforce descriptor membership, capability binding equality, budget checks, and proof presence before permitting commit.
 
+Native asset escrow
+- 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&NoritoBytes(Numeric)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.
+- 0xB9 ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Queues `AcceptAssetEscrow` for the buyer authority.
+- 0xBA ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Queues `MarkEscrowPaymentSent` for the accepted buyer.
+- 0xBB ESCROW_RELEASE — Args: `r10=&Name(escrow)` → 0. Queues `ReleaseAssetEscrow` for the seller authority after payment is marked.
+- 0xBC ESCROW_CANCEL — Args: `r10=&Name(escrow)` → 0. Queues `CancelAssetEscrow`; cancellation is rejected once payment is marked.
+- 0xBD ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Queues `OpenEscrowDispute` for the seller or accepted buyer.
+- 0xBE ESCROW_RESOLVE_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Numeric buyer_amount)`, `r12=&NoritoBytes(Numeric seller_amount)`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Queues `ResolveEscrowDispute`; core enforces `CanResolveEscrowDispute` and that the split sums to the held amount.
+- 0xAA ANONYMOUS_ESCROW_OPEN_OFFER — Args: `r10=&NoritoBytes(OpenAnonymousAssetEscrow)` → 0. Queues the proof-carrying anonymous escrow opening ISI.
+- 0xAB ANONYMOUS_ESCROW_ACCEPT — Args: `r10=&Name(escrow)` → 0. Queues `AcceptAnonymousAssetEscrow`.
+- 0xAC ANONYMOUS_ESCROW_MARK_PAYMENT_SENT — Args: `r10=&Name(escrow)` → 0. Queues `MarkAnonymousEscrowPaymentSent`.
+- 0xAD ANONYMOUS_ESCROW_RELEASE — Args: `r10=&NoritoBytes(ReleaseAnonymousAssetEscrow)` → 0. Queues the proof-carrying anonymous escrow release ISI.
+- 0xAE ANONYMOUS_ESCROW_CANCEL — Args: `r10=&NoritoBytes(CancelAnonymousAssetEscrow)` → 0. Queues the proof-carrying anonymous escrow cancellation ISI.
+- 0xAF ANONYMOUS_ESCROW_OPEN_DISPUTE — Args: `r10=&Name(escrow)`, `r11=&NoritoBytes(Vec<Hash>)` or `0` → 0. Queues `OpenAnonymousEscrowDispute`.
+- 0xBF ANONYMOUS_ESCROW_RESOLVE_DISPUTE — Args: `r10=&NoritoBytes(ResolveAnonymousEscrowDispute)` → 0. Queues the proof-carrying anonymous escrow dispute-resolution ISI.
+- Kotodama escrow names are deterministically mapped to `EscrowId`; native ISIs perform custody movement directly and generic `TRANSFER_ASSET` remains unable to drain active escrow custody accounts.
+
+Soracloud runtime host surface
+- 0xC0 SORACLOUD_READ_COMMITTED_STATE — Args: `r10=&SoracloudRequest(ReadCommittedState)` → `r10=&SoracloudResponse(ReadCommittedState)`. Returns committed service-state metadata for one declared binding/key pair.
+- 0xC1 SORACLOUD_EMIT_STATE_MUTATION — Args: `r10=&SoracloudRequest(EmitStateMutation)` → `r10=&SoracloudResponse(EmitStateMutation)`. Stages a deterministic write-back validated again by core before persistence.
+- 0xC2 SORACLOUD_EMIT_MAILBOX_MESSAGE — Args: `r10=&SoracloudRequest(EmitMailboxMessage)` → `r10=&SoracloudResponse(EmitMailboxMessage)`. Emits an outbound mailbox message for authoritative queueing after receipt validation.
+- 0xC3 SORACLOUD_APPEND_JOURNAL — Args: `r10=&SoracloudRequest(AppendJournal)` → `r10=&SoracloudResponse(AppendJournal)`. Stages deterministic journal material and returns its content hash.
+- 0xC4 SORACLOUD_PUBLISH_CHECKPOINT — Args: `r10=&SoracloudRequest(PublishCheckpoint)` → `r10=&SoracloudResponse(PublishCheckpoint)`. Stages checkpoint material and returns its content hash.
+- 0xC5 SORACLOUD_READ_SECRET — Args: `r10=&SoracloudRequest(ReadSecret)` → `r10=&SoracloudResponse(ReadSecret)`. Reads node-local secret material and is only valid from `private_update`.
+- 0xC6 SORACLOUD_READ_CREDENTIAL — Args: `r10=&SoracloudRequest(ReadCredential)` → `r10=&SoracloudResponse(ReadCredential)`. Reads node-local credential material and is only valid from `private_update`.
+- 0xC7 SORACLOUD_EGRESS_FETCH — Args: `r10=&SoracloudRequest(EgressFetch)` → `r10=&SoracloudResponse(EgressFetch)`. Performs a bounded host-allowlisted fetch and fails deterministically on policy or hash mismatch.
+- 0xC8 SORACLOUD_READ_CONFIG — Args: `r10=&SoracloudRequest(ReadConfig)` → `r10=&SoracloudResponse(ReadConfig)`. Reads authoritative service config payload bytes for the active revision and is valid from ordinary Soracloud handlers.
+- 0xC9 SORACLOUD_READ_SECRET_ENVELOPE — Args: `r10=&SoracloudRequest(ReadSecretEnvelope)` → `r10=&SoracloudResponse(ReadSecretEnvelope)`. Reads the authoritative committed secret envelope for the active revision and is valid from ordinary Soracloud handlers; plaintext/ciphertext payload reads remain on the private-runtime `READ_SECRET` path.
+- All Soracloud payloads are Norito request/response envelopes carried in the Soracloud pointer-ABI types. Host failures must be deterministic and receipt-stable, and unknown numbers still map to `VMError::UnknownSyscall`.
+
 ZK Helpers
-- 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&ScopedAccountId, r11=&AssetDefinitionId` → `ptr (&NoritoBytes(Numeric))` — Gas: G_get_bal
+- 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&NoritoBytes(Numeric))` — Gas: G_get_bal
 - 0xFB USE_NULLIFIER — Args: `r10=nullifier:u64` → `u64=0` — Gas: G_use_null
 - 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig
 
 Hardware / Proofs
-- 0xF4 PROVE_EXECUTION — Args: none → `NotImplemented` (reserved for future end-to-end proving integration) — Gas: -
+- 0xF4 PROVE_EXECUTION — Args: none → `NotImplemented` (reserved for future end-to-end proving integration) — Gas: G_prove
 - 0xF5 GROW_HEAP — Args: `r10=bytes:u64` → `u64=new_limit` — Gas: G_grow_heap per page
 - 0xF6 VERIFY_PROOF — Args: none → `NotImplemented` (reserved for future end-to-end execution-proof verification) — Gas: -
 - 0xF7 GET_MERKLE_PATH — Args: `r10=addr:u64, r11=out_ptr:u64, r12=root_out:u64?` → `u64=len` — Gas: G_mpath + path_len
@@ -301,129 +339,201 @@ but they must not change the host ABI.
 <!-- BEGIN GENERATED SYSCALLS -->
 | Number | Name | Args | Return | Gas |
 |---|---|---|---|---|
-| 0x00 | DEBUG_PRINT | - | - | - |
-| 0x01 | EXIT | - | - | - |
-| 0x02 | ABORT | - | - | - |
-| 0x03 | DEBUG_LOG | - | - | - |
-| 0x10 | REGISTER_DOMAIN | - | - | - |
-| 0x11 | UNREGISTER_DOMAIN | - | - | - |
-| 0x12 | TRANSFER_DOMAIN | - | - | - |
-| 0x13 | REGISTER_ACCOUNT | - | - | - |
-| 0x14 | UNREGISTER_ACCOUNT | - | - | - |
-| 0x15 | REGISTER_PEER | - | - | - |
-| 0x16 | UNREGISTER_PEER | - | - | - |
-| 0x17 | ADD_SIGNATORY | - | - | - |
-| 0x18 | REMOVE_SIGNATORY | - | - | - |
-| 0x19 | SET_ACCOUNT_QUORUM | - | - | - |
-| 0x1A | SET_ACCOUNT_DETAIL | - | - | - |
-| 0x20 | REGISTER_ASSET | - | - | - |
-| 0x21 | UNREGISTER_ASSET | - | - | - |
-| 0x22 | MINT_ASSET | - | - | - |
-| 0x23 | BURN_ASSET | - | - | - |
-| 0x24 | TRANSFER_ASSET | - | - | - |
-| 0x25 | NFT_MINT_ASSET | - | - | - |
-| 0x26 | NFT_TRANSFER_ASSET | - | - | - |
-| 0x27 | NFT_SET_METADATA | - | - | - |
-| 0x28 | NFT_BURN_ASSET | - | - | - |
-| 0x29 | TRANSFER_V1_BATCH_BEGIN | - | - | - |
-| 0x2A | TRANSFER_V1_BATCH_END | - | - | - |
-| 0x2B | TRANSFER_V1_BATCH_APPLY | - | - | - |
-| 0x30 | CREATE_ROLE | - | - | - |
-| 0x31 | DELETE_ROLE | - | - | - |
-| 0x32 | GRANT_ROLE | - | - | - |
-| 0x33 | REVOKE_ROLE | - | - | - |
-| 0x34 | GRANT_PERMISSION | - | - | - |
-| 0x35 | REVOKE_PERMISSION | - | - | - |
-| 0x40 | CREATE_TRIGGER | - | - | - |
-| 0x41 | REMOVE_TRIGGER | - | - | - |
-| 0x42 | SET_TRIGGER_ENABLED | - | - | - |
-| 0x43 | DEACTIVATE_CONTRACT_INSTANCE | - | - | - |
-| 0x44 | REMOVE_SMART_CONTRACT_BYTES | - | - | - |
-| 0x45 | REGISTER_SMART_CONTRACT_CODE | - | - | - |
-| 0x46 | REGISTER_SMART_CONTRACT_BYTES | - | - | - |
-| 0x47 | ACTIVATE_CONTRACT_INSTANCE | - | - | - |
-| 0x50 | STATE_GET | - | - | - |
-| 0x51 | STATE_SET | - | - | - |
-| 0x52 | STATE_DEL | - | - | - |
-| 0x53 | DECODE_INT | - | - | - |
-| 0x54 | BUILD_PATH_MAP_KEY | - | - | - |
-| 0x55 | ENCODE_INT | - | - | - |
-| 0x56 | BUILD_PATH_KEY_NORITO | - | - | - |
-| 0x57 | JSON_ENCODE | - | - | - |
-| 0x58 | JSON_DECODE | - | - | - |
-| 0x59 | SCHEMA_ENCODE | - | - | - |
-| 0x5A | SCHEMA_DECODE | - | - | - |
-| 0x5B | SCHEMA_INFO | - | - | - |
-| 0x5C | NAME_DECODE | - | - | - |
-| 0x5D | POINTER_TO_NORITO | - | - | - |
-| 0x5E | POINTER_FROM_NORITO | - | - | - |
-| 0x5F | TLV_EQ | - | - | - |
-| 0x60 | ZK_VERIFY_TRANSFER | - | - | - |
-| 0x61 | ZK_VERIFY_UNSHIELD | - | - | - |
-| 0x62 | ZK_VOTE_VERIFY_BALLOT | - | - | - |
-| 0x63 | ZK_VOTE_VERIFY_TALLY | - | - | - |
-| 0x64 | ZK_ROOTS_GET | - | - | - |
-| 0x65 | ZK_VOTE_GET_TALLY | - | - | - |
-| 0x66 | VRF_VERIFY | - | - | - |
-| 0x67 | VRF_VERIFY_BATCH | - | - | - |
-| 0x68 | ZK_VERIFY_BATCH | - | - | - |
-| 0x69 | NUMERIC_FROM_INT | - | - | - |
-| 0x6A | NUMERIC_TO_INT | - | - | - |
-| 0x6B | NUMERIC_ADD | - | - | - |
-| 0x6C | NUMERIC_SUB | - | - | - |
-| 0x6D | NUMERIC_MUL | - | - | - |
-| 0x6E | NUMERIC_DIV | - | - | - |
-| 0x6F | NUMERIC_REM | - | - | - |
-| 0x70 | NUMERIC_NEG | - | - | - |
-| 0x71 | NUMERIC_EQ | - | - | - |
-| 0x72 | NUMERIC_NE | - | - | - |
-| 0x73 | NUMERIC_LT | - | - | - |
-| 0x74 | NUMERIC_LE | - | - | - |
-| 0x75 | NUMERIC_GT | - | - | - |
-| 0x76 | NUMERIC_GE | - | - | - |
-| 0x77 | TLV_LEN | - | - | - |
-| 0x78 | JSON_GET_I64 | - | - | - |
-| 0x79 | JSON_GET_JSON | - | - | - |
-| 0x7A | JSON_GET_NAME | - | - | - |
-| 0x7B | JSON_GET_ACCOUNT_ID | - | - | - |
-| 0x7C | JSON_GET_NFT_ID | - | - | - |
-| 0x7D | JSON_GET_BLOB_HEX | - | - | - |
-| 0x7E | VRF_EPOCH_SEED | - | - | - |
-| 0x90 | SM3_HASH | - | - | - |
-| 0x91 | SM2_VERIFY | - | - | - |
-| 0x92 | SM4_GCM_SEAL | - | - | - |
-| 0x93 | SM4_GCM_OPEN | - | - | - |
-| 0x94 | SM4_CCM_SEAL | - | - | - |
-| 0x95 | SM4_CCM_OPEN | - | - | - |
-| 0x96 | SHA256_HASH | - | - | - |
-| 0x97 | SHA3_HASH | - | - | - |
-| 0xA0 | SMARTCONTRACT_EXECUTE_INSTRUCTION | - | - | - |
-| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY | - | - | - |
-| 0xA2 | CREATE_NFTS_FOR_ALL_USERS | - | - | - |
-| 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | - | - | - |
-| 0xA4 | GET_AUTHORITY | - | - | - |
-| 0xA5 | SUBSCRIPTION_BILL | - | - | - |
-| 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | - | - |
-| 0xB0 | AXT_BEGIN | - | - | - |
-| 0xB1 | AXT_TOUCH | - | - | - |
-| 0xB2 | AXT_COMMIT | - | - | - |
-| 0xB3 | VERIFY_DS_PROOF | - | - | - |
-| 0xB4 | USE_ASSET_HANDLE | - | - | - |
-| 0xE0 | INPUT_PUBLISH_TLV | - | - | - |
-| 0xF0 | ALLOC | - | - | - |
-| 0xF1 | GET_PUBLIC_INPUT | - | - | - |
-| 0xF4 | PROVE_EXECUTION | - | - | - |
-| 0xF5 | GROW_HEAP | - | - | - |
-| 0xF6 | VERIFY_PROOF | - | - | - |
-| 0xF7 | GET_MERKLE_PATH | - | - | - |
-| 0xF9 | GET_ACCOUNT_BALANCE | - | - | - |
-| 0xFA | GET_MERKLE_COMPACT | - | - | - |
-| 0xFB | USE_NULLIFIER | - | - | - |
-| 0xFC | VERIFY_SIGNATURE | - | - | - |
-| 0xFD | GET_PRIVATE_INPUT | - | - | - |
-| 0xFE | COMMIT_OUTPUT | - | - | - |
-| 0xFF | GET_REGISTER_MERKLE_COMPACT | - | - | - |
+| 0x00 | DEBUG_PRINT | - | - | asset:gas/G_debug@ivm.core/v2 |
+| 0x01 | EXIT | r10=status:u64 | u64=status | asset:gas/G_exit@ivm.core/v2 |
+| 0x02 | ABORT | - | u64=0 | asset:gas/G_abort@ivm.core/v2 |
+| 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v2 |
+| 0x10 | REGISTER_DOMAIN | - | u64=0 | - |
+| 0x11 | UNREGISTER_DOMAIN | - | u64=0 | - |
+| 0x12 | TRANSFER_DOMAIN | - | u64=0 | - |
+| 0x13 | REGISTER_ACCOUNT | r10=&AccountId | u64=0 | asset:gas/G_reg_acct@ivm.core/v2 |
+| 0x14 | UNREGISTER_ACCOUNT | r10=&AccountId | u64=0 | asset:gas/G_unreg_acct@ivm.core/v2 |
+| 0x15 | REGISTER_PEER | r10=&Json | u64=0 | asset:gas/G_reg_peer@ivm.core/v2 |
+| 0x16 | UNREGISTER_PEER | r10=&Json | u64=0 | asset:gas/G_unreg_peer@ivm.core/v2 |
+| 0x17 | ADD_SIGNATORY | r10=&AccountId, r11=&Json | u64=0 | asset:gas/G_add_sig@ivm.core/v2 |
+| 0x18 | REMOVE_SIGNATORY | r10=&AccountId, r11=&Json | u64=0 | asset:gas/G_rm_sig@ivm.core/v2 |
+| 0x19 | SET_ACCOUNT_QUORUM | r10=&AccountId, r11=quorum:u64 | u64=0 | asset:gas/G_set_quorum@ivm.core/v2 |
+| 0x1A | SET_ACCOUNT_DETAIL | r10=&AccountId, r11=&Name, r12=&Json | u64=0 | asset:gas/G_set_detail@ivm.core/v2 + bytes(val) |
+| 0x20 | REGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_reg_asset@ivm.core/v2 |
+| 0x21 | UNREGISTER_ASSET | r10=&AssetDefinitionId | u64=0 | asset:gas/G_unreg_asset@ivm.core/v2 |
+| 0x22 | MINT_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_mint@ivm.core/v2 |
+| 0x23 | BURN_ASSET | r10=&AccountId, r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_burn@ivm.core/v2 |
+| 0x24 | TRANSFER_ASSET | r10=&AccountId(from), r11=&AccountId(to), r12=&AssetDefinitionId, r13=&NoritoBytes(Numeric) | u64=0 | asset:gas/G_transfer@ivm.core/v2 |
+| 0x25 | NFT_MINT_ASSET | r10=&NftId, r11=&AccountId(owner) | u64=0 | asset:gas/G_nft_mint_asset@ivm.core/v2 |
+| 0x26 | NFT_TRANSFER_ASSET | r10=&AccountId(from), r11=&NftId, r12=&AccountId(to) | u64=0 | asset:gas/G_nft_transfer_asset@ivm.core/v2 |
+| 0x27 | NFT_SET_METADATA | r10=&NftId, r11=&Json | u64=0 | asset:gas/G_nft_set_metadata@ivm.core/v2 |
+| 0x28 | NFT_BURN_ASSET | r10=&NftId | u64=0 | asset:gas/G_nft_burn_asset@ivm.core/v2 |
+| 0x29 | TRANSFER_V1_BATCH_BEGIN | - | u64=0 | - |
+| 0x2A | TRANSFER_V1_BATCH_END | - | u64=0 | - |
+| 0x2B | TRANSFER_V1_BATCH_APPLY | r10=&NoritoBytes(TransferAssetBatch) | u64=0 | asset:gas/G_transfer@ivm.core/v2 per entry |
+| 0x30 | CREATE_ROLE | r10=&Name, r11=&Json(perms) | u64=0 | asset:gas/G_create_role@ivm.core/v2 |
+| 0x31 | DELETE_ROLE | r10=&Name | u64=0 | asset:gas/G_delete_role@ivm.core/v2 |
+| 0x32 | GRANT_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_role@ivm.core/v2 |
+| 0x33 | REVOKE_ROLE | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_revoke_role@ivm.core/v2 |
+| 0x34 | GRANT_PERMISSION | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_grant_perm@ivm.core/v2 |
+| 0x35 | REVOKE_PERMISSION | r10=&AccountId, r11=&Name | u64=0 | asset:gas/G_revoke_perm@ivm.core/v2 |
+| 0x40 | CREATE_TRIGGER | r10=&Json(spec) | u64=0 | asset:gas/G_create_trig@ivm.core/v2 |
+| 0x41 | REMOVE_TRIGGER | r10=&Name | u64=0 | asset:gas/G_remove_trig@ivm.core/v2 |
+| 0x42 | SET_TRIGGER_ENABLED | r10=&Name, r11=enabled:u64 | u64=0 | asset:gas/G_set_trig@ivm.core/v2 |
+| 0x43 | DEACTIVATE_CONTRACT_INSTANCE | r10=&NoritoBytes(DeactivateContractInstance) | u64=0 | - |
+| 0x44 | REMOVE_SMART_CONTRACT_BYTES | r10=&NoritoBytes(RemoveSmartContractBytes) | u64=0 | - |
+| 0x45 | REGISTER_SMART_CONTRACT_CODE | r10=&NoritoBytes(RegisterSmartContractCode) | u64=0 | - |
+| 0x46 | REGISTER_SMART_CONTRACT_BYTES | r10=&NoritoBytes(RegisterSmartContractBytes) | u64=0 | - |
+| 0x47 | ACTIVATE_CONTRACT_INSTANCE | r10=&NoritoBytes(ActivateContractInstance) | u64=0 | - |
+| 0x50 | STATE_GET | r10=&Name | r10=ptr (&NoritoBytes) or 0 | - |
+| 0x51 | STATE_SET | r10=&Name, r11=&NoritoBytes | u64=0 | - |
+| 0x52 | STATE_DEL | r10=&Name | u64=0 | - |
+| 0x53 | DECODE_INT | r10=&NoritoBytes(ASCII decimal) or r10=&Blob(ASCII decimal) | r10=i64 | - |
+| 0x54 | BUILD_PATH_MAP_KEY | r10=&Name(base), r11=key:i64 | r10=ptr (&Name) | - |
+| 0x55 | ENCODE_INT | r10=value:i64 | r10=ptr (&NoritoBytes(ASCII decimal)) | - |
+| 0x56 | BUILD_PATH_KEY_NORITO | r10=&Name(base), r11=&NoritoBytes(key) | r10=ptr (&Name) | - |
+| 0x57 | JSON_ENCODE | r10=&Json | ptr (&NoritoBytes) | asset:gas/G_json_encode@ivm.core/v2 |
+| 0x58 | JSON_DECODE | r10=&NoritoBytes(JSON bytes) | ptr (&Json) | asset:gas/G_json_decode@ivm.core/v2 |
+| 0x59 | SCHEMA_ENCODE | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes) | - |
+| 0x5A | SCHEMA_DECODE | r10=&Name(schema), r11=&NoritoBytes | ptr (&Json) | - |
+| 0x5B | SCHEMA_INFO | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | - |
+| 0x5C | NAME_DECODE | r10=&NoritoBytes(UTF-8 string) | ptr (&Name) | asset:gas/G_name_decode@ivm.core/v2 |
+| 0x5D | POINTER_TO_NORITO | r10=&PointerType<T> | ptr (&NoritoBytes(TLV envelope)) | - |
+| 0x5E | POINTER_FROM_NORITO | r10=&NoritoBytes(TLV envelope), r11=expected?:u16 | ptr (&PointerType<T>) | - |
+| 0x5F | TLV_EQ | r10=&Tlv, r11=&Tlv | r10=1/0 | - |
+| 0x60 | ZK_VERIFY_TRANSFER | r10=&NoritoBytes(OpenVerifyEnvelope) | u64=0/1 | asset:gas/G_verify_proof@ivm.core/v2 |
+| 0x61 | ZK_VERIFY_UNSHIELD | r10=&NoritoBytes(OpenVerifyEnvelope) | u64=0/1 | asset:gas/G_verify_proof@ivm.core/v2 |
+| 0x62 | ZK_VOTE_VERIFY_BALLOT | r10=&NoritoBytes(OpenVerifyEnvelope) | u64=0/1 | asset:gas/G_verify_proof@ivm.core/v2 |
+| 0x63 | ZK_VOTE_VERIFY_TALLY | r10=&NoritoBytes(OpenVerifyEnvelope) | u64=0/1 | asset:gas/G_verify_proof@ivm.core/v2 |
+| 0x64 | ZK_ROOTS_GET | r10=&NoritoBytes(RootsGetRequest) | ptr (NoritoBytes in INPUT) | asset:gas/G_roots_get@ivm.core/v2 |
+| 0x65 | ZK_VOTE_GET_TALLY | r10=&NoritoBytes(VoteGetTallyRequest) | ptr (NoritoBytes in INPUT) | asset:gas/G_vote_get@ivm.core/v2 |
+| 0x66 | VRF_VERIFY | r10=&NoritoBytes(VrfVerifyRequest) | r10=ptr (&Blob(32-byte output)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 |
+| 0x67 | VRF_VERIFY_BATCH | r10=&NoritoBytes(VrfVerifyBatchRequest) | r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64 | asset:gas/G_verify@ivm.core/v2 |
+| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 |
+| 0x69 | NUMERIC_FROM_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Numeric)) | - |
+| 0x6A | NUMERIC_TO_INT | r10=&NoritoBytes(Numeric) | r10=value:i64 | - |
+| 0x6B | NUMERIC_ADD | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
+| 0x6C | NUMERIC_SUB | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
+| 0x6D | NUMERIC_MUL | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
+| 0x6E | NUMERIC_DIV | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
+| 0x6F | NUMERIC_REM | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
+| 0x70 | NUMERIC_NEG | r10=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
+| 0x71 | NUMERIC_EQ | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | - |
+| 0x72 | NUMERIC_NE | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | - |
+| 0x73 | NUMERIC_LT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | - |
+| 0x74 | NUMERIC_LE | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | - |
+| 0x75 | NUMERIC_GT | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | - |
+| 0x76 | NUMERIC_GE | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=u64(0/1) | - |
+| 0x77 | TLV_LEN | - | u64=0 | - |
+| 0x78 | JSON_GET_I64 | - | u64=0 | - |
+| 0x79 | JSON_GET_JSON | - | u64=0 | - |
+| 0x7A | JSON_GET_NAME | - | u64=0 | - |
+| 0x7B | JSON_GET_ACCOUNT_ID | - | u64=0 | - |
+| 0x7C | JSON_GET_NFT_ID | - | u64=0 | - |
+| 0x7D | JSON_GET_BLOB_HEX | - | u64=0 | - |
+| 0x7E | VRF_EPOCH_SEED | r10=&NoritoBytes(VrfEpochSeedRequest) | r10=ptr (&NoritoBytes(VrfEpochSeedResponse)), r11=status:u64 | asset:gas/G_vote_get@ivm.core/v2 |
+| 0x7F | JSON_GET_NUMERIC | - | u64=0 | - |
+| 0x80 | JSON_GET_ASSET_DEFINITION_ID | - | u64=0 | - |
+| 0x81 | JSON_OBJECT | - | ptr (&Json({})) | asset:gas/G_json_object@ivm.core/v2 |
+| 0x82 | JSON_SET_I64 | r10=&Json(object), r11=&Name(key), r12=value:i64 | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 |
+| 0x83 | JSON_SET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key), r12=&AccountId | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 |
+| 0x84 | JSON_GET_I64_DIRECT | - | u64=0 | - |
+| 0x85 | JSON_GET_JSON_DIRECT | - | u64=0 | - |
+| 0x86 | JSON_GET_NAME_DIRECT | - | u64=0 | - |
+| 0x87 | JSON_GET_ACCOUNT_ID_DIRECT | - | u64=0 | - |
+| 0x88 | JSON_GET_NFT_ID_DIRECT | - | u64=0 | - |
+| 0x89 | JSON_GET_BLOB_HEX_DIRECT | - | u64=0 | - |
+| 0x8A | JSON_GET_NUMERIC_DIRECT | - | u64=0 | - |
+| 0x8B | JSON_GET_ASSET_DEFINITION_ID_DIRECT | - | u64=0 | - |
+| 0x8C | JSON_SET_I64_DIRECT | r10=&Json(object), r11=&Name(key), r12=value:i64 | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 |
+| 0x8D | JSON_SET_ACCOUNT_ID_DIRECT | r10=&Json(object), r11=&Name(key), r12=&AccountId | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 |
+| 0x8E | BUILD_PATH_KEY_NORITO_DIRECT | - | u64=0 | - |
+| 0x8F | SCHEMA_INFO_DIRECT | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | - |
+| 0x90 | SM3_HASH | r10=&Blob(message) | r10=ptr (&Blob(digest)) | - |
+| 0x91 | SM2_VERIFY | r10=&Blob(msg), r11=&Blob(sig), r12=&Blob(pubkey), r13=&Blob(distid)? | u64=0/1 | asset:gas/G_verify@ivm.core/v2 |
+| 0x92 | SM4_GCM_SEAL | r10=&Blob(key16), r11=&Blob(nonce12), r12=&Blob(aad)?, r13=&Blob(plaintext) | r10=ptr (&Blob(ciphertext || tag16)) | - |
+| 0x93 | SM4_GCM_OPEN | r10=&Blob(key16), r11=&Blob(nonce12), r12=&Blob(aad)?, r13=&Blob(ciphertext || tag16) | r10=ptr (&Blob(plaintext)) or 0 | - |
+| 0x94 | SM4_CCM_SEAL | r10=&Blob(key16), r11=&Blob(nonce[7..13]), r12=&Blob(aad)?, r13=&Blob(plaintext), r14=tag_len:u64 | r10=ptr (&Blob(ciphertext || tag)) | - |
+| 0x95 | SM4_CCM_OPEN | r10=&Blob(key16), r11=&Blob(nonce[7..13]), r12=&Blob(aad)?, r13=&Blob(ciphertext || tag), r14=tag_len:u64 | r10=ptr (&Blob(plaintext)) or 0 | - |
+| 0x96 | SHA256_HASH | - | u64=0 | - |
+| 0x97 | SHA3_HASH | - | u64=0 | - |
+| 0xA0 | SMARTCONTRACT_EXECUTE_INSTRUCTION | r10=&NoritoBytes(InstructionBox) | u64=0 | asset:gas/G_sci@ivm.core/v2 |
+| 0xA1 | SMARTCONTRACT_EXECUTE_QUERY | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |
+| 0xA2 | CREATE_NFTS_FOR_ALL_USERS | - | u64=count | asset:gas/G_create_nfts_all@ivm.core/v2 |
+| 0xA3 | SET_SMARTCONTRACT_EXECUTION_DEPTH | r10=depth:u64 | u64=prev | asset:gas/G_sc_depth@ivm.core/v2 |
+| 0xA4 | GET_AUTHORITY | - | ptr (AccountId in INPUT) | asset:gas/G_get_auth@ivm.core/v2 |
+| 0xA5 | SUBSCRIPTION_BILL | - | u64=0 | asset:gas/G_sub_bill@ivm.core/v2 |
+| 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | u64=0 | asset:gas/G_sub_usage@ivm.core/v2 |
+| 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Blob(alias literal) | ptr (&AccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
+| 0xA8 | CURRENT_TIME_MS | - | u64=0 | - |
+| 0xA9 | CALL_CONTRACT | - | u64=0 | - |
+| 0xAA | ANONYMOUS_ESCROW_OPEN_OFFER | r10=&NoritoBytes(OpenAnonymousAssetEscrow) | u64=0 | - |
+| 0xAB | ANONYMOUS_ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | - |
+| 0xAC | ANONYMOUS_ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | - |
+| 0xAD | ANONYMOUS_ESCROW_RELEASE | r10=&NoritoBytes(ReleaseAnonymousAssetEscrow) | u64=0 | - |
+| 0xAE | ANONYMOUS_ESCROW_CANCEL | r10=&NoritoBytes(CancelAnonymousAssetEscrow) | u64=0 | - |
+| 0xAF | ANONYMOUS_ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | - |
+| 0xB0 | AXT_BEGIN | r10=&AxtDescriptor | u64=0 | - |
+| 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | - |
+| 0xB2 | AXT_COMMIT | - | u64=0 | - |
+| 0xB3 | VERIFY_DS_PROOF | r10=&DataSpaceId, r11=&ProofBlob or 0 | u64=0/1 | asset:gas/G_verify@ivm.core/v2 |
+| 0xB4 | USE_ASSET_HANDLE | r10=&AssetHandle, r11=&NoritoBytes(RemoteSpendIntent), r12=&ProofBlob? | u64=0 | - |
+| 0xB8 | ESCROW_OPEN_OFFER | r10=&Name(escrow), r11=&AssetDefinitionId, r12=&NoritoBytes(Numeric), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | - |
+| 0xB9 | ESCROW_ACCEPT | r10=&Name(escrow) | u64=0 | - |
+| 0xBA | ESCROW_MARK_PAYMENT_SENT | r10=&Name(escrow) | u64=0 | - |
+| 0xBB | ESCROW_RELEASE | r10=&Name(escrow) | u64=0 | - |
+| 0xBC | ESCROW_CANCEL | r10=&Name(escrow) | u64=0 | - |
+| 0xBD | ESCROW_OPEN_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | - |
+| 0xBE | ESCROW_RESOLVE_DISPUTE | r10=&Name(escrow), r11=&NoritoBytes(Numeric buyer_amount), r12=&NoritoBytes(Numeric seller_amount), r13=&NoritoBytes(Vec<Hash>) or 0 | u64=0 | - |
+| 0xBF | ANONYMOUS_ESCROW_RESOLVE_DISPUTE | r10=&NoritoBytes(ResolveAnonymousEscrowDispute) | u64=0 | - |
+| 0xC0 | SORACLOUD_READ_COMMITTED_STATE | r10=&SoracloudRequest(ReadCommittedState) | r10=&SoracloudResponse(ReadCommittedState) | - |
+| 0xC1 | SORACLOUD_EMIT_STATE_MUTATION | r10=&SoracloudRequest(EmitStateMutation) | r10=&SoracloudResponse(EmitStateMutation) | - |
+| 0xC2 | SORACLOUD_EMIT_MAILBOX_MESSAGE | r10=&SoracloudRequest(EmitMailboxMessage) | r10=&SoracloudResponse(EmitMailboxMessage) | - |
+| 0xC3 | SORACLOUD_APPEND_JOURNAL | r10=&SoracloudRequest(AppendJournal) | r10=&SoracloudResponse(AppendJournal) | - |
+| 0xC4 | SORACLOUD_PUBLISH_CHECKPOINT | r10=&SoracloudRequest(PublishCheckpoint) | r10=&SoracloudResponse(PublishCheckpoint) | - |
+| 0xC5 | SORACLOUD_READ_SECRET | r10=&SoracloudRequest(ReadSecret) | r10=&SoracloudResponse(ReadSecret) | - |
+| 0xC6 | SORACLOUD_READ_CREDENTIAL | r10=&SoracloudRequest(ReadCredential) | r10=&SoracloudResponse(ReadCredential) | - |
+| 0xC7 | SORACLOUD_EGRESS_FETCH | r10=&SoracloudRequest(EgressFetch) | r10=&SoracloudResponse(EgressFetch) | - |
+| 0xC8 | SORACLOUD_READ_CONFIG | r10=&SoracloudRequest(ReadConfig) | r10=&SoracloudResponse(ReadConfig) | - |
+| 0xC9 | SORACLOUD_READ_SECRET_ENVELOPE | r10=&SoracloudRequest(ReadSecretEnvelope) | r10=&SoracloudResponse(ReadSecretEnvelope) | - |
+| 0xD0 | SCHEMA_ENCODE_DIRECT | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes) | - |
+| 0xD1 | SCHEMA_DECODE_DIRECT | r10=&Name(schema), r11=&NoritoBytes | ptr (&Json) | - |
+| 0xD2 | NUMERIC_TO_INT_DIRECT | - | u64=0 | - |
+| 0xD3 | NUMERIC_ADD_DIRECT | - | u64=0 | - |
+| 0xD4 | NUMERIC_SUB_DIRECT | - | u64=0 | - |
+| 0xD5 | NUMERIC_MUL_DIRECT | - | u64=0 | - |
+| 0xD6 | NUMERIC_DIV_DIRECT | - | u64=0 | - |
+| 0xD7 | NUMERIC_REM_DIRECT | - | u64=0 | - |
+| 0xD8 | NUMERIC_NEG_DIRECT | - | u64=0 | - |
+| 0xD9 | NUMERIC_EQ_DIRECT | - | u64=0 | - |
+| 0xDA | NUMERIC_NE_DIRECT | - | u64=0 | - |
+| 0xDB | NUMERIC_LT_DIRECT | - | u64=0 | - |
+| 0xDC | NUMERIC_LE_DIRECT | - | u64=0 | - |
+| 0xDD | NUMERIC_GT_DIRECT | - | u64=0 | - |
+| 0xDE | NUMERIC_GE_DIRECT | - | u64=0 | - |
+| 0xE0 | INPUT_PUBLISH_TLV | r10=&Blob(TLV) | ptr (r10) | asset:gas/G_input_publish@ivm.core/v2 |
+| 0xF0 | ALLOC | r10=bytes:u64 | ptr (r10) | asset:gas/G_alloc@ivm.core/v2 + bytes |
+| 0xF1 | GET_PUBLIC_INPUT | r10=&Name | ptr (&Tlv) | asset:gas/G_get_pub@ivm.core/v2 + bytes |
+| 0xF4 | PROVE_EXECUTION | - | r10=0/1 | asset:gas/G_prove@ivm.core/v2 |
+| 0xF5 | GROW_HEAP | r10=bytes:u64 | u64=new_limit | asset:gas/G_grow_heap@ivm.core/v2 per page |
+| 0xF6 | VERIFY_PROOF | - | r10=0/1 | asset:gas/G_verify@ivm.core/v2 |
+| 0xF7 | GET_MERKLE_PATH | r10=addr:u64, r11=out:u64, r12=root_out?:u64 | u64=len | asset:gas/G_mpath@ivm.core/v2 + len |
+| 0xF9 | GET_ACCOUNT_BALANCE | r10=&AccountId, r11=&AssetDefinitionId | ptr (&NoritoBytes(Numeric)) | asset:gas/G_get_bal@ivm.core/v2 |
+| 0xFA | GET_MERKLE_COMPACT | r10=addr, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
+| 0xFB | USE_NULLIFIER | r10=nullifier:u64 | u64=0 | asset:gas/G_use_null@ivm.core/v2 |
+| 0xFC | VERIFY_SIGNATURE | r10=&Blob(message), r11=&Blob(signature), r12=&Blob(pubkey), r13=scheme:u8 | r10=0/1 | asset:gas/G_verify_sig@ivm.core/v2 |
+| 0xFD | GET_PRIVATE_INPUT | r10=index:u64 | r10=value | asset:gas/G_get_priv@ivm.core/v2 |
+| 0xFE | COMMIT_OUTPUT | - | u64=0 | asset:gas/G_commit@ivm.core/v2 |
+| 0xFF | GET_REGISTER_MERKLE_COMPACT | r10=reg, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 <!-- END GENERATED SYSCALLS -->
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -464,6 +574,7 @@ Codec helpers
 - All other pointer-typed syscalls require explicit non-zero pointers; there is no implicit last-input fallback.
 ZK (Halo2 OpenVerify)
 - 0x68 ZK_VERIFY_BATCH — Args: `r10=&NoritoBytes(Vec<iroha_data_model::zk::OpenVerifyEnvelope>)` → Return: `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`, `r12=first_fail_index|u64::MAX` — Gas: G_verify
-  - Per-item statuses are `1 = verified`, `0 = not verified`. Each item runs the same binding + full backend verification path as single-item ZK verify syscalls.
-  - Top-level request failures (decode, disabled backend, oversized batch) return `r10=0` and set `r11` (`ERR_DECODE`, `ERR_DISABLED`, `ERR_BACKEND`, `ERR_BATCH`).
+  - `CoreHost` returns per-item statuses (`1 = verified`, `0 = not verified`) and runs the same outer-envelope binding + full backend verification path as the single-item ZK verify syscalls.
+  - `DefaultHost` does not implement batch proof verification and returns `r10=0`, `r11=ERR_DISABLED`.
+  - On `CoreHost`, top-level request failures (decode, disabled backend, oversized batch) return `r10=0` and set `r11` (`ERR_DECODE`, `ERR_DISABLED`, `ERR_BACKEND`, `ERR_BATCH`).
   - On vector return, `r11` carries the first observed precheck/verify error code (or `0` when all succeed).

@@ -24,7 +24,7 @@ json = [
     "norito_derive",
     "mv",
 ]
-test-fixtures = []
+test-fixtures = ["dep:p256"]
 gost = ["iroha_crypto/gost"]
 bls = ["iroha_crypto/bls"]
 sm = ["iroha_crypto/sm"]
@@ -40,7 +40,8 @@ transparent_api = ["iroha_data_model_derive/transparent_api"]
 # Enable fault injection to simulate malicious data tampering during testing.
 fault_injection = []
 fast_dsl = []
-trybuild-tests = []
+trybuild-tests = ["dep:trybuild"]
+bench = []
 ids_projection = []
 governance = []
 zk-ballot = []
@@ -66,17 +67,20 @@ iroha_schema = { workspace = true }
 iroha_ffi = { workspace = true, optional = true }
 iroha_zkp_halo2 = { workspace = true }
 hex = { workspace = true }
+sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 
 derive_more = { workspace = true, features = ["as_ref", "display", "debug", "constructor", "from_str", "from", "into", "try_into", "deref"] }
 norito = {workspace = true}
 norito_derive = { workspace = true, optional = true }
 mv = { path = "../mv", optional = true }
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"], optional = true }
 sorafs_manifest = { workspace = true }
 thiserror = { workspace = true }
 displaydoc = { workspace = true, features = ["std"] }
 getset = { workspace = true }
 derive-where = { workspace = true }
 base64 = { workspace = true, features = ["alloc"] }
+bech32 = { workspace = true }
 nonzero_ext = { workspace = true }
 rustc-hash = { workspace = true }
 icu_normalizer = { version = "2.1.1", default-features = false, features = ["compiled_data"] }
@@ -86,16 +90,15 @@ idna = { version = "1.1.0", default-features = false, features = ["std"] }
 bs58 = "0.5.1"
 time = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
+trybuild = { workspace = true, optional = true }
 
 [dev-dependencies]
+criterion = { workspace = true }
 iroha_crypto = { workspace = true, features = ["rand", "gost", "sm"] }
 hex-literal = { workspace = true }
 ivm = { path = "../ivm" }
 
-criterion = { workspace = true }
-proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 tempfile = { workspace = true }
-trybuild = { workspace = true }
 
 #[build-dependencies]
 # NOTE: This crate's build.rs only copies a file and does not require syn.
@@ -115,6 +118,14 @@ harness = false
 name = "enum_vs_trait"
 harness = false
 
+[[bench]]
+name = "chain_wire"
+harness = false
+
+[[test]]
+name = "ui"
+required-features = ["trybuild-tests"]
+
 [[bin]]
 name = "axt_fixtures"
 path = "src/bin/axt_fixtures.rs"
@@ -124,3 +135,8 @@ required-features = ["test-fixtures"]
 name = "qr_stream_fixtures"
 path = "src/bin/qr_stream_fixtures.rs"
 required-features = ["test-fixtures"]
+
+[[bin]]
+name = "offline_v2_vectors"
+path = "src/bin/offline_v2_vectors.rs"
+required-features = ["test-fixtures", "transparent_api"]

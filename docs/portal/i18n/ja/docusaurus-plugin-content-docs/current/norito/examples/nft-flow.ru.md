@@ -19,7 +19,7 @@ translation_last_reviewed: 2026-02-07
 
 ## Полаговый обход рестра
 
-- Убедитесь、что определение NFT (например `n0#wonderland`) существует вместе с аккаунтами владельца/получателя, (`i105...`、`i105...`) を参照してください。
+- Убедитесь、что определение NFT (например `n0#wonderland`) существует вместе с аккаунтами владельца/получателя, (`<i105-account-id>`、`<i105-account-id>`) を参照してください。
 - Вызовите точку входа `nft_issue_and_transfer`、NFT のメッセージ、Alice と Bob のメッセージ、 описывающий выпуск。
 - NFT-рестра через `iroha_cli ledger nfts list --account <id>` または эквиваленты SDK、чтобы подтвердить перевод、затем убедитесь、燃えます。
 
@@ -35,11 +35,11 @@ translation_last_reviewed: 2026-02-07
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.
 seiyaku NftFlow {
   kotoage fn nft_issue_and_transfer() permission(NftAuthority) {
-    let owner = account!("i105...");
+    let owner = account!("<i105-account-id>");
     let nft = nft_id!("n0$wonderland");
     nft_mint_asset(nft, owner);
 
-    let to = account!("i105...");
+    let to = account!("<i105-account-id>");
     nft_transfer_asset(owner, nft, to);
     nft_set_metadata(nft, json!{ issued: "demo" });
     nft_burn_asset(nft);

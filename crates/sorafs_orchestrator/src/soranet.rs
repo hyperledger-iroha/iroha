@@ -2493,7 +2493,7 @@ mod tests {
     };
     use iroha_primitives::numeric::Numeric;
     use rand::{RngCore, SeedableRng, rngs::StdRng};
-    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair};
+    use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
 
     use super::*;
 
@@ -2700,7 +2700,7 @@ mod tests {
     }
 
     fn asset_definition(name: &str) -> AssetDefinitionId {
-        let domain = DomainId::from_str("sora").expect("domain id");
+        let domain = DomainId::try_new("sora", "universal").expect("domain id");
         let asset_name = Name::from_str(name).expect("asset name");
         AssetDefinitionId::new(domain, asset_name)
     }

@@ -10,7 +10,7 @@ use hex;
 use iroha_core::state::WorldReadOnly;
 use iroha_data_model::{
     HasMetadata, Identifiable, ValidationFail,
-    account::{AccountAddress, AccountEntry, AccountId},
+    account::{AccountEntry, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetEntry, AssetId, Mintable},
     block::SignedBlock,
     domain::{Domain, DomainId},
@@ -20,26 +20,25 @@ use iroha_data_model::{
         RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
         UnregisterBox, Upgrade,
         mint_burn::BurnBox,
+        offline::{AuditOfflineNoteV2, IssueOfflineNoteV2, RedeemOfflineNoteV2},
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
+        zk::{Shield, Unshield, ZkTransfer},
     },
     metadata::Metadata,
     nft::{NftEntry, NftId},
     peer::Peer,
+    rwa::RwaEntry,
     transaction::{
         error::TransactionRejectionReason,
         executable::Executable,
         signed::{SignedTransaction, TransactionResult},
     },
 };
+use iroha_torii_shared::qr::{EcLevel, QrCode, QrError};
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::Encode,
     json::{self, Map, Value},
-};
-use qrcode::{
-    EcLevel, QrCode,
-    render::svg,
-    types::{QrError, Version},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -83,7 +82,12 @@ impl ExplorerAggregates {
             let account_id = account.id().clone();
             agg.account_counters.entry(account_id.clone()).or_default();
             let account_domains = agg.account_domains.entry(account_id).or_default();
-            for domain_id in world.domains_for_subject(account.id()) {
+            let linked_domains = world
+                .bound_account_aliases(account.id())
+                .into_iter()
+                .filter_map(|alias| alias.domain_id(world.dataspace_catalog()).ok().flatten())
+                .collect::<BTreeSet<_>>();
+            for domain_id in linked_domains {
                 account_domains.insert(domain_id.clone());
                 let entry = agg.domain_counters.entry(domain_id).or_default();
                 entry.accounts = entry.accounts.saturating_add(1);
@@ -188,8 +192,6 @@ pub(crate) struct ExplorerPaginationMeta {
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerAccountDto {
     pub id: String,
-    pub i105_address: String,
-    pub i105_default_address: String,
     pub network_prefix: u16,
     pub metadata: Value,
     pub owned_domains: u32,
@@ -199,18 +201,9 @@ pub(crate) struct ExplorerAccountDto {
 
 impl ExplorerAccountDto {
     pub(crate) fn from_entry(entry: AccountEntry<'_>, counts: AccountCounters) -> Self {
-        let network_prefix = iroha_data_model::account::address::chain_discriminant();
-        let address =
-            AccountAddress::from_account_id(entry.id()).expect("account ids are always valid");
         Self {
             id: entry.id().to_string(),
-            i105_address: address
-                .to_i105_for_discriminant(network_prefix)
-                .unwrap_or_else(|_| entry.id().to_string()),
-            i105_default_address: address
-                .to_i105_fullwidth()
-                .unwrap_or_else(|_| entry.id().to_string()),
-            network_prefix,
+            network_prefix: iroha_data_model::account::address::chain_discriminant(),
             metadata: metadata_to_json(entry.value().metadata()),
             owned_domains: counts.domains,
             owned_assets: counts.assets,
@@ -255,28 +248,8 @@ impl ExplorerAccountQrDto {
 
 fn render_account_qr_svg(input: &str) -> Result<(String, u8), QrError> {
     let code = QrCode::with_error_correction_level(input.as_bytes(), ACCOUNT_QR_ERROR_CORRECTION)?;
-    let version = match code.version() {
-        Version::Normal(n) | Version::Micro(n) => {
-            u8::try_from(n).expect("QR versions fit in u8 range")
-        }
-    };
-    let svg = code
-        .render::<svg::Color>()
-        .min_dimensions(ACCOUNT_QR_DIMENSION_PX, ACCOUNT_QR_DIMENSION_PX)
-        .max_dimensions(ACCOUNT_QR_DIMENSION_PX, ACCOUNT_QR_DIMENSION_PX)
-        .build();
-    let svg = {
-        let trimmed = svg.trim_start();
-        if trimmed.starts_with("<?xml") {
-            let after_decl = trimmed
-                .find("?>")
-                .map(|idx| &trimmed[idx + 2..])
-                .unwrap_or(trimmed);
-            after_decl.trim_start().to_owned()
-        } else {
-            trimmed.to_owned()
-        }
-    };
+    let version = code.version();
+    let svg = code.to_svg(ACCOUNT_QR_DIMENSION_PX, "#000000", "#FFFFFF");
     Ok((svg, version))
 }
 
@@ -528,6 +501,61 @@ pub(crate) struct ExplorerNftsPage {
 }
 
 #[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerRwaParentDto {
+    pub rwa: String,
+    pub quantity: String,
+}
+
+impl ExplorerRwaParentDto {
+    fn from_parent(parent: &iroha_data_model::rwa::RwaParentRef) -> Self {
+        Self {
+            rwa: parent.rwa().to_string(),
+            quantity: parent.quantity().to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerRwaDto {
+    pub id: String,
+    pub owned_by: String,
+    pub quantity: String,
+    pub held_quantity: String,
+    pub primary_reference: String,
+    pub status: Option<String>,
+    pub is_frozen: bool,
+    pub metadata: Value,
+    pub parents: Vec<ExplorerRwaParentDto>,
+}
+
+impl ExplorerRwaDto {
+    pub(crate) fn from_entry(entry: RwaEntry<'_>) -> Self {
+        let value = entry.value();
+        Self {
+            id: entry.id().to_string(),
+            owned_by: value.owned_by.to_string(),
+            quantity: value.quantity.to_string(),
+            held_quantity: value.held_quantity.to_string(),
+            primary_reference: value.primary_reference.clone(),
+            status: value.status.as_ref().map(ToString::to_string),
+            is_frozen: value.is_frozen,
+            metadata: metadata_to_json(&value.metadata),
+            parents: value
+                .parents
+                .iter()
+                .map(ExplorerRwaParentDto::from_parent)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
+pub(crate) struct ExplorerRwasPage {
+    pub pagination: ExplorerPaginationMeta,
+    pub items: Vec<ExplorerRwaDto>,
+}
+
+#[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerBlockDto {
     pub hash: String,
     pub height: u64,
@@ -594,6 +622,7 @@ pub(crate) struct ExplorerTransactionDetailDto {
     pub executable: String,
     pub status: String,
     pub rejection_reason: Option<ExplorerTransactionRejectionDto>,
+    pub executable_payload: Value,
     pub metadata: Value,
     pub nonce: Option<u64>,
     pub signature: String,
@@ -639,6 +668,12 @@ pub(crate) enum ExplorerInstructionKind {
     SetParameter,
     Upgrade,
     Log,
+    Shield,
+    ZkTransfer,
+    Unshield,
+    IssueOfflineNoteV2,
+    RedeemOfflineNoteV2,
+    AuditOfflineNoteV2,
     Custom,
 }
 
@@ -658,6 +693,12 @@ impl ExplorerInstructionKind {
             Self::SetParameter => "SetParameter",
             Self::Upgrade => "Upgrade",
             Self::Log => "Log",
+            Self::Shield => "Shield",
+            Self::ZkTransfer => "ZkTransfer",
+            Self::Unshield => "Unshield",
+            Self::IssueOfflineNoteV2 => "IssueOfflineNoteV2",
+            Self::RedeemOfflineNoteV2 => "RedeemOfflineNoteV2",
+            Self::AuditOfflineNoteV2 => "AuditOfflineNoteV2",
             Self::Custom => "Custom",
         }
     }
@@ -681,6 +722,12 @@ impl std::str::FromStr for ExplorerInstructionKind {
             "setparameter" | "set_parameter" => Ok(Self::SetParameter),
             "upgrade" => Ok(Self::Upgrade),
             "log" => Ok(Self::Log),
+            "shield" => Ok(Self::Shield),
+            "zktransfer" | "zk_transfer" => Ok(Self::ZkTransfer),
+            "unshield" => Ok(Self::Unshield),
+            "issueofflinenotev2" | "issue_offline_note_v2" => Ok(Self::IssueOfflineNoteV2),
+            "redeemofflinenotev2" | "redeem_offline_note_v2" => Ok(Self::RedeemOfflineNoteV2),
+            "auditofflinenotev2" | "audit_offline_note_v2" => Ok(Self::AuditOfflineNoteV2),
             "custom" => Ok(Self::Custom),
             _ => Err(()),
         }
@@ -787,6 +834,18 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::Upgrade
             } else if any.downcast_ref::<Log>().is_some() {
                 ExplorerInstructionKind::Log
+            } else if any.downcast_ref::<Shield>().is_some() {
+                ExplorerInstructionKind::Shield
+            } else if any.downcast_ref::<ZkTransfer>().is_some() {
+                ExplorerInstructionKind::ZkTransfer
+            } else if any.downcast_ref::<Unshield>().is_some() {
+                ExplorerInstructionKind::Unshield
+            } else if any.downcast_ref::<IssueOfflineNoteV2>().is_some() {
+                ExplorerInstructionKind::IssueOfflineNoteV2
+            } else if any.downcast_ref::<RedeemOfflineNoteV2>().is_some() {
+                ExplorerInstructionKind::RedeemOfflineNoteV2
+            } else if any.downcast_ref::<AuditOfflineNoteV2>().is_some() {
+                ExplorerInstructionKind::AuditOfflineNoteV2
             } else {
                 ExplorerInstructionKind::Custom
             }
@@ -884,6 +943,12 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::SetParameter => set_parameter_payload(instruction),
         ExplorerInstructionKind::Upgrade => upgrade_payload(instruction),
         ExplorerInstructionKind::Log => log_payload(instruction),
+        ExplorerInstructionKind::Shield => zk_payload(instruction, "Shield"),
+        ExplorerInstructionKind::ZkTransfer => zk_payload(instruction, "ZkTransfer"),
+        ExplorerInstructionKind::Unshield => zk_payload(instruction, "Unshield"),
+        ExplorerInstructionKind::IssueOfflineNoteV2 => issue_offline_note_v2_payload(instruction),
+        ExplorerInstructionKind::RedeemOfflineNoteV2 => redeem_offline_note_v2_payload(instruction),
+        ExplorerInstructionKind::AuditOfflineNoteV2 => audit_offline_note_v2_payload(instruction),
         ExplorerInstructionKind::Custom => custom_payload(instruction),
     }
     .unwrap_or_else(|| fallback_structured_payload(instruction))
@@ -1063,11 +1128,124 @@ fn log_payload(instruction: &InstructionBox) -> Option<Value> {
     Some(instruction_variant_value("Log", value))
 }
 
+fn issue_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<IssueOfflineNoteV2>()?;
+    let issue = &isi.issue;
+    let mut value = Map::new();
+    value.insert(
+        "note_commitment".to_string(),
+        Value::String(issue.note_commitment.to_string()),
+    );
+    value.insert(
+        "account".to_string(),
+        Value::String(issue.key_certificate.account_id.to_string()),
+    );
+    value.insert(
+        "asset".to_string(),
+        json::to_value(&issue.asset).unwrap_or(Value::Null),
+    );
+    value.insert(
+        "amount".to_string(),
+        Value::String(issue.amount.to_string()),
+    );
+    Some(instruction_variant_value(
+        "IssueOfflineNoteV2",
+        Value::Object(value),
+    ))
+}
+
+fn redeem_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<RedeemOfflineNoteV2>()?;
+    let redemption = &isi.redemption;
+    let mut value = Map::new();
+    value.insert(
+        "source_note_commitment".to_string(),
+        Value::String(redemption.source_note_commitment.to_string()),
+    );
+    value.insert(
+        "recipient".to_string(),
+        Value::String(redemption.recipient.to_string()),
+    );
+    value.insert(
+        "asset".to_string(),
+        json::to_value(&redemption.asset).unwrap_or(Value::Null),
+    );
+    value.insert(
+        "amount".to_string(),
+        Value::String(redemption.amount.to_string()),
+    );
+    value.insert(
+        "input_nullifier_count".to_string(),
+        Value::Number((redemption.input_nullifiers.len() as u64).into()),
+    );
+    Some(instruction_variant_value(
+        "RedeemOfflineNoteV2",
+        Value::Object(value),
+    ))
+}
+
+fn audit_offline_note_v2_payload(instruction: &InstructionBox) -> Option<Value> {
+    let isi = instruction.as_any().downcast_ref::<AuditOfflineNoteV2>()?;
+    let audit = &isi.audit;
+    let mut value = Map::new();
+    value.insert(
+        "token_id".to_string(),
+        Value::String(audit.token_id.to_string()),
+    );
+    value.insert(
+        "account".to_string(),
+        Value::String(audit.sender_key_certificate.account_id.to_string()),
+    );
+    value.insert(
+        "input_nullifier_count".to_string(),
+        Value::Number((audit.input_nullifiers.len() as u64).into()),
+    );
+    value.insert(
+        "input_claim_count".to_string(),
+        Value::Number((audit.input_claims.len() as u64).into()),
+    );
+    value.insert(
+        "output_commitment_count".to_string(),
+        Value::Number((audit.output_commitments.len() as u64).into()),
+    );
+    Some(instruction_variant_value(
+        "AuditOfflineNoteV2",
+        Value::Object(value),
+    ))
+}
+
 fn custom_payload(instruction: &InstructionBox) -> Option<Value> {
     let custom = instruction.as_any().downcast_ref::<CustomInstruction>()?;
     let parsed = json::parse_value(custom.payload.get())
         .unwrap_or_else(|_| Value::String(custom.payload.get().clone()));
     Some(instruction_variant_value("Custom", parsed))
+}
+
+fn zk_payload(instruction: &InstructionBox, variant: &'static str) -> Option<Value> {
+    match variant {
+        "Shield" => {
+            let shield = instruction.as_any().downcast_ref::<Shield>()?;
+            Some(instruction_variant_value(
+                "Shield",
+                json::to_value(shield).ok()?,
+            ))
+        }
+        "ZkTransfer" => {
+            let transfer = instruction.as_any().downcast_ref::<ZkTransfer>()?;
+            Some(instruction_variant_value(
+                "ZkTransfer",
+                json::to_value(transfer).ok()?,
+            ))
+        }
+        "Unshield" => {
+            let unshield = instruction.as_any().downcast_ref::<Unshield>()?;
+            Some(instruction_variant_value(
+                "Unshield",
+                json::to_value(unshield).ok()?,
+            ))
+        }
+        _ => None,
+    }
 }
 
 fn instruction_variant_value(variant: &str, value: Value) -> Value {
@@ -1085,8 +1263,57 @@ fn encode_norito_hex_prefixed<T: Encode>(value: &T) -> String {
 fn executable_label(executable: &Executable) -> &'static str {
     match executable {
         Executable::Instructions(_) => "Instructions",
+        Executable::ContractCall(_) => "ContractCall",
         Executable::Ivm(_) => "Ivm",
         Executable::IvmProved(_) => "IvmProved",
+    }
+}
+
+fn usize_to_value(value: usize) -> Value {
+    Value::Number(u64::try_from(value).unwrap_or(u64::MAX).into())
+}
+
+fn executable_payload(executable: &Executable) -> Value {
+    match executable {
+        Executable::Instructions(instructions) => {
+            let mut map = Map::new();
+            map.insert(
+                "instruction_count".to_string(),
+                usize_to_value(instructions.len()),
+            );
+            Value::Object(map)
+        }
+        Executable::ContractCall(invocation) => {
+            norito::json::to_value(invocation).unwrap_or(Value::Null)
+        }
+        Executable::Ivm(bytecode) => {
+            let mut map = Map::new();
+            map.insert(
+                "bytecode_len".to_string(),
+                usize_to_value(bytecode.size_bytes()),
+            );
+            Value::Object(map)
+        }
+        Executable::IvmProved(proved) => {
+            let mut map = Map::new();
+            map.insert(
+                "bytecode_len".to_string(),
+                usize_to_value(proved.bytecode.size_bytes()),
+            );
+            map.insert(
+                "overlay_count".to_string(),
+                usize_to_value(proved.overlay.len()),
+            );
+            map.insert(
+                "events_commitment".to_string(),
+                Value::String(proved.events_commitment.to_string()),
+            );
+            map.insert(
+                "gas_policy_commitment".to_string(),
+                Value::String(proved.gas_policy_commitment.to_string()),
+            );
+            Value::Object(map)
+        }
     }
 }
 
@@ -1160,6 +1387,7 @@ pub(crate) fn transaction_detail_dto(
                 json: norito::json::to_value(reason).unwrap_or(Value::Null),
                 message: format_rejection_reason_message(reason),
             }),
+        executable_payload: executable_payload(tx.instructions()),
         metadata: metadata_to_json(tx.metadata()),
         nonce: tx.nonce().map(|nonce| nonce.get().into()),
         signature: hex::encode(tx.signature().payload().payload()),
@@ -1290,10 +1518,10 @@ where
 {
     let mut items = Vec::new();
     for definition in definitions {
-        if let Some(domain) = domain_filter {
-            if definition.id().domain() != domain {
-                continue;
-            }
+        if let Some(domain) = domain_filter
+            && definition.id().try_domain() != Some(domain)
+        {
+            continue;
         }
         if let Some(owner) = owner_filter {
             if definition.owned_by() != owner {
@@ -1373,6 +1601,35 @@ where
     ExplorerNftsPage { pagination, items }
 }
 
+pub(crate) fn rwas_page<'world, I>(
+    rwas: I,
+    owned_by: Option<&AccountId>,
+    domain_filter: Option<&DomainId>,
+    page: u64,
+    per_page: u64,
+) -> ExplorerRwasPage
+where
+    I: IntoIterator<Item = RwaEntry<'world>>,
+{
+    let mut items = Vec::new();
+    for rwa in rwas {
+        if let Some(owner) = owned_by {
+            if rwa.value().owned_by != *owner {
+                continue;
+            }
+        }
+        if let Some(domain) = domain_filter {
+            if rwa.id().domain() != domain {
+                continue;
+            }
+        }
+        items.push(ExplorerRwaDto::from_entry(rwa));
+    }
+    items.sort_by(|lhs, rhs| lhs.id.cmp(&rhs.id));
+    let (items, pagination) = paginate(items, page, per_page);
+    ExplorerRwasPage { pagination, items }
+}
+
 pub(crate) fn block_created_at(duration: Duration) -> String {
     duration_to_rfc3339(duration)
 }
@@ -1408,9 +1665,13 @@ mod tests {
         domain::DomainId,
         isi::{Register, Transfer},
         metadata::Metadata,
+        nexus::DataSpaceId,
         nft::{NftData, NftId},
+        rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
+        smart_contract::ContractAddress,
         transaction::{
             error::TransactionRejectionReason,
+            executable::{ContractInvocation, Executable},
             signed::{TransactionBuilder, TransactionResultInner},
         },
         trigger::DataTriggerSequence,
@@ -1460,9 +1721,10 @@ mod tests {
 
     #[test]
     fn domain_dto_reflects_counts() {
-        let mut domain =
-            iroha_data_model::domain::Domain::new(DomainId::from_str("test").expect("domain name"))
-                .build(&ALICE_ID);
+        let mut domain = iroha_data_model::domain::Domain::new(
+            DomainId::try_new("test", "universal").expect("domain name"),
+        )
+        .build(&ALICE_ID);
         domain.metadata_mut().insert(
             "label".parse().unwrap(),
             json::Value::String("value".into()),
@@ -1480,9 +1742,52 @@ mod tests {
     }
 
     #[test]
+    fn account_dto_omits_redundant_i105_address_field() {
+        let details = Owned::new(AccountDetails::new(
+            Metadata::default(),
+            None,
+            None,
+            Vec::new(),
+        ));
+        let account_id = ALICE_ID.clone();
+        let entry = Ref::new(&account_id, &details);
+        let dto = ExplorerAccountDto::from_entry(
+            entry,
+            AccountCounters {
+                domains: 1,
+                assets: 2,
+                nfts: 3,
+            },
+        );
+        let expected_id = account_id.to_string();
+
+        assert_eq!(dto.id, expected_id);
+        assert_eq!(
+            dto.network_prefix,
+            iroha_data_model::account::address::chain_discriminant()
+        );
+        assert_eq!(dto.owned_domains, 1);
+        assert_eq!(dto.owned_assets, 2);
+        assert_eq!(dto.owned_nfts, 3);
+
+        let payload = norito::json::to_value(&dto).expect("dto json");
+        let object = payload
+            .as_object()
+            .expect("dto should serialize as an object");
+        assert_eq!(
+            object.get("id").and_then(Value::as_str),
+            Some(expected_id.as_str())
+        );
+        assert!(
+            !object.contains_key("i105_address"),
+            "explorer account detail should not emit redundant i105_address"
+        );
+    }
+
+    #[test]
     fn asset_definition_dto_contains_metadata() {
         let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let mut definition = {
@@ -1513,7 +1818,7 @@ mod tests {
     #[test]
     fn asset_dto_formats_value() {
         let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(def_id, ALICE_ID.clone());
@@ -1527,7 +1832,7 @@ mod tests {
 
     #[test]
     fn nft_dto_includes_metadata() {
-        let nft_id: NftId = "rose$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "rose$wonderland.universal".parse().expect("nft id");
         let mut data = NftData {
             content: Metadata::default(),
             owned_by: ALICE_ID.clone(),
@@ -1686,7 +1991,7 @@ mod tests {
             isi::error::InstructionExecutionError::Repetition(isi::error::RepetitionError {
                 instruction: isi::InstructionType::Register,
                 id: iroha_data_model::IdBox::DomainId(
-                    DomainId::from_str("acme").expect("domain id"),
+                    DomainId::try_new("acme", "universal").expect("domain id"),
                 ),
             }),
         ));
@@ -1709,9 +2014,47 @@ mod tests {
     }
 
     #[test]
+    fn transaction_detail_includes_contract_call_payload() {
+        let chain: ChainId = "test-chain".parse().expect("valid chain id");
+        let contract_address = ContractAddress::derive(0, &ALICE_ID, 1, DataSpaceId::UNIVERSAL)
+            .expect("contract address");
+        let mut payload = Map::new();
+        payload.insert("amount".to_string(), Value::Number(5_u64.into()));
+        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
+            .with_executable(Executable::ContractCall(ContractInvocation {
+                contract_address: contract_address.clone(),
+                entrypoint: "contribute".to_string(),
+                payload: Some(iroha_primitives::json::Json::new(Value::Object(payload))),
+            }))
+            .sign(ALICE_KEYPAIR.private_key());
+        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let dto = transaction_detail_dto(&tx, 9, &result);
+
+        assert_eq!(dto.executable, "ContractCall");
+        match dto.executable_payload {
+            Value::Object(map) => {
+                assert_eq!(
+                    map.get("contract_address").and_then(Value::as_str),
+                    Some(contract_address.as_ref())
+                );
+                assert_eq!(
+                    map.get("entrypoint").and_then(Value::as_str),
+                    Some("contribute")
+                );
+                let payload = map
+                    .get("payload")
+                    .and_then(Value::as_object)
+                    .expect("contract call payload should be serialized as object");
+                assert_eq!(payload.get("amount").and_then(Value::as_u64), Some(5));
+            }
+            other => panic!("unexpected executable payload: {other:?}"),
+        }
+    }
+
+    #[test]
     fn accounts_page_filters_by_domain_and_definition() {
         let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let mut aggregates = ExplorerAggregates::default();
@@ -1751,7 +2094,8 @@ mod tests {
         ));
         let alice_id = ALICE_ID.clone();
         let bob_id = BOB_ID.clone();
-        let domain_filter: DomainId = "wonderland".parse().expect("domain id");
+        let domain_filter: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
         aggregates
             .account_domains
             .entry(alice_id.clone())
@@ -1779,11 +2123,11 @@ mod tests {
     #[test]
     fn assets_page_filters_by_owner_and_definition() {
         let rose_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let lily_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "lily".parse().unwrap(),
         );
         let alice_asset_id = AssetId::new(rose_def.clone(), ALICE_ID.clone());
@@ -1823,7 +2167,7 @@ mod tests {
     #[test]
     fn assets_page_filters_by_asset_id() {
         let rose_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let alice_asset_id = AssetId::new(rose_def.clone(), ALICE_ID.clone());
@@ -1848,8 +2192,10 @@ mod tests {
 
     #[test]
     fn nfts_page_filters_by_owner_and_domain() {
-        let nft_alpha: NftId = "alpha$wonderland".parse().expect("nft id");
-        let nft_beta: NftId = "beta$garden_of_live_flowers".parse().expect("nft id");
+        let nft_alpha: NftId = "alpha$wonderland.universal".parse().expect("nft id");
+        let nft_beta: NftId = "beta$garden_of_live_flowers.universal"
+            .parse()
+            .expect("nft id");
         let mut alpha_data = NftData {
             content: Metadata::default(),
             owned_by: ALICE_ID.clone(),
@@ -1893,9 +2239,99 @@ mod tests {
     }
 
     #[test]
+    fn rwas_page_filters_by_owner_and_domain() {
+        let rwa_alpha: RwaId = format!(
+            "{}$wonderland.universal",
+            iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
+        )
+        .parse()
+        .expect("rwa id");
+        let rwa_alpha_parent: RwaId = format!(
+            "{}$wonderland.universal",
+            iroha_crypto::Hash::prehashed([9; iroha_crypto::Hash::LENGTH])
+        )
+        .parse()
+        .expect("rwa parent id");
+        let rwa_beta: RwaId = format!(
+            "{}$garden_of_live_flowers.universal",
+            iroha_crypto::Hash::prehashed([8; iroha_crypto::Hash::LENGTH])
+        )
+        .parse()
+        .expect("rwa id");
+
+        let mut alpha_data = RwaData {
+            quantity: "10".parse().unwrap(),
+            spec: iroha_primitives::numeric::NumericSpec::integer(),
+            primary_reference: "https://example.test/rwa/alpha".to_owned(),
+            status: Some("vaulted".parse().unwrap()),
+            metadata: Metadata::default(),
+            parents: vec![RwaParentRef::new(
+                rwa_alpha_parent.clone(),
+                "4".parse().unwrap(),
+            )],
+            controls: RwaControlPolicy::default(),
+            owned_by: ALICE_ID.clone(),
+            is_frozen: false,
+            held_quantity: Numeric::zero(),
+        };
+        alpha_data.metadata.insert(
+            "series".parse().unwrap(),
+            json::Value::String("alpha".into()),
+        );
+        let alpha_value = Owned::new(alpha_data);
+        let beta_value = Owned::new(RwaData {
+            quantity: "6".parse().unwrap(),
+            spec: iroha_primitives::numeric::NumericSpec::integer(),
+            primary_reference: "https://example.test/rwa/beta".to_owned(),
+            status: None,
+            metadata: Metadata::default(),
+            parents: Vec::new(),
+            controls: RwaControlPolicy::default(),
+            owned_by: BOB_ID.clone(),
+            is_frozen: true,
+            held_quantity: "2".parse().unwrap(),
+        });
+
+        let owner_page = rwas_page(
+            vec![
+                Ref::new(&rwa_alpha, &alpha_value),
+                Ref::new(&rwa_beta, &beta_value),
+            ],
+            Some(&*ALICE_ID),
+            None,
+            1,
+            10,
+        );
+        assert_eq!(owner_page.items.len(), 1);
+        assert_eq!(owner_page.items[0].id, rwa_alpha.to_string());
+        assert_eq!(owner_page.items[0].parents.len(), 1);
+        assert_eq!(
+            owner_page.items[0].parents[0].rwa,
+            rwa_alpha_parent.to_string()
+        );
+        assert_eq!(owner_page.items[0].parents[0].quantity, "4");
+
+        let domain_filter = rwa_beta.domain().clone();
+        let domain_page = rwas_page(
+            vec![
+                Ref::new(&rwa_alpha, &alpha_value),
+                Ref::new(&rwa_beta, &beta_value),
+            ],
+            None,
+            Some(&domain_filter),
+            1,
+            10,
+        );
+        assert_eq!(domain_page.items.len(), 1);
+        assert_eq!(domain_page.items[0].id, rwa_beta.to_string());
+        assert_eq!(domain_page.items[0].held_quantity, "2");
+        assert!(domain_page.items[0].is_frozen);
+    }
+
+    #[test]
     fn instruction_kind_classifies_register_and_transfer() {
         let register = Register::domain(iroha_data_model::domain::Domain::new(
-            "test".parse().expect("domain id"),
+            DomainId::try_new("test", "universal").expect("domain id"),
         ));
         let register_box: InstructionBox = register.into();
         assert_eq!(
@@ -1904,7 +2340,7 @@ mod tests {
         );
 
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
@@ -1972,7 +2408,7 @@ mod tests {
     #[test]
     fn instruction_box_dto_wraps_payload_and_encoded() {
         let register = Register::domain(iroha_data_model::domain::Domain::new(
-            "payload".parse().expect("domain id"),
+            DomainId::try_new("payload", "universal").expect("domain id"),
         ));
         let instruction: InstructionBox = register.into();
         let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Register);
@@ -2033,7 +2469,7 @@ mod tests {
     #[test]
     fn instruction_dto_carries_index() {
         let register = Register::domain(iroha_data_model::domain::Domain::new(
-            "index_test".parse().expect("domain id"),
+            DomainId::try_new("index_test", "universal").expect("domain id"),
         ));
         let instruction = InstructionBox::from(register);
         let chain: ChainId = "test-chain".parse().expect("chain id");

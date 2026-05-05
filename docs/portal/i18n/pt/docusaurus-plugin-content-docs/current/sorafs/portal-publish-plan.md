@@ -68,7 +68,7 @@ Defina `${SUBMITTED_EPOCH}` como a epoca de consenso mais recente (de
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
 TORII_URL="https://torii.stg.sora.net/"
-AUTHORITY="i105..."
+AUTHORITY="<i105-account-id>"
 KEY_FILE="secrets/docs-admin.key"
 ALIAS_PROOF="secrets/docs.alias.proof"
 SUBMITTED_EPOCH="$(curl -s ${TORII_URL}/v1/status | jq '.sumeragi.epoch')"

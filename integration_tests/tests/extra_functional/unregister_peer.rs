@@ -9,7 +9,7 @@ use iroha::{
     client::Client,
     data_model::{isi::register::RegisterPeerWithPop, parameter::BlockParameter, prelude::*},
 };
-use iroha_test_network::{NetworkBuilder, NetworkPeer};
+use iroha_test_network::{NetworkBuilder, NetworkPeer, ensure_domain_registration_lease};
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;
 use tokio::{
@@ -42,8 +42,9 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     let client = network.client();
 
     let (account, _account_keypair) = gen_account_in("domain");
-    let domain_id: DomainId = "domain".parse()?;
-    let asset_def: AssetDefinitionId = AssetDefinitionId::new("domain".parse()?, "xor".parse()?);
+    let domain_id: DomainId = DomainId::try_new("domain", "universal")?;
+    let asset_def: AssetDefinitionId =
+        AssetDefinitionId::new(DomainId::try_new("domain", "universal")?, "xor".parse()?);
     // Register a new peer early to keep the pre-join block history short.
     let new_peer = NetworkPeer::builder().build(network.env());
     let new_peer_id = new_peer.id();
@@ -106,6 +107,22 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     {
         return Ok(());
     }
+    let mut lease_clients: Vec<_> = network.peers().iter().map(NetworkPeer::client).collect();
+    lease_clients.push(new_peer_client.clone());
+    run_blocking_with_timeout(
+        {
+            let domain_id = domain_id.clone();
+            move || {
+                for client in lease_clients {
+                    ensure_domain_registration_lease(&client, &domain_id)?;
+                }
+                Ok(())
+            }
+        },
+        tx_timeout,
+        "network_stable_after_add_and_after_remove_peer register bootstrap lease",
+    )
+    .await?;
     run_blocking_with_timeout(
         {
             let client = client.clone();
@@ -116,7 +133,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
                 client
                     .submit_all::<InstructionBox>([
                         Register::domain(Domain::new(domain_id.clone())).into(),
-                        Register::account(Account::new(account.to_account_id(domain_id))).into(),
+                        Register::account(Account::new(account.clone())).into(),
                         Register::asset_definition({
                             let __asset_definition_id = asset_def;
                             AssetDefinition::numeric(__asset_definition_id.clone())

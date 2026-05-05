@@ -8,9 +8,10 @@ use norito::codec::{Decode, Encode};
 use tracing::warn;
 
 use crate::config::{
-    ChaosConfig, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT, FaultArgs, FaultToggles,
-    IzanamiArgs, WorkloadProfile,
+    ChaosConfig, DEFAULT_PROGRESS_INTERVAL, DEFAULT_PROGRESS_TIMEOUT,
+    DEFAULT_SHUTDOWN_DRAIN_TIMEOUT, FaultArgs, FaultToggles, IzanamiArgs, WorkloadProfile,
 };
+use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
 
 const APP_DIR: &str = "izanami";
 const CONFIG_FILE: &str = "config.bin";
@@ -23,6 +24,8 @@ struct StoredArgs {
     seed: Option<u64>,
     tps: f64,
     max_inflight: u32,
+    #[norito(default = "default_submitters")]
+    submitters: u32,
     #[norito(default)]
     workload_profile: u8,
     #[norito(default)]
@@ -41,8 +44,20 @@ struct StoredArgs {
     progress_interval_ms: u64,
     #[norito(default = "default_progress_timeout_ms")]
     progress_timeout_ms: u64,
+    #[norito(default = "default_shutdown_drain_timeout_ms")]
+    shutdown_drain_timeout_ms: u64,
     #[norito(default)]
     latency_p95_threshold_ms: Option<u64>,
+    #[norito(default)]
+    fault_window_start_ms: Option<u64>,
+    #[norito(default)]
+    fault_window_end_ms: Option<u64>,
+    #[norito(default = "default_packet_loss_percent")]
+    packet_loss_percent: u8,
+    #[norito(default)]
+    prebuild_tx_buffer: u32,
+    #[norito(default)]
+    prebuild_tx_workers: u32,
 }
 
 fn workload_profile_to_u8(profile: WorkloadProfile) -> u8 {
@@ -80,6 +95,19 @@ fn default_progress_timeout_ms() -> u64 {
         .expect("default progress timeout should fit into u64")
 }
 
+fn default_shutdown_drain_timeout_ms() -> u64 {
+    u64::try_from(DEFAULT_SHUTDOWN_DRAIN_TIMEOUT.as_millis())
+        .expect("default shutdown drain timeout should fit into u64")
+}
+
+fn default_submitters() -> u32 {
+    1
+}
+
+fn default_packet_loss_percent() -> u8 {
+    DEFAULT_NETWORK_PACKET_LOSS_PERCENT
+}
+
 impl StoredArgs {
     fn from_args(args: &IzanamiArgs) -> Result<Self> {
         let peers = u32::try_from(args.peers)
@@ -90,12 +118,31 @@ impl StoredArgs {
         let pipeline_time_ms = maybe_duration_to_ms(args.pipeline_time, "pipeline time")?;
         let progress_interval_ms = duration_to_ms(args.progress_interval, "progress interval")?;
         let progress_timeout_ms = duration_to_ms(args.progress_timeout, "progress timeout")?;
+        let shutdown_drain_timeout_ms =
+            duration_to_ms(args.shutdown_drain_timeout, "shutdown drain timeout")?;
         let latency_p95_threshold_ms =
             maybe_duration_to_ms(args.latency_p95_threshold, "latency p95 threshold")?;
+        let fault_window_start_ms =
+            maybe_duration_to_ms(args.fault_window_start, "fault window start")?;
+        let fault_window_end_ms = maybe_duration_to_ms(args.fault_window_end, "fault window end")?;
         let max_inflight = u32::try_from(args.max_inflight).map_err(|_| {
             eyre!(
                 "max_inflight {} exceeds persistence limits",
                 args.max_inflight
+            )
+        })?;
+        let submitters = u32::try_from(args.submitters)
+            .map_err(|_| eyre!("submitters {} exceeds persistence limits", args.submitters))?;
+        let prebuild_tx_buffer = u32::try_from(args.prebuild_tx_buffer).map_err(|_| {
+            eyre!(
+                "prebuild_tx_buffer {} exceeds persistence limits",
+                args.prebuild_tx_buffer
+            )
+        })?;
+        let prebuild_tx_workers = u32::try_from(args.prebuild_tx_workers).map_err(|_| {
+            eyre!(
+                "prebuild_tx_workers {} exceeds persistence limits",
+                args.prebuild_tx_workers
             )
         })?;
         let fault_min_ms = duration_to_ms(args.fault_interval_min, "fault interval min")?;
@@ -107,6 +154,9 @@ impl StoredArgs {
             seed: args.seed,
             tps: args.tps,
             max_inflight,
+            submitters,
+            prebuild_tx_buffer,
+            prebuild_tx_workers,
             workload_profile: workload_profile_to_u8(args.workload_profile),
             allow_contract_deploy_in_stable: args.allow_contract_deploy_in_stable,
             log_filter: args.log_filter.clone(),
@@ -119,7 +169,11 @@ impl StoredArgs {
             target_blocks: args.target_blocks,
             progress_interval_ms,
             progress_timeout_ms,
+            shutdown_drain_timeout_ms,
             latency_p95_threshold_ms,
+            fault_window_start_ms,
+            fault_window_end_ms,
+            packet_loss_percent: args.packet_loss_percent,
         })
     }
 
@@ -136,17 +190,25 @@ impl StoredArgs {
             target_blocks: self.target_blocks,
             progress_interval: Duration::from_millis(self.progress_interval_ms),
             progress_timeout: Duration::from_millis(self.progress_timeout_ms),
+            shutdown_drain_timeout: Duration::from_millis(self.shutdown_drain_timeout_ms),
             latency_p95_threshold: self.latency_p95_threshold_ms.map(Duration::from_millis),
+            fault_window_start: self.fault_window_start_ms.map(Duration::from_millis),
+            fault_window_end: self.fault_window_end_ms.map(Duration::from_millis),
             seed: self.seed,
             tps: self.tps,
             max_inflight: self.max_inflight as usize,
+            submitters: self.submitters as usize,
+            prebuild_tx_buffer: self.prebuild_tx_buffer as usize,
+            prebuild_tx_workers: self.prebuild_tx_workers as usize,
             workload_profile: workload_profile_from_u8(self.workload_profile),
             allow_contract_deploy_in_stable: self.allow_contract_deploy_in_stable,
             log_filter: self.log_filter,
             fault_interval_min: to_duration(self.fault_min_ms)?,
             fault_interval_max: to_duration(self.fault_max_ms)?,
             faults: FaultArgs::from(fault_toggles),
+            packet_loss_percent: self.packet_loss_percent.min(100),
             nexus: self.nexus,
+            diagnostic_dir: None,
         })
     }
 }
@@ -217,9 +279,39 @@ pub fn store_config(config: &ChaosConfig) -> Result<()> {
     store_args(&IzanamiArgs::from_config(config))
 }
 
+#[cfg(test)]
+mod portable_tests {
+    use super::*;
+
+    #[test]
+    fn stored_args_roundtrip_preserves_fault_window_fields() -> Result<()> {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.fault_window_start = Some(Duration::from_secs(133));
+        args.fault_window_end = Some(Duration::from_secs(266));
+        args.shutdown_drain_timeout = Duration::from_secs(60);
+        args.prebuild_tx_buffer = 1024;
+        args.prebuild_tx_workers = 4;
+
+        let loaded = StoredArgs::from_args(&args)?.into_args()?;
+
+        assert_eq!(loaded.fault_window_start, args.fault_window_start);
+        assert_eq!(loaded.fault_window_end, args.fault_window_end);
+        assert_eq!(loaded.shutdown_drain_timeout, args.shutdown_drain_timeout);
+        assert_eq!(loaded.prebuild_tx_buffer, args.prebuild_tx_buffer);
+        assert_eq!(loaded.prebuild_tx_workers, args.prebuild_tx_workers);
+        Ok(())
+    }
+}
+
 #[cfg(all(unix, target_os = "linux"))]
 mod tests {
-    use std::{env, fs, os::unix::fs::PermissionsExt, path::PathBuf};
+    use std::{
+        env, fs,
+        os::unix::fs::PermissionsExt,
+        path::PathBuf,
+        sync::{Mutex as StdMutex, OnceLock},
+    };
 
     use super::*;
 
@@ -255,6 +347,11 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn env_lock() -> &'static StdMutex<()> {
+        static ENV_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| StdMutex::new(()))
     }
 
     fn readonly_dir(label: &str) -> Result<PathBuf> {
@@ -300,6 +397,7 @@ mod tests {
 
     #[test]
     fn store_args_skips_permission_denied() -> Result<()> {
+        let _env_lock = env_lock().lock().expect("env lock");
         let dir = readonly_dir("perm-store")?;
         let _guard = EnvGuard::set("XDG_CONFIG_HOME", dir.to_string_lossy().as_ref());
 
@@ -312,6 +410,7 @@ mod tests {
 
     #[test]
     fn load_args_skips_permission_denied() -> Result<()> {
+        let _env_lock = env_lock().lock().expect("env lock");
         let dir = env::temp_dir().join(format!("izanami-perm-load-{}", std::process::id()));
         fs::create_dir_all(&dir)?;
         let config_dir = dir.join(APP_DIR);
@@ -335,6 +434,7 @@ mod tests {
 
     #[test]
     fn store_and_load_roundtrip_persists_progress_settings() -> Result<()> {
+        let _env_lock = env_lock().lock().expect("env lock");
         let dir = temp_config_dir("roundtrip")?;
         let _guard = EnvGuard::set("XDG_CONFIG_HOME", dir.to_string_lossy().as_ref());
 
@@ -348,22 +448,34 @@ mod tests {
             target_blocks: Some(42),
             progress_interval: Duration::from_secs(7),
             progress_timeout: Duration::from_secs(55),
+            shutdown_drain_timeout: Duration::from_secs(19),
             latency_p95_threshold: Some(Duration::from_millis(900)),
+            fault_window_start: Some(Duration::from_secs(13)),
+            fault_window_end: Some(Duration::from_secs(26)),
             seed: Some(123),
             tps: 12.5,
             max_inflight: 64,
+            submitters: 3,
+            prebuild_tx_buffer: 2048,
+            prebuild_tx_workers: 6,
             workload_profile: WorkloadProfile::Chaos,
             allow_contract_deploy_in_stable: true,
             log_filter: "debug".to_string(),
             fault_interval_min: Duration::from_secs(3),
             fault_interval_max: Duration::from_secs(9),
             faults: FaultArgs {
+                crash_restart: true,
+                wipe_storage: false,
+                spam_invalid_transactions: true,
                 network_latency: false,
                 network_partition: true,
+                network_packet_loss: true,
                 cpu_stress: false,
                 disk_saturation: true,
             },
+            packet_loss_percent: 50,
             nexus: true,
+            diagnostic_dir: None,
         };
 
         store_args(&args)?;
@@ -377,10 +489,16 @@ mod tests {
         assert_eq!(loaded.target_blocks, args.target_blocks);
         assert_eq!(loaded.progress_interval, args.progress_interval);
         assert_eq!(loaded.progress_timeout, args.progress_timeout);
+        assert_eq!(loaded.shutdown_drain_timeout, args.shutdown_drain_timeout);
         assert_eq!(loaded.latency_p95_threshold, args.latency_p95_threshold);
+        assert_eq!(loaded.fault_window_start, args.fault_window_start);
+        assert_eq!(loaded.fault_window_end, args.fault_window_end);
         assert_eq!(loaded.seed, args.seed);
         assert_eq!(loaded.tps, args.tps);
         assert_eq!(loaded.max_inflight, args.max_inflight);
+        assert_eq!(loaded.submitters, args.submitters);
+        assert_eq!(loaded.prebuild_tx_buffer, args.prebuild_tx_buffer);
+        assert_eq!(loaded.prebuild_tx_workers, args.prebuild_tx_workers);
         assert_eq!(loaded.workload_profile, args.workload_profile);
         assert_eq!(
             loaded.allow_contract_deploy_in_stable,
@@ -393,6 +511,7 @@ mod tests {
             loaded.faults.to_toggles().bits(),
             args.faults.to_toggles().bits()
         );
+        assert_eq!(loaded.packet_loss_percent, args.packet_loss_percent);
         assert_eq!(loaded.nexus, args.nexus);
 
         let _ = fs::remove_dir_all(&dir);
@@ -401,6 +520,7 @@ mod tests {
 
     #[test]
     fn load_args_defaults_missing_progress_fields() -> Result<()> {
+        let _env_lock = env_lock().lock().expect("env lock");
         let dir = temp_config_dir("legacy")?;
         let _guard = EnvGuard::set("XDG_CONFIG_HOME", dir.to_string_lossy().as_ref());
 
@@ -436,6 +556,9 @@ mod tests {
         assert_eq!(loaded.seed, legacy.seed);
         assert_eq!(loaded.tps, legacy.tps);
         assert_eq!(loaded.max_inflight, legacy.max_inflight as usize);
+        assert_eq!(loaded.submitters, 1);
+        assert_eq!(loaded.prebuild_tx_buffer, 0);
+        assert_eq!(loaded.prebuild_tx_workers, 0);
         assert_eq!(loaded.workload_profile, WorkloadProfile::Stable);
         assert!(!loaded.allow_contract_deploy_in_stable);
         assert_eq!(loaded.log_filter, legacy.log_filter);
@@ -446,7 +569,15 @@ mod tests {
         assert_eq!(loaded.target_blocks, None);
         assert_eq!(loaded.progress_interval, DEFAULT_PROGRESS_INTERVAL);
         assert_eq!(loaded.progress_timeout, DEFAULT_PROGRESS_TIMEOUT);
+        assert_eq!(
+            loaded.shutdown_drain_timeout,
+            DEFAULT_SHUTDOWN_DRAIN_TIMEOUT
+        );
         assert_eq!(loaded.latency_p95_threshold, None);
+        assert_eq!(
+            loaded.packet_loss_percent,
+            DEFAULT_NETWORK_PACKET_LOSS_PERCENT
+        );
 
         let _ = fs::remove_dir_all(&dir);
         Ok(())

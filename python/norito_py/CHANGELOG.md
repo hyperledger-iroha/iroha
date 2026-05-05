@@ -1,6 +1,11 @@
 # Changelog
 
 ## v0.1.0 (unreleased)
+- Revalidated parity after the Rust Norito accelerator-output hardening now
+  rejects malformed Stage-1 structural tapes and invalid GPU zstd output
+  lengths before consuming helper results; Python bindings required no
+  implementation changes beyond rerunning the parity suite because these are
+  internal Rust-side safety checks.
 - Revalidated parity after the Rust Norito enum named-variant self-delimiting decode fix; Python bindings required no code changes beyond rerunning the parity suite.
 - Revalidated parity after the Rust Norito GPU zstd loader wrapped its CUDA
   symbol lookups in explicit `unsafe {}` blocks to satisfy the Rust 2024

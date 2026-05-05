@@ -15,7 +15,7 @@ use iroha_data_model::{
     fastpq::{
         FastpqOperationKind, FastpqPublicInputs, FastpqRolePermissionDelta, FastpqStateTransition,
         FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript,
-        TransferTranscript, TransferTranscriptBundle,
+        TransferTranscript, TransferTranscriptBundle, normalized_numeric_to_u64,
     },
     role::{Role, RoleId},
 };
@@ -68,8 +68,8 @@ impl FastpqPublicInputsTemplate {
 /// Errors that can occur while mapping transfer transcripts into FASTPQ transition batches.
 #[derive(Debug, Error)]
 pub enum TranscriptBatchError {
-    /// Encountered a Numeric value that cannot be encoded as a 64-bit little-endian integer.
-    #[error("numeric value `{value}` exceeds the supported 64-bit integer range or is fractional")]
+    /// Encountered a Numeric value that cannot be normalized into FASTPQ witness units.
+    #[error("numeric value `{value}` cannot be normalized into 64-bit FASTPQ witness units")]
     NumericEncoding {
         /// Numeric value that fell outside the FASTPQ prover's supported range.
         value: Numeric,
@@ -123,7 +123,7 @@ pub fn public_inputs_template_from_block(
     let old_root = crate::sumeragi::exec::parent_state_from_witness(witness);
     let new_root = crate::sumeragi::exec::post_state_from_witness(witness);
     FastpqPublicInputsTemplate {
-        dsid: dataspace_id_bytes(DataSpaceId::GLOBAL),
+        dsid: dataspace_id_bytes(DataSpaceId::UNIVERSAL),
         slot,
         old_root: old_root.into(),
         new_root: new_root.into(),
@@ -315,10 +315,11 @@ fn push_transfer_delta(
 ) -> Result<(), TranscriptBatchError> {
     let from_key = balance_key(&delta.asset_definition, &delta.from_account);
     let to_key = balance_key(&delta.asset_definition, &delta.to_account);
-    let from_pre = encode_numeric_le(delta.from_balance_before.clone())?;
-    let from_post = encode_numeric_le(delta.from_balance_after.clone())?;
-    let to_pre = encode_numeric_le(delta.to_balance_before.clone())?;
-    let to_post = encode_numeric_le(delta.to_balance_after.clone())?;
+    let target_scale = delta.normalized_scale();
+    let from_pre = encode_numeric_le(&delta.from_balance_before, target_scale)?;
+    let from_post = encode_numeric_le(&delta.from_balance_after, target_scale)?;
+    let to_pre = encode_numeric_le(&delta.to_balance_before, target_scale)?;
+    let to_post = encode_numeric_le(&delta.to_balance_after, target_scale)?;
 
     batch.push(StateTransition::new(
         from_key,
@@ -339,11 +340,12 @@ fn balance_key(asset: &AssetDefinitionId, account: &AccountId) -> Vec<u8> {
     format!("asset/{asset}/{account}").into_bytes()
 }
 
-fn encode_numeric_le(value: Numeric) -> Result<Vec<u8>, TranscriptBatchError> {
-    let integer: u64 = match value.clone().try_into() {
-        Ok(v) => v,
-        Err(_) => return Err(TranscriptBatchError::NumericEncoding { value }),
-    };
+fn encode_numeric_le(value: &Numeric, target_scale: u32) -> Result<Vec<u8>, TranscriptBatchError> {
+    let integer = normalized_numeric_to_u64(value, target_scale).ok_or_else(|| {
+        TranscriptBatchError::NumericEncoding {
+            value: value.clone(),
+        }
+    })?;
     Ok(integer.to_le_bytes().to_vec())
 }
 
@@ -554,6 +556,7 @@ mod tests {
             BlockHeader,
             consensus::{ExecKv, ExecWitness},
         },
+        domain::DomainId,
         fastpq::{TransferTranscript, TransferTranscriptBundle},
         permission::Permission,
         role::{Role, RoleId},
@@ -569,14 +572,14 @@ mod tests {
         let digest = authority_digest(&ALICE_ID);
         assert_eq!(
             hex::encode(digest.as_ref()),
-            "0ab8515c63c9d51963d14006b34946e5d7cba4788f0b33c0f6d275bfdd81f42f"
+            "c03a53264d90b3d5825626599268d2ad8a2016f42730ee80d7b9f63b83c42989"
         );
     }
 
     #[test]
     fn poseidon_digest_matches_known_vector() {
         let asset = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let delta = TransferDeltaTranscript {
@@ -595,7 +598,7 @@ mod tests {
         let digest = poseidon_preimage_digest(&delta, &batch_hash);
         assert_eq!(
             hex::encode(digest.as_ref()),
-            "349a52ad3a452c8ad7cb0e21df495d76b683d77d9dc021a470aedff2418e0801"
+            "a3d862221d5d238c9a8e97f978b75431c6f44adef6debffb3b6baeb741aeac01"
         );
     }
 
@@ -674,7 +677,7 @@ mod tests {
         let perm_root = [0x11; 32];
         let template = public_inputs_template_from_block(&header, &witness, perm_root);
         let mut expected_dsid = [0u8; 16];
-        expected_dsid[..8].copy_from_slice(&DataSpaceId::GLOBAL.as_u64().to_le_bytes());
+        expected_dsid[..8].copy_from_slice(&DataSpaceId::UNIVERSAL.as_u64().to_le_bytes());
         assert_eq!(template.dsid, expected_dsid);
         assert_eq!(template.slot, 123_000_000);
         assert_eq!(template.perm_root, perm_root);
@@ -767,16 +770,92 @@ mod tests {
     }
 
     #[test]
-    fn batch_from_transcripts_rejects_fractional_values() {
+    fn batch_from_transcripts_normalizes_mixed_scale_values() {
         let mut transcript = sample_transcript();
-        transcript.deltas[0].from_balance_before = Numeric::try_new(15, 1).unwrap();
-        let err = batch_from_transcripts(
+        transcript.deltas[0].amount = Numeric::new(5, 1);
+        transcript.deltas[0].from_balance_before = Numeric::new(1, 0);
+        transcript.deltas[0].from_balance_after = Numeric::new(5, 1);
+        transcript.deltas[0].to_balance_before = Numeric::new(0, 0);
+        transcript.deltas[0].to_balance_after = Numeric::new(5, 1);
+        let batch = batch_from_transcripts(
             "fastpq-lane-balanced",
             sample_public_inputs(),
             [&transcript],
         )
-        .unwrap_err();
-        assert!(matches!(err, TranscriptBatchError::NumericEncoding { .. }));
+        .expect("batch");
+        let sender_row = batch
+            .transitions
+            .iter()
+            .find(|row| {
+                row.key
+                    == balance_key(
+                        &transcript.deltas[0].asset_definition,
+                        &transcript.deltas[0].from_account,
+                    )
+            })
+            .expect("sender row");
+        let receiver_row = batch
+            .transitions
+            .iter()
+            .find(|row| {
+                row.key
+                    == balance_key(
+                        &transcript.deltas[0].asset_definition,
+                        &transcript.deltas[0].to_account,
+                    )
+            })
+            .expect("receiver row");
+
+        assert_eq!(decode_le(&sender_row.pre_value), 10);
+        assert_eq!(decode_le(&sender_row.post_value), 5);
+        assert_eq!(decode_le(&receiver_row.pre_value), 0);
+        assert_eq!(decode_le(&receiver_row.post_value), 5);
+    }
+
+    #[test]
+    fn batch_from_transcripts_trims_padded_balance_scale() {
+        let mut transcript = sample_transcript();
+        transcript.deltas[0].amount = Numeric::new(11, 3);
+        transcript.deltas[0].from_balance_before =
+            Numeric::new(120_000_000_000_000_000_000_000_i128, 18);
+        transcript.deltas[0].from_balance_after =
+            Numeric::new(119_999_989_000_000_000_000_000_i128, 18);
+        transcript.deltas[0].to_balance_before = Numeric::zero();
+        transcript.deltas[0].to_balance_after = Numeric::new(11_000_000_000_000_000_i128, 18);
+
+        let batch = batch_from_transcripts(
+            FASTPQ_CANONICAL_PARAMETER_SET,
+            sample_public_inputs(),
+            [&transcript],
+        )
+        .expect("batch");
+        let sender_row = batch
+            .transitions
+            .iter()
+            .find(|row| {
+                row.key
+                    == balance_key(
+                        &transcript.deltas[0].asset_definition,
+                        &transcript.deltas[0].from_account,
+                    )
+            })
+            .expect("sender row");
+        let receiver_row = batch
+            .transitions
+            .iter()
+            .find(|row| {
+                row.key
+                    == balance_key(
+                        &transcript.deltas[0].asset_definition,
+                        &transcript.deltas[0].to_account,
+                    )
+            })
+            .expect("receiver row");
+
+        assert_eq!(decode_le(&sender_row.pre_value), 120_000_000);
+        assert_eq!(decode_le(&sender_row.post_value), 119_999_989);
+        assert_eq!(decode_le(&receiver_row.pre_value), 0);
+        assert_eq!(decode_le(&receiver_row.post_value), 11);
     }
 
     #[test]
@@ -961,7 +1040,7 @@ mod tests {
 
     fn sample_transcript() -> TransferTranscript {
         let asset = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         TransferTranscript {

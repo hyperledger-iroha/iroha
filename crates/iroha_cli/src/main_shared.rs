@@ -18,15 +18,15 @@ mod json_utils;
 mod jurisdiction;
 mod list_support;
 mod nexus;
-mod offline;
 mod runtime;
 mod soracloud;
 mod space_directory;
 mod staking;
 mod subscriptions;
 mod sumeragi;
+mod taira;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
-use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
+use clap::{ArgAction, CommandFactory, FromArgMatches, error::ErrorKind};
 use iroha_i18n::{Bundle, Localizer, detect_language};
 use iroha_version::BuildLine;
 use std::{
@@ -44,8 +44,9 @@ use futures::{TryStreamExt, stream::TryStream};
 use iroha::{
     client::Client,
     config::{Config, LoadPath},
-    data_model::{account::ScopedAccountId, prelude::*, transaction::IvmBytecode},
+    data_model::{prelude::*, transaction::IvmBytecode},
 };
+use iroha::data_model::account::address::ChainDiscriminantGuard;
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_crypto::{Algorithm, KeyPair};
 use std::num::NonZeroU64;
@@ -66,6 +67,51 @@ const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
 fn build_line() -> BuildLine {
     BuildLine::from_bin_name(env!("CARGO_BIN_NAME"))
 }
+
+fn validate_executable_metadata(executable: &Executable, metadata: &Metadata) -> Result<()> {
+    if !executable.requires_transaction_gas_limit() {
+        return Ok(());
+    }
+    iroha::data_model::transaction::require_transaction_gas_limit(metadata)
+        .map(|_| ())
+        .map_err(|err| eyre!(format_gas_limit_validation_error(executable, err)))
+}
+
+fn format_gas_limit_validation_error(
+    executable: &Executable,
+    err: iroha::data_model::transaction::TransactionGasLimitError,
+) -> String {
+    let executable_label = match executable {
+        Executable::Instructions(_) => "instruction transactions",
+        Executable::ContractCall(_) => "contract-call transactions",
+        Executable::Ivm(_) | Executable::IvmProved(_) => "IVM transactions",
+    };
+    match err {
+        iroha::data_model::transaction::TransactionGasLimitError::Missing => {
+            if matches!(executable, Executable::Ivm(_) | Executable::IvmProved(_)) {
+                format!(
+                    "{executable_label} require transaction metadata `gas_limit`; pass `--gas-limit <u64>` or `--metadata <json>` with `{{\"gas_limit\": <positive u64>}}`"
+                )
+            } else {
+                format!(
+                    "{executable_label} require transaction metadata `gas_limit`; pass `--metadata <json>` with `{{\"gas_limit\": <positive u64>}}`"
+                )
+            }
+        }
+        iroha::data_model::transaction::TransactionGasLimitError::Invalid(source) => {
+            format!("invalid transaction metadata `gas_limit` for {executable_label}: {source}")
+        }
+        iroha::data_model::transaction::TransactionGasLimitError::Zero => {
+            format!("transaction metadata `gas_limit` for {executable_label} must be positive")
+        }
+    }
+}
+
+fn apply_cli_gas_limit_override(metadata: &mut Metadata, gas_limit: Option<u64>) {
+    if let Some(gas_limit) = gas_limit {
+        iroha::data_model::transaction::insert_transaction_gas_limit(metadata, gas_limit);
+    }
+}
 /// Norito JSON derive macros exported for CLI data definitions.
 pub mod json_macros {
     pub use norito::derive::{FastJsonWrite, JsonDeserialize, JsonSerialize};
@@ -78,6 +124,81 @@ pub enum CliOutputFormat {
     Json,
     /// Emit human-readable text when available.
     Text,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransactionWaitTerminalStatusArg {
+    Queued,
+    Approved,
+    Committed,
+    Applied,
+    Rejected,
+    Expired,
+}
+
+impl From<TransactionWaitTerminalStatusArg> for iroha::client::TransactionWaitTerminalStatus {
+    fn from(value: TransactionWaitTerminalStatusArg) -> Self {
+        match value {
+            TransactionWaitTerminalStatusArg::Queued => Self::Queued,
+            TransactionWaitTerminalStatusArg::Approved => Self::Approved,
+            TransactionWaitTerminalStatusArg::Committed => Self::Committed,
+            TransactionWaitTerminalStatusArg::Applied => Self::Applied,
+            TransactionWaitTerminalStatusArg::Rejected => Self::Rejected,
+            TransactionWaitTerminalStatusArg::Expired => Self::Expired,
+        }
+    }
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub(crate) struct TransactionWaitArgs {
+    /// Poll `/v1/pipeline/transactions/status` until the transaction reaches a stop state.
+    #[arg(long)]
+    pub wait: bool,
+    /// Maximum time to wait before failing.
+    #[arg(long, default_value_t = 30_000, requires = "wait")]
+    pub timeout_ms: u64,
+    /// Poll interval used while waiting.
+    #[arg(long, default_value_t = 500, requires = "wait")]
+    pub poll_interval_ms: u64,
+    /// Stop when the pipeline reaches any of these statuses. Applied, rejected, and expired always stop.
+    #[arg(
+        long = "terminal-status",
+        value_enum,
+        action = ArgAction::Append,
+        requires = "wait"
+    )]
+    pub terminal_statuses: Vec<TransactionWaitTerminalStatusArg>,
+}
+
+impl TransactionWaitArgs {
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.wait
+    }
+
+    pub(crate) fn to_options(&self) -> Result<iroha::client::TransactionWaitOptions> {
+        if self.poll_interval_ms == 0 {
+            eyre::bail!("--poll-interval-ms must be greater than 0");
+        }
+
+        Ok(iroha::client::TransactionWaitOptions {
+            timeout: Duration::from_millis(self.timeout_ms),
+            poll_interval: Duration::from_millis(self.poll_interval_ms),
+            terminal_statuses: self
+                .terminal_statuses
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+        })
+    }
+}
+
+pub(crate) fn wait_for_transaction_status(
+    client: &Client,
+    hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
+    wait: &TransactionWaitArgs,
+) -> Result<iroha::client::TransactionWaitOutcome> {
+    client.wait_for_transaction_terminal_status(hash, wait.to_options()?)
 }
 
 /// Iroha Client CLI provides a simple way to interact with the Iroha Web API.
@@ -99,14 +220,14 @@ struct Args {
     ///
     /// Example usage:
     ///
-    /// `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "aid:2f17c72466f84a4bb8a8e24884fdcd2f" --name "USD" --scale 0`
+    /// `echo "[]" | iroha -io domain register --id "domain" | iroha -i asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0`
     #[arg(short, long)]
     input: bool,
     /// Outputs instructions to stdout without submitting them.
     ///
     /// Example usage:
     ///
-    /// `iroha -o domain register --id "domain" | iroha -io asset definition register --id "aid:2f17c72466f84a4bb8a8e24884fdcd2f" --name "USD" --scale 0 | iroha transaction stdin`
+    /// `iroha -o domain register --id "domain" | iroha -io asset definition register --id "66owaQmAQMuHxPzxUN3bqZ6FJfDa" --name "USD" --scale 0 | iroha transaction stdin`
     #[arg(short, long)]
     output: bool,
     /// Output format for command responses.
@@ -125,21 +246,30 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum Command {
+    /// Canonical account reads and account mutations
+    #[command(subcommand)]
+    Account(account::Command),
+    /// Typed transaction status and transaction helpers
+    #[command(subcommand, alias = "transaction")]
+    Tx(transaction::Command),
     /// Ledger data and transaction helpers
     #[command(subcommand)]
     Ledger(ledger::Command),
     /// Node and operator helpers
     #[command(subcommand)]
     Ops(ops::Command),
-    /// Inspect offline allowances and offline-to-online bundles
-    #[command(subcommand)]
-    Offline(crate::offline::Command),
     /// App API helpers and product tooling
     #[command(subcommand)]
     App(app::Command),
+    /// Contract app bundles, deploys, calls, and alias tooling
+    #[command(subcommand, alias = "contracts")]
+    Contract(crate::contracts::Command),
     /// Developer utilities and diagnostics
     #[command(subcommand)]
     Tools(tools::Command),
+    /// SORA Taira public testnet diagnostics and canaries
+    #[command(subcommand)]
+    Taira(taira::Command),
 }
 
 /// Context inside which commands run
@@ -161,6 +291,10 @@ trait RunContext {
     fn print_data<T>(&mut self, data: &T) -> Result<()>
     where
         T: JsonSerialize + ?Sized;
+
+    fn println_data(&mut self, data: impl Display) -> Result<()> {
+        self.println(data)
+    }
 
     fn println(&mut self, data: impl Display) -> Result<()>;
 
@@ -226,6 +360,14 @@ trait RunContext {
     ) -> Result<()> {
         let executable = instructions.into();
         let executable = match executable {
+            Executable::ContractCall(invocation) => {
+                if self.input_instructions() || self.output_instructions() {
+                    eyre::bail!(
+                        "Incompatible `--input` `--output` flags with contract-call executables"
+                    )
+                }
+                Executable::ContractCall(invocation)
+            }
             Executable::Ivm(bytecode) => {
                 if self.input_instructions() || self.output_instructions() {
                     eyre::bail!(
@@ -256,6 +398,7 @@ trait RunContext {
                 Executable::Instructions(out.into())
             }
         };
+        validate_executable_metadata(&executable, &metadata)?;
         let client = self.client_from_config();
         let transaction = client.build_transaction(executable, metadata);
         let i18n = self.i18n().clone();
@@ -365,6 +508,11 @@ impl<W: std::io::Write, E: std::io::Write> RunContext for PrintJsonContext<W, E>
         }
         Ok(())
     }
+
+    fn println_data(&mut self, data: impl Display) -> Result<()> {
+        writeln!(&mut self.write, "{data}")?;
+        Ok(())
+    }
 }
 
 /// Runs command
@@ -380,11 +528,14 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         use Command::*;
         match self {
+            Account(variant) => Run::run(variant, context),
+            Tx(variant) => Run::run(variant, context),
             Ledger(variant) => Run::run(variant, context),
             Ops(variant) => Run::run(variant, context),
-            Offline(variant) => Run::run(variant, context),
             App(variant) => Run::run(variant, context),
+            Contract(variant) => Run::run(variant, context),
             Tools(variant) => Run::run(variant, context),
+            Taira(variant) => Run::run(variant, context),
         }
     }
 }
@@ -406,6 +557,9 @@ mod ledger {
         /// Read and write NFTs
         #[command(subcommand)]
         Nft(crate::nft::Command),
+        /// Read and write RWA lots
+        #[command(subcommand)]
+        Rwa(crate::rwa::Command),
         /// Read and write peers
         #[command(subcommand)]
         Peer(crate::peer::Command),
@@ -441,6 +595,7 @@ mod ledger {
                 Account(variant) => Run::run(variant, context),
                 Asset(variant) => Run::run(variant, context),
                 Nft(variant) => Run::run(variant, context),
+                Rwa(variant) => Run::run(variant, context),
                 Peer(variant) => Run::run(variant, context),
                 Role(variant) => Run::run(variant, context),
                 Parameter(variant) => Run::run(variant, context),
@@ -460,9 +615,6 @@ mod ops {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
-        /// Inspect offline allowances and offline-to-online bundles
-        #[command(subcommand)]
-        Offline(crate::offline::Command),
         /// Read and write the executor
         #[command(subcommand)]
         Executor(crate::executor::Command),
@@ -488,7 +640,6 @@ mod ops {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
             match self {
-                Offline(variant) => Run::run(variant, context),
                 Executor(variant) => Run::run(variant, context),
                 Runtime(variant) => Run::run(variant, context),
                 Sumeragi(variant) => Run::run(variant, context),
@@ -548,7 +699,7 @@ mod app {
         /// Compute lane simulation helpers
         #[command(subcommand)]
         Compute(crate::compute::Command),
-        /// Soracloud deployment/control-plane simulation helpers
+        /// Soracloud deployment/control-plane helpers
         #[command(subcommand)]
         Soracloud(crate::soracloud::Command),
         /// Social incentive helpers (viral follow rewards and escrows)
@@ -621,9 +772,6 @@ mod tools {
         /// Account address helpers (canonical I105 conversions)
         #[command(subcommand)]
         Address(crate::address::Command),
-        /// Canonical ID encoders
-        #[command(subcommand)]
-        Encode(encode::Command),
         /// Cryptography helpers (SM2/SM3/SM4)
         #[command(subcommand)]
         Crypto(crate::crypto::Command),
@@ -641,62 +789,10 @@ mod tools {
             use self::Command::*;
             match self {
                 Address(variant) => Run::run(variant, context),
-                Encode(variant) => Run::run(variant, context),
                 Crypto(variant) => Run::run(variant, context),
                 Ivm(variant) => Run::run(variant, context),
                 MarkdownHelp(variant) => Run::run(variant, context),
                 Version(variant) => Run::run(variant, context),
-            }
-        }
-    }
-
-    mod encode {
-        use super::*;
-        use iroha::data_model::asset::{AssetDefinitionAlias, AssetDefinitionId};
-
-        #[derive(clap::Subcommand, Debug)]
-        pub enum Command {
-            /// Encode a canonical asset id (`norito:<hex>`)
-            AssetId(AssetId),
-        }
-
-        impl Run for Command {
-            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-                match self {
-                    Command::AssetId(args) => args.run(context),
-                }
-            }
-        }
-
-        #[derive(clap::Args, Debug)]
-        pub struct AssetId {
-            /// Canonical asset definition id (`aid:<32-lower-hex-no-dash>`)
-            #[arg(long, conflicts_with = "alias")]
-            pub definition: Option<AssetDefinitionId>,
-            /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
-            #[arg(long, conflicts_with = "definition")]
-            pub alias: Option<AssetDefinitionAlias>,
-            /// Canonical I105 account literal receiving the asset bucket.
-            #[arg(long)]
-            pub account: String,
-        }
-
-        impl AssetId {
-            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-                let account = resolve_account_id(context, &self.account)
-                    .wrap_err("failed to resolve --account")?;
-                let definition = match (self.definition, self.alias) {
-                    (Some(definition), None) => definition,
-                    (None, Some(alias)) => {
-                        let client = context.client_from_config();
-                        resolve_asset_definition_id_by_alias(&client, &alias)?
-                    }
-                    _ => eyre::bail!(
-                        "provide either `--definition aid:...` or `--alias <name>#<domain>@<dataspace>|<name>#<dataspace>`"
-                    ),
-                };
-                let asset_id = iroha::data_model::asset::AssetId::new(definition, account);
-                context.print_data(&asset_id.canonical_encoded())
             }
         }
     }
@@ -929,6 +1025,8 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
         context.transaction_metadata = Some(metadata);
     }
 
+    let _account_chain_discriminant =
+        ChainDiscriminantGuard::enter(context.config.account_chain_discriminant);
     args.command
         .run(&mut context)
         .into_report()
@@ -1088,6 +1186,7 @@ pub(crate) fn fallback_config() -> Config {
     Config {
         chain,
         account,
+        account_chain_discriminant: defaults::common::chain_discriminant(),
         key_pair,
         basic_auth: None,
         torii_api_url: Url::parse("http://127.0.0.1:8080/").expect("fallback url"),
@@ -1098,6 +1197,7 @@ pub(crate) fn fallback_config() -> Config {
         torii_api_version: defaults::torii::API_DEFAULT_VERSION.to_string(),
         torii_api_min_proof_version: defaults::torii::API_MIN_PROOF_VERSION.to_string(),
         connect_queue_root: iroha::config::default_connect_queue_root(),
+        soracloud_http_witness_file: None,
         sorafs_alias_cache: alias_cache,
         sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
         sorafs_rollout_phase: SorafsRolloutPhase::Default,
@@ -1117,6 +1217,10 @@ fn config_to_json(config: &Config) -> Result<norito::json::Value> {
     json_utils::json_object(vec![
         ("chain", json_utils::json_value(&config.chain)?),
         ("account", json_utils::json_value(&config.account)?),
+        (
+            "account_chain_discriminant",
+            json_utils::json_value(&config.account_chain_discriminant)?,
+        ),
         ("key_pair", json_utils::json_value(&config.key_pair)?),
         ("basic_auth", json_utils::json_value(&config.basic_auth)?),
         (
@@ -1138,6 +1242,10 @@ fn config_to_json(config: &Config) -> Result<norito::json::Value> {
         (
             "transaction_add_nonce",
             json_utils::json_value(&config.transaction_add_nonce)?,
+        ),
+        (
+            "soracloud_http_witness_file",
+            json_utils::json_value(&config.soracloud_http_witness_file)?,
         ),
     ])
 }
@@ -1284,6 +1392,21 @@ mod filter {
 
     impl NftFilter {
         pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Nft>> {
+            FilterArgs::new(self.predicate, self.options)
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct RwaFilter {
+        /// Filtering condition specified as a JSON string
+        #[arg(value_parser = parse_json::<CompoundPredicate<Rwa>>)]
+        predicate: CompoundPredicate<Rwa>,
+        #[command(flatten)]
+        options: CommonArgs,
+    }
+
+    impl RwaFilter {
+        pub fn into_list_args(self) -> FilterArgs<CompoundPredicate<Rwa>> {
             FilterArgs::new(self.predicate, self.options)
         }
     }
@@ -1591,7 +1714,7 @@ mod domain {
     #[derive(clap::Args, Debug)]
     pub struct Transfer {
         /// Domain name
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_domain_id_literal)]
         pub id: DomainId,
         /// Source account identifier (canonical I105 literal)
         #[arg(short, long)]
@@ -1604,7 +1727,7 @@ mod domain {
     #[derive(clap::Args, Debug)]
     pub struct Id {
         /// Domain name
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_domain_id_literal)]
         pub id: DomainId,
     }
 
@@ -1714,23 +1837,21 @@ mod account {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
                     let client = context.client_from_config();
-                    let entries = client
-                        .query(FindAccounts)
-                        .execute_all()
+                    let entry = client
+                        .get_account_read(&account_id)
                         .wrap_err("Failed to get account")?;
-                    let entry = entries
-                        .into_iter()
-                        .find(|e| e.id() == &account_id)
-                        .ok_or_else(|| eyre!("Account not found"))?;
                     context.print_data(&entry)
                 }
                 Register(args) => {
-                    let account_id = parse_register_account_id(&args.id, &args.domain)?;
+                    let account_id = parse_register_account_id(&args.id)?;
                     let instruction =
                         iroha::data_model::isi::Register::account(Account::new(account_id));
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to register account")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed([instruction])
+                    } else {
+                        context.finish([instruction])
+                    };
+                    submit.wrap_err("Failed to register account")
                 }
                 Unregister(args) => {
                     let account_id = resolve_account_id(context, &args.id)
@@ -1805,9 +1926,9 @@ mod account {
         /// List account permissions
         List(PermissionList),
         /// Grant an account permission using JSON input from stdin
-        Grant(Id),
+        Grant(PermissionId),
         /// Revoke an account permission using JSON input from stdin
-        Revoke(Id),
+        Revoke(PermissionId),
     }
 
     impl Run for PermissionCommand {
@@ -1839,9 +1960,12 @@ mod account {
                         .wrap_err("failed to resolve --id account")?;
                     let instruction =
                         iroha::data_model::isi::Grant::account_permission(permission, account_id);
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to grant the permission to the account")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed([instruction])
+                    } else {
+                        context.finish([instruction])
+                    };
+                    submit.wrap_err("Failed to grant the permission to the account")
                 }
                 Revoke(args) => {
                     let permission: Permission = parse_json_stdin(context)?;
@@ -1849,9 +1973,12 @@ mod account {
                         .wrap_err("failed to resolve --id account")?;
                     let instruction =
                         iroha::data_model::isi::Revoke::account_permission(permission, account_id);
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to revoke the permission from the account")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed([instruction])
+                    } else {
+                        context.finish([instruction])
+                    };
+                    submit.wrap_err("Failed to revoke the permission from the account")
                 }
             }
         }
@@ -1865,13 +1992,23 @@ mod account {
     }
 
     #[derive(clap::Args, Debug)]
-    pub struct RegisterId {
-        /// Canonical domainless account identifier for registration (canonical I105 literal)
+    pub struct PermissionId {
+        /// Account identifier (canonical I105 literal)
         #[arg(short, long)]
         id: String,
-        /// Domain in which to materialize the account link
-        #[arg(short = 'd', long)]
-        domain: DomainId,
+        /// Submit without waiting for confirmation
+        #[arg(long)]
+        no_wait: bool,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct RegisterId {
+        /// Canonical global account identifier for registration (canonical I105 literal)
+        #[arg(short, long)]
+        id: String,
+        /// Submit without waiting for confirmation.
+        #[arg(long)]
+        no_wait: bool,
     }
 
     #[derive(clap::Args, Debug)]
@@ -1928,7 +2065,7 @@ mod account {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
             match self {
-                List::All(args) => list_all(context, client.query(FindAccounts), &args),
+                List::All(args) => list_all(context, &client, &args),
                 List::Filter(filter) => {
                     let (predicate, common) = filter.into_list_args().decompose();
                     let builder = client.query(FindAccounts).filter(predicate);
@@ -1942,15 +2079,24 @@ mod account {
 
     fn list_all<C: RunContext>(
         context: &mut C,
-        builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindAccounts, Account>,
+        client: &Client,
         args: &crate::list_support::AllArgs,
     ) -> Result<()> {
-        let builder = apply_common_args(builder, &args.common)?;
-        let entries = builder.execute_all()?;
-        if args.verbose {
-            context.print_data(&entries)
+        if args.verbose
+            || args.common.select.is_some()
+            || args.common.sort_by_metadata_key.is_some()
+        {
+            let builder = apply_common_args(client.query(FindAccounts), &args.common)?;
+            let entries = builder.execute_all()?;
+            if args.verbose {
+                context.print_data(&entries)
+            } else {
+                let ids: Vec<_> = entries.into_iter().map(|e| e.id().clone()).collect();
+                context.print_data(&ids)
+            }
         } else {
-            let ids: Vec<_> = entries.into_iter().map(|e| e.id().clone()).collect();
+            let builder = apply_common_id_args(client.query(FindAccountIds), &args.common)?;
+            let ids = builder.execute_all()?;
             context.print_data(&ids)
         }
     }
@@ -1979,6 +2125,32 @@ mod account {
         if let Some(sel) = common.select.as_deref() {
             let tuple = crate::list_support::parse_selector_tuple::<Account>(sel)?;
             builder = builder.with_selector_tuple(tuple);
+        }
+        Ok(builder)
+    }
+
+    fn apply_common_id_args<'a>(
+        builder: iroha::data_model::query::builder::QueryBuilder<
+            'a,
+            Client,
+            FindAccountIds,
+            AccountId,
+        >,
+        common: &'a crate::list_support::CommonArgs,
+    ) -> Result<
+        iroha::data_model::query::builder::QueryBuilder<'a, Client, FindAccountIds, AccountId>,
+    > {
+        use iroha::data_model::query::parameters::{FetchSize, Pagination};
+        use std::num::NonZeroU64;
+
+        let mut builder = builder;
+        if common.limit.is_some() || common.offset > 0 {
+            let pagination = Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
+            builder = builder.with_pagination(pagination);
+        }
+        if let Some(n) = common.fetch_size.and_then(NonZeroU64::new) {
+            let fs = FetchSize::new(Some(n));
+            builder = builder.with_fetch_size(fs);
         }
         Ok(builder)
     }
@@ -2079,9 +2251,12 @@ mod asset {
                         .wrap_err("failed to resolve asset identifier")?;
                     let instruction =
                         iroha::data_model::isi::Mint::asset_numeric(args.quantity, id);
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to mint numeric asset")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed([instruction])
+                    } else {
+                        context.finish([instruction])
+                    };
+                    submit.wrap_err("Failed to mint numeric asset")
                 }
                 Burn(args) => {
                     let id = args
@@ -2089,9 +2264,12 @@ mod asset {
                         .wrap_err("failed to resolve asset identifier")?;
                     let instruction =
                         iroha::data_model::isi::Burn::asset_numeric(args.quantity, id);
-                    context
-                        .finish([instruction])
-                        .wrap_err("Failed to burn numeric asset")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed([instruction])
+                    } else {
+                        context.finish([instruction])
+                    };
+                    submit.wrap_err("Failed to burn numeric asset")
                 }
                 Transfer(args) => {
                     let id = args
@@ -2108,9 +2286,12 @@ mod asset {
 
                     let instructions =
                         asset_transfer_instructions(id, &args, &to, policy.as_ref())?;
-                    context
-                        .finish(instructions)
-                        .wrap_err("Failed to transfer numeric asset")
+                    let submit = if args.no_wait {
+                        context.finish_unconfirmed(instructions)
+                    } else {
+                        context.finish(instructions)
+                    };
+                    submit.wrap_err("Failed to transfer numeric asset")
                 }
             }
         }
@@ -2118,24 +2299,31 @@ mod asset {
 
     fn resolve_asset_id_components<C: RunContext>(
         context: &C,
-        id: Option<AssetId>,
+        definition: Option<AssetDefinitionId>,
         definition_alias: Option<AssetDefinitionAlias>,
         account: Option<String>,
+        scope: Option<iroha::data_model::asset::AssetBalanceScope>,
     ) -> Result<AssetId> {
-        if let Some(id) = id {
-            return Ok(id);
-        }
         let account =
-            account.ok_or_else(|| eyre!("`--account` must be provided when `--id` is omitted"))?;
+            account.ok_or_else(|| eyre!("`--account` must be provided with asset selectors"))?;
         let account =
             resolve_account_id(context, &account).wrap_err("failed to resolve --account")?;
-        if let Some(alias) = definition_alias {
-            let client = context.client_from_config();
-            let definition = resolve_asset_definition_id_by_alias(&client, &alias)?;
-            return Ok(AssetId::new(definition, account));
-        }
-        Err(eyre!(
-            "`--definition-alias` must be provided when `--id` is omitted"
+        let definition = match (definition, definition_alias) {
+            (Some(definition), None) => definition,
+            (None, Some(alias)) => {
+                let client = context.client_from_config();
+                resolve_asset_definition_id_by_alias(&client, &alias)?
+            }
+            _ => {
+                eyre::bail!(
+                    "provide either `--definition <base58-asset-definition-id>` or `--definition-alias <name>#<domain>.<dataspace>|<name>#<dataspace>`"
+                )
+            }
+        };
+        Ok(AssetId::with_scope(
+            definition,
+            account,
+            scope.unwrap_or(iroha::data_model::asset::AssetBalanceScope::Global),
         ))
     }
 
@@ -2265,8 +2453,8 @@ mod asset {
 
         #[derive(clap::Args, Debug)]
         pub struct Register {
-            /// Asset definition identifier (`aid:<32-lower-hex-no-dash>`)
-            #[arg(short, long, value_parser = parse_asset_definition_aid_literal)]
+            /// Asset definition identifier (unprefixed Base58 address)
+            #[arg(short, long, value_parser = parse_asset_definition_literal)]
             pub id: AssetDefinitionId,
             /// Human-readable asset name.
             #[arg(long)]
@@ -2274,14 +2462,14 @@ mod asset {
             /// Optional human-readable description.
             #[arg(long)]
             pub description: Option<String>,
-            /// Optional explicit alias literal (`<name>#<domain>@<dataspace>` or
+            /// Optional explicit alias literal (`<name>#<domain>.<dataspace>` or
             /// `<name>#<dataspace>`).
             #[arg(long, conflicts_with_all = ["alias_domain", "alias_dataspace"])]
             pub alias: Option<AssetDefinitionAlias>,
-            /// Optional alias owner/domain segment used to build `<name>#<domain>@<dataspace>`.
+            /// Optional alias owner/domain segment used to build `<name>#<domain>.<dataspace>`.
             #[arg(long, requires = "alias_dataspace", conflicts_with = "alias")]
             pub alias_domain: Option<Name>,
-            /// Optional alias dataspace segment used to build `<name>#<domain>@<dataspace>` or
+            /// Optional alias dataspace segment used to build `<name>#<domain>.<dataspace>` or
             /// `<name>#<dataspace>`.
             #[arg(long, conflicts_with = "alias")]
             pub alias_dataspace: Option<Name>,
@@ -2314,10 +2502,10 @@ mod asset {
 
         #[derive(clap::Args, Debug)]
         pub struct Transfer {
-            /// Asset definition identifier (`aid:<32-lower-hex-no-dash>`).
-            #[arg(short, long, value_parser = parse_asset_definition_aid_literal, required_unless_present = "alias", conflicts_with = "alias")]
+            /// Asset definition identifier (unprefixed Base58 address).
+            #[arg(short, long, value_parser = parse_asset_definition_literal, required_unless_present = "alias", conflicts_with = "alias")]
             pub id: Option<AssetDefinitionId>,
-            /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+            /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
             #[arg(long, required_unless_present = "id", conflicts_with = "id")]
             pub alias: Option<AssetDefinitionAlias>,
             /// Source account identifier (canonical I105 literal)
@@ -2330,10 +2518,10 @@ mod asset {
 
         #[derive(clap::Args, Debug)]
         pub struct Id {
-            /// Asset definition identifier (`aid:<32-lower-hex-no-dash>`).
-            #[arg(short, long, value_parser = parse_asset_definition_aid_literal, required_unless_present = "alias", conflicts_with = "alias")]
+            /// Asset definition identifier (unprefixed Base58 address).
+            #[arg(short, long, value_parser = parse_asset_definition_literal, required_unless_present = "alias", conflicts_with = "alias")]
             pub id: Option<AssetDefinitionId>,
-            /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+            /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
             #[arg(long, required_unless_present = "id", conflicts_with = "id")]
             pub alias: Option<AssetDefinitionAlias>,
         }
@@ -2502,9 +2690,9 @@ mod asset {
 
             fn base_register_args() -> Register {
                 Register {
-                    id: "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
-                        .parse()
-                        .expect("valid id"),
+                    id: AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").expect("domain"),
+                        "rose".parse().expect("asset name"),
+                    ),
                     name: "Rose".to_owned(),
                     description: None,
                     alias: None,
@@ -2566,7 +2754,7 @@ mod asset {
                 let alias = register_alias_from_args(&args)
                     .expect("alias should derive")
                     .expect("alias should be present");
-                assert_eq!(alias.as_ref(), "Rose#issuer@main");
+                assert_eq!(alias.as_ref(), "Rose#issuer.main");
             }
 
             #[test]
@@ -2584,16 +2772,19 @@ mod asset {
 
     #[derive(clap::Args, Debug)]
     pub struct Transfer {
-        /// Encoded asset identifier (`norito:<hex>`).
-        #[arg(short, long, value_parser = parse_asset_id_literal, conflicts_with_all = ["definition_alias", "account"])]
-        pub id: Option<AssetId>,
-        /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used
+        /// Canonical asset definition id (unprefixed Base58 address) used with `--account`.
+        #[arg(long, requires = "account", conflicts_with = "definition_alias")]
+        pub definition: Option<AssetDefinitionId>,
+        /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used
         /// with `--account`.
-        #[arg(long, requires = "account", conflicts_with = "id")]
+        #[arg(long, requires = "account", conflicts_with = "definition")]
         pub definition_alias: Option<AssetDefinitionAlias>,
-        /// Source account identifier (canonical I105), required with `--definition-alias`.
-        #[arg(long, conflicts_with = "id")]
+        /// Source account identifier (canonical I105), required with asset selectors.
+        #[arg(long)]
         pub account: Option<String>,
+        /// Optional balance scope (`global` or `dataspace:<id>`).
+        #[arg(long, value_parser = parse_asset_balance_scope_literal)]
+        pub scope: Option<iroha::data_model::asset::AssetBalanceScope>,
         /// Destination account identifier (canonical I105 literal)
         #[arg(short, long)]
         pub to: String,
@@ -2603,46 +2794,59 @@ mod asset {
         /// Attempt to register the destination when implicit receive is disabled.
         #[arg(long)]
         pub ensure_destination: bool,
+        /// Submit without waiting for confirmation.
+        #[arg(long)]
+        pub no_wait: bool,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct Id {
-        /// Encoded asset identifier (`norito:<hex>`).
-        #[arg(short, long, value_parser = parse_asset_id_literal, conflicts_with_all = ["definition_alias", "account"])]
-        pub id: Option<AssetId>,
-        /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used
+        /// Canonical asset definition id (unprefixed Base58 address) used with `--account`.
+        #[arg(long, requires = "account", conflicts_with = "definition_alias")]
+        pub definition: Option<AssetDefinitionId>,
+        /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used
         /// with `--account`.
-        #[arg(long, requires = "account", conflicts_with = "id")]
+        #[arg(long, requires = "account", conflicts_with = "definition")]
         pub definition_alias: Option<AssetDefinitionAlias>,
-        /// Account identifier (canonical I105), required with `--definition-alias`.
-        #[arg(long, conflicts_with = "id")]
+        /// Account identifier (canonical I105), required with asset selectors.
+        #[arg(long)]
         pub account: Option<String>,
+        /// Optional balance scope (`global` or `dataspace:<id>`).
+        #[arg(long, value_parser = parse_asset_balance_scope_literal)]
+        pub scope: Option<iroha::data_model::asset::AssetBalanceScope>,
     }
 
     #[derive(clap::Args, Debug)]
     pub struct IdQuantity {
-        /// Encoded asset identifier (`norito:<hex>`).
-        #[arg(short, long, value_parser = parse_asset_id_literal, conflicts_with_all = ["definition_alias", "account"])]
-        pub id: Option<AssetId>,
-        /// Asset definition alias (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`) used
+        /// Canonical asset definition id (unprefixed Base58 address) used with `--account`.
+        #[arg(long, requires = "account", conflicts_with = "definition_alias")]
+        pub definition: Option<AssetDefinitionId>,
+        /// Asset definition alias (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`) used
         /// with `--account`.
-        #[arg(long, requires = "account", conflicts_with = "id")]
+        #[arg(long, requires = "account", conflicts_with = "definition")]
         pub definition_alias: Option<AssetDefinitionAlias>,
-        /// Account identifier (canonical I105), required with `--definition-alias`.
-        #[arg(long, conflicts_with = "id")]
+        /// Account identifier (canonical I105), required with asset selectors.
+        #[arg(long)]
         pub account: Option<String>,
+        /// Optional balance scope (`global` or `dataspace:<id>`).
+        #[arg(long, value_parser = parse_asset_balance_scope_literal)]
+        pub scope: Option<iroha::data_model::asset::AssetBalanceScope>,
         /// Amount of change (integer or decimal)
         #[arg(short, long)]
         pub quantity: Numeric,
+        /// Submit without waiting for confirmation.
+        #[arg(long)]
+        pub no_wait: bool,
     }
 
     impl Id {
         fn resolve_asset_id<C: RunContext>(&self, context: &C) -> Result<AssetId> {
             resolve_asset_id_components(
                 context,
-                self.id.clone(),
+                self.definition.clone(),
                 self.definition_alias.clone(),
                 self.account.clone(),
+                self.scope,
             )
         }
     }
@@ -2651,9 +2855,10 @@ mod asset {
         fn resolve_asset_id<C: RunContext>(&self, context: &C) -> Result<AssetId> {
             resolve_asset_id_components(
                 context,
-                self.id.clone(),
+                self.definition.clone(),
                 self.definition_alias.clone(),
                 self.account.clone(),
+                self.scope,
             )
         }
     }
@@ -2662,9 +2867,10 @@ mod asset {
         fn resolve_asset_id<C: RunContext>(&self, context: &C) -> Result<AssetId> {
             resolve_asset_id_components(
                 context,
-                self.id.clone(),
+                self.definition.clone(),
                 self.definition_alias.clone(),
                 self.account.clone(),
+                self.scope,
             )
         }
     }
@@ -2743,29 +2949,29 @@ mod asset {
         use iroha_crypto::Algorithm;
         use iroha_primitives::numeric::Numeric;
 
-        fn sample_transfer_args(ensure_destination: bool) -> (Transfer, ScopedAccountId) {
-            let domain: DomainId = "wonderland".parse().expect("domain id");
+        fn sample_transfer_args(ensure_destination: bool) -> (Transfer, AccountId, AssetId) {
             let src = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
             let dest = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
-            let owner = ScopedAccountId::new(domain.clone(), src.public_key().clone());
-            let to = ScopedAccountId::new(domain, dest.public_key().clone());
-            let asset_def_id = AssetDefinitionId::new(
-                "wonderland".parse().expect("domain id"),
+            let owner = AccountId::new(src.public_key().clone());
+            let to = AccountId::new(dest.public_key().clone());
+            let asset_def_id = AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").expect("domain id"),
                 "rose".parse().expect("asset name"),
             );
             let asset_id = AssetId::new(asset_def_id, owner.clone().into());
             let args = Transfer {
-                id: Some(asset_id),
+                definition: Some(asset_id.definition().clone()),
                 definition_alias: None,
-                account: None,
+                account: Some(asset_id.account().to_string()),
+                scope: None,
                 to: to.to_string(),
                 quantity: Numeric::new(5, 0),
                 ensure_destination,
+                no_wait: false,
             };
-            (args, to)
+            (args, to, asset_id)
         }
 
-        fn assert_transfer_destination(instruction: &InstructionBox, to: &ScopedAccountId) {
+        fn assert_transfer_destination(instruction: &InstructionBox, to: &AccountId) {
             let any: &dyn Instruction = &**instruction;
             let transfer = any
                 .as_any()
@@ -2774,23 +2980,18 @@ mod asset {
             let TransferBox::Asset(asset_transfer) = transfer else {
                 panic!("expected asset transfer");
             };
-            assert_eq!(&asset_transfer.destination, to.account());
+            assert_eq!(&asset_transfer.destination, to);
         }
 
         #[test]
         fn explicit_policy_rejects_ensure_destination_without_explicit_scope() {
-            let (args, to) = sample_transfer_args(true);
+            let (args, to, asset_id) = sample_transfer_args(true);
             let policy = AccountAdmissionPolicy {
                 mode: AccountAdmissionMode::ExplicitOnly,
                 ..AccountAdmissionPolicy::default()
             };
-            let err = asset_transfer_instructions(
-                args.id.clone().expect("id"),
-                &args,
-                to.account(),
-                Some(&policy),
-            )
-            .expect_err("explicit-only admission should reject inferred destination scope");
+            let err = asset_transfer_instructions(asset_id, &args, &to, Some(&policy))
+                .expect_err("explicit-only admission should reject inferred destination scope");
             assert!(
                 err.to_string()
                     .contains("no longer infers a registration domain"),
@@ -2800,11 +3001,11 @@ mod asset {
 
         #[test]
         fn implicit_policy_skips_register_instruction() {
-            let (args, to) = sample_transfer_args(true);
+            let (args, to, asset_id) = sample_transfer_args(true);
             let instructions = asset_transfer_instructions(
-                args.id.clone().expect("id"),
+                asset_id,
                 &args,
-                to.account(),
+                &to,
                 Some(&AccountAdmissionPolicy::default()),
             )
             .expect("instructions");
@@ -2814,18 +3015,13 @@ mod asset {
 
         #[test]
         fn ensure_flag_off_sends_transfer_only() {
-            let (args, to) = sample_transfer_args(false);
+            let (args, to, asset_id) = sample_transfer_args(false);
             let policy = AccountAdmissionPolicy {
                 mode: AccountAdmissionMode::ExplicitOnly,
                 ..AccountAdmissionPolicy::default()
             };
-            let instructions = asset_transfer_instructions(
-                args.id.clone().expect("id"),
-                &args,
-                to.account(),
-                Some(&policy),
-            )
-            .expect("instructions");
+            let instructions = asset_transfer_instructions(asset_id, &args, &to, Some(&policy))
+                .expect("instructions");
             assert_eq!(instructions.len(), 1);
             assert_transfer_destination(&instructions[0], &to);
         }
@@ -2986,6 +3182,264 @@ mod nft {
     }
 }
 
+mod rwa {
+    use iroha::data_model::isi::rwa::{
+        ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
+        SetRwaControls, TransferRwa, UnfreezeRwa,
+    };
+
+    use super::*;
+
+    #[derive(clap::Subcommand, Debug)]
+    pub enum Command {
+        /// Retrieve details of a specific RWA lot
+        Get(Id),
+        /// List RWA lots
+        #[clap(subcommand)]
+        List(List),
+        /// Register an RWA lot using `NewRwa` JSON from stdin
+        Register,
+        /// Transfer quantity from an existing lot
+        Transfer(Transfer),
+        /// Merge parent lots using `MergeRwas` JSON from stdin
+        Merge,
+        /// Redeem quantity from an existing lot
+        Redeem(Quantity),
+        /// Freeze an existing lot
+        Freeze(Id),
+        /// Unfreeze an existing lot
+        Unfreeze(Id),
+        /// Hold quantity on an existing lot
+        Hold(Quantity),
+        /// Release held quantity from an existing lot
+        Release(Quantity),
+        /// Force-transfer quantity from an existing lot
+        ForceTransfer(ForceTransfer),
+        /// Replace the lot control policy using `RwaControlPolicy` JSON from stdin
+        SetControls(Id),
+        /// Read and write metadata
+        #[command(subcommand)]
+        Meta(metadata::rwa::Command),
+    }
+
+    #[derive(crate::json_macros::JsonDeserialize)]
+    struct MergeInput {
+        parents: Vec<RwaParentRef>,
+        primary_reference: String,
+        status: Option<Name>,
+        metadata: Metadata,
+    }
+
+    impl Run for Command {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            use self::Command::*;
+            match self {
+                Get(args) => {
+                    let client = context.client_from_config();
+                    let entries = client
+                        .query(FindRwas)
+                        .execute_all()
+                        .wrap_err("Failed to get RWA")?;
+                    let entry = entries
+                        .into_iter()
+                        .find(|e| e.id() == &args.id)
+                        .ok_or_else(|| eyre!("RWA not found"))?;
+                    context.print_data(&entry)
+                }
+                List(cmd) => cmd.run(context),
+                Register => {
+                    let rwa: NewRwa = parse_json_stdin(context)?;
+                    context
+                        .finish([RegisterRwa { rwa }])
+                        .wrap_err("Failed to register RWA")
+                }
+                Transfer(args) => {
+                    let from = resolve_account_id(context, &args.from)
+                        .wrap_err("failed to resolve --from account")?;
+                    let to = resolve_account_id(context, &args.to)
+                        .wrap_err("failed to resolve --to account")?;
+                    context
+                        .finish([TransferRwa {
+                            source: from,
+                            rwa: args.id,
+                            quantity: args.quantity,
+                            destination: to,
+                        }])
+                        .wrap_err("Failed to transfer RWA")
+                }
+                Merge => {
+                    let merge: MergeInput = parse_json_stdin(context)?;
+                    context
+                        .finish([MergeRwas {
+                            parents: merge.parents,
+                            primary_reference: merge.primary_reference,
+                            status: merge.status,
+                            metadata: merge.metadata,
+                        }])
+                        .wrap_err("Failed to merge RWAs")
+                }
+                Redeem(args) => context
+                    .finish([RedeemRwa {
+                        rwa: args.id,
+                        quantity: args.quantity,
+                    }])
+                    .wrap_err("Failed to redeem RWA"),
+                Freeze(args) => context
+                    .finish([FreezeRwa { rwa: args.id }])
+                    .wrap_err("Failed to freeze RWA"),
+                Unfreeze(args) => context
+                    .finish([UnfreezeRwa { rwa: args.id }])
+                    .wrap_err("Failed to unfreeze RWA"),
+                Hold(args) => context
+                    .finish([HoldRwa {
+                        rwa: args.id,
+                        quantity: args.quantity,
+                    }])
+                    .wrap_err("Failed to hold RWA quantity"),
+                Release(args) => context
+                    .finish([ReleaseRwa {
+                        rwa: args.id,
+                        quantity: args.quantity,
+                    }])
+                    .wrap_err("Failed to release RWA hold"),
+                ForceTransfer(args) => {
+                    let to = resolve_account_id(context, &args.to)
+                        .wrap_err("failed to resolve --to account")?;
+                    context
+                        .finish([ForceTransferRwa {
+                            rwa: args.id,
+                            quantity: args.quantity,
+                            destination: to,
+                        }])
+                        .wrap_err("Failed to force-transfer RWA")
+                }
+                SetControls(args) => {
+                    let controls: RwaControlPolicy = parse_json_stdin(context)?;
+                    context
+                        .finish([SetRwaControls {
+                            rwa: args.id,
+                            controls,
+                        }])
+                        .wrap_err("Failed to update RWA controls")
+                }
+                Meta(cmd) => cmd.run(context),
+            }
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Id {
+        /// RWA identifier in the format `hash$domain`
+        #[arg(short, long)]
+        pub id: RwaId,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Quantity {
+        /// RWA identifier in the format `hash$domain`
+        #[arg(short, long)]
+        pub id: RwaId,
+        /// Quantity for the operation
+        #[arg(short, long)]
+        pub quantity: Numeric,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Transfer {
+        /// RWA identifier in the format `hash$domain`
+        #[arg(short, long)]
+        pub id: RwaId,
+        /// Source account identifier (canonical I105 literal)
+        #[arg(short, long)]
+        pub from: String,
+        /// Quantity to transfer
+        #[arg(short, long)]
+        pub quantity: Numeric,
+        /// Destination account identifier (canonical I105 literal)
+        #[arg(short, long)]
+        pub to: String,
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct ForceTransfer {
+        /// RWA identifier in the format `hash$domain`
+        #[arg(short, long)]
+        pub id: RwaId,
+        /// Quantity to transfer
+        #[arg(short, long)]
+        pub quantity: Numeric,
+        /// Destination account identifier (canonical I105 literal)
+        #[arg(short, long)]
+        pub to: String,
+    }
+
+    #[derive(clap::Subcommand, Debug)]
+    pub enum List {
+        /// List all IDs, or full entries when `--verbose` is specified
+        All(crate::list_support::AllArgs),
+        /// Filter by a given predicate
+        Filter(filter::RwaFilter),
+    }
+
+    impl Run for List {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let client = context.client_from_config();
+            match self {
+                List::All(args) => list_all(context, client.query(FindRwas), &args),
+                List::Filter(filter) => {
+                    let (predicate, common) = filter.into_list_args().decompose();
+                    let builder = client.query(FindRwas).filter(predicate);
+                    let builder = apply_common_args(builder, &common)?;
+                    let entries = builder.execute_all()?;
+                    context.print_data(&entries)
+                }
+            }
+        }
+    }
+
+    fn list_all<C: RunContext>(
+        context: &mut C,
+        builder: iroha::data_model::query::builder::QueryBuilder<'_, Client, FindRwas, Rwa>,
+        args: &crate::list_support::AllArgs,
+    ) -> Result<()> {
+        let builder = apply_common_args(builder, &args.common)?;
+        let entries = builder.execute_all()?;
+        if args.verbose {
+            context.print_data(&entries)
+        } else {
+            let ids: Vec<_> = entries.into_iter().map(|e| e.id().clone()).collect();
+            context.print_data(&ids)
+        }
+    }
+
+    fn apply_common_args<'a>(
+        builder: iroha::data_model::query::builder::QueryBuilder<'a, Client, FindRwas, Rwa>,
+        common: &'a crate::list_support::CommonArgs,
+    ) -> Result<iroha::data_model::query::builder::QueryBuilder<'a, Client, FindRwas, Rwa>> {
+        use iroha::data_model::query::parameters::{FetchSize, Pagination, Sorting};
+        use std::num::NonZeroU64;
+
+        let mut builder = builder;
+        if let Some(key) = common.sort_by_metadata_key.clone() {
+            let sorting = Sorting::new(Some(key), common.order.map(Into::into));
+            builder = builder.with_sorting(sorting);
+        }
+        if common.limit.is_some() || common.offset > 0 {
+            let pagination = Pagination::new(common.limit.and_then(NonZeroU64::new), common.offset);
+            builder = builder.with_pagination(pagination);
+        }
+        if let Some(n) = common.fetch_size.and_then(NonZeroU64::new) {
+            let fs = FetchSize::new(Some(n));
+            builder = builder.with_fetch_size(fs);
+        }
+        if let Some(sel) = common.select.as_deref() {
+            let tuple = crate::list_support::parse_selector_tuple::<Rwa>(sel)?;
+            builder = builder.with_selector_tuple(tuple);
+        }
+        Ok(builder)
+    }
+}
+
 mod peer {
     use super::*;
     use iroha::data_model::isi::register::RegisterPeerWithPop;
@@ -3130,16 +3584,16 @@ mod peer {
 mod multisig {
     use core::convert::TryFrom;
     use std::{
-        collections::{BTreeMap, BTreeSet},
+        collections::BTreeMap,
         num::{NonZeroU16, NonZeroU64},
         time::{Duration, SystemTime},
     };
 
-    use derive_more::{Constructor, Display};
-    use iroha::data_model::isi::CustomInstruction;
     use iroha::executor_data_model::isi::multisig::*;
 
     use super::*;
+
+    type ProposalKey = HashOf<Vec<InstructionBox>>;
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
@@ -3152,6 +3606,8 @@ mod multisig {
         Propose(Propose),
         /// Approve a multisig transaction
         Approve(Approve),
+        /// Propose cancellation of an existing multisig transaction
+        Cancel(Cancel),
         /// Inspect a multisig account controller and print the CTAP2 payload + digest
         Inspect(Inspect),
     }
@@ -3164,6 +3620,7 @@ mod multisig {
                 Register(cmd) => cmd.run(context),
                 Propose(cmd) => cmd.run(context),
                 Approve(cmd) => cmd.run(context),
+                Cancel(cmd) => cmd.run(context),
                 Inspect(cmd) => cmd.run(context),
             }
         }
@@ -3181,7 +3638,7 @@ mod multisig {
         pub quorum: u16,
         /// Account id to use for the multisig controller. If omitted, a new
         /// random domainless account id is generated locally, the private key is
-        /// discarded, and the registration uses the configured default home domain.
+        /// discarded, and the registration defaults to a domainless home-domain policy.
         #[arg(long)]
         pub account: Option<String>,
         /// Time-to-live for multisig transactions.
@@ -3231,14 +3688,11 @@ mod multisig {
                 .and_then(NonZeroU64::new)
                 .ok_or_else(|| eyre!("ttl should be between 1 ms and 584942417 years"))?;
             let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
-            let home_domain: DomainId = iroha::account_address::default_domain_name()
-                .as_ref()
-                .parse()
-                .wrap_err("failed to parse default multisig home domain")?;
             if !context.output_instructions() {
                 context.println(format!("multisig account id: {account}"))?;
             }
-            let instruction = MultisigRegister::with_account(account.clone(), home_domain, spec);
+            let instruction =
+                MultisigRegister::with_account(account.clone(), None::<DomainId>, spec);
 
             context
                 .finish([iroha::data_model::isi::InstructionBox::from(instruction)])
@@ -3319,6 +3773,54 @@ mod multisig {
     }
 
     #[derive(clap::Args, Debug)]
+    pub struct Cancel {
+        /// Multisig authority of the transaction
+        #[arg(short, long)]
+        pub account: String,
+        /// Hash of the target proposal instructions to cancel
+        #[arg(short, long)]
+        pub instructions_hash: ProposalKey,
+        /// Overrides the default time-to-live for the cancel proposal itself.
+        #[arg(short, long)]
+        pub transaction_ttl: Option<humantime::Duration>,
+    }
+
+    impl Run for Cancel {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let transaction_ttl_ms = self.transaction_ttl.map(|duration| {
+                duration
+                    .as_millis()
+                    .try_into()
+                    .ok()
+                    .and_then(NonZeroU64::new)
+                    .expect("ttl should be between 1 ms and 584942417 years")
+            });
+            let account = resolve_account_id(context, &self.account)
+                .wrap_err("failed to resolve --account")?;
+
+            if !context.output_instructions() {
+                surface_policy_ttl(context, &account, transaction_ttl_ms)?;
+            }
+
+            let cancel_instructions = vec![InstructionBox::from(MultisigCancel::new(
+                account.clone(),
+                self.instructions_hash,
+            ))];
+            let cancel_hash = HashOf::new(&cancel_instructions);
+            if matches!(context.output_format(), CliOutputFormat::Text) {
+                context.println(format_args!("cancel_proposal_hash: {cancel_hash}"))?;
+            }
+
+            let propose_cancel =
+                MultisigPropose::new(account, cancel_instructions, transaction_ttl_ms);
+
+            context
+                .finish([iroha::data_model::isi::InstructionBox::from(propose_cancel)])
+                .wrap_err("Failed to propose cancellation")
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
     pub struct Inspect {
         /// Multisig account identifier to inspect
         #[arg(short, long)]
@@ -3330,15 +3832,13 @@ mod multisig {
 
     impl Run for Inspect {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            use iroha::data_model::prelude::FindAccounts;
+            use iroha::data_model::prelude::FindAccountById;
             let account_id = resolve_account_id(context, &self.account)
                 .wrap_err("failed to resolve --account")?;
             let client = context.client_from_config();
-            let mut accounts = client.query(FindAccounts).execute_all()?;
-            let account = accounts
-                .iter_mut()
-                .find(|entry| entry.id() == &account_id)
-                .ok_or_else(|| eyre!("account `{}` not found", account_id))?;
+            let account: Account = client
+                .query_single(FindAccountById::new(account_id.clone()))
+                .wrap_err_with(|| format!("account `{account_id}` not found"))?;
 
             let controller = account
                 .id()
@@ -3427,13 +3927,13 @@ mod multisig {
     pub enum List {
         /// List all pending multisig transactions relevant to you
         All {
-            /// Maximum number of role IDs to scan for multisig (server-side limit)
+            /// Maximum number of proposals to emit after server ordering (client-side cap)
             #[arg(long)]
             limit: Option<u64>,
-            /// Offset into the role ID set (server-side offset)
+            /// Number of ordered proposals to skip after fetching cursor pages
             #[arg(long, default_value_t = 0)]
             offset: u64,
-            /// Batch fetch size for roles query
+            /// Cursor page size for the remote approvals list endpoint
             #[arg(long)]
             fetch_size: Option<u64>,
         },
@@ -3442,9 +3942,6 @@ mod multisig {
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
-            let me = client.account.clone();
-            // Query my roles with optional pagination/fetch-size
-            let mut roles_builder = client.query(FindRolesByAccountId::new(me.clone()));
             let (limit, offset, fetch_size) = match self {
                 Self::All {
                     limit,
@@ -3452,65 +3949,36 @@ mod multisig {
                     fetch_size,
                 } => (limit, offset, fetch_size),
             };
-            {
-                if limit.is_some() || offset > 0 {
-                    let pagination = iroha::data_model::query::parameters::Pagination::new(
-                        limit.and_then(NonZeroU64::new),
-                        offset,
-                    );
-                    roles_builder = roles_builder.with_pagination(pagination);
-                }
-                if let Some(n) = fetch_size.and_then(NonZeroU64::new) {
-                    let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
-                    roles_builder = roles_builder.with_fetch_size(fs);
+            let entries = load_multisig_list_all_entries(&client, fetch_size, offset, limit)?;
+            match context.output_format() {
+                CliOutputFormat::Json => context.print_data(&entries),
+                CliOutputFormat::Text => {
+                    let rendered = render_multisig_list_all_text(&entries)?;
+                    if rendered.is_empty() {
+                        return Ok(());
+                    }
+                    context.println(rendered)
                 }
             }
-            let Ok(my_multisig_roles) = roles_builder.execute_all().map(|roles: Vec<RoleId>| {
-                roles
-                    .into_iter()
-                    .filter(|role_id| role_id.name().as_ref().starts_with(MULTISIG_SIGNATORY))
-                    .collect::<Vec<_>>()
-            }) else {
-                return Ok(());
-            };
-            let mut stack = my_multisig_roles
-                .iter()
-                .filter_map(multisig_account_from)
-                .map(|account_id| Context::new(me.clone(), account_id, None))
-                .collect();
-            let mut proposals = BTreeMap::new();
-
-            fold_proposals(&mut proposals, &mut stack, &client)?;
-            context.print_data(&proposals)
         }
     }
 
-    const DELIMITER: char = '/';
-    const MULTISIG: &str = "multisig";
-    const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
+    fn spec_key() -> Name {
+        "multisig/spec".parse().expect("valid multisig spec key")
+    }
+
+    const COLLECTING_SIGNATURES_STATUS: &str = "COLLECTING_SIGNATURES";
 
     fn surface_policy_ttl<C: RunContext>(
         context: &mut C,
         multisig_account: &AccountId,
         override_ttl_ms: Option<NonZeroU64>,
     ) -> Result<()> {
-        use iroha::data_model::prelude::FindAccounts;
+        use iroha::data_model::prelude::FindAccountById;
 
         let client = context.client_from_config();
-        let account = match client.query(FindAccounts).execute_all() {
-            Ok(accounts) => {
-                if let Some(account) = accounts
-                    .into_iter()
-                    .find(|entry| entry.id() == multisig_account)
-                {
-                    account
-                } else {
-                    context.println(format!(
-                        "Unable to fetch multisig policy for {multisig_account}: account not found"
-                    ))?;
-                    return Ok(());
-                }
-            }
+        let account = match client.query_single(FindAccountById::new(multisig_account.clone())) {
+            Ok(account) => account,
             Err(err) => {
                 context.println(format!(
                     "Unable to fetch multisig policy for {multisig_account}: {err}"
@@ -3587,272 +4055,189 @@ mod multisig {
         ))
     }
 
-    fn spec_key() -> Name {
-        format!("{MULTISIG}{DELIMITER}spec").parse().unwrap()
+    #[derive(Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize)]
+    struct MultisigListAllEntry {
+        multisig_account_id: AccountId,
+        proposal_id: String,
+        instructions_hash: String,
+        status: String,
+        operation_type: String,
+        intent: Option<Json>,
+        proposed_at_ms: u64,
+        terminal_at_ms: Option<u64>,
+        proposal: MultisigProposalValue,
     }
 
-    fn proposal_key_prefix() -> String {
-        format!("{MULTISIG}{DELIMITER}proposals{DELIMITER}")
+    fn multisig_approvals_remote_page_size(
+        fetch_size: Option<u64>,
+        limit: Option<u64>,
+    ) -> Option<u64> {
+        fetch_size.or(limit)
     }
 
-    fn multisig_account_from(role: &RoleId) -> Option<AccountId> {
-        role.name()
-            .as_ref()
-            .strip_prefix(MULTISIG_SIGNATORY)?
-            .rsplit_once(DELIMITER)
-            .and_then(|(_, last)| AccountId::parse_encoded(last).ok())
-            .map(|parsed| parsed.into_account_id())
-    }
-
-    type PendingProposals = BTreeMap<ProposalKey, ProposalView>;
-
-    type ProposalKey = HashOf<Vec<InstructionBox>>;
-
-    #[derive(Debug, Clone, Default, crate::json_macros::FastJsonWrite)]
-    struct ProposalView {
-        instructions: Vec<InstructionBox>,
-        proposed_at: String,
-        expires_in: String,
-        approval_path: Vec<String>,
-    }
-
-    #[derive(Debug, Display, Constructor)]
-    #[display("{weight} {} [{got}/{quorum}] {target}", self.relation())]
-    struct ApprovalEdge {
-        weight: u8,
-        has_approved: bool,
-        got: u16,
-        quorum: u16,
-        target: AccountId,
-    }
-
-    impl ApprovalEdge {
-        fn relation(&self) -> &str {
-            if self.has_approved { "joined" } else { "->" }
-        }
-    }
-
-    #[derive(Debug, Constructor, Clone, PartialEq, Eq)]
-    struct Context {
-        child: AccountId,
-        this: AccountId,
-        key_span: Option<(ProposalKey, ProposalKey)>,
-    }
-
-    fn fold_proposals(
-        proposals: &mut PendingProposals,
-        stack: &mut Vec<Context>,
-        client: &Client,
-    ) -> Result<()> {
-        let mut fetch = |account_id: &AccountId| {
-            client
-                .query(FindAccounts)
-                .execute_all()?
-                .into_iter()
-                .find(|account| account.id() == account_id)
-                .ok_or_else(|| eyre!("Account not found"))
-        };
-        fold_proposals_with(proposals, stack, &mut fetch)
-    }
-
-    fn fold_proposals_with<F>(
-        proposals: &mut PendingProposals,
-        stack: &mut Vec<Context>,
-        fetch: &mut F,
-    ) -> Result<()>
+    fn collect_multisig_approvals_with<F>(
+        fetch_size: Option<u64>,
+        offset: u64,
+        limit: Option<u64>,
+        fetch_page: &mut F,
+    ) -> Result<Vec<iroha::client::MultisigApprovalEntry>>
     where
-        F: FnMut(&AccountId) -> Result<Account>,
+        F: FnMut(
+            iroha::client::MultisigApprovalsListRequest,
+        ) -> Result<iroha::client::MultisigApprovalsListResponse>,
     {
-        let Some(context) = stack.pop() else {
-            return Ok(());
-        };
-        let account = fetch(&context.this)?;
-        let Some(spec_value) = account.metadata().get(&spec_key()) else {
-            return fold_proposals_with(proposals, stack, fetch);
-        };
-        let spec: MultisigSpec = spec_value.clone().try_into_any_norito()?;
-        for (proposal_key, proposal_value) in account
-            .metadata()
-            .iter()
-            .filter_map(|(k, v)| {
-                k.as_ref().strip_prefix(&proposal_key_prefix()).map(|k| {
-                    (
-                        k.parse::<ProposalKey>().unwrap(),
-                        v.try_into_any_norito::<MultisigProposalValue>().unwrap(),
-                    )
-                })
-            })
-            .filter(|(k, _v)| context.key_span.is_none_or(|(_, top)| *k == top))
-        {
-            process_proposal(
-                proposals,
-                stack,
-                &context,
-                &proposal_key,
-                &proposal_value,
-                &spec,
-            );
-        }
-        fold_proposals_with(proposals, stack, fetch)
-    }
+        let mut cursor = None;
+        let mut skip_remaining = usize::try_from(offset).wrap_err("multisig offset exceeds usize")?;
+        let mut remaining_limit = limit
+            .map(|value| usize::try_from(value).wrap_err("multisig limit exceeds usize"))
+            .transpose()?;
+        let mut approvals = Vec::new();
+        let remote_limit = multisig_approvals_remote_page_size(fetch_size, limit);
 
-    fn process_proposal(
-        proposals: &mut PendingProposals,
-        stack: &mut Vec<Context>,
-        context: &Context,
-        proposal_key: &ProposalKey,
-        proposal_value: &MultisigProposalValue,
-        spec: &MultisigSpec,
-    ) {
-        let root_key = context
-            .key_span
-            .as_ref()
-            .map_or(*proposal_key, |(leaf, _)| *leaf);
-
-        let mut is_root_proposal = context.key_span.is_none();
-
-        for instruction in &proposal_value.instructions {
-            if let Some(MultisigInstructionBox::Approve(approve)) =
-                decode_multisig_instruction(instruction)
-            {
-                let next_context = Context::new(
-                    context.this.clone(),
-                    approve.account.clone(),
-                    Some((root_key, approve.instructions_hash)),
-                );
-                if !stack.contains(&next_context) {
-                    stack.push(next_context);
-                }
-                is_root_proposal = false;
+        loop {
+            if remaining_limit == Some(0) {
+                break;
             }
+
+            let response = fetch_page(iroha::client::MultisigApprovalsListRequest {
+                status: vec![COLLECTING_SIGNATURES_STATUS.to_owned()],
+                operation_type: Vec::new(),
+                requires_my_signature: false,
+                cursor: cursor.clone(),
+                limit: remote_limit,
+            })?;
+
+            for entry in response.items {
+                if skip_remaining > 0 {
+                    skip_remaining -= 1;
+                    continue;
+                }
+                if remaining_limit == Some(0) {
+                    break;
+                }
+                approvals.push(entry);
+                if let Some(remaining) = remaining_limit.as_mut() {
+                    *remaining -= 1;
+                }
+            }
+
+            if response.next_cursor.is_none() {
+                break;
+            }
+            cursor = response.next_cursor;
         }
 
-        let proposal_status = proposals.entry(root_key).or_default();
-        let child_weight = signatory_weight_by_subject(spec, &context.child)
-            .expect("context child must be a signatory subject");
+        Ok(approvals)
+    }
 
-        let edge = ApprovalEdge::new(
-            child_weight,
-            approval_contains_subject(&proposal_value.approvals, &context.child),
-            approval_weight_by_subject(spec, &proposal_value.approvals),
-            spec.quorum.into(),
-            context.this.clone(),
-        );
-        proposal_status.approval_path.push(format!("{edge}"));
+    fn collect_multisig_approvals(
+        client: &Client,
+        fetch_size: Option<u64>,
+        offset: u64,
+        limit: Option<u64>,
+    ) -> Result<Vec<iroha::client::MultisigApprovalEntry>> {
+        let mut fetch_page = |request| client.post_multisig_approvals_list_for_authority(&request);
+        collect_multisig_approvals_with(fetch_size, offset, limit, &mut fetch_page)
+    }
 
-        if is_root_proposal {
-            proposal_status
-                .instructions
-                .clone_from(&proposal_value.instructions);
-            proposal_status.proposed_at = {
-                let proposed_at = Duration::from_secs(
-                    Duration::from_millis(proposal_value.proposed_at_ms).as_secs(),
-                );
-                let timestamp = SystemTime::UNIX_EPOCH.checked_add(proposed_at).unwrap();
-                humantime::Timestamp::from(timestamp).to_string()
-            };
-            proposal_status.expires_in = {
-                let now = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap();
-                let expires_at = Duration::from_millis(proposal_value.expires_at_ms);
-                humantime::Duration::from(Duration::from_secs(
-                    expires_at.saturating_sub(now).as_secs(),
-                ))
-                .to_string()
-            };
+    fn multisig_list_all_entry_from_approval(
+        approval: iroha::client::MultisigApprovalEntry,
+    ) -> MultisigListAllEntry {
+        let iroha::client::MultisigApprovalEntry {
+            multisig_account_id,
+            proposal_id,
+            instructions_hash,
+            proposal,
+            operation_type,
+            intent,
+            status,
+            terminal_at_ms,
+            ..
+        } = approval;
+        MultisigListAllEntry {
+            multisig_account_id,
+            proposal_id,
+            instructions_hash,
+            status,
+            operation_type,
+            intent,
+            proposed_at_ms: proposal.proposed_at_ms,
+            terminal_at_ms,
+            proposal,
         }
     }
 
-    fn decode_multisig_instruction(instruction: &InstructionBox) -> Option<MultisigInstructionBox> {
-        let custom = instruction.as_any().downcast_ref::<CustomInstruction>()?;
-        MultisigInstructionBox::try_from(&custom.payload).ok()
+    fn load_multisig_list_all_entries(
+        client: &Client,
+        fetch_size: Option<u64>,
+        offset: u64,
+        limit: Option<u64>,
+    ) -> Result<Vec<MultisigListAllEntry>> {
+        collect_multisig_approvals(client, fetch_size, offset, limit).map(|approvals| {
+            approvals
+                .into_iter()
+                .map(multisig_list_all_entry_from_approval)
+                .collect()
+        })
     }
 
-    fn signatory_weight_by_subject(spec: &MultisigSpec, account: &AccountId) -> Option<u8> {
-        let subject = account.subject_id();
-        spec.signatories
-            .iter()
-            .find_map(|(signatory, weight)| (signatory.subject_id() == subject).then_some(*weight))
+    fn format_multisig_intent(intent: &Option<Json>) -> Result<String> {
+        match intent {
+            Some(value) => norito::json::to_json(value)
+                .map_err(|err| eyre!("failed to render multisig intent: {err}")),
+            None => Ok("null".to_owned()),
+        }
     }
 
-    fn approval_contains_subject(approvals: &BTreeSet<AccountId>, account: &AccountId) -> bool {
-        let subject = account.subject_id();
-        approvals
-            .iter()
-            .any(|approved| approved.subject_id() == subject)
-    }
-
-    fn approval_weight_by_subject(spec: &MultisigSpec, approvals: &BTreeSet<AccountId>) -> u16 {
-        let approved_subjects: BTreeSet<_> = approvals.iter().map(AccountId::subject_id).collect();
-        spec.signatories
-            .iter()
-            .filter(|(signatory, _)| approved_subjects.contains(&signatory.subject_id()))
-            .map(|(_, weight)| u16::from(*weight))
-            .sum()
+    fn render_multisig_list_all_text(entries: &[MultisigListAllEntry]) -> Result<String> {
+        let mut blocks = Vec::with_capacity(entries.len());
+        for entry in entries {
+            blocks.push(format!(
+                "multisig_account_id: {}\nproposal_id: {}\nstatus: {}\noperation_type: {}\nintent: {}\nproposed_at_ms: {}",
+                entry.multisig_account_id,
+                entry.proposal_id,
+                entry.status,
+                entry.operation_type,
+                format_multisig_intent(&entry.intent)?,
+                entry.proposed_at_ms,
+            ));
+        }
+        Ok(blocks.join("\n\n"))
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
-        use iroha::crypto::{Algorithm, KeyPair};
-        use iroha::data_model::{Level, account::Account, domain::DomainId, isi::Log};
-        use iroha_crypto::HashOf;
-        use std::{
-            collections::{BTreeMap, BTreeSet},
-            num::{NonZeroU16, NonZeroU64},
-        };
+        use iroha::crypto::KeyPair;
+        use std::collections::BTreeSet;
 
-        fn account_from_seed(seed: u8, domain: &DomainId) -> AccountId {
-            let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-            let _ = domain;
-            AccountId::new(key_pair.public_key().clone())
-        }
-
-        #[test]
-        fn approval_weight_by_subject_deduplicates_cross_domain_subjects() {
-            let home: DomainId = "home".parse().unwrap();
-            let shared = account_from_seed(1, &home);
-            let shared_alt = shared.clone();
-            let peer = account_from_seed(2, &home);
-            let spec = MultisigSpec::new(
-                BTreeMap::from([(shared.clone(), 1), (peer.clone(), 1)]),
-                NonZeroU16::new(2).unwrap(),
-                NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        fn sample_approval_entry(
+            suffix: &str,
+            proposed_at_ms: u64,
+        ) -> iroha::client::MultisigApprovalEntry {
+            let multisig_account_id = AccountId::new(KeyPair::random().public_key().clone());
+            let proposal = MultisigProposalValue::new(
+                Vec::new(),
+                proposed_at_ms,
+                proposed_at_ms + 60_000,
+                BTreeSet::new(),
+                None,
             );
-            let approvals = BTreeSet::from([shared.clone(), shared_alt, peer.clone()]);
-            assert_eq!(
-                approval_weight_by_subject(&spec, &approvals),
-                2,
-                "the same subject approving from two domains must be counted once"
-            );
-            assert!(
-                approval_contains_subject(&approvals, &shared),
-                "subject approval lookup should ignore domain scope"
-            );
-        }
-
-        #[test]
-        fn fold_proposals_skips_accounts_without_spec_metadata() {
-            let domain: DomainId = "wonderland".parse().unwrap();
-            let account_id = account_from_seed(9, &domain);
-            let account =
-                Account::new(account_id.clone().to_account_id(domain.clone())).build(&account_id);
-
-            let mut accounts = BTreeMap::new();
-            accounts.insert(account_id.clone(), account);
-
-            let mut proposals = BTreeMap::new();
-            let mut stack = vec![Context::new(account_id.clone(), account_id.clone(), None)];
-            let mut fetch = |id: &AccountId| {
-                accounts
-                    .get(id)
-                    .cloned()
-                    .ok_or_else(|| eyre!("Account not found in test map"))
-            };
-
-            fold_proposals_with(&mut proposals, &mut stack, &mut fetch).expect("fold proposals");
-            assert!(proposals.is_empty());
+            iroha::client::MultisigApprovalEntry {
+                multisig_account_id,
+                spec: MultisigSpec::new(
+                    BTreeMap::new(),
+                    NonZeroU16::new(1).expect("quorum"),
+                    NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("ttl"),
+                ),
+                proposal_id: format!("proposal-{suffix}"),
+                instructions_hash: format!("hash-{suffix}"),
+                proposal,
+                operation_type: "TRANSFER".to_owned(),
+                intent: Some(Json::new(norito::json!({ "sequence": suffix }))),
+                status: COLLECTING_SIGNATURES_STATUS.to_owned(),
+                terminal_at_ms: None,
+            }
         }
 
         #[test]
@@ -3874,127 +4259,77 @@ mod multisig {
         }
 
         #[test]
-        fn process_proposal_enqueues_relay_context() {
-            let domain: DomainId = "wonderland".parse().unwrap();
-            let parent_account = account_from_seed(1, &domain);
-            let current_account = account_from_seed(2, &domain);
-            let child_account = account_from_seed(3, &domain);
+        fn collect_multisig_approvals_applies_fetch_size_offset_and_limit_across_pages() {
+            let entries = vec![
+                sample_approval_entry("0", 5),
+                sample_approval_entry("1", 4),
+                sample_approval_entry("2", 3),
+                sample_approval_entry("3", 2),
+                sample_approval_entry("4", 1),
+            ];
+            let mut requests = Vec::new();
+            let mut fetch_page = |request: iroha::client::MultisigApprovalsListRequest| {
+                requests.push((request.cursor.clone(), request.limit));
+                let page = match request.cursor.as_deref() {
+                    None => iroha::client::MultisigApprovalsListResponse {
+                        items: entries[..2].to_vec(),
+                        next_cursor: Some("cursor-1".to_owned()),
+                    },
+                    Some("cursor-1") => iroha::client::MultisigApprovalsListResponse {
+                        items: entries[2..4].to_vec(),
+                        next_cursor: Some("cursor-2".to_owned()),
+                    },
+                    Some("cursor-2") => iroha::client::MultisigApprovalsListResponse {
+                        items: entries[4..].to_vec(),
+                        next_cursor: None,
+                    },
+                    Some(other) => panic!("unexpected cursor {other}"),
+                };
+                Ok(page)
+            };
 
-            let root_instructions = vec![InstructionBox::from(Log::new(
-                Level::INFO,
-                "root".to_string(),
-            ))];
-            let root_key = HashOf::new(&root_instructions);
+            let actual = collect_multisig_approvals_with(Some(2), 1, Some(3), &mut fetch_page)
+                .expect("collect approvals");
 
-            let child_instructions = vec![InstructionBox::from(Log::new(
-                Level::INFO,
-                "child".to_string(),
-            ))];
-            let child_hash = HashOf::new(&child_instructions);
-
-            let relay_instruction: InstructionBox =
-                MultisigApprove::new(child_account.clone(), child_hash).into();
-            let relay_instructions = vec![relay_instruction.clone()];
-            let current_key = HashOf::new(&relay_instructions);
-            let proposal_value = MultisigProposalValue::new(
-                relay_instructions,
-                1_000,
-                2_000,
-                BTreeSet::new(),
-                Some(false),
+            let proposal_ids = actual
+                .iter()
+                .map(|entry| entry.proposal_id.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                proposal_ids,
+                vec![
+                    "proposal-1".to_owned(),
+                    "proposal-2".to_owned(),
+                    "proposal-3".to_owned(),
+                ]
             );
-
-            let mut signatories = BTreeMap::new();
-            signatories.insert(parent_account.clone(), 3);
-            let spec = MultisigSpec::new(
-                signatories,
-                NonZeroU16::new(5).unwrap(),
-                NonZeroU64::new(60_000).unwrap(),
+            assert_eq!(
+                requests,
+                vec![
+                    (None, Some(2)),
+                    (Some("cursor-1".to_owned()), Some(2)),
+                ]
             );
-
-            let mut proposals = PendingProposals::new();
-            proposals.insert(root_key, ProposalView::default());
-            let mut stack = Vec::new();
-
-            let context = Context::new(
-                parent_account.clone(),
-                current_account.clone(),
-                Some((root_key, current_key)),
-            );
-
-            process_proposal(
-                &mut proposals,
-                &mut stack,
-                &context,
-                &current_key,
-                &proposal_value,
-                &spec,
-            );
-
-            assert_eq!(stack.len(), 1);
-            let expected = Context::new(
-                current_account.clone(),
-                child_account.clone(),
-                Some((root_key, child_hash)),
-            );
-            assert_eq!(stack.pop().unwrap(), expected);
-
-            let view = proposals.get(&root_key).unwrap();
-            assert!(view.instructions.is_empty());
-            assert_eq!(view.approval_path.len(), 1);
-            assert!(view.approval_path[0].contains(current_account.to_string().as_str()));
         }
 
         #[test]
-        fn process_proposal_records_root_instructions() {
-            let domain: DomainId = "wonderland".parse().unwrap();
-            let user_account = account_from_seed(7, &domain);
-            let current_account = account_from_seed(9, &domain);
+        fn render_multisig_list_all_text_outputs_human_readable_blocks() {
+            let entry = multisig_list_all_entry_from_approval(sample_approval_entry("a", 42));
+            let rendered =
+                render_multisig_list_all_text(std::slice::from_ref(&entry)).expect("render text");
 
-            let root_instructions = vec![InstructionBox::from(Log::new(
-                Level::INFO,
-                "execute".to_string(),
-            ))];
-            let root_key = HashOf::new(&root_instructions);
+            assert!(rendered.contains("multisig_account_id: "));
+            assert!(rendered.contains("proposal_id: proposal-a"));
+            assert!(rendered.contains("status: COLLECTING_SIGNATURES"));
+            assert!(rendered.contains("operation_type: TRANSFER"));
+            assert!(rendered.contains("intent: {\"sequence\":\"a\"}"));
+            assert!(rendered.contains("proposed_at_ms: 42"));
+        }
 
-            let mut approvals = BTreeSet::new();
-            approvals.insert(user_account.clone());
-            let proposal_value = MultisigProposalValue::new(
-                root_instructions.clone(),
-                5_000,
-                10_000,
-                approvals,
-                None,
-            );
-
-            let mut signatories = BTreeMap::new();
-            signatories.insert(user_account.clone(), 4);
-            let spec = MultisigSpec::new(
-                signatories,
-                NonZeroU16::new(6).unwrap(),
-                NonZeroU64::new(90_000).unwrap(),
-            );
-
-            let mut proposals = PendingProposals::new();
-            let mut stack = Vec::new();
-            let context = Context::new(user_account.clone(), current_account.clone(), None);
-
-            process_proposal(
-                &mut proposals,
-                &mut stack,
-                &context,
-                &root_key,
-                &proposal_value,
-                &spec,
-            );
-
-            assert!(stack.is_empty());
-            let view = proposals.get(&root_key).unwrap();
-            assert_eq!(view.instructions, root_instructions);
-            assert!(!view.proposed_at.is_empty());
-            assert!(!view.expires_in.is_empty());
-            assert_eq!(view.approval_path.len(), 1);
-            assert!(view.approval_path[0].contains("joined"));
+        #[test]
+        fn render_multisig_list_all_text_is_empty_for_empty_results() {
+            let rendered = render_multisig_list_all_text(&[]).expect("render empty text");
+            assert!(rendered.is_empty());
         }
     }
 }
@@ -4118,6 +4453,8 @@ mod transaction {
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
+        /// Read the typed pipeline status of a submitted transaction
+        Status(Status),
         /// Retrieve details of a specific transaction
         Get(Get),
         /// Send an empty transaction that logs a message
@@ -4132,10 +4469,35 @@ mod transaction {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use self::Command::*;
             match self {
+                Status(cmd) => cmd.run(context),
                 Get(cmd) => cmd.run(context),
                 Ping(cmd) => cmd.run(context),
                 Ivm(cmd) => cmd.run(context),
                 Stdin(cmd) => cmd.run(context),
+            }
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct Status {
+        /// Hash of the signed transaction to inspect
+        #[arg(short('H'), long)]
+        pub hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
+        #[command(flatten)]
+        pub wait: TransactionWaitArgs,
+    }
+
+    impl Run for Status {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            let client = context.client_from_config();
+            if self.wait.is_enabled() {
+                let status = crate::wait_for_transaction_status(&client, self.hash, &self.wait)?;
+                context.print_data(&status)
+            } else {
+                let status = client
+                    .get_transaction_status_response(self.hash)?
+                    .ok_or_else(|| eyre!("Transaction status not found"))?;
+                context.print_data(&status)
             }
         }
     }
@@ -4454,20 +4816,26 @@ mod transaction {
         /// Path to the IVM bytecode file. If omitted, reads from stdin
         #[arg(short, long)]
         path: Option<PathBuf>,
+        /// Transaction gas limit to attach as metadata for this IVM submit
+        #[arg(long, value_name("U64"))]
+        gas_limit: Option<u64>,
     }
 
     impl Run for Ivm {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let blob = if let Some(path) = self.path {
+            let Ivm { path, gas_limit } = self;
+            let blob = if let Some(path) = path {
                 fs::read(path)
                     .wrap_err("Failed to read IVM bytecode from the file into the buffer")?
             } else {
                 bytes_from_stdin()
                     .wrap_err("Failed to read IVM bytecode from stdin into the buffer")?
             };
+            let mut metadata = context.transaction_metadata().cloned().unwrap_or_default();
+            apply_cli_gas_limit_override(&mut metadata, gas_limit);
 
             context
-                .finish(IvmBytecode::from_compiled(blob))
+                .submit_with_metadata(IvmBytecode::from_compiled(blob), metadata, true)
                 .wrap_err("Failed to submit an IVM transaction")
         }
     }
@@ -4731,14 +5099,9 @@ mod trigger {
                 List(cmd) => cmd.run(context),
                 Get(args) => {
                     let client = context.client_from_config();
-                    let entries = client
-                        .query(FindTriggers)
-                        .execute_all()
+                    let entry: Trigger = client
+                        .query_single(FindTriggerById::new(args.id))
                         .wrap_err("Failed to get trigger")?;
-                    let entry = entries
-                        .into_iter()
-                        .find(|t| t.id() == &args.id)
-                        .ok_or_else(|| eyre!("Trigger not found"))?;
                     let printable = trigger_pretty_json(&entry)
                         .wrap_err("Failed to serialise trigger for display")?;
                     context.print_data(&printable)
@@ -4868,16 +5231,28 @@ mod trigger {
         #[arg(long, value_name = "JSON")]
         pub data_filter: Option<String>,
         /// Data filter preset: events within a domain
-        #[arg(long)]
+        #[arg(long, value_parser = parse_domain_id_literal)]
         pub data_domain: Option<DomainId>,
         /// Data filter preset: events for an account (canonical I105 literal)
         #[arg(long)]
         pub data_account: Option<String>,
-        /// Data filter preset: events for an encoded asset (`norito:<hex>`)
-        #[arg(long, value_parser = parse_asset_id_literal)]
-        pub data_asset: Option<AssetId>,
+        /// Data filter preset: events for a specific asset definition; use with
+        /// `--data-asset-account` for a concrete ownership bucket.
+        #[arg(
+            long,
+            requires = "data_asset_account",
+            conflicts_with = "data_asset_definition"
+        )]
+        pub data_asset: Option<AssetDefinitionId>,
+        /// Data filter preset: account owning the selected asset bucket (canonical I105 literal).
+        #[arg(long, requires = "data_asset")]
+        pub data_asset_account: Option<String>,
+        /// Data filter preset: balance scope for the selected asset bucket (`global` or
+        /// `dataspace:<id>`).
+        #[arg(long, value_parser = parse_asset_balance_scope_literal, requires_all = ["data_asset", "data_asset_account"])]
+        pub data_asset_scope: Option<iroha::data_model::asset::AssetBalanceScope>,
         /// Data filter preset: events for an asset definition
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["data_asset", "data_asset_account", "data_asset_scope"])]
         pub data_asset_definition: Option<AssetDefinitionId>,
         /// Data filter preset: events for a role
         #[arg(long)]
@@ -5031,7 +5406,21 @@ mod trigger {
                             iroha::data_model::events::data::prelude::AccountEventFilter::new()
                                 .for_account(account),
                         )
-                    } else if let Some(asset) = self.data_asset.clone() {
+                    } else if let Some(definition) = self.data_asset.clone() {
+                        let owner = resolve_account_id(
+                            context,
+                            self.data_asset_account.as_deref().ok_or_else(|| {
+                                eyre!("`--data-asset-account` is required with `--data-asset`")
+                            })?,
+                        )
+                        .wrap_err("failed to resolve --data-asset-account")?;
+                        let asset = AssetId::with_scope(
+                            definition,
+                            owner,
+                            self.data_asset_scope
+                                .clone()
+                                .unwrap_or(iroha::data_model::asset::AssetBalanceScope::Global),
+                        );
                         DataEventFilter::from(
                             iroha::data_model::events::data::prelude::AssetEventFilter::new()
                                 .for_asset(asset),
@@ -5181,6 +5570,11 @@ mod trigger {
 
         let executable_value = match trigger.action().executable() {
             Executable::Instructions(instrs) => to_value(instrs)?,
+            Executable::ContractCall(invocation) => {
+                let mut outer = BTreeMap::<String, Value>::new();
+                outer.insert("ContractCall".into(), to_value(invocation)?);
+                Value::Object(outer)
+            }
             Executable::Ivm(bytecode) => {
                 let mut inner = BTreeMap::<String, Value>::new();
                 inner.insert("hash".into(), to_value(&HashOf::new(bytecode))?);
@@ -5266,7 +5660,7 @@ mod metadata {
 
         #[derive(clap::Args, Debug)]
         pub struct IdKey {
-            #[arg(short, long)]
+            #[arg(short, long, value_parser = parse_domain_id_literal)]
             pub id: DomainId,
             #[arg(short, long)]
             pub key: Name,
@@ -5338,14 +5732,9 @@ mod metadata {
                         let account_id = resolve_account_id(context, &args.id)
                             .wrap_err("failed to resolve --id account")?;
                         let client = context.client_from_config();
-                        let entries: Vec<Account> = client
-                            .query(FindAccounts)
-                            .execute_all()
+                        let entry: Account = client
+                            .query_single(FindAccountById::new(account_id))
                             .wrap_err("Failed to get value")?;
-                        let entry = entries
-                            .into_iter()
-                            .find(|e| e.id() == &account_id)
-                            .ok_or_else(|| eyre!("Account not found"))?;
                         let value = entry
                             .metadata()
                             .get(&args.key)
@@ -5494,6 +5883,64 @@ mod metadata {
         }
     }
 
+    pub mod rwa {
+        use super::*;
+
+        #[derive(clap::Subcommand, Debug)]
+        pub enum Command {
+            /// Retrieve a value from the key-value store
+            Get(IdKey),
+            /// Create or update an entry in the key-value store using JSON input from stdin
+            Set(IdKey),
+            /// Delete an entry from the key-value store
+            Remove(IdKey),
+        }
+
+        #[derive(clap::Args, Debug)]
+        pub struct IdKey {
+            #[arg(short, long)]
+            pub id: RwaId,
+            #[arg(short, long)]
+            pub key: Name,
+        }
+
+        impl Run for Command {
+            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+                use self::Command::*;
+                match self {
+                    Get(args) => {
+                        let client = context.client_from_config();
+                        let entries: Vec<Rwa> = client
+                            .query(FindRwas)
+                            .execute_all()
+                            .wrap_err("Failed to get value")?;
+                        let entry = entries
+                            .into_iter()
+                            .find(|e| e.id() == &args.id)
+                            .ok_or_else(|| eyre!("RWA not found"))?;
+                        let value = entry
+                            .metadata()
+                            .get(&args.key)
+                            .cloned()
+                            .ok_or_else(|| eyre!("Key not found"))?;
+                        context.print_data(&value)
+                    }
+                    Set(args) => {
+                        let value: Json = parse_json_stdin(context)?;
+                        let instruction =
+                            iroha::data_model::isi::SetKeyValue::rwa(args.id, args.key, value);
+                        context.finish([instruction])
+                    }
+                    Remove(args) => {
+                        let instruction =
+                            iroha::data_model::isi::RemoveKeyValue::rwa(args.id, args.key);
+                        context.finish([instruction])
+                    }
+                }
+            }
+        }
+    }
+
     pub mod trigger {
         use super::*;
 
@@ -5521,14 +5968,9 @@ mod metadata {
                 match self {
                     Get(args) => {
                         let client = context.client_from_config();
-                        let entries: Vec<Trigger> = client
-                            .query(FindTriggers)
-                            .execute_all()
+                        let entry: Trigger = client
+                            .query_single(FindTriggerById::new(args.id))
                             .wrap_err("Failed to get value")?;
-                        let entry = entries
-                            .into_iter()
-                            .find(|e| e.id() == &args.id)
-                            .ok_or_else(|| eyre!("Trigger not found"))?;
                         let value = entry
                             .metadata()
                             .get(&args.key)
@@ -6279,7 +6721,7 @@ mod settlement {
                 );
                 msg_set(
                     "CashLeg/Ccy",
-                    currency_code(isi.payment_leg.asset_definition_id()).as_bytes(),
+                    settlement_currency_code(isi.payment_leg.asset_definition_id()).as_bytes(),
                 );
                 msg_set("SttlmDt", settlement_date_string().as_bytes());
                 msg_set(
@@ -6377,7 +6819,7 @@ mod settlement {
                 }
                 msg_set(
                     "SttlmCcy",
-                    currency_code(isi.primary_leg.asset_definition_id()).as_bytes(),
+                    settlement_currency_code(isi.primary_leg.asset_definition_id()).as_bytes(),
                 );
                 msg_set(
                     "SttlmAmt",
@@ -6453,14 +6895,24 @@ mod settlement {
             format!("IROA{country}{location}")
         }
 
-        fn currency_code(asset: &AssetDefinitionId) -> String {
-            asset.name().as_ref().to_ascii_uppercase()
+        fn settlement_currency_code(asset: &AssetDefinitionId) -> String {
+            if let Some(name) = asset.try_name() {
+                let candidate = name.as_ref().to_ascii_uppercase();
+                if candidate.len() == 3 && candidate.chars().all(|ch| ch.is_ascii_uppercase()) {
+                    return candidate;
+                }
+                return candidate;
+            }
+            // Offline previews only see the canonical asset-definition address, so
+            // preserve a schema-valid placeholder when the original currency label
+            // is no longer recoverable from the identifier alone.
+            "XXX".to_owned()
         }
 
         fn counter_info(leg: &SettlementLeg) -> String {
             format!(
                 "{{\"counter_currency\":\"{}\",\"amount\":\"{}\"}}",
-                currency_code(leg.asset_definition_id()),
+                settlement_currency_code(leg.asset_definition_id()),
                 leg.quantity()
             )
         }
@@ -6500,15 +6952,14 @@ mod settlement {
             }
 
             fn sample_dvp() -> DvpIsi {
-                let domain: DomainId = "wonderland".parse().unwrap();
+                let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
                 let seller = account_with_seed(&domain, 0x11);
                 let buyer = account_with_seed(&domain, 0x22);
                 let payer = account_with_seed(&domain, 0x33);
                 let receiver = account_with_seed(&domain, 0x44);
 
                 let delivery_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(
-                        "wonderland".parse().unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                         "bond".parse().unwrap(),
                     ),
                     Numeric::new(100, 0),
@@ -6516,8 +6967,7 @@ mod settlement {
                     buyer,
                 );
                 let payment_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(
-                        "wonderland".parse().unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                         "usd".parse().unwrap(),
                     ),
                     Numeric::new(1000, 0),
@@ -6538,15 +6988,14 @@ mod settlement {
             }
 
             fn sample_pvp() -> PvpIsi {
-                let domain: DomainId = "wonderland".parse().unwrap();
+                let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
                 let payer = account_with_seed(&domain, 0x55);
                 let receiver = account_with_seed(&domain, 0x66);
                 let counter_payer = account_with_seed(&domain, 0x77);
                 let counter_receiver = account_with_seed(&domain, 0x88);
 
                 let primary_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(
-                        "wonderland".parse().unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                         "usd".parse().unwrap(),
                     ),
                     Numeric::new(1000, 0),
@@ -6554,8 +7003,7 @@ mod settlement {
                     receiver,
                 );
                 let counter_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(
-                        "wonderland".parse().unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                         "eur".parse().unwrap(),
                     ),
                     Numeric::new(900, 0),
@@ -6633,12 +7081,11 @@ mod settlement {
                     }"#,
                 );
 
-                let domain: DomainId = "wonderland".parse().unwrap();
+                let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
                 let dvp = DvpIsi {
                     settlement_id: "dvp_settlement".parse().unwrap(),
                     delivery_leg: SettlementLeg::new(
-                        iroha_data_model::asset::AssetDefinitionId::new(
-                            "wonderland".parse().unwrap(),
+                        iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                             "bond".parse().unwrap(),
                         ),
                         Numeric::new(100, 0),
@@ -6646,8 +7093,7 @@ mod settlement {
                         account_with_seed(&domain, 0x66),
                     ),
                     payment_leg: SettlementLeg::new(
-                        iroha_data_model::asset::AssetDefinitionId::new(
-                            "wonderland".parse().unwrap(),
+                        iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                             "doge".parse().unwrap(),
                         ),
                         Numeric::new(1000, 0),
@@ -6672,6 +7118,61 @@ mod settlement {
                 assert!(
                     msg.contains("invalid ISO 4217 currency value for field `CashLeg/Ccy`"),
                     "unexpected error message: {msg}"
+                );
+            }
+
+            #[test]
+            fn dvp_preview_uses_placeholder_currency_for_opaque_asset_ids() {
+                let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+                let seller = account_with_seed(&domain, 0x11);
+                let buyer = account_with_seed(&domain, 0x22);
+                let payer = account_with_seed(&domain, 0x33);
+                let receiver = account_with_seed(&domain, 0x44);
+                let named_payment_asset = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
+                    "usd".parse().unwrap(),
+                );
+                let opaque_payment_asset: AssetDefinitionId = named_payment_asset
+                    .to_string()
+                    .parse()
+                    .expect("canonical asset id should parse");
+                assert!(opaque_payment_asset.is_opaque_canonical());
+
+                let dvp = DvpIsi {
+                    settlement_id: "dvp_settlement".parse().unwrap(),
+                    delivery_leg: SettlementLeg::new(
+                        iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
+                            "bond".parse().unwrap(),
+                        ),
+                        Numeric::new(100, 0),
+                        seller,
+                        buyer,
+                    ),
+                    payment_leg: SettlementLeg::new(
+                        opaque_payment_asset,
+                        Numeric::new(1000, 0),
+                        payer,
+                        receiver,
+                    ),
+                    plan: SettlementPlan::new(
+                        SettlementExecutionOrder::DeliveryThenPayment,
+                        SettlementAtomicity::CommitFirstLeg,
+                    ),
+                    metadata: Metadata::default(),
+                };
+
+                let xml = dvp_to_sese023(
+                    &dvp,
+                    Some("US0378331005"),
+                    None,
+                    &SettlementPreviewOptions::default(),
+                )
+                .expect("preview succeeds for opaque currency asset ids");
+                let parsed = ivm::iso20022::parse_message("sese.023", xml.as_bytes())
+                    .expect("parse preview");
+                assert_eq!(parsed.field_text("CashLeg/Ccy"), Some("XXX"));
+                assert_eq!(
+                    parsed.field_text("Plan/Atomicity"),
+                    Some("COMMIT_FIRST_LEG")
                 );
             }
 
@@ -6792,6 +7293,7 @@ fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
     {
         eyre::bail!("account literal must be canonical I105; canonical hex is not accepted");
     }
+
     let parsed = AccountId::parse_encoded(trimmed)
         .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
     Ok(parsed.into_account_id())
@@ -6801,36 +7303,24 @@ pub(crate) fn resolve_account_id<C: RunContext>(_context: &C, literal: &str) -> 
     resolve_account_id_with(literal)
 }
 
-#[cfg(test)]
-fn resolve_scoped_account_for_subject(
-    parsed: &ScopedAccountId,
-    chain_scoped_accounts: std::collections::BTreeSet<ScopedAccountId>,
-) -> Result<ScopedAccountId> {
-    if chain_scoped_accounts.is_empty() {
-        return Ok(parsed.clone());
+fn parse_asset_balance_scope_literal(
+    literal: &str,
+) -> Result<iroha::data_model::asset::AssetBalanceScope> {
+    let trimmed = literal.trim();
+    if trimmed.eq_ignore_ascii_case("global") {
+        return Ok(iroha::data_model::asset::AssetBalanceScope::Global);
     }
-    if chain_scoped_accounts.len() == 1 {
-        return Ok(chain_scoped_accounts
-            .iter()
-            .next()
-            .cloned()
-            .expect("set contains one element"));
+    if let Some(rest) = trimmed.strip_prefix("dataspace:") {
+        let dataspace = rest
+            .parse::<u64>()
+            .map_err(|_| eyre!("asset balance scope must be `global` or `dataspace:<id>`"))?;
+        return Ok(iroha::data_model::asset::AssetBalanceScope::Dataspace(
+            iroha::data_model::nexus::DataSpaceId::new(dataspace),
+        ));
     }
-    if chain_scoped_accounts.contains(parsed) {
-        return Ok(parsed.clone());
-    }
-    eyre::bail!(
-        "subject `{}` resolves to multiple scoped accounts; specify an explicit scope",
-        parsed.subject_id()
-    )
-}
-
-fn parse_asset_id_literal_with(literal: &str, field: &str) -> Result<AssetId> {
-    AssetId::parse_encoded(literal).map_err(|err| eyre!("{field}: {err}"))
-}
-
-fn parse_asset_id_literal(literal: &str) -> Result<AssetId> {
-    parse_asset_id_literal_with(literal, "asset literal")
+    Err(eyre!(
+        "asset balance scope must be `global` or `dataspace:<id>`"
+    ))
 }
 
 fn resolve_asset_definition_id_by_alias(
@@ -6859,23 +7349,27 @@ fn resolve_asset_definition_id_by_alias(
         .get("asset_definition_id")
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("asset alias resolve response missing `asset_definition_id` field"))?;
-    AssetDefinitionId::parse_aid_literal(definition_raw)
+    AssetDefinitionId::parse_address_literal(definition_raw)
         .map_err(|err| eyre!("invalid `asset_definition_id` in alias response: {err}"))
 }
 
-fn parse_asset_definition_aid_literal(literal: &str) -> Result<AssetDefinitionId> {
-    AssetDefinitionId::parse_aid_literal(literal)
+fn parse_asset_definition_literal(literal: &str) -> Result<AssetDefinitionId> {
+    AssetDefinitionId::parse_address_literal(literal)
         .map_err(|err| eyre!("asset definition literal: {err}"))
 }
 
-fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedAccountId> {
+fn parse_domain_id_literal(literal: &str) -> std::result::Result<DomainId, String> {
+    DomainId::parse_fully_qualified(literal).map_err(|err| err.to_string())
+}
+
+fn parse_register_account_id(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
         eyre::bail!("`ledger account register --id` must be a canonical I105 account id");
     }
     if trimmed.contains('@') {
         eyre::bail!(
-            "`ledger account register --id` must not include '@domain'; pass the scope via `--domain`"
+            "`ledger account register --id` must not include '@domain'; accounts are global and aliases carry domains"
         );
     }
     if trimmed
@@ -6886,13 +7380,11 @@ fn parse_register_account_id(literal: &str, domain: &DomainId) -> Result<ScopedA
             "`ledger account register --id` must be canonical I105; canonical hex is not accepted"
         );
     }
+
     let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
         eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
     })?;
-    Ok(ScopedAccountId::from_account_id(
-        parsed.into_account_id(),
-        domain.clone(),
-    ))
+    Ok(parsed.into_account_id())
 }
 
 fn string_from_stdin() -> Result<String> {
@@ -7007,6 +7499,7 @@ mod tests {
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
         ChainId, Level,
+        account::AccountId,
         events::{
             EventFilterBox, data::DataEventFilter, execute_trigger::ExecuteTriggerEventFilter,
         },
@@ -7022,6 +7515,27 @@ mod tests {
     };
     use tokio::runtime::Runtime;
     use url::Url;
+
+    fn sample_canonical_i105_literal(seed: u8) -> String {
+        AccountId::new(
+            KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+        .canonical_i105()
+        .expect("canonical I105")
+    }
+
+    fn sample_noncanonical_i105_literal(seed: u8) -> String {
+        sample_canonical_i105_literal(seed).replacen("sora", "ｓｏｒａ", 1)
+    }
+
+    #[test]
+    fn parse_register_account_id_accepts_canonical_i105_literal() {
+        let literal = sample_canonical_i105_literal(23);
+        let parsed = parse_register_account_id(&literal).expect("register account id");
+        assert_eq!(parsed.to_string(), literal);
+    }
 
     #[derive(Clone, Copy, JsonSerialize)]
     struct DummyEvent;
@@ -7040,7 +7554,9 @@ mod tests {
     }
 
     fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {
-        let _domain: iroha::data_model::domain::DomainId = domain_literal.parse().expect("domain");
+        let _domain =
+            iroha::data_model::domain::DomainId::try_new(domain_literal, "universal")
+                .expect("domain");
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         AccountId::new(key_pair.public_key().clone())
     }
@@ -7156,8 +7672,63 @@ mod tests {
     }
 
     #[test]
+    fn printjsoncontext_writes_data_lines_to_stdout_in_json_mode() {
+        let mut ctx = test_context(CliOutputFormat::Json);
+        ctx.println_data("input,status").expect("println data");
+        assert!(ctx.err_write.is_empty(), "stderr should be empty");
+        let stdout = String::from_utf8(ctx.write).expect("stdout utf8");
+        assert_eq!(stdout, "input,status\n");
+    }
+
+    #[test]
+    fn taira_doctor_cli_parses_public_root_and_json() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "taira",
+            "doctor",
+            "--public-root",
+            "https://taira.sora.org",
+            "--json",
+        ])
+        .expect("parse args");
+        let Command::Taira(crate::taira::Command::Doctor(cmd)) = args.command else {
+            panic!("expected taira doctor command");
+        };
+        assert_eq!(cmd.public_root, "https://taira.sora.org");
+        assert!(cmd.json);
+    }
+
+    #[test]
+    fn taira_write_canary_cli_parses_defaults_and_overrides() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "taira",
+            "write-canary",
+            "--alias-prefix",
+            "rollout",
+            "--gas-asset-id",
+            "asset",
+            "--write-config",
+            "/tmp/taira-canary-client.toml",
+            "--json",
+        ])
+        .expect("parse args");
+        let Command::Taira(crate::taira::Command::WriteCanary(cmd)) = args.command else {
+            panic!("expected taira write-canary command");
+        };
+        assert_eq!(cmd.public_root, "https://taira.sora.org");
+        assert_eq!(cmd.alias_prefix, "rollout");
+        assert_eq!(cmd.gas_asset_id, "asset");
+        assert_eq!(
+            cmd.write_config.as_deref(),
+            Some(std::path::Path::new("/tmp/taira-canary-client.toml"))
+        );
+        assert!(cmd.json);
+    }
+
+    #[test]
     fn resolve_account_id_with_rejects_public_key_domain() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
         let key_pair = KeyPair::from_seed(vec![7_u8; 32], Algorithm::Ed25519);
         let literal = format!("{}@{}", key_pair.public_key(), domain);
 
@@ -7172,7 +7743,7 @@ mod tests {
 
     #[test]
     fn resolve_account_id_with_rejects_non_canonical_i105_literal() {
-        let literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+        let literal = sample_noncanonical_i105_literal(25);
 
         let err =
             resolve_account_id_with(&literal).expect_err("non-canonical I105 literal should fail");
@@ -7184,36 +7755,19 @@ mod tests {
     }
 
     #[test]
-    fn parse_register_account_id_uses_explicit_domain() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let key_pair = KeyPair::from_seed(vec![11_u8; 32], Algorithm::Ed25519);
-        let literal = AccountId::new(key_pair.public_key().clone())
-            .canonical_i105()
-            .expect("canonical i105");
-        let resolved = parse_register_account_id(&literal, &domain).expect("register account id");
-        assert_eq!(
-            resolved,
-            ScopedAccountId::new(domain, key_pair.public_key().clone())
-        );
-    }
-
-    #[test]
     fn parse_register_account_id_rejects_alias_like_literal() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let err = parse_register_account_id("inori@invalid-domain", &domain)
-            .expect_err("alias should fail");
+        let err = parse_register_account_id("inori@invalid-domain").expect_err("alias should fail");
         assert!(
             err.to_string()
-                .contains("must not include '@domain'; pass the scope via `--domain`"),
+                .contains("accounts are global and aliases carry domains"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
     fn parse_register_account_id_rejects_non_canonical_i105_literal() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let literal = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
-        let err = parse_register_account_id(&literal, &domain)
+        let literal = sample_noncanonical_i105_literal(26);
+        let err = parse_register_account_id(&literal)
             .expect_err("non-canonical I105 literal should fail");
         assert!(
             err.to_string()
@@ -7224,13 +7778,11 @@ mod tests {
 
     #[test]
     fn parse_register_account_id_rejects_canonical_hex() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
         let key_pair = KeyPair::from_seed(vec![14_u8; 32], Algorithm::Ed25519);
         let literal = AccountId::new(key_pair.public_key().clone())
             .to_canonical_hex()
             .expect("canonical hex");
-        let err =
-            parse_register_account_id(&literal, &domain).expect_err("canonical hex should fail");
+        let err = parse_register_account_id(&literal).expect_err("canonical hex should fail");
         assert!(
             err.to_string().contains("canonical hex is not accepted"),
             "unexpected error: {err}"
@@ -7238,80 +7790,70 @@ mod tests {
     }
 
     #[test]
-    fn parse_asset_id_literal_accepts_encoded_literal() {
-        let account = account_with_seed("wonderland", 22);
-        let definition: iroha::data_model::asset::id::AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
-                "xor".parse().unwrap(),
-            );
-        let expected = AssetId::new(definition, account);
-        let encoded = format!(
-            "norito:{}",
-            hex::encode(norito::to_bytes(&expected).expect("encode asset id"))
-        );
-
-        let parsed = parse_asset_id_literal(&encoded).expect("encoded asset literal should parse");
-        assert_eq!(parsed, expected);
+    fn parse_asset_balance_scope_literal_accepts_global() {
+        let parsed =
+            parse_asset_balance_scope_literal("global").expect("global scope should parse");
+        assert_eq!(parsed, iroha::data_model::asset::AssetBalanceScope::Global);
     }
 
     #[test]
-    fn parse_asset_id_literal_rejects_textual_literal() {
-        let account = account_with_seed("wonderland", 23);
-        let literal = format!("xor#wonderland#{account}");
+    fn parse_asset_balance_scope_literal_accepts_dataspace() {
+        let parsed =
+            parse_asset_balance_scope_literal("dataspace:7").expect("dataspace scope should parse");
+        assert_eq!(
+            parsed,
+            iroha::data_model::asset::AssetBalanceScope::Dataspace(
+                iroha::data_model::nexus::DataSpaceId::new(7)
+            )
+        );
+    }
 
-        let err = parse_asset_id_literal(&literal).expect_err("textual literal must be rejected");
+    #[test]
+    fn parse_asset_balance_scope_literal_rejects_invalid_literal() {
+        let err = parse_asset_balance_scope_literal("scope:not-supported")
+            .expect_err("invalid asset balance scope must fail");
         assert!(
-            err.to_string().contains("norito:<hex>"),
+            err.to_string()
+                .contains("asset balance scope must be `global` or `dataspace:<id>`"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn ledger_asset_mint_parser_rejects_textual_literal() {
-        let account = account_with_seed("wonderland", 24);
-        let literal = format!("xor#wonderland#{account}");
-
+    fn ledger_asset_mint_parser_rejects_missing_account_for_definition() {
         let err = Args::try_parse_from([
             "iroha",
             "ledger",
             "asset",
             "mint",
-            "--id",
-            &literal,
+            "--definition",
+            "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
             "--quantity",
             "1",
         ])
-        .expect_err("textual asset literal must be rejected");
+        .expect_err("definition selector without account must be rejected");
         assert!(
-            err.to_string().contains("norito:<hex>"),
+            err.to_string().contains("--account"),
             "unexpected clap error: {err}"
         );
     }
 
     #[test]
-    fn parse_asset_id_literal_rejects_invalid_norito_hex() {
-        let err = parse_asset_id_literal("norito:not-hex")
-            .expect_err("invalid norito hex payload must fail");
-        assert!(
-            err.to_string().contains("must be valid hex"),
-            "unexpected error: {err}"
+    fn parse_asset_definition_literal_accepts_base58() {
+        let expected = AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("name"),
         );
+        let parsed = parse_asset_definition_literal(&expected.to_string())
+            .expect("base58 literal should parse");
+        assert_eq!(parsed, expected);
     }
 
     #[test]
-    fn parse_asset_definition_aid_literal_accepts_aid() {
-        let parsed = parse_asset_definition_aid_literal("aid:2f17c72466f84a4bb8a8e24884fdcd2f")
-            .expect("aid literal should parse");
-        assert_eq!(parsed.to_string(), "aid:2f17c72466f84a4bb8a8e24884fdcd2f");
-    }
-
-    #[test]
-    fn parse_asset_definition_aid_literal_rejects_legacy_literal() {
-        let err = parse_asset_definition_aid_literal("xor#wonderland")
-            .expect_err("legacy literal should be rejected");
+    fn parse_asset_definition_literal_rejects_prefixed_literal() {
+        let err = parse_asset_definition_literal("prefix:2f17c72466f84a4bb8a8e24884fdcd2f")
+            .expect_err("prefixed literal should be rejected");
         assert!(
-            err.to_string().contains("aid:<32-lower-hex>"),
+            err.to_string().contains("Base58"),
             "unexpected error: {err}"
         );
     }
@@ -7320,74 +7862,10 @@ mod tests {
     fn resolve_account_id_with_resolves_encoded_literal() {
         let key_pair = KeyPair::from_seed(vec![9_u8; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
-        let canonical = account.canonical_i105().expect("canonical i105");
+        let canonical = account.canonical_i105().expect("canonical I105");
         let resolved = resolve_account_id_with(&canonical).expect("local resolve");
 
         assert_eq!(resolved.to_string(), account.to_string());
-    }
-
-    #[test]
-    fn resolve_scoped_account_for_subject_prefers_single_chain_match() {
-        let key_pair = KeyPair::from_seed(vec![10_u8; 32], Algorithm::Ed25519);
-        let parsed = ScopedAccountId::new(
-            "selector".parse().expect("selector domain"),
-            key_pair.public_key().clone(),
-        );
-        let chain_scoped = ScopedAccountId::new(
-            "nexus".parse().expect("nexus domain"),
-            key_pair.public_key().clone(),
-        );
-        let resolved = resolve_scoped_account_for_subject(
-            &parsed,
-            std::collections::BTreeSet::from([chain_scoped.clone()]),
-        )
-        .expect("subject-aware resolution");
-        assert_eq!(resolved, chain_scoped);
-    }
-
-    #[test]
-    fn resolve_scoped_account_for_subject_keeps_parsed_when_present_in_ambiguous_set() {
-        let key_pair = KeyPair::from_seed(vec![12_u8; 32], Algorithm::Ed25519);
-        let parsed = ScopedAccountId::new(
-            "alpha".parse().expect("alpha domain"),
-            key_pair.public_key().clone(),
-        );
-        let alternative = ScopedAccountId::new(
-            "beta".parse().expect("beta domain"),
-            key_pair.public_key().clone(),
-        );
-        let resolved = resolve_scoped_account_for_subject(
-            &parsed,
-            std::collections::BTreeSet::from([parsed.clone(), alternative]),
-        )
-        .expect("resolution should keep parsed literal");
-        assert_eq!(resolved, parsed);
-    }
-
-    #[test]
-    fn resolve_scoped_account_for_subject_rejects_ambiguous_subject_without_explicit_scope() {
-        let key_pair = KeyPair::from_seed(vec![15_u8; 32], Algorithm::Ed25519);
-        let parsed = ScopedAccountId::new(
-            "gamma".parse().expect("gamma domain"),
-            key_pair.public_key().clone(),
-        );
-        let first = ScopedAccountId::new(
-            "delta".parse().expect("delta domain"),
-            key_pair.public_key().clone(),
-        );
-        let second = ScopedAccountId::new(
-            "epsilon".parse().expect("epsilon domain"),
-            key_pair.public_key().clone(),
-        );
-        let err = resolve_scoped_account_for_subject(
-            &parsed,
-            std::collections::BTreeSet::from([first, second]),
-        )
-        .expect_err("ambiguous subject should be rejected");
-        assert!(
-            err.to_string().contains("multiple scoped accounts"),
-            "unexpected error: {err}"
-        );
     }
 
     #[test]
@@ -7412,6 +7890,97 @@ mod tests {
         let err = result.expect_err("stream error should propagate");
         assert!(err.to_string().contains("connection failed"));
         assert_eq!(processed, 0);
+    }
+
+    fn metadata_with_gas_limit(limit: u64) -> Metadata {
+        let mut metadata = Metadata::default();
+        iroha::data_model::transaction::insert_transaction_gas_limit(&mut metadata, limit);
+        metadata
+    }
+
+    #[test]
+    fn validate_executable_metadata_accepts_positive_ivm_gas_limit() {
+        let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
+        let metadata = metadata_with_gas_limit(42);
+        validate_executable_metadata(&executable, &metadata).expect("gas_limit should validate");
+    }
+
+    #[test]
+    fn validate_executable_metadata_rejects_missing_ivm_gas_limit() {
+        let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
+        let err = validate_executable_metadata(&executable, &Metadata::default())
+            .expect_err("missing gas_limit must fail");
+        assert!(err.to_string().contains("IVM transactions require"));
+        assert!(err.to_string().contains("--gas-limit <u64>"));
+        assert!(err.to_string().contains("gas_limit"));
+    }
+
+    #[test]
+    fn validate_executable_metadata_rejects_non_numeric_ivm_gas_limit() {
+        let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            iroha::data_model::transaction::transaction_gas_limit_metadata_key().clone(),
+            iroha_primitives::json::Json::from("oops"),
+        );
+        let err = validate_executable_metadata(&executable, &metadata)
+            .expect_err("non-numeric gas_limit must fail");
+        assert!(err.to_string().contains("invalid transaction metadata `gas_limit`"));
+    }
+
+    #[test]
+    fn validate_executable_metadata_rejects_zero_ivm_gas_limit() {
+        let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
+        let metadata = metadata_with_gas_limit(0);
+        let err = validate_executable_metadata(&executable, &metadata)
+            .expect_err("zero gas_limit must fail");
+        assert!(err.to_string().contains("must be positive"));
+    }
+
+    #[test]
+    fn validate_executable_metadata_skips_instruction_transactions() {
+        let executable = Executable::Instructions(Vec::<InstructionBox>::new().into());
+        validate_executable_metadata(&executable, &Metadata::default())
+            .expect("plain instructions should not require gas_limit");
+    }
+
+    #[test]
+    fn validate_executable_metadata_accepts_positive_ivm_proved_gas_limit() {
+        let executable = Executable::IvmProved(iroha::data_model::transaction::IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x00]),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        });
+        let metadata = metadata_with_gas_limit(42);
+        validate_executable_metadata(&executable, &metadata).expect("gas_limit should validate");
+    }
+
+    #[test]
+    fn validate_executable_metadata_rejects_missing_contract_call_gas_limit() {
+        let executable = Executable::ContractCall(
+            iroha::data_model::transaction::executable::ContractInvocation {
+                contract_address:
+                    "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                        .parse()
+                        .expect("contract address"),
+                entrypoint: "call".to_owned(),
+                payload: None,
+            },
+        );
+        let err = validate_executable_metadata(&executable, &Metadata::default())
+            .expect_err("missing gas_limit must fail");
+        assert!(err.to_string().contains("contract-call transactions require"));
+        assert!(!err.to_string().contains("--gas-limit <u64>"));
+    }
+
+    #[test]
+    fn apply_cli_gas_limit_override_sets_and_replaces_metadata_value() {
+        let mut metadata = metadata_with_gas_limit(10);
+        apply_cli_gas_limit_override(&mut metadata, Some(42));
+        let gas_limit = iroha::data_model::transaction::require_transaction_gas_limit(&metadata)
+            .expect("gas_limit should be present");
+        assert_eq!(gas_limit, 42);
     }
 
     #[test]
@@ -7600,6 +8169,8 @@ transaction_status_timeout = "77s"
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
@@ -7611,6 +8182,7 @@ transaction_status_timeout = "77s"
                 transaction_status_timeout: iroha::config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: iroha::config::DEFAULT_TRANSACTION_NONCE,
                 connect_queue_root: iroha::config::default_connect_queue_root(),
+                soracloud_http_witness_file: None,
                 sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
                 sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
                 sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),
@@ -7708,6 +8280,7 @@ transaction_status_timeout = "77s"
         let exec = ctx.captured.expect("captured instructions");
         let instructions = match exec {
             Executable::Instructions(instructions) => instructions.into_vec(),
+            Executable::ContractCall(_) => panic!("expected instructions"),
             Executable::Ivm(_) => panic!("expected instructions"),
             Executable::IvmProved(_) => panic!("expected instructions"),
         };
@@ -7718,6 +8291,53 @@ transaction_status_timeout = "77s"
             .expect("log instruction");
         assert_eq!(log.level, Level::WARN);
         assert_eq!(log.msg, "hello");
+    }
+
+    #[test]
+    fn multisig_register_run_defaults_to_domainless_home_domain() {
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![0xD6; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let mut ctx = CaptureContext::new(account.clone());
+        let register = multisig::Register {
+            signatories: vec![account.to_string()],
+            weights: vec![1],
+            quorum: 1,
+            account: Some(account.to_string()),
+            transaction_ttl: std::time::Duration::from_millis(
+                iroha::executor_data_model::isi::multisig::DEFAULT_MULTISIG_TTL_MS,
+            )
+            .into(),
+        };
+
+        register.run(&mut ctx).expect("register should build");
+
+        let exec = ctx.captured.expect("captured executable");
+        let Executable::Instructions(instructions) = exec else {
+            panic!("expected instructions executable");
+        };
+        assert_eq!(instructions.len(), 1);
+        let payload = instructions[0]
+            .as_any()
+            .downcast_ref::<iroha::data_model::isi::CustomInstruction>()
+            .expect("custom multisig instruction")
+            .payload()
+            .as_ref()
+            .to_owned();
+        let instruction: iroha::executor_data_model::isi::multisig::MultisigInstructionBox =
+            norito::json::from_str(&payload).expect("multisig instruction payload should parse");
+        let iroha::executor_data_model::isi::multisig::MultisigInstructionBox::Register(
+            register,
+        ) = instruction
+        else {
+            panic!("expected multisig register instruction");
+        };
+        assert_eq!(
+            register.home_domain, None,
+            "CLI default multisig registration should not invent a home domain"
+        );
     }
 
     #[test]
@@ -7821,6 +8441,8 @@ transaction_status_timeout = "77s"
             data_domain: None,
             data_account: None,
             data_asset: None,
+            data_asset_account: None,
+            data_asset_scope: None,
             data_asset_definition: None,
             data_role: None,
             data_trigger: None,
@@ -7901,6 +8523,8 @@ transaction_status_timeout = "77s"
             data_domain: None,
             data_account: None,
             data_asset: None,
+            data_asset_account: None,
+            data_asset_scope: None,
             data_asset_definition: None,
             data_role: None,
             data_trigger: None,
@@ -7964,9 +8588,11 @@ transaction_status_timeout = "77s"
             time_start_ms: None,
             time_period_ms: None,
             data_filter: None,
-            data_domain: Some("wonderland".parse().unwrap()),
+            data_domain: Some(DomainId::try_new("wonderland", "universal").unwrap()),
             data_account: None,
             data_asset: None,
+            data_asset_account: None,
+            data_asset_scope: None,
             data_asset_definition: None,
             data_role: None,
             data_trigger: None,
@@ -8005,7 +8631,7 @@ mod multisig_json_tests {
     use super::*;
     use iroha::crypto::{Algorithm, KeyPair};
     use iroha::data_model::{
-        account::ScopedAccountId,
+        account::AccountId,
         domain::DomainId,
         isi::{CustomInstruction, InstructionBox},
     };
@@ -8015,27 +8641,22 @@ mod multisig_json_tests {
     use std::collections::BTreeMap;
     use std::num::{NonZeroU16, NonZeroU64};
 
-    fn multisig_account() -> ScopedAccountId {
-        let domain: DomainId = "acme".parse().expect("domain");
+    fn multisig_account() -> AccountId {
         let key_pair = KeyPair::from_seed(vec![0xD6; 32], Algorithm::Ed25519);
-        ScopedAccountId::new(domain, key_pair.public_key().clone())
+        AccountId::new(key_pair.public_key().clone())
     }
 
     #[test]
     fn multisig_register_payload_contains_account() {
         let account = multisig_account();
         let mut signatories = BTreeMap::new();
-        signatories.insert(account.account().clone(), 1);
+        signatories.insert(account.clone(), 1);
         let spec = MultisigSpec::new(
             signatories,
             NonZeroU16::new(1).expect("nonzero quorum"),
             NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("nonzero ttl"),
         );
-        let register = MultisigRegister::with_account(
-            account.account().clone(),
-            account.domain().clone(),
-            spec,
-        );
+        let register = MultisigRegister::with_account(account.clone(), None::<DomainId>, spec);
         let instruction: InstructionBox = register.into();
         let payload = instruction
             .as_any()
@@ -8049,38 +8670,23 @@ mod multisig_json_tests {
             "serialized payload missing account field: {payload}"
         );
     }
-}
 
-#[cfg(test)]
-mod cli_command_tests {
-    use super::*;
-    use clap::Parser;
-
-    #[test]
-    fn top_level_offline_parses() {
-        let args =
-            Args::try_parse_from(["iroha_cli", "offline", "allowance", "list"]).expect("parse");
-        assert!(matches!(args.command, Command::Offline(_)));
-    }
 }
 
 #[cfg(all(test, feature = "cli_integration_harness"))]
-mod tests {
-    use super::cli_integration_harness::MockQueryServer;
+mod cli_integration_harness_tests {
     use super::*;
     use iroha::crypto::KeyPair;
     use iroha::data_model::query::{
-        QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithParams, SingularQueryBox,
-        SingularQueryOutputBox,
+        QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithParams,
         builder::{QueryBuilder, QueryExecutor},
-        parameters::{FetchSize, Pagination, QueryParams, Sorting},
+        parameters::{FetchSize, Pagination, Sorting},
     };
-    use iroha::data_model::smart_contract::manifest::ContractManifest;
     use iroha::data_model::{
         domain::{Domain, DomainId},
         prelude::FindDomains,
     };
-    use iroha_crypto::{Algorithm, Hash};
+    use iroha_crypto::Algorithm;
     use std::cmp::Ordering as CmpOrdering;
     use std::num::NonZeroU64;
 
@@ -8118,10 +8724,9 @@ mod tests {
         }
     }
 
-    fn sample_account_id(domain: &str, seed: u8) -> ScopedAccountId {
-        let domain_id: DomainId = domain.parse().expect("domain id");
+    fn sample_account_id(_domain: &str, seed: u8) -> AccountId {
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-        ScopedAccountId::new(domain_id, key_pair.public_key().clone())
+        AccountId::new(key_pair.public_key().clone())
     }
 
     #[test]
@@ -8130,7 +8735,7 @@ mod tests {
 
         let owner = sample_account_id("wonderland", 1);
         let raw = format!(r#"{{"op":"eq","args":[{{"FieldPath":"authority"}},"{owner}"]}}"#);
-        let predicate = super::parse_json::<CompoundPredicate<Domain>>(raw)
+        let predicate = super::parse_json::<CompoundPredicate<Domain>>(&raw)
             .expect("predicate JSON should parse");
 
         let serialized = norito::json::to_json(&predicate).expect("serialize predicate");
@@ -8169,7 +8774,7 @@ mod tests {
         fetch: usize,
     ) -> (usize, usize, usize)
     where
-        Get: Fn(&T, &Name) -> Option<&Json>,
+        Get: for<'a> Fn(&'a T, &'a Name) -> Option<&'a Json>,
     {
         if let Some(k) = key {
             items.sort_by(|a, b| {
@@ -8231,26 +8836,26 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             // Build three domains with metadata key `rank`: 2, 1, and None
-            let domain_id1: iroha::data_model::domain::DomainId = "d1".parse().unwrap();
-            let domain_id2: iroha::data_model::domain::DomainId = "d2".parse().unwrap();
-            let domain_id3: iroha::data_model::domain::DomainId = "d3".parse().unwrap();
+            let domain_id1: iroha::data_model::domain::DomainId = DomainId::try_new("d1", "universal").unwrap();
+            let domain_id2: iroha::data_model::domain::DomainId = DomainId::try_new("d2", "universal").unwrap();
+            let domain_id3: iroha::data_model::domain::DomainId = DomainId::try_new("d3", "universal").unwrap();
             let kp = KeyPair::random();
-            let owner1 = iroha::data_model::account::ScopedAccountId::new(
+            let owner1 = iroha::data_model::account::AccountId::new(
                 domain_id1.clone(),
                 kp.public_key().clone(),
             );
-            let owner2 = iroha::data_model::account::ScopedAccountId::new(
+            let owner2 = iroha::data_model::account::AccountId::new(
                 domain_id2.clone(),
                 kp.public_key().clone(),
             );
-            let owner3 = iroha::data_model::account::ScopedAccountId::new(
+            let owner3 = iroha::data_model::account::AccountId::new(
                 domain_id3.clone(),
                 kp.public_key().clone(),
             );
 
-            let mut d1 = Domain::new(domain_id1).build(&owner1);
-            let mut d2 = Domain::new(domain_id2).build(&owner2);
-            let d3 = Domain::new(domain_id3).build(&owner3);
+            let mut d1 = Domain::new(domain_id1).build(owner1.account());
+            let mut d2 = Domain::new(domain_id2).build(owner2.account());
+            let d3 = Domain::new(domain_id3).build(owner3.account());
             d1.metadata_mut()
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
             d2.metadata_mut()
@@ -8266,13 +8871,15 @@ mod tests {
                 v.sort_by(|a, b| {
                     let la = a.metadata().get(&key);
                     let lb = b.metadata().get(&key);
-                    let ord = match (la, lb) {
-                        (Some(l), Some(r)) => l.cmp(r),
+                    match (la, lb) {
+                        (Some(l), Some(r)) => {
+                            let ord = l.cmp(r);
+                            if desc { ord.reverse() } else { ord }
+                        }
                         (Some(_), None) => std::cmp::Ordering::Less,
                         (None, Some(_)) => std::cmp::Ordering::Greater,
                         (None, None) => std::cmp::Ordering::Equal,
-                    };
-                    if desc { ord.reverse() } else { ord }
+                    }
                 });
             }
 
@@ -8348,16 +8955,16 @@ mod tests {
             &self,
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
-            use iroha::data_model::account::{Account, ScopedAccountId};
+            use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = "land".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let kp1 = KeyPair::random();
             let kp2 = KeyPair::random();
             let kp3 = KeyPair::random();
-            let id1 = ScopedAccountId::new(domain.clone(), kp1.public_key().clone());
-            let id2 = ScopedAccountId::new(domain.clone(), kp2.public_key().clone());
-            let id3 = ScopedAccountId::new(domain.clone(), kp3.public_key().clone());
+            let id1 = AccountId::new(kp1.public_key().clone());
+            let id2 = AccountId::new(kp2.public_key().clone());
+            let id3 = AccountId::new(kp3.public_key().clone());
 
             // Build accounts; builder API needs an authority, use id1 for simplicity
             let mut a1 = Account::new(id1.clone()).build(&id1);
@@ -8380,13 +8987,15 @@ mod tests {
                 v.sort_by(|a, b| {
                     let la = a.metadata().get(&key);
                     let lb = b.metadata().get(&key);
-                    let ord = match (la, lb) {
-                        (Some(l), Some(r)) => l.cmp(r),
+                    match (la, lb) {
+                        (Some(l), Some(r)) => {
+                            let ord = l.cmp(r);
+                            if desc { ord.reverse() } else { ord }
+                        }
                         (Some(_), None) => std::cmp::Ordering::Less,
                         (None, Some(_)) => std::cmp::Ordering::Greater,
                         (None, None) => std::cmp::Ordering::Equal,
-                    };
-                    if desc { ord.reverse() } else { ord }
+                    }
                 });
             }
 
@@ -8491,30 +9100,42 @@ mod tests {
             &self,
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
-            use iroha::data_model::account::ScopedAccountId;
+            use iroha::data_model::account::AccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = "land".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let kp = KeyPair::random();
-            let owner = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
-            let id1: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "land".parse().unwrap(),
+            let owner = AccountId::new(kp.public_key().clone());
+            let id1: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("land", "universal").unwrap(),
                 "gold".parse().unwrap(),
             );
-            let id2: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "land".parse().unwrap(),
+            let id2: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("land", "universal").unwrap(),
                 "silver".parse().unwrap(),
             );
-            let id3: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "land".parse().unwrap(),
+            let id3: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("land", "universal").unwrap(),
                 "bronze".parse().unwrap(),
             );
 
-            let mut ad1 = { let __asset_definition_id = id1; AssetDefinition::numeric(__asset_definition_id.clone()).with_name(__asset_definition_id.name().to_string()) }.build(&owner);
-            let mut ad2 = { let __asset_definition_id = id2; AssetDefinition::numeric(__asset_definition_id.clone()).with_name(__asset_definition_id.name().to_string()) }.build(&owner);
-            let ad3 = { let __asset_definition_id = id3; AssetDefinition::numeric(__asset_definition_id.clone()).with_name(__asset_definition_id.name().to_string()) }.build(&owner);
+            let mut ad1 = {
+                let __asset_definition_id = id1;
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(owner.account());
+            let mut ad2 = {
+                let __asset_definition_id = id2;
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(owner.account());
+            let ad3 = {
+                let __asset_definition_id = id3;
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(owner.account());
 
             // Insert ranks: ad1=2, ad2=1, ad3=None
             ad1.metadata_mut()
@@ -8531,13 +9152,15 @@ mod tests {
                 v.sort_by(|a, b| {
                     let la = a.metadata().get(&key);
                     let lb = b.metadata().get(&key);
-                    let ord = match (la, lb) {
-                        (Some(l), Some(r)) => l.cmp(r),
+                    match (la, lb) {
+                        (Some(l), Some(r)) => {
+                            let ord = l.cmp(r);
+                            if desc { ord.reverse() } else { ord }
+                        }
                         (Some(_), None) => std::cmp::Ordering::Less,
                         (None, Some(_)) => std::cmp::Ordering::Greater,
                         (None, None) => std::cmp::Ordering::Equal,
-                    };
-                    if desc { ord.reverse() } else { ord }
+                    }
                 });
             }
 
@@ -8636,7 +9259,7 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PAGED_DOMAINS_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::ScopedAccountId;
+            use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
 
             // Build 5 domains d0..d4
@@ -8644,8 +9267,8 @@ mod tests {
             let mut domains = Vec::new();
             for i in 0..5 {
                 let name = format!("d{i}");
-                let did: DomainId = name.parse().unwrap();
-                let owner = ScopedAccountId::new(did.clone(), kp.public_key().clone());
+                let did = DomainId::try_new(&name, "universal").unwrap();
+                let owner = AccountId::new(kp.public_key().clone());
                 domains.push(Domain::new(did).build(&owner));
             }
 
@@ -8777,15 +9400,15 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PSD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::ScopedAccountId;
+            use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
 
             let kp = KeyPair::random();
             // Build domains d0..d4 with ranks: d0=2, d1=4, d2=None, d3=1, d4=3
             let mut domains = Vec::new();
-            let mut mk = |name: &str, rank: Option<i64>| {
-                let did: DomainId = name.parse().unwrap();
-                let owner = ScopedAccountId::new(did.clone(), kp.public_key().clone());
+            let mk = |name: &str, rank: Option<i64>| {
+                let did = DomainId::try_new(name, "universal").unwrap();
+                let owner = AccountId::new(kp.public_key().clone());
                 let mut d = Domain::new(did).build(&owner);
                 if let Some(r) = rank {
                     d.metadata_mut()
@@ -8898,14 +9521,14 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PSD_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::ScopedAccountId;
+            use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
 
             let kp = KeyPair::random();
             let mut domains = Vec::new();
-            let mut mk = |name: &str, rank: Option<i64>| {
-                let did: DomainId = name.parse().unwrap();
-                let owner = ScopedAccountId::new(did.clone(), kp.public_key().clone());
+            let mk = |name: &str, rank: Option<i64>| {
+                let did = DomainId::try_new(name, "universal").unwrap();
+                let owner = AccountId::new(kp.public_key().clone());
                 let mut d = Domain::new(did).build(&owner);
                 if let Some(r) = rank {
                     d.metadata_mut()
@@ -9098,20 +9721,17 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PSA_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::{Account, ScopedAccountId};
+            use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = "land".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             // Build accounts a0..a4 with ranks: a0=2, a1=4, a2=None, a3=1, a4=3
             let mut accounts: Vec<Account> = (0..5)
                 .map(|_| {
                     let kp = KeyPair::random();
-                    let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
+                    let id = AccountId::new(kp.public_key().clone());
                     // owner for builder is arbitrary for this harness
-                    Account::new(id).build(&ScopedAccountId::new(
-                        domain.clone(),
-                        KeyPair::random().public_key().clone(),
-                    ))
+                    Account::new(id.clone()).build(&id)
                 })
                 .collect();
             let key: Name = "rank".parse().unwrap();
@@ -9228,18 +9848,15 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PSA_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::{Account, ScopedAccountId};
+            use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = "land".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let mut accounts: Vec<Account> = (0..5)
                 .map(|_| {
                     let kp = KeyPair::random();
-                    let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
-                    Account::new(id).build(&ScopedAccountId::new(
-                        domain.clone(),
-                        KeyPair::random().public_key().clone(),
-                    ))
+                    let id = AccountId::new(kp.public_key().clone());
+                    Account::new(id.clone()).build(&id)
                 })
                 .collect();
             let key: Name = "rank".parse().unwrap();
@@ -9370,7 +9987,7 @@ mod tests {
             .iter()
             .map(|a| {
                 a.metadata()
-                    .get(&"rank".parse().unwrap())
+                    .get(&"rank".parse::<Name>().unwrap())
                     .and_then(|j| j.try_into_any_norito::<i64>().ok())
             })
             .collect();
@@ -9406,7 +10023,7 @@ mod tests {
             .iter()
             .map(|a| {
                 a.metadata()
-                    .get(&"rank".parse().unwrap())
+                    .get(&"rank".parse::<Name>().unwrap())
                     .and_then(|j| j.try_into_any_norito::<i64>().ok())
             })
             .collect();
@@ -9445,14 +10062,13 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PSAD_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::ScopedAccountId;
+            use iroha::data_model::account::AccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = "land".parse().unwrap();
-            let owner =
-                ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
+            let owner = AccountId::new(KeyPair::random().public_key().clone());
 
             // Build asset defs ad0..ad4 with ranks: ad0=2, ad1=4, ad2=None, ad3=1, ad4=3
             let ids: Vec<AssetDefinitionId> = (0..5)
@@ -9460,7 +10076,14 @@ mod tests {
                 .collect();
             let mut defs: Vec<AssetDefinition> = ids
                 .into_iter()
-                .map(|id| { let __asset_definition_id = id; AssetDefinition::numeric(__asset_definition_id.clone()).with_name(__asset_definition_id.name().to_string()) }.build(&owner))
+                .map(|id| {
+                    {
+                        let __asset_definition_id = id;
+                        AssetDefinition::numeric(__asset_definition_id.clone())
+                            .with_name(__asset_definition_id.name().to_string())
+                    }
+                    .build(owner.account())
+                })
                 .collect();
             let key: Name = "rank".parse().unwrap();
             defs[0]
@@ -9585,7 +10208,7 @@ mod tests {
             .iter()
             .map(|ad| {
                 ad.metadata()
-                    .get(&"rank".parse().unwrap())
+                    .get(&"rank".parse::<Name>().unwrap())
                     .and_then(|j| j.try_into_any_norito::<i64>().ok())
             })
             .collect();
@@ -9618,14 +10241,13 @@ mod tests {
             ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error>
             {
                 PSAD_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-                use iroha::data_model::account::ScopedAccountId;
+                use iroha::data_model::account::AccountId;
                 use iroha::data_model::asset::definition::AssetDefinition;
                 use iroha::data_model::asset::id::AssetDefinitionId;
                 use iroha::data_model::domain::DomainId;
 
-                let domain: DomainId = "land".parse().unwrap();
-                let owner =
-                    ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+                let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
+                let owner = AccountId::new(KeyPair::random().public_key().clone());
                 let ids: Vec<AssetDefinitionId> = (0..5)
                     .map(|i| {
                         AssetDefinitionId::new(domain.clone(), format!("ad{i}").parse().unwrap())
@@ -9633,7 +10255,14 @@ mod tests {
                     .collect();
                 let mut defs: Vec<AssetDefinition> = ids
                     .into_iter()
-                    .map(|id| { let __asset_definition_id = id; AssetDefinition::numeric(__asset_definition_id.clone()).with_name(__asset_definition_id.name().to_string()) }.build(&owner))
+                    .map(|id| {
+                        {
+                            let __asset_definition_id = id;
+                            AssetDefinition::numeric(__asset_definition_id.clone())
+                                .with_name(__asset_definition_id.name().to_string())
+                        }
+                        .build(owner.account())
+                    })
                     .collect();
                 let key: Name = "rank".parse().unwrap();
                 defs[0]
@@ -9763,7 +10392,7 @@ mod tests {
             .iter()
             .map(|ad| {
                 ad.metadata()
-                    .get(&"rank".parse().unwrap())
+                    .get(&"rank".parse::<Name>().unwrap())
                     .and_then(|j| j.try_into_any_norito::<i64>().ok())
             })
             .collect();
@@ -9790,20 +10419,20 @@ mod tests {
             &self,
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
-            use iroha::data_model::account::ScopedAccountId;
+            use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
 
-            let domain: DomainId = "art".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("art", "universal").unwrap();
             let kp = KeyPair::random();
-            let owner = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
+            let owner = AccountId::new(kp.public_key().clone());
             let id1: NftId = "n1$art".parse().unwrap();
             let id2: NftId = "n2$art".parse().unwrap();
             let id3: NftId = "n3$art".parse().unwrap();
 
-            let mut n1 = Nft::new(id1, Default::default()).build(&owner);
-            let mut n2 = Nft::new(id2, Default::default()).build(&owner);
-            let n3 = Nft::new(id3, Default::default()).build(&owner);
+            let mut n1 = Nft::new(id1, Default::default()).build(owner.account());
+            let mut n2 = Nft::new(id2, Default::default()).build(owner.account());
+            let n3 = Nft::new(id3, Default::default()).build(owner.account());
 
             n1.content
                 .insert("rank".parse().unwrap(), Json::from(norito::json!(2)));
@@ -9820,13 +10449,15 @@ mod tests {
                 v.sort_by(|a, b| {
                     let la = a.content().get(&key);
                     let lb = b.content().get(&key);
-                    let ord = match (la, lb) {
-                        (Some(l), Some(r)) => l.cmp(r),
+                    match (la, lb) {
+                        (Some(l), Some(r)) => {
+                            let ord = l.cmp(r);
+                            if desc { ord.reverse() } else { ord }
+                        }
                         (Some(_), None) => std::cmp::Ordering::Less,
                         (None, Some(_)) => std::cmp::Ordering::Greater,
                         (None, None) => std::cmp::Ordering::Equal,
-                    };
-                    if desc { ord.reverse() } else { ord }
+                    }
                 });
             }
 
@@ -9922,13 +10553,12 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PSN_ASC_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::ScopedAccountId;
+            use iroha::data_model::account::AccountId;
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
 
-            let domain: DomainId = "art".parse().unwrap();
-            let owner =
-                ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+            let domain: DomainId = DomainId::try_new("art", "universal").unwrap();
+            let owner = AccountId::new(KeyPair::random().public_key().clone());
 
             // Build NFTs n0..n4 with ranks: n0=2, n1=4, n2=None, n3=1, n4=3
             let ids: Vec<NftId> = (0..5)
@@ -9936,7 +10566,7 @@ mod tests {
                 .collect();
             let mut nfts: Vec<Nft> = ids
                 .into_iter()
-                .map(|id| Nft::new(id, Default::default()).build(&owner))
+                .map(|id| Nft::new(id, Default::default()).build(owner.account()))
                 .collect();
             let key: Name = "rank".parse().unwrap();
             nfts[0]
@@ -10094,20 +10724,19 @@ mod tests {
             ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error>
             {
                 PSN_DESC_STARTS.fetch_add(1, Ordering::SeqCst);
-                use iroha::data_model::account::ScopedAccountId;
+                use iroha::data_model::account::AccountId;
                 use iroha::data_model::domain::DomainId;
                 use iroha::data_model::nft::{Nft, NftId};
 
-                let domain: DomainId = "art".parse().unwrap();
-                let owner =
-                    ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+                let domain: DomainId = DomainId::try_new("art", "universal").unwrap();
+                let owner = AccountId::new(KeyPair::random().public_key().clone());
 
                 let ids: Vec<NftId> = (0..5)
                     .map(|i| format!("n{i}$art").parse().unwrap())
                     .collect();
                 let mut nfts: Vec<Nft> = ids
                     .into_iter()
-                    .map(|id| Nft::new(id, Default::default()).build(&owner))
+                    .map(|id| Nft::new(id, Default::default()).build(owner.account()))
                     .collect();
                 let key: Name = "rank".parse().unwrap();
                 nfts[0]
@@ -10268,19 +10897,17 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PAGED_ACCOUNTS_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::{Account, ScopedAccountId};
+            use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
 
             // Build 5 accounts a0..a4 in the same domain, annotate metadata pos = index
-            let domain: DomainId = "land".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let mut accounts = Vec::new();
             for i in 0..5 {
                 let kp = KeyPair::random();
-                let id = ScopedAccountId::new(domain.clone(), kp.public_key().clone());
-                let mut a = Account::new(id).build(
-                    // owner is arbitrary in builder path
-                    &ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone()),
-                );
+                let id = AccountId::new(kp.public_key().clone());
+                // owner is arbitrary in builder path
+                let mut a = Account::new(id.clone()).build(&id);
                 a.metadata
                     .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
                 accounts.push(a);
@@ -10418,21 +11045,25 @@ mod tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             PAGED_ADS_STARTS.fetch_add(1, Ordering::SeqCst);
-            use iroha::data_model::account::ScopedAccountId;
+            use iroha::data_model::account::AccountId;
             use iroha::data_model::asset::definition::AssetDefinition;
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = "land".parse().unwrap();
-            let owner =
-                ScopedAccountId::new(domain.clone(), KeyPair::random().public_key().clone());
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
+            let owner = AccountId::new(KeyPair::random().public_key().clone());
 
             // Build 5 defs ad0..ad4 and tag pos metadata
             let mut defs = Vec::new();
             for i in 0..5 {
                 let id: AssetDefinitionId =
                     AssetDefinitionId::new(domain.clone(), format!("ad{i}").parse().unwrap());
-                let mut ad = { let __asset_definition_id = id; AssetDefinition::numeric(__asset_definition_id.clone()).with_name(__asset_definition_id.name().to_string()) }.build(&owner);
+                let mut ad = {
+                    let __asset_definition_id = id;
+                    AssetDefinition::numeric(__asset_definition_id.clone())
+                        .with_name(__asset_definition_id.name().to_string())
+                }
+                .build(owner.account());
                 ad.metadata_mut()
                     .insert("pos".parse().unwrap(), Json::from(norito::json!(i)));
                 defs.push(ad);
@@ -10550,35 +11181,39 @@ mod tests {
 // embedded state once server-side selectors/projections are fully enabled.
 // It is intentionally behind a feature and unused by default to avoid pulling
 // additional dependencies or affecting production builds.
-#[cfg(feature = "cli_integration_harness")]
+#[cfg(all(test, feature = "cli_integration_harness"))]
 mod cli_integration_harness {
     use super::*;
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     use eyre::eyre;
+    use iroha::crypto::KeyPair;
     use iroha::data_model::query::runtime::AbiVersion;
+    #[cfg(feature = "ids_projection")]
+    use iroha::data_model::query::{QueryItemKind, QueryWithFilter};
     use iroha::data_model::{
+        account::ScopedAccountId,
         asset::{Asset, AssetId},
+        domain::DomainId,
         executor::ExecutorDataModel,
         parameter::Parameters,
-        proof::{ProofId, ProofRecord, ProofStatus},
+        proof::{ProofId, ProofRecord},
         query::{
             QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithParams, SingularQueryBox,
-            SingularQueryOutputBox,
-            builder::QueryExecutor,
-            parameters::{FetchSize, Pagination, QueryParams, Sorting},
+            SingularQueryOutputBox, builder::QueryExecutor,
         },
         smart_contract::manifest::ContractManifest,
     };
-    use iroha_crypto::Hash;
-    use iroha_primitives::json::Json;
+    use iroha_crypto::{Algorithm, Hash};
+    #[cfg(feature = "ids_projection")]
+    use norito::codec::Decode;
 
     /// Minimal mock server for iterable queries; returns static payloads by type.
     pub struct MockQueryServer {
         pub domains: Vec<iroha::data_model::domain::Domain>,
         pub accounts: Vec<iroha::data_model::account::Account>,
+        pub triggers: Vec<iroha::data_model::trigger::Trigger>,
         pub asset_defs: Vec<iroha::data_model::asset::definition::AssetDefinition>,
-        pub params: QueryParams,
         pub executor_data_model: Option<ExecutorDataModel>,
         pub parameters: Option<Parameters>,
         pub proof_records: BTreeMap<ProofId, ProofRecord>,
@@ -10592,12 +11227,8 @@ mod cli_integration_harness {
             Self {
                 domains: vec![],
                 accounts: vec![],
+                triggers: vec![],
                 asset_defs: vec![],
-                params: QueryParams {
-                    pagination: Pagination::default(),
-                    sorting: Sorting::default(),
-                    fetch_size: FetchSize::default(),
-                },
                 executor_data_model: None,
                 parameters: None,
                 proof_records: BTreeMap::new(),
@@ -10606,6 +11237,114 @@ mod cli_integration_harness {
                 assets: BTreeMap::new(),
             }
         }
+    }
+
+    fn sample_account_id(domain: &str, seed: u8) -> ScopedAccountId {
+        let domain_id = DomainId::try_new(domain, "universal").expect("domain id");
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        ScopedAccountId::new(domain_id, key_pair.public_key().clone())
+    }
+
+    #[cfg(feature = "ids_projection")]
+    fn build_query_with_params<T, F>(
+        predicate: iroha::data_model::query::dsl::CompoundPredicate<T>,
+        selector: iroha::data_model::query::dsl::SelectorTuple<T>,
+        params: iroha::data_model::query::parameters::QueryParams,
+        _builder: F,
+    ) -> QueryWithParams
+    where
+        T: iroha::data_model::query::dsl::HasProjection<
+                iroha::data_model::query::dsl::PredicateMarker,
+            > + iroha::data_model::query::dsl::HasProjection<
+                iroha::data_model::query::dsl::SelectorMarker,
+                AtomType = (),
+            > + Send
+            + Sync
+            + 'static,
+        F: FnOnce() -> Box<dyn iroha::data_model::query::Query<Item = T> + Send + Sync + 'static>,
+    {
+        let qwf = QueryWithFilter::new_with_query((), predicate, selector);
+        let qbox: iroha::data_model::query::QueryBox<
+            iroha::data_model::query::QueryOutputBatchBox,
+        > = qwf.into();
+        QueryWithParams::new(&qbox, params)
+    }
+
+    #[cfg(feature = "ids_projection")]
+    fn query_projects_domain_ids(query: &QueryWithParams) -> bool {
+        query
+            .query_box()
+            .and_then(
+                iroha::data_model::query::iter_query_inner::<iroha::data_model::domain::Domain>,
+            )
+            .is_some_and(|erased| erased.selector().is_ids_only())
+            || query
+                .fast_dsl_parts()
+                .is_some_and(|(item_kind, _, selector_bytes, _)| {
+                    if item_kind != QueryItemKind::Domain {
+                        return false;
+                    }
+                    let mut cursor = selector_bytes;
+                    let selector: iroha::data_model::query::dsl::SelectorTuple<
+                        iroha::data_model::domain::Domain,
+                    > = match Decode::decode(&mut cursor) {
+                        Ok(selector) => selector,
+                        Err(_) => return false,
+                    };
+                    selector.is_ids_only()
+                })
+    }
+
+    #[cfg(feature = "ids_projection")]
+    fn query_projects_account_ids(query: &QueryWithParams) -> bool {
+        query
+            .query_box()
+            .and_then(
+                iroha::data_model::query::iter_query_inner::<iroha::data_model::account::Account>,
+            )
+            .is_some_and(|erased| erased.selector().is_ids_only())
+            || query
+                .fast_dsl_parts()
+                .is_some_and(|(item_kind, _, selector_bytes, _)| {
+                    if item_kind != QueryItemKind::Account {
+                        return false;
+                    }
+                    let mut cursor = selector_bytes;
+                    let selector: iroha::data_model::query::dsl::SelectorTuple<
+                        iroha::data_model::account::Account,
+                    > = match Decode::decode(&mut cursor) {
+                        Ok(selector) => selector,
+                        Err(_) => return false,
+                    };
+                    selector.is_ids_only()
+                })
+    }
+
+    #[cfg(feature = "ids_projection")]
+    fn query_projects_asset_definition_ids(query: &QueryWithParams) -> bool {
+        query
+            .query_box()
+            .and_then(
+                iroha::data_model::query::iter_query_inner::<
+                    iroha::data_model::asset::definition::AssetDefinition,
+                >,
+            )
+            .is_some_and(|erased| erased.selector().is_ids_only())
+            || query
+                .fast_dsl_parts()
+                .is_some_and(|(item_kind, _, selector_bytes, _)| {
+                    if item_kind != QueryItemKind::AssetDefinition {
+                        return false;
+                    }
+                    let mut cursor = selector_bytes;
+                    let selector: iroha::data_model::query::dsl::SelectorTuple<
+                        iroha::data_model::asset::definition::AssetDefinition,
+                    > = match Decode::decode(&mut cursor) {
+                        Ok(selector) => selector,
+                        Err(_) => return false,
+                    };
+                    selector.is_ids_only()
+                })
     }
 
     // Cursor that carries the remaining items and fetch size
@@ -10633,13 +11372,13 @@ mod cli_integration_harness {
         },
         #[cfg(feature = "ids_projection")]
         AccountIds {
-            ids: Vec<iroha::data_model::account::ScopedAccountId>,
+            ids: Vec<iroha::data_model::account::AccountId>,
             idx: usize,
             fetch: usize,
         },
         #[cfg(feature = "ids_projection")]
         AssetDefIds {
-            ids: Vec<iroha::data_model::asset::definition::AssetDefinitionId>,
+            ids: Vec<iroha::data_model::asset::id::AssetDefinitionId>,
             idx: usize,
             fetch: usize,
         },
@@ -10664,6 +11403,13 @@ mod cli_integration_harness {
                     .clone()
                     .map(SingularQueryOutputBox::Parameters)
                     .ok_or_else(|| eyre!("parameters not configured in MockQueryServer")),
+                SingularQueryBox::FindAccountById(req) => self
+                    .accounts
+                    .iter()
+                    .find(|account| account.id() == req.account_id())
+                    .cloned()
+                    .map(SingularQueryOutputBox::Account)
+                    .ok_or_else(|| eyre!(format!("account `{}` not found", req.account_id()))),
                 SingularQueryBox::FindProofRecordById(req) => self
                     .proof_records
                     .get(&req.id)
@@ -10683,10 +11429,17 @@ mod cli_integration_harness {
                     .ok_or_else(|| eyre!("ABI version not configured in MockQueryServer")),
                 SingularQueryBox::FindAssetById(req) => self
                     .assets
-                    .get(&req.asset_id)
+                    .get(req.asset_id())
                     .cloned()
                     .map(SingularQueryOutputBox::Asset)
-                    .ok_or_else(|| eyre!(format!("asset `{}` not found", req.asset_id))),
+                    .ok_or_else(|| eyre!(format!("asset `{}` not found", req.asset_id()))),
+                SingularQueryBox::FindTriggerById(req) => self
+                    .triggers
+                    .iter()
+                    .find(|trigger| trigger.id() == req.trigger_id())
+                    .cloned()
+                    .map(SingularQueryOutputBox::Trigger)
+                    .ok_or_else(|| eyre!(format!("trigger `{}` not found", req.trigger_id()))),
                 other => Err(eyre!(format!(
                     "query `{other:?}` not supported in MockQueryServer"
                 ))),
@@ -10724,13 +11477,15 @@ mod cli_integration_harness {
                     v.sort_by(|a, b| {
                         let la = a.metadata().get(&key);
                         let lb = b.metadata().get(&key);
-                        let ord = match (la, lb) {
-                            (Some(l), Some(r)) => l.cmp(r),
+                        match (la, lb) {
+                            (Some(l), Some(r)) => {
+                                let ord = l.cmp(r);
+                                if desc { ord.reverse() } else { ord }
+                            }
                             (Some(_), None) => std::cmp::Ordering::Less,
                             (None, Some(_)) => std::cmp::Ordering::Greater,
                             (None, None) => std::cmp::Ordering::Equal,
-                        };
-                        if desc { ord.reverse() } else { ord }
+                        }
                     });
                 }
                 let start = offset.min(v.len());
@@ -10739,32 +11494,27 @@ mod cli_integration_harness {
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
                 // Detect ids-only selector for domains
-                if let Some(erased) = iroha::data_model::query::iter_query_inner::<
-                    iroha::data_model::domain::Domain,
-                >(&query.query)
-                {
-                    #[cfg(feature = "ids_projection")]
-                    if erased.selector().is_ids_only() {
-                        let first_ids: Vec<_> = first.iter().map(|d| d.id().clone()).collect();
-                        let remaining_ids: Vec<_> =
-                            v[first_end..end].iter().map(|d| d.id().clone()).collect();
-                        let next = if remaining > 0 {
-                            Some(MockCursor::DomainIds {
-                                ids: remaining_ids,
-                                idx: 0,
-                                fetch,
-                            })
-                        } else {
-                            None
-                        };
-                        return Ok((
-                            QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::DomainId(first_ids)],
-                            },
-                            remaining,
-                            next,
-                        ));
-                    }
+                #[cfg(feature = "ids_projection")]
+                if query_projects_domain_ids(&query) {
+                    let first_ids: Vec<_> = first.iter().map(|d| d.id().clone()).collect();
+                    let remaining_ids: Vec<_> =
+                        v[first_end..end].iter().map(|d| d.id().clone()).collect();
+                    let next = if remaining > 0 {
+                        Some(MockCursor::DomainIds {
+                            ids: remaining_ids,
+                            idx: 0,
+                            fetch,
+                        })
+                    } else {
+                        None
+                    };
+                    return Ok((
+                        QueryOutputBatchBoxTuple {
+                            tuple: vec![QueryOutputBatchBox::DomainId(first_ids)],
+                        },
+                        remaining,
+                        next,
+                    ));
                 }
                 let next = if remaining > 0 {
                     Some(MockCursor::Domains {
@@ -10789,13 +11539,15 @@ mod cli_integration_harness {
                     v.sort_by(|a, b| {
                         let la = a.metadata().get(&key);
                         let lb = b.metadata().get(&key);
-                        let ord = match (la, lb) {
-                            (Some(l), Some(r)) => l.cmp(r),
+                        match (la, lb) {
+                            (Some(l), Some(r)) => {
+                                let ord = l.cmp(r);
+                                if desc { ord.reverse() } else { ord }
+                            }
                             (Some(_), None) => std::cmp::Ordering::Less,
                             (None, Some(_)) => std::cmp::Ordering::Greater,
                             (None, None) => std::cmp::Ordering::Equal,
-                        };
-                        if desc { ord.reverse() } else { ord }
+                        }
                     });
                 }
                 let start = offset.min(v.len());
@@ -10804,31 +11556,26 @@ mod cli_integration_harness {
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
                 #[cfg(feature = "ids_projection")]
-                if let Some(erased) = iroha::data_model::query::iter_query_inner::<
-                    iroha::data_model::account::Account,
-                >(&query.query)
-                {
-                    if erased.selector().is_ids_only() {
-                        let first_ids: Vec<_> = first.iter().map(|a| a.id().clone()).collect();
-                        let remaining_ids: Vec<_> =
-                            v[first_end..end].iter().map(|a| a.id().clone()).collect();
-                        let next = if remaining > 0 {
-                            Some(MockCursor::AccountIds {
-                                ids: remaining_ids,
-                                idx: 0,
-                                fetch,
-                            })
-                        } else {
-                            None
-                        };
-                        return Ok((
-                            QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::ScopedAccountId(first_ids)],
-                            },
-                            remaining,
-                            next,
-                        ));
-                    }
+                if query_projects_account_ids(&query) {
+                    let first_ids: Vec<_> = first.iter().map(|a| a.id().clone()).collect();
+                    let remaining_ids: Vec<_> =
+                        v[first_end..end].iter().map(|a| a.id().clone()).collect();
+                    let next = if remaining > 0 {
+                        Some(MockCursor::AccountIds {
+                            ids: remaining_ids,
+                            idx: 0,
+                            fetch,
+                        })
+                    } else {
+                        None
+                    };
+                    return Ok((
+                        QueryOutputBatchBoxTuple {
+                            tuple: vec![QueryOutputBatchBox::AccountId(first_ids)],
+                        },
+                        remaining,
+                        next,
+                    ));
                 }
                 let next = if remaining > 0 {
                     Some(MockCursor::Accounts {
@@ -10853,13 +11600,15 @@ mod cli_integration_harness {
                     v.sort_by(|a, b| {
                         let la = a.metadata().get(&key);
                         let lb = b.metadata().get(&key);
-                        let ord = match (la, lb) {
-                            (Some(l), Some(r)) => l.cmp(r),
+                        match (la, lb) {
+                            (Some(l), Some(r)) => {
+                                let ord = l.cmp(r);
+                                if desc { ord.reverse() } else { ord }
+                            }
                             (Some(_), None) => std::cmp::Ordering::Less,
                             (None, Some(_)) => std::cmp::Ordering::Greater,
                             (None, None) => std::cmp::Ordering::Equal,
-                        };
-                        if desc { ord.reverse() } else { ord }
+                        }
                     });
                 }
                 let start = offset.min(v.len());
@@ -10868,31 +11617,26 @@ mod cli_integration_harness {
                 let first = v[start..first_end].to_vec();
                 let remaining = end.saturating_sub(first_end) as u64;
                 #[cfg(feature = "ids_projection")]
-                if let Some(erased) = iroha::data_model::query::iter_query_inner::<
-                    iroha::data_model::asset::definition::AssetDefinition,
-                >(&query.query)
-                {
-                    if erased.selector().is_ids_only() {
-                        let first_ids: Vec<_> = first.iter().map(|ad| ad.id().clone()).collect();
-                        let remaining_ids: Vec<_> =
-                            v[first_end..end].iter().map(|ad| ad.id().clone()).collect();
-                        let next = if remaining > 0 {
-                            Some(MockCursor::AssetDefIds {
-                                ids: remaining_ids,
-                                idx: 0,
-                                fetch,
-                            })
-                        } else {
-                            None
-                        };
-                        return Ok((
-                            QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::AssetDefinitionId(first_ids)],
-                            },
-                            remaining,
-                            next,
-                        ));
-                    }
+                if query_projects_asset_definition_ids(&query) {
+                    let first_ids: Vec<_> = first.iter().map(|ad| ad.id().clone()).collect();
+                    let remaining_ids: Vec<_> =
+                        v[first_end..end].iter().map(|ad| ad.id().clone()).collect();
+                    let next = if remaining > 0 {
+                        Some(MockCursor::AssetDefIds {
+                            ids: remaining_ids,
+                            idx: 0,
+                            fetch,
+                        })
+                    } else {
+                        None
+                    };
+                    return Ok((
+                        QueryOutputBatchBoxTuple {
+                            tuple: vec![QueryOutputBatchBox::AssetDefinitionId(first_ids)],
+                        },
+                        remaining,
+                        next,
+                    ));
                 }
                 let next = if remaining > 0 {
                     Some(MockCursor::AssetDefs {
@@ -11025,7 +11769,7 @@ mod cli_integration_harness {
                     };
                     Ok((
                         QueryOutputBatchBoxTuple {
-                            tuple: vec![QueryOutputBatchBox::ScopedAccountId(batch)],
+                            tuple: vec![QueryOutputBatchBox::AccountId(batch)],
                         },
                         remaining,
                         next,
@@ -11068,8 +11812,8 @@ mod cli_integration_harness {
         let owner_w2 = sample_account_id("w2", 10);
         let mut server = MockQueryServer::default();
         server.domains = vec![
-            Domain::new("w1".parse().unwrap()).build(&owner_w1),
-            Domain::new("w2".parse().unwrap()).build(&owner_w2),
+            Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account()),
+            Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account()),
         ];
 
         // Build and execute the query via QueryBuilder against the mock server
@@ -11091,9 +11835,9 @@ mod cli_integration_harness {
         let owner_w2 = sample_account_id("w2", 12);
         let owner_w3 = sample_account_id("w3", 13);
         let mut server = MockQueryServer::default();
-        let mut w1 = Domain::new("w1".parse().unwrap()).build(&owner_w1);
-        let mut w2 = Domain::new("w2".parse().unwrap()).build(&owner_w2);
-        let w3 = Domain::new("w3".parse().unwrap()).build(&owner_w3); // no rank
+        let mut w1 = Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account());
+        let mut w2 = Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account());
+        let w3 = Domain::new(DomainId::try_new("w3", "universal").unwrap()).build(owner_w3.account()); // no rank
         w1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         w2.metadata_mut()
@@ -11112,29 +11856,28 @@ mod cli_integration_harness {
         assert_eq!(out[2].id(), w3.id());
     }
 
+    #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_domains_ids_projection() {
         use iroha::data_model::domain::{Domain, DomainId};
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::QueryParams;
-        use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
+        use iroha::data_model::query::{self};
 
         let owner_w1 = sample_account_id("w1", 1);
         let owner_w2 = sample_account_id("w2", 2);
         let mut server = MockQueryServer::default();
         server.domains = vec![
-            Domain::new("w1".parse().unwrap()).build(&owner_w1),
-            Domain::new("w2".parse().unwrap()).build(&owner_w2),
+            Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account()),
+            Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account()),
         ];
 
-        // Build an erased iter query with ids-only selector
-        let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
-            Box::new(query::domain::prelude::FindDomains),
+        let qwp = build_query_with_params(
             CompoundPredicate::PASS,
             SelectorTuple::<Domain>::ids_only(),
+            QueryParams::default(),
+            || Box::new(query::domain::prelude::FindDomains),
         );
-        let qbox: query::QueryBox<query::QueryOutputBatchBox> = with_filter.into();
-        let qwp = QueryWithParams::new(qbox, QueryParams::default());
 
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
         let ids = match batch.into_iter().next().expect("slice") {
@@ -11142,16 +11885,23 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids.len(), 2);
-        assert_eq!(ids[0], DomainId::new("w1".parse().unwrap(),));
-        assert_eq!(ids[1], DomainId::new("w2".parse().unwrap(),));
+        assert_eq!(
+            ids[0],
+            DomainId::try_new("w1", "universal").unwrap()
+        );
+        assert_eq!(
+            ids[1],
+            DomainId::try_new("w2", "universal").unwrap()
+        );
     }
 
+    #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_accounts_ids_projection() {
-        use iroha::data_model::account::{Account, ScopedAccountId};
+        use iroha::data_model::account::Account;
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::QueryParams;
-        use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
+        use iroha::data_model::query::{self};
 
         let alice = sample_account_id("w", 1);
         let bob = sample_account_id("w", 2);
@@ -11161,17 +11911,16 @@ mod cli_integration_harness {
             Account::new(bob.clone()).build(&bob),
         ];
 
-        let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
-            Box::new(query::account::prelude::FindAccounts),
+        let qwp = build_query_with_params(
             CompoundPredicate::PASS,
             SelectorTuple::<Account>::ids_only(),
+            QueryParams::default(),
+            || Box::new(query::account::prelude::FindAccounts),
         );
-        let qbox: query::QueryBox<query::QueryOutputBatchBox> = with_filter.into();
-        let qwp = QueryWithParams::new(qbox, QueryParams::default());
 
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
         let ids = match batch.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::ScopedAccountId(v) => v,
+            query::QueryOutputBatchBox::AccountId(v) => v,
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids.len(), 2);
@@ -11179,36 +11928,42 @@ mod cli_integration_harness {
         assert!(ids.iter().any(|id| id == &bob));
     }
 
+    #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_asset_defs_ids_projection() {
-        use iroha::data_model::asset::definition::{AssetDefinition, AssetDefinitionId};
+        use iroha::data_model::asset::{definition::AssetDefinition, id::AssetDefinitionId};
         use iroha::data_model::prelude::NumericSpec;
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::QueryParams;
-        use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
+        use iroha::data_model::query::{self};
 
         let owner_w = sample_account_id("w", 1);
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
-            { let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "w".parse().unwrap(),
+            {
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
                     "rose".parse().unwrap(),
-                ); AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default(),).with_name(__asset_definition_id.name().to_string()) }
-            .build(&owner_w),
-            { let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "w".parse().unwrap(),
+                );
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(owner_w.account()),
+            {
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
                     "tulip".parse().unwrap(),
-                ); AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default(),).with_name(__asset_definition_id.name().to_string()) }
-            .build(&owner_w),
+                );
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(owner_w.account()),
         ];
 
-        let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
-            Box::new(query::asset::prelude::FindAssetsDefinitions),
+        let qwp = build_query_with_params(
             CompoundPredicate::PASS,
             SelectorTuple::<AssetDefinition>::ids_only(),
+            QueryParams::default(),
+            || Box::new(query::asset::prelude::FindAssetsDefinitions),
         );
-        let qbox: query::QueryBox<query::QueryOutputBatchBox> = with_filter.into();
-        let qwp = QueryWithParams::new(qbox, QueryParams::default());
 
         let (batch, _rem, _cur) = server.start_query(qwp).expect("start ok");
         let ids = match batch.into_iter().next().expect("slice") {
@@ -11219,51 +11974,60 @@ mod cli_integration_harness {
         assert!(
             ids.iter()
                 .any(|id| id
-                    == &AssetDefinitionId::new("w".parse().unwrap(), "rose".parse().unwrap()))
+                    == &AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(), "rose".parse().unwrap()))
         );
         assert!(ids.iter().any(
-            |id| id == &AssetDefinitionId::new("w".parse().unwrap(), "tulip".parse().unwrap())
+            |id| id == &AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(), "tulip".parse().unwrap())
         ));
     }
 
+    #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_asset_defs_ids_projection_batched() {
-        use iroha::data_model::asset::definition::{AssetDefinition, AssetDefinitionId};
+        use iroha::data_model::asset::{definition::AssetDefinition, id::AssetDefinitionId};
         use iroha::data_model::prelude::NumericSpec;
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
-        use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
+        use iroha::data_model::query::{self};
         use std::num::NonZeroU64;
 
         let owner_w = sample_account_id("w", 2);
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
-            { let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "w".parse().unwrap(),
+            {
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
                     "rose".parse().unwrap(),
-                ); AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default(),).with_name(__asset_definition_id.name().to_string()) }
-            .build(&owner_w),
-            { let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "w".parse().unwrap(),
+                );
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(owner_w.account()),
+            {
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
                     "tulip".parse().unwrap(),
-                ); AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default(),).with_name(__asset_definition_id.name().to_string()) }
-            .build(&owner_w),
-            { let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "w".parse().unwrap(),
+                );
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(owner_w.account()),
+            {
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
                     "peony".parse().unwrap(),
-                ); AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default(),).with_name(__asset_definition_id.name().to_string()) }
-            .build(&owner_w),
+                );
+                AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(owner_w.account()),
         ];
 
-        let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
-            Box::new(query::asset::prelude::FindAssetsDefinitions),
-            CompoundPredicate::PASS,
-            SelectorTuple::<AssetDefinition>::ids_only(),
-        );
-        let qbox: query::QueryBox<query::QueryOutputBatchBox> = with_filter.into();
         let mut params = QueryParams::default();
         params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
-        let qwp = QueryWithParams::new(qbox, params);
+        let qwp = build_query_with_params(
+            CompoundPredicate::PASS,
+            SelectorTuple::<AssetDefinition>::ids_only(),
+            params,
+            || Box::new(query::asset::prelude::FindAssetsDefinitions),
+        );
 
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
         let ids1 = match batch1.into_iter().next().expect("slice") {
@@ -11271,12 +12035,10 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&AssetDefinitionId::new(
-            "w".parse().unwrap(),
+        assert!(ids1.contains(&AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
             "rose".parse().unwrap()
         )));
-        assert!(ids1.contains(&AssetDefinitionId::new(
-            "w".parse().unwrap(),
+        assert!(ids1.contains(&AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
             "tulip".parse().unwrap()
         )));
         assert_eq!(rem, 1);
@@ -11290,20 +12052,20 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&AssetDefinitionId::new(
-            "w".parse().unwrap(),
+        assert!(ids2.contains(&AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
             "peony".parse().unwrap()
         )));
         assert_eq!(rem2, 0);
         assert!(cur2.is_none());
     }
 
+    #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_accounts_ids_projection_batched() {
-        use iroha::data_model::account::{Account, ScopedAccountId};
+        use iroha::data_model::account::Account;
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
-        use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
+        use iroha::data_model::query::{self};
         use std::num::NonZeroU64;
 
         let alice = sample_account_id("w", 3);
@@ -11316,19 +12078,18 @@ mod cli_integration_harness {
             Account::new(carol.clone()).build(&carol),
         ];
 
-        let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
-            Box::new(query::account::prelude::FindAccounts),
-            CompoundPredicate::PASS,
-            SelectorTuple::<Account>::ids_only(),
-        );
-        let qbox: query::QueryBox<query::QueryOutputBatchBox> = with_filter.into();
         let mut params = QueryParams::default();
         params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
-        let qwp = QueryWithParams::new(qbox, params);
+        let qwp = build_query_with_params(
+            CompoundPredicate::PASS,
+            SelectorTuple::<Account>::ids_only(),
+            params,
+            || Box::new(query::account::prelude::FindAccounts),
+        );
 
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
         let ids1 = match batch1.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::ScopedAccountId(v) => v,
+            query::QueryOutputBatchBox::AccountId(v) => v,
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids1.len(), 2);
@@ -11341,7 +12102,7 @@ mod cli_integration_harness {
             <MockQueryServer as query::builder::QueryExecutor>::continue_query(cur)
                 .expect("cont ok");
         let ids2 = match batch2.into_iter().next().expect("slice") {
-            query::QueryOutputBatchBox::ScopedAccountId(v) => v,
+            query::QueryOutputBatchBox::AccountId(v) => v,
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids2.len(), 1);
@@ -11350,12 +12111,13 @@ mod cli_integration_harness {
         assert!(cur2.is_none());
     }
 
+    #[cfg(feature = "ids_projection")]
     #[test]
     fn mock_query_domains_ids_projection_batched() {
         use iroha::data_model::domain::{Domain, DomainId};
         use iroha::data_model::query::dsl::{CompoundPredicate, SelectorTuple};
         use iroha::data_model::query::parameters::{FetchSize, QueryParams};
-        use iroha::data_model::query::{self, QueryWithFilter, QueryWithParams};
+        use iroha::data_model::query::{self};
         use std::num::NonZeroU64;
 
         let owner_d1 = sample_account_id("d1", 1);
@@ -11363,20 +12125,19 @@ mod cli_integration_harness {
         let owner_d3 = sample_account_id("d3", 3);
         let mut server = MockQueryServer::default();
         server.domains = vec![
-            Domain::new("d1".parse().unwrap()).build(&owner_d1),
-            Domain::new("d2".parse().unwrap()).build(&owner_d2),
-            Domain::new("d3".parse().unwrap()).build(&owner_d3),
+            Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(owner_d1.account()),
+            Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(owner_d2.account()),
+            Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(owner_d3.account()),
         ];
 
-        let with_filter: QueryWithFilter<_> = QueryWithFilter::new(
-            Box::new(query::domain::prelude::FindDomains),
-            CompoundPredicate::PASS,
-            SelectorTuple::<Domain>::ids_only(),
-        );
-        let qbox: query::QueryBox<query::QueryOutputBatchBox> = with_filter.into();
         let mut params = QueryParams::default();
         params.fetch_size = FetchSize::new(Some(NonZeroU64::new(2).unwrap()));
-        let qwp = QueryWithParams::new(qbox, params);
+        let qwp = build_query_with_params(
+            CompoundPredicate::PASS,
+            SelectorTuple::<Domain>::ids_only(),
+            params,
+            || Box::new(query::domain::prelude::FindDomains),
+        );
 
         let (batch1, rem, cur) = server.start_query(qwp).expect("start ok");
         let ids1 = match batch1.into_iter().next().expect("slice") {
@@ -11384,8 +12145,8 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&DomainId::from_str("d1").unwrap()));
-        assert!(ids1.contains(&DomainId::from_str("d2").unwrap()));
+        assert!(ids1.contains(&DomainId::try_new("d1", "universal").unwrap()));
+        assert!(ids1.contains(&DomainId::try_new("d2", "universal").unwrap()));
         assert_eq!(rem, 1);
         let cur = cur.expect("should continue");
 
@@ -11397,7 +12158,7 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&DomainId::from_str("d3").unwrap()));
+        assert!(ids2.contains(&DomainId::try_new("d3", "universal").unwrap()));
         assert_eq!(rem2, 0);
         assert!(cur2.is_none());
     }
@@ -11415,9 +12176,9 @@ mod cli_integration_harness {
         let owner_w1 = sample_account_id("w1", 6);
         let owner_w2 = sample_account_id("w2", 7);
         let owner_w3 = sample_account_id("w3", 8);
-        let mut w1 = Domain::new("w1".parse().unwrap()).build(&owner_w1);
-        let mut w2 = Domain::new("w2".parse().unwrap()).build(&owner_w2);
-        let mut w3 = Domain::new("w3".parse().unwrap()).build(&owner_w3);
+        let mut w1 = Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account());
+        let mut w2 = Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account());
+        let mut w3 = Domain::new(DomainId::try_new("w3", "universal").unwrap()).build(owner_w3.account());
         w1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         w2.metadata_mut()
@@ -11448,30 +12209,85 @@ mod cli_integration_harness {
     #[test]
     fn harness_singular_asset_roundtrip() {
         use iroha::data_model::{
-            account::ScopedAccountId,
             asset::{Asset, AssetId, id::AssetDefinitionId},
             query::asset::prelude::FindAssetById,
         };
-        use std::str::FromStr;
 
         let mut server = MockQueryServer::default();
         let asset_def_id =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "coin".parse().unwrap());
+            AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(), "coin".parse().unwrap());
         let account_id = sample_account_id("wonderland", 14);
-        let asset_id = AssetId::new(asset_def_id, account_id);
+        let asset_id = AssetId::new(asset_def_id, account_id.account().clone());
         let asset = Asset::new(asset_id.clone(), 77_u32);
         server.assets.insert(asset_id.clone(), asset.clone());
 
         let out = server
-            .execute_singular_query(SingularQueryBox::FindAssetById(FindAssetById {
-                asset_id: asset_id.clone(),
-            }))
+            .execute_singular_query(SingularQueryBox::FindAssetById(FindAssetById::new(
+                asset_id.clone(),
+            )))
             .expect("asset present");
         match out {
             SingularQueryOutputBox::Asset(found) => {
                 assert_eq!(found.id, asset.id);
                 assert_eq!(found.value(), asset.value());
             }
+            other => panic!("unexpected output variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn harness_singular_account_roundtrip() {
+        use iroha::data_model::{account::Account, query::account::prelude::FindAccountById};
+
+        let account_id = sample_account_id("wonderland", 15);
+        let account = Account::new(account_id.clone()).build(&account_id);
+
+        let mut server = MockQueryServer::default();
+        server.accounts = vec![account.clone()];
+
+        let out = server
+            .execute_singular_query(SingularQueryBox::FindAccountById(FindAccountById::new(
+                account_id.account().clone(),
+            )))
+            .expect("account present");
+        match out {
+            SingularQueryOutputBox::Account(found) => assert_eq!(found.id(), account.id()),
+            other => panic!("unexpected output variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn harness_singular_trigger_roundtrip() {
+        use iroha::data_model::{
+            events::execute_trigger::ExecuteTriggerEventFilter,
+            query::trigger::prelude::FindTriggerById,
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger, TriggerId,
+                action::{Action, Repeats},
+            },
+        };
+
+        let authority = sample_account_id("wonderland", 16);
+        let trigger_id: TriggerId = "demo_trigger".parse().expect("trigger id");
+        let action = Action::new(
+            Executable::Ivm(IvmBytecode::from_compiled(Vec::new())),
+            Repeats::Exactly(1),
+            authority.account().clone(),
+            ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+        );
+        let trigger = Trigger::new(trigger_id.clone(), action);
+
+        let mut server = MockQueryServer::default();
+        server.triggers = vec![trigger.clone()];
+
+        let out = server
+            .execute_singular_query(SingularQueryBox::FindTriggerById(FindTriggerById::new(
+                trigger_id.clone(),
+            )))
+            .expect("trigger present");
+        match out {
+            SingularQueryOutputBox::Trigger(found) => assert_eq!(found.id(), trigger.id()),
             other => panic!("unexpected output variant: {other:?}"),
         }
     }
@@ -11582,15 +12398,12 @@ mod cli_integration_harness {
         }
 
         let abi_out = server
-            .execute_singular_query(SingularQueryBox::FindAbiVersion(
-                FindAbiVersion,
-            ))
+            .execute_singular_query(SingularQueryBox::FindAbiVersion(FindAbiVersion))
             .expect("ABI version present");
         match abi_out {
-            SingularQueryOutputBox::AbiVersion(versions) => assert_eq!(
-                versions,
-                AbiVersion { abi_version: 1 }
-            ),
+            SingularQueryOutputBox::AbiVersion(versions) => {
+                assert_eq!(versions, AbiVersion { abi_version: 1 })
+            }
             other => panic!("unexpected output variant: {other:?}"),
         }
     }

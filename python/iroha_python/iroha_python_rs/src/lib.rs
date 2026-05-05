@@ -23,8 +23,8 @@ use futures::executor::block_on;
 use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
 use iroha_config::parameters::defaults;
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, KeyGenOption, KeyPair, LaneCommitmentId, PrivateKey, PublicKey,
-    Signature, derive_keyset_from_slice,
+    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyGenOption, KeyPair, LaneCommitmentId,
+    PrivateKey, PublicKey, Signature, derive_keyset_from_slice,
     error::ParseError,
     kex::{KeyExchangeScheme, X25519Sha256},
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
@@ -59,6 +59,7 @@ use iroha_data_model::{
     prelude::{AccountId, ChainId},
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox},
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
+    rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     transaction::{
         Executable, IvmBytecode, SignedTransaction, TransactionBuilder as ModelTransactionBuilder,
         TransactionSubmissionReceipt,
@@ -141,6 +142,73 @@ fn algorithm_guard(algorithm: Algorithm) -> PyResult<()> {
         Ok(())
     }
 }
+
+fn supported_crypto_algorithms() -> Vec<Algorithm> {
+    let mut algorithms = vec![Algorithm::Ed25519, Algorithm::Secp256k1, Algorithm::MlDsa];
+    algorithms.extend([
+        Algorithm::Gost3410_2012_256ParamSetA,
+        Algorithm::Gost3410_2012_256ParamSetB,
+        Algorithm::Gost3410_2012_256ParamSetC,
+        Algorithm::Gost3410_2012_512ParamSetA,
+        Algorithm::Gost3410_2012_512ParamSetB,
+    ]);
+    algorithms.extend([Algorithm::BlsNormal, Algorithm::BlsSmall]);
+    algorithms.push(Algorithm::Sm2);
+    algorithms
+}
+
+fn parse_algorithm_arg(algorithm: &str) -> PyResult<Algorithm> {
+    let normalized = algorithm.trim().to_ascii_lowercase();
+    if let Ok(parsed) = Algorithm::from_str(&normalized) {
+        return Ok(parsed);
+    }
+
+    let compact = normalized
+        .chars()
+        .map(|ch| match ch {
+            '_' | ' ' | '.' => '-',
+            _ => ch,
+        })
+        .collect::<String>();
+
+    let parsed = match compact.as_str() {
+        "ed-25519" | "ed25519" => Some(Algorithm::Ed25519),
+        "ecdsa"
+        | "ecdsa-secp256k1"
+        | "ecdsa-secp256k1-sha256"
+        | "secp-256-k1"
+        | "secp-256k1"
+        | "secp256k1" => Some(Algorithm::Secp256k1),
+        "dilithium" | "dilithium3" | "ml-dsa" | "ml-dsa-65" | "mldsa" | "mldsa65" => {
+            Some(Algorithm::MlDsa)
+        }
+        "gost-3410-2012-256-paramset-a" | "gost3410-2012-256-paramset-a" => {
+            Some(Algorithm::Gost3410_2012_256ParamSetA)
+        }
+        "gost-3410-2012-256-paramset-b" | "gost3410-2012-256-paramset-b" => {
+            Some(Algorithm::Gost3410_2012_256ParamSetB)
+        }
+        "gost-3410-2012-256-paramset-c" | "gost3410-2012-256-paramset-c" => {
+            Some(Algorithm::Gost3410_2012_256ParamSetC)
+        }
+        "gost-3410-2012-512-paramset-a" | "gost3410-2012-512-paramset-a" => {
+            Some(Algorithm::Gost3410_2012_512ParamSetA)
+        }
+        "gost-3410-2012-512-paramset-b" | "gost3410-2012-512-paramset-b" => {
+            Some(Algorithm::Gost3410_2012_512ParamSetB)
+        }
+        "bls-normal" | "blsnormal" | "bls12-381-g1" | "bls12-381-normal" => {
+            Some(Algorithm::BlsNormal)
+        }
+        "bls-small" | "blssmall" | "bls12-381-g2" | "bls12-381-small" => Some(Algorithm::BlsSmall),
+        "sm2" => Some(Algorithm::Sm2),
+        _ => None,
+    };
+
+    parsed
+        .ok_or_else(|| PyValueError::new_err(format!("unsupported crypto algorithm `{algorithm}`")))
+}
+
 fn parse_err(kind: &str, err: ParseError) -> PyErr {
     PyValueError::new_err(format!("failed to parse {kind} key: {err}"))
 }
@@ -151,6 +219,14 @@ fn parse_private_key(bytes: &[u8]) -> PyResult<PrivateKey> {
 
 fn parse_public_key(bytes: &[u8]) -> PyResult<PublicKey> {
     PublicKey::from_bytes(Algorithm::Ed25519, bytes).map_err(|err| parse_err("public", err))
+}
+
+fn parse_private_key_for_algorithm(algorithm: Algorithm, bytes: &[u8]) -> PyResult<PrivateKey> {
+    PrivateKey::from_bytes(algorithm, bytes).map_err(|err| parse_err("private", err))
+}
+
+fn parse_public_key_for_algorithm(algorithm: Algorithm, bytes: &[u8]) -> PyResult<PublicKey> {
+    PublicKey::from_bytes(algorithm, bytes).map_err(|err| parse_err("public", err))
 }
 
 fn proxy_mode_from_label_py(label: &str) -> PyResult<ProxyMode> {
@@ -213,10 +289,8 @@ fn parse_sm2_signature(bytes: &[u8]) -> PyResult<Sm2Signature> {
 }
 
 fn keypair_to_py(py: Python<'_>, key_pair: KeyPair) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
-    let (pub_alg, public_bytes) = key_pair.public_key().to_bytes();
-    algorithm_guard(pub_alg)?;
-    let (priv_alg, mut private_bytes) = key_pair.private_key().to_bytes();
-    algorithm_guard(priv_alg)?;
+    let (_, public_bytes) = key_pair.public_key().to_bytes();
+    let (_, mut private_bytes) = key_pair.private_key().to_bytes();
 
     let public = Py::from(PyBytes::new(py, public_bytes));
     let private = Py::from(PyBytes::new(py, private_bytes.as_slice()));
@@ -1838,7 +1912,6 @@ fn build_gateway_metadata_dict(
     manifest_id: &str,
     manifest_cid_hex: Option<&str>,
     manifest_envelope_present: bool,
-    allow_single_source_fallback: bool,
     allow_implicit_metadata: bool,
 ) -> PyResult<Py<PyDict>> {
     let metadata = PyDict::new(py);
@@ -1921,7 +1994,6 @@ fn build_gateway_metadata_dict(
     } else {
         metadata.set_item("gateway_manifest_cid", py.None())?;
     }
-    metadata.set_item("allow_single_source_fallback", allow_single_source_fallback)?;
     metadata.set_item("allow_implicit_metadata", allow_implicit_metadata)?;
 
     Ok(metadata.unbind())
@@ -2889,6 +2961,16 @@ fn sorafs_gateway_fetch_py(
             })
         })
         .collect::<PyResult<_>>()?;
+    let unique_gateway_providers = provider_inputs
+        .iter()
+        .map(|provider| provider.provider_id_hex.as_str())
+        .collect::<HashSet<_>>()
+        .len();
+    if unique_gateway_providers < 2 {
+        return Err(PyValueError::new_err(
+            "sorafs_gateway_fetch requires at least two unique gateway providers",
+        ));
+    }
 
     let mut orchestrator_config = OrchestratorConfig::default();
     if let Some(region) = telemetry_region.as_ref() {
@@ -3085,7 +3167,6 @@ fn sorafs_gateway_fetch_py(
         manifest_id.as_str(),
         manifest_cid_metadata.as_deref(),
         manifest_envelope_present,
-        false,
         false,
     )?;
 
@@ -3504,11 +3585,20 @@ mod tests {
 
     use super::*;
 
+    const SAMPLE_RWA_ID: &str =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal";
+
     fn ensure_python() {
         static INIT: OnceCell<()> = OnceCell::new();
         INIT.get_or_init(|| {
             Python::initialize();
         });
+    }
+
+    fn canonical_i105_from_seed(seed: u8) -> String {
+        AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
+            .canonical_i105()
+            .expect("canonical I105")
     }
 
     fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
@@ -3584,7 +3674,7 @@ mod tests {
         let public_key = PublicKey::from(private_key.clone());
         let authority = AccountId::new(public_key.clone())
             .canonical_i105()
-            .expect("canonical i105 authority");
+            .expect("canonical I105 authority");
 
         let mut builder =
             TransactionBuilder::new("test-chain", &authority).expect("builder constructs");
@@ -3734,6 +3824,430 @@ mod tests {
     }
 
     #[test]
+    fn transfer_rwa_instruction_classmethod_serializes_canonical_numeric_payload() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let quantity = pyo3::types::PyString::new(py, "1.2500");
+            let source = canonical_i105_from_seed(0x11);
+            let destination = canonical_i105_from_seed(0x22);
+            let instruction = Instruction::transfer_rwa(
+                &instruction_type,
+                &source,
+                SAMPLE_RWA_ID,
+                quantity.as_any(),
+                &destination,
+            )
+            .expect("transfer rwa builds");
+            let decoded = json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
+                .expect("instruction json decodes");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+            let Some(rwa_box) = instruction_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected TransferRwa instruction");
+            };
+            let iroha_data_model::isi::rwa::RwaInstructionBox::Transfer(transfer) = rwa_box else {
+                panic!("expected TransferRwa instruction");
+            };
+
+            assert_eq!(
+                transfer.source,
+                parse_account_id(&source).expect("source parses")
+            );
+            assert_eq!(
+                transfer.destination,
+                parse_account_id(&destination).expect("destination parses")
+            );
+            assert_eq!(transfer.rwa, SAMPLE_RWA_ID.parse().expect("rwa id parses"));
+            assert_eq!(
+                transfer.quantity,
+                Numeric::from_str("1.25").expect("numeric parses")
+            );
+        });
+    }
+
+    #[test]
+    fn register_rwa_instruction_classmethod_serializes_payload() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let json_module = py.import("json").expect("json module");
+            let payload = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{
+                        "domain": "commodities.universal",
+                        "quantity": "10.5",
+                        "spec": {"scale": 1},
+                        "primary_reference": "vault-cert-001",
+                        "status": null,
+                        "metadata": {"origin": "AE"},
+                        "parents": [],
+                        "controls": {
+                            "controller_accounts": [],
+                            "controller_roles": [],
+                            "freeze_enabled": true,
+                            "hold_enabled": false,
+                            "force_transfer_enabled": false,
+                            "redeem_enabled": false
+                        }
+                    }"#,),
+                )
+                .expect("register payload loads");
+            let instruction =
+                Instruction::register_rwa(&instruction_type, payload.as_any()).expect("builds");
+            let decoded = json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
+                .expect("instruction json decodes");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+            let Some(rwa_box) = instruction_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected RegisterRwa instruction");
+            };
+            let iroha_data_model::isi::rwa::RwaInstructionBox::Register(register) = rwa_box else {
+                panic!("expected RegisterRwa instruction");
+            };
+
+            assert_eq!(
+                register.rwa.domain,
+                DomainId::try_new("commodities", "universal").expect("domain")
+            );
+            assert_eq!(
+                register.rwa.quantity,
+                Numeric::from_str("10.5").expect("quantity")
+            );
+            assert_eq!(register.rwa.primary_reference, "vault-cert-001");
+            assert_eq!(
+                register
+                    .rwa
+                    .metadata
+                    .get("origin")
+                    .and_then(|value| value.try_into_any_norito::<String>().ok())
+                    .as_deref(),
+                Some("AE")
+            );
+            assert!(register.rwa.controls.freeze_enabled);
+        });
+    }
+
+    #[test]
+    fn register_account_instruction_classmethod_is_domainless() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let account_id = canonical_i105_from_seed(0x33);
+            let instruction =
+                Instruction::register_account(&instruction_type, py, &account_id, None)
+                    .expect("register account builds");
+            let decoded = json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
+                .expect("instruction json decodes");
+            let instruction_ref: &dyn iroha_data_model::isi::Instruction = &*decoded;
+            let Some(register_box) = instruction_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+            else {
+                panic!("expected Register instruction");
+            };
+            let iroha_data_model::isi::RegisterBox::Account(register) = register_box else {
+                panic!("expected Register<Account> instruction");
+            };
+
+            assert_eq!(
+                register.object.id,
+                parse_account_id(&account_id).expect("account parses")
+            );
+            assert_eq!(register.object.metadata, Metadata::default());
+        });
+    }
+
+    #[test]
+    fn merge_rwas_and_set_rwa_controls_classmethods_roundtrip_payloads() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let json_module = py.import("json").expect("json module");
+            let controller = canonical_i105_from_seed(0x33);
+            let merge_payload = json_module
+                .call_method1(
+                    "loads",
+                    (r#"{
+                            "parents": [
+                                {
+                                    "rwa": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal",
+                                    "quantity": "1.500"
+                                }
+                            ],
+                            "primary_reference": "blend-cert-007",
+                            "status": "blended",
+                            "metadata": {"grade": "A"}
+                        }"#,),
+                )
+                .expect("merge payload loads");
+            let merge_instruction =
+                Instruction::merge_rwas(&instruction_type, merge_payload.as_any())
+                    .expect("merge builds");
+            let merge_decoded =
+                json::from_str::<InstructionBox>(&merge_instruction.to_json().expect("json"))
+                    .expect("merge json decodes");
+            let merge_ref: &dyn iroha_data_model::isi::Instruction = &*merge_decoded;
+            let Some(rwa_box) = merge_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected MergeRwas instruction");
+            };
+            let iroha_data_model::isi::rwa::RwaInstructionBox::Merge(merge) = rwa_box else {
+                panic!("expected MergeRwas instruction");
+            };
+
+            assert_eq!(merge.parents.len(), 1);
+            assert_eq!(merge.primary_reference, "blend-cert-007");
+            assert_eq!(
+                merge.status.as_ref().map(ToString::to_string).as_deref(),
+                Some("blended")
+            );
+            assert_eq!(
+                merge
+                    .metadata
+                    .get("grade")
+                    .and_then(|value| value.try_into_any_norito::<String>().ok())
+                    .as_deref(),
+                Some("A")
+            );
+
+            let controls_payload = json_module
+                .call_method1(
+                    "loads",
+                    (format!(
+                        r#"{{
+                            "controller_accounts": ["{controller}"],
+                            "controller_roles": [],
+                            "freeze_enabled": true,
+                            "hold_enabled": true,
+                            "force_transfer_enabled": false,
+                            "redeem_enabled": true
+                        }}"#
+                    ),),
+                )
+                .expect("controls payload loads");
+            let controls_instruction = Instruction::set_rwa_controls(
+                &instruction_type,
+                SAMPLE_RWA_ID,
+                controls_payload.as_any(),
+            )
+            .expect("controls build");
+            let controls_decoded =
+                json::from_str::<InstructionBox>(&controls_instruction.to_json().expect("json"))
+                    .expect("controls json decodes");
+            let controls_ref: &dyn iroha_data_model::isi::Instruction = &*controls_decoded;
+            let Some(rwa_box) = controls_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected SetRwaControls instruction");
+            };
+            let iroha_data_model::isi::rwa::RwaInstructionBox::SetControls(controls) = rwa_box
+            else {
+                panic!("expected SetRwaControls instruction");
+            };
+
+            assert_eq!(controls.controls.controller_accounts.len(), 1);
+            assert!(controls.controls.freeze_enabled);
+            assert!(controls.controls.hold_enabled);
+            assert!(controls.controls.redeem_enabled);
+        });
+    }
+
+    #[test]
+    fn rwa_scalar_instruction_classmethods_roundtrip_payloads() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let rwa_id = SAMPLE_RWA_ID;
+            let destination = canonical_i105_from_seed(0x44);
+
+            let redeem = Instruction::redeem_rwa(
+                &instruction_type,
+                rwa_id,
+                pyo3::types::PyString::new(py, "2.500").as_any(),
+            )
+            .expect("redeem builds");
+            let hold = Instruction::hold_rwa(
+                &instruction_type,
+                rwa_id,
+                pyo3::types::PyString::new(py, "1.2500").as_any(),
+            )
+            .expect("hold builds");
+            let release = Instruction::release_rwa(
+                &instruction_type,
+                rwa_id,
+                pyo3::types::PyString::new(py, "0.500").as_any(),
+            )
+            .expect("release builds");
+            let force = Instruction::force_transfer_rwa(
+                &instruction_type,
+                rwa_id,
+                pyo3::types::PyString::new(py, "4").as_any(),
+                &destination,
+            )
+            .expect("force transfer builds");
+            let freeze = Instruction::freeze_rwa(&instruction_type, rwa_id).expect("freeze builds");
+            let unfreeze =
+                Instruction::unfreeze_rwa(&instruction_type, rwa_id).expect("unfreeze builds");
+            let metadata = PyDict::new(py);
+            metadata.set_item("origin", "AE").expect("origin");
+            metadata.set_item("lot", 3).expect("lot");
+            let set_metadata = Instruction::set_rwa_key_value(
+                &instruction_type,
+                rwa_id,
+                "grade",
+                Some(metadata.as_any()),
+            )
+            .expect("set metadata builds");
+            let remove_metadata =
+                Instruction::remove_rwa_key_value(&instruction_type, rwa_id, "grade")
+                    .expect("remove metadata builds");
+
+            let decoded = |instruction: &Instruction| {
+                json::from_str::<InstructionBox>(&instruction.to_json().expect("json"))
+                    .expect("instruction json decodes")
+            };
+
+            let redeem_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&redeem);
+            let hold_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&hold);
+            let release_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&release);
+            let force_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&force);
+            let freeze_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&freeze);
+            let unfreeze_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&unfreeze);
+            let set_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&set_metadata);
+            let remove_ref: &dyn iroha_data_model::isi::Instruction = &*decoded(&remove_metadata);
+
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::Redeem(redeem_box)) =
+                redeem_ref
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected RedeemRwa");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::Hold(hold_box)) = hold_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected HoldRwa");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::Release(release_box)) =
+                release_ref
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected ReleaseRwa");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::ForceTransfer(force_box)) =
+                force_ref
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected ForceTransferRwa");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::Freeze(_)) = freeze_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected FreezeRwa");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::Unfreeze(_)) = unfreeze_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected UnfreezeRwa");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::SetKeyValue(set_box)) = set_ref
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected SetRwaKeyValue");
+            };
+            let Some(iroha_data_model::isi::rwa::RwaInstructionBox::RemoveKeyValue(remove_box)) =
+                remove_ref
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::rwa::RwaInstructionBox>()
+            else {
+                panic!("expected RemoveRwaKeyValue");
+            };
+
+            assert_eq!(
+                redeem_box.quantity,
+                Numeric::from_str("2.5").expect("numeric")
+            );
+            assert_eq!(
+                hold_box.quantity,
+                Numeric::from_str("1.25").expect("numeric")
+            );
+            assert_eq!(
+                release_box.quantity,
+                Numeric::from_str("0.5").expect("numeric")
+            );
+            assert_eq!(
+                force_box.destination,
+                parse_account_id(&destination).expect("destination parses")
+            );
+            assert_eq!(set_box.key.to_string(), "grade");
+            assert_eq!(
+                set_box
+                    .value
+                    .try_into_any_norito::<json::Value>()
+                    .ok()
+                    .and_then(|value| value.as_object().cloned())
+                    .and_then(|obj| obj.get("origin").cloned())
+                    .and_then(|value| value.as_str().map(|value| value.to_owned()))
+                    .as_deref(),
+                Some("AE")
+            );
+            assert_eq!(remove_box.key.to_string(), "grade");
+        });
+    }
+
+    #[test]
+    fn sorafs_gateway_fetch_py_rejects_single_gateway_provider() {
+        ensure_python();
+        let payload = vec![0x41; 128];
+        let plan =
+            CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
+        let plan_json =
+            sorafs_car::fetch_plan::chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
+                .expect("serialise plan");
+        let providers = vec![PyGatewayProviderSpec {
+            name: "alpha".to_string(),
+            provider_id_hex: "55".repeat(32),
+            base_url: "https://gateway.test".to_string(),
+            stream_token_b64: "dG9rZW4=".to_string(),
+            privacy_events_url: None,
+        }];
+
+        Python::attach(|py| {
+            let result = sorafs_gateway_fetch_py(
+                py,
+                &"aa".repeat(32),
+                "sorafs.sf1@1.0.0",
+                &plan_json,
+                providers,
+                None,
+            );
+            match result {
+                Ok(_) => panic!("single gateway provider must be rejected"),
+                Err(err) => assert!(
+                    err.to_string()
+                        .contains("at least two unique gateway providers"),
+                    "{err}"
+                ),
+            }
+        });
+    }
+
+    #[test]
     fn sorafs_gateway_fetch_py_streams_payload() {
         ensure_python();
         let payload: Vec<u8> = (0..4096).map(|idx| (idx as u8).wrapping_mul(11)).collect();
@@ -3778,6 +4292,8 @@ mod tests {
         );
         let provider_id_bytes = [0x55u8; 32];
         let provider_id_hex = hex::encode(provider_id_bytes);
+        let second_provider_id_bytes = [0x56u8; 32];
+        let second_provider_id_hex = hex::encode(second_provider_id_bytes);
 
         let chunk_specs = plan.chunk_fetch_specs();
         let server = MockServer::start();
@@ -3833,36 +4349,49 @@ mod tests {
         }
 
         let signing = SigningKey::from_bytes(&[0x7Bu8; 32]);
-        let token_body = StreamTokenBodyV1 {
-            token_id: "py-gateway-test".to_string(),
-            manifest_cid: root_cid,
-            provider_id: provider_id_bytes,
-            profile_handle: chunk_profile_handle.clone(),
-            max_streams: 4,
-            ttl_epoch: 1_900_000_000,
-            rate_limit_bytes: 32 * 1024 * 1024,
-            issued_at: 1_800_000_000,
-            requests_per_minute: 180,
-            token_pk_version: 1,
+        let make_stream_token = |token_id: &str, provider_id: [u8; 32]| {
+            let token_body = StreamTokenBodyV1 {
+                token_id: token_id.to_string(),
+                manifest_cid: root_cid.clone(),
+                provider_id,
+                profile_handle: chunk_profile_handle.clone(),
+                max_streams: 4,
+                ttl_epoch: 1_900_000_000,
+                rate_limit_bytes: 32 * 1024 * 1024,
+                issued_at: 1_800_000_000,
+                requests_per_minute: 180,
+                token_pk_version: 1,
+            };
+            let stream_token =
+                StreamTokenV1::sign(token_body, &signing).expect("sign gateway stream token");
+            BASE64_STANDARD.encode(to_bytes(&stream_token).expect("token bytes"))
         };
-        let stream_token =
-            StreamTokenV1::sign(token_body, &signing).expect("sign gateway stream token");
-        let stream_token_b64 =
-            BASE64_STANDARD.encode(to_bytes(&stream_token).expect("token bytes"));
+        let stream_token_b64 = make_stream_token("py-gateway-test-alpha", provider_id_bytes);
+        let second_stream_token_b64 =
+            make_stream_token("py-gateway-test-beta", second_provider_id_bytes);
 
-        let providers = vec![PyGatewayProviderSpec {
-            name: "alpha".to_string(),
-            provider_id_hex: provider_id_hex.clone(),
-            base_url: server.base_url(),
-            stream_token_b64,
-            privacy_events_url: None,
-        }];
+        let providers = vec![
+            PyGatewayProviderSpec {
+                name: "alpha".to_string(),
+                provider_id_hex: provider_id_hex.clone(),
+                base_url: server.base_url(),
+                stream_token_b64,
+                privacy_events_url: None,
+            },
+            PyGatewayProviderSpec {
+                name: "beta".to_string(),
+                provider_id_hex: second_provider_id_hex,
+                base_url: server.base_url(),
+                stream_token_b64: second_stream_token_b64,
+                privacy_events_url: None,
+            },
+        ];
 
         Python::attach(|py| {
             let options = PyGatewayFetchOptions {
                 telemetry_region: Some("test-region".to_string()),
                 scoreboard_telemetry_label: Some("ci-sdk-python".to_string()),
-                max_peers: Some(1),
+                max_peers: Some(2),
                 retry_budget: Some(2),
                 local_proxy: Some(PyLocalProxyOptions {
                     proxy_mode: Some("bridge".to_string()),
@@ -3989,7 +4518,7 @@ mod tests {
                     .expect("gateway_provider_count")
                     .extract::<u64>()
                     .expect("gateway count"),
-                1
+                2
             );
             assert_eq!(
                 metadata
@@ -4099,16 +4628,19 @@ mod tests {
         ensure_python();
         Python::attach(|py| {
             let dict = PyDict::new(py);
-            dict.set_item("asset_definition_id", "usd#wonderland")
+            dict.set_item("asset_definition_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
                 .unwrap();
             dict.set_item("quantity", "10").unwrap();
             let leg = parse_repo_cash_leg(py, dict.as_any()).expect("repo cash leg should parse");
-            assert_eq!(leg.asset_definition_id.to_string(), "usd#wonderland");
+            assert_eq!(
+                leg.asset_definition_id.to_string(),
+                "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+            );
             assert_eq!(leg.quantity.to_string(), "10");
 
             let missing = PyDict::new(py);
             missing
-                .set_item("asset_definition_id", "usd#wonderland")
+                .set_item("asset_definition_id", "7EAD8EFYUx1aVKZPUU1fyKvr8dF1")
                 .unwrap();
             let err =
                 parse_repo_cash_leg(py, missing.as_any()).expect_err("missing quantity rejected");
@@ -4544,11 +5076,31 @@ mod tests {
         }
     }
 
-    fn expect_bn254<F>(a: [u64; 4], b: [u64; 4], gpu: Option<[u64; 4]>, fallback: F)
+    fn expect_bn254<F>(a: [u64; 4], b: [u64; 4], gpu: Option<[u64; 4]>, reference_impl: F)
     where
         F: Fn(FieldElem, FieldElem) -> FieldElem,
     {
-        let expected = fallback(FieldElem(a), FieldElem(b)).0;
+        let expected = reference_impl(FieldElem(a), FieldElem(b)).0;
+        match gpu {
+            Some(value) => assert_eq!(value, expected),
+            None => assert!(!super::cuda_available_py() || super::cuda_disabled_py()),
+        }
+    }
+
+    fn expect_bn254_many<F>(
+        lhs: &[[u64; 4]],
+        rhs: &[[u64; 4]],
+        gpu: Option<Vec<[u64; 4]>>,
+        reference_impl: F,
+    ) where
+        F: Fn(FieldElem, FieldElem) -> FieldElem,
+    {
+        let expected: Vec<[u64; 4]> = lhs
+            .iter()
+            .copied()
+            .zip(rhs.iter().copied())
+            .map(|(a, b)| reference_impl(FieldElem(a), FieldElem(b)).0)
+            .collect();
         match gpu {
             Some(value) => assert_eq!(value, expected),
             None => assert!(!super::cuda_available_py() || super::cuda_disabled_py()),
@@ -4593,6 +5145,48 @@ mod tests {
         let a = [7, 0, 0, 0];
         let b = [11, 0, 0, 0];
         expect_bn254(a, b, super::bn254_mul_cuda_py(a, b), bn254_vec::mul);
+    }
+
+    #[test]
+    fn bn254_add_many_wrapper_matches_cpu() {
+        let lhs = vec![[1, 0, 0, 0], [2, 0, 0, 0], [9, 0, 0, 0]];
+        let rhs = vec![[2, 0, 0, 0], [3, 0, 0, 0], [4, 0, 0, 0]];
+        expect_bn254_many(
+            &lhs,
+            &rhs,
+            super::bn254_add_cuda_many_py(lhs.clone(), rhs.clone()),
+            bn254_vec::add_scalar,
+        );
+        let empty = super::bn254_add_cuda_many_py(Vec::new(), Vec::new());
+        if super::cuda_available_py() && !super::cuda_disabled_py() {
+            assert_eq!(empty, Some(Vec::new()));
+        } else {
+            assert!(empty.is_none());
+        }
+    }
+
+    #[test]
+    fn bn254_sub_many_wrapper_matches_cpu() {
+        let lhs = vec![[5, 0, 0, 0], [8, 0, 0, 0], [13, 0, 0, 0]];
+        let rhs = vec![[3, 0, 0, 0], [2, 0, 0, 0], [6, 0, 0, 0]];
+        expect_bn254_many(
+            &lhs,
+            &rhs,
+            super::bn254_sub_cuda_many_py(lhs.clone(), rhs.clone()),
+            bn254_vec::sub_scalar,
+        );
+    }
+
+    #[test]
+    fn bn254_mul_many_wrapper_matches_cpu() {
+        let lhs = vec![[7, 0, 0, 0], [11, 0, 0, 0], [5, 0, 0, 0]];
+        let rhs = vec![[11, 0, 0, 0], [7, 0, 0, 0], [9, 0, 0, 0]];
+        expect_bn254_many(
+            &lhs,
+            &rhs,
+            super::bn254_mul_cuda_many_py(lhs.clone(), rhs.clone()),
+            bn254_vec::mul_scalar,
+        );
     }
 
     #[test]
@@ -4805,36 +5399,192 @@ fn py_to_metadata(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<
     match value {
         None => Ok(Metadata::default()),
         Some(obj) => {
-            let json_module = py.import("json").map_err(|err| {
-                PyValueError::new_err(format!("failed to import json module: {err}"))
-            })?;
-            let dumped = json_module.call_method1("dumps", (obj,)).map_err(|err| {
-                PyValueError::new_err(format!("metadata must be JSON serializable: {err}"))
-            })?;
-            let dumped: String = dumped
-                .extract()
-                .map_err(|err| PyValueError::new_err(format!("expected JSON string: {err}")))?;
+            let dumped = py_to_json_string(py, obj, "metadata")?;
             json::from_str::<Metadata>(&dumped)
                 .map_err(|err| PyValueError::new_err(format!("invalid metadata value: {err}")))
         }
     }
 }
 
+fn py_to_json_string(py: Python<'_>, value: &Bound<'_, PyAny>, context: &str) -> PyResult<String> {
+    let json_module = py
+        .import("json")
+        .map_err(|err| PyValueError::new_err(format!("failed to import json module: {err}")))?;
+    let dumped = json_module.call_method1("dumps", (value,)).map_err(|err| {
+        PyValueError::new_err(format!("{context} must be JSON serializable: {err}"))
+    })?;
+    dumped
+        .extract()
+        .map_err(|err| PyValueError::new_err(format!("expected JSON string: {err}")))
+}
+
+fn py_to_json_model<T>(py: Python<'_>, value: &Bound<'_, PyAny>, context: &str) -> PyResult<T>
+where
+    T: norito::json::JsonDeserialize,
+{
+    let dumped = py_to_json_string(py, value, context)?;
+    json::from_str::<T>(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("invalid {context} value: {err}")))
+}
+
+fn json_required_value(
+    fields: &mut std::collections::BTreeMap<String, json::Value>,
+    key: &str,
+    context: &str,
+) -> PyResult<json::Value> {
+    fields
+        .remove(key)
+        .ok_or_else(|| PyValueError::new_err(format!("{context}.{key} is required")))
+}
+
+fn json_string_value(value: json::Value, context: &str) -> PyResult<String> {
+    match value {
+        json::Value::String(value) => Ok(value),
+        _ => Err(PyValueError::new_err(format!("{context} must be a string"))),
+    }
+}
+
+fn json_rwa_id_value(value: json::Value, context: &str) -> PyResult<RwaId> {
+    let literal = json_string_value(value, context)?;
+    literal
+        .parse()
+        .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{literal}`: {err}")))
+}
+
+fn json_rwa_parent_refs_value(value: json::Value, context: &str) -> PyResult<Vec<RwaParentRef>> {
+    let json::Value::Array(entries) = value else {
+        return Err(PyValueError::new_err(format!("{context} must be an array")));
+    };
+
+    let mut parents = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.into_iter().enumerate() {
+        let entry_context = format!("{context}[{index}]");
+        let json::Value::Object(mut fields) = entry else {
+            return Err(PyValueError::new_err(format!(
+                "{entry_context} must be an object"
+            )));
+        };
+        let rwa = json_rwa_id_value(
+            json_required_value(&mut fields, "rwa", &entry_context)?,
+            &format!("{entry_context}.rwa"),
+        )?;
+        let quantity = json::from_value::<Numeric>(json_required_value(
+            &mut fields,
+            "quantity",
+            &entry_context,
+        )?)
+        .map_err(|err| {
+            PyValueError::new_err(format!("invalid {entry_context}.quantity value: {err}"))
+        })?;
+        parents.push(RwaParentRef::new(rwa, quantity));
+    }
+    Ok(parents)
+}
+
+fn parse_new_rwa_payload(py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<NewRwa> {
+    let dumped = py_to_json_string(py, value, "rwa")?;
+    let json::Value::Object(mut fields) = json::from_str::<json::Value>(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("invalid rwa value: {err}")))?
+    else {
+        return Err(PyValueError::new_err("rwa must be a JSON object"));
+    };
+
+    let domain =
+        json::from_value::<DomainId>(json_required_value(&mut fields, "domain", "rwa")?)
+            .map_err(|err| PyValueError::new_err(format!("invalid rwa.domain value: {err}")))?;
+    let quantity =
+        json::from_value::<Numeric>(json_required_value(&mut fields, "quantity", "rwa")?)
+            .map_err(|err| PyValueError::new_err(format!("invalid rwa.quantity value: {err}")))?;
+    let spec = json::from_value::<NumericSpec>(json_required_value(&mut fields, "spec", "rwa")?)
+        .map_err(|err| PyValueError::new_err(format!("invalid rwa.spec value: {err}")))?;
+    let primary_reference = json_string_value(
+        json_required_value(&mut fields, "primary_reference", "rwa")?,
+        "rwa.primary_reference",
+    )?;
+    let status = fields
+        .remove("status")
+        .map_or(Ok(None), |value| match value {
+            json::Value::Null => Ok(None),
+            other => json::from_value(other)
+                .map(Some)
+                .map_err(|err| PyValueError::new_err(format!("invalid rwa.status value: {err}"))),
+        })?;
+    let metadata = fields
+        .remove("metadata")
+        .map_or(Ok(Metadata::default()), |value| {
+            json::from_value(value)
+                .map_err(|err| PyValueError::new_err(format!("invalid rwa.metadata value: {err}")))
+        })?;
+    let parents = fields.remove("parents").map_or(Ok(Vec::new()), |value| {
+        json_rwa_parent_refs_value(value, "rwa.parents")
+    })?;
+    let controls = fields
+        .remove("controls")
+        .map_or(Ok(RwaControlPolicy::default()), |value| {
+            json::from_value(value)
+                .map_err(|err| PyValueError::new_err(format!("invalid rwa.controls value: {err}")))
+        })?;
+
+    Ok(NewRwa::new(
+        domain,
+        quantity,
+        spec,
+        primary_reference,
+        status,
+        metadata,
+        parents,
+        controls,
+    ))
+}
+
+fn parse_merge_rwas_payload(
+    py: Python<'_>,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<iroha_data_model::isi::rwa::MergeRwas> {
+    let dumped = py_to_json_string(py, value, "merge")?;
+    let json::Value::Object(mut fields) = json::from_str::<json::Value>(&dumped)
+        .map_err(|err| PyValueError::new_err(format!("invalid merge value: {err}")))?
+    else {
+        return Err(PyValueError::new_err("merge must be a JSON object"));
+    };
+
+    let parents = json_rwa_parent_refs_value(
+        json_required_value(&mut fields, "parents", "merge")?,
+        "merge.parents",
+    )?;
+    let primary_reference = json_string_value(
+        json_required_value(&mut fields, "primary_reference", "merge")?,
+        "merge.primary_reference",
+    )?;
+    let status = fields
+        .remove("status")
+        .map_or(Ok(None), |value| match value {
+            json::Value::Null => Ok(None),
+            other => json::from_value(other)
+                .map(Some)
+                .map_err(|err| PyValueError::new_err(format!("invalid merge.status value: {err}"))),
+        })?;
+    let metadata = fields
+        .remove("metadata")
+        .map_or(Ok(Metadata::default()), |value| {
+            json::from_value(value).map_err(|err| {
+                PyValueError::new_err(format!("invalid merge.metadata value: {err}"))
+            })
+        })?;
+
+    Ok(iroha_data_model::isi::rwa::MergeRwas {
+        parents,
+        primary_reference,
+        status,
+        metadata,
+    })
+}
+
 fn py_to_json_value(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<Json> {
     match value {
         None => Ok(Json::default()),
         Some(obj) => {
-            let json_module = py.import("json").map_err(|err| {
-                PyValueError::new_err(format!("failed to import json module: {err}"))
-            })?;
-            let dumped = json_module.call_method1("dumps", (obj,)).map_err(|err| {
-                PyValueError::new_err(format!(
-                    "trigger arguments must be JSON serializable: {err}"
-                ))
-            })?;
-            let dumped: String = dumped
-                .extract()
-                .map_err(|err| PyValueError::new_err(format!("expected JSON string: {err}")))?;
+            let dumped = py_to_json_string(py, obj, "trigger arguments")?;
             Json::from_str_norito(&dumped)
                 .map_err(|err| PyValueError::new_err(format!("invalid JSON payload: {err}")))
         }
@@ -4842,9 +5592,11 @@ fn py_to_json_value(py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResul
 }
 
 fn parse_numeric(quantity: &str) -> PyResult<Numeric> {
-    Numeric::from_str(quantity).map_err(|err| {
-        PyValueError::new_err(format!("invalid numeric quantity `{quantity}`: {err}"))
-    })
+    Numeric::from_str(quantity)
+        .map(Numeric::trim_trailing_zeros)
+        .map_err(|err| {
+            PyValueError::new_err(format!("invalid numeric quantity `{quantity}`: {err}"))
+        })
 }
 
 fn numeric_from_py(value: &Bound<'_, PyAny>) -> PyResult<Numeric> {
@@ -5129,8 +5881,7 @@ struct PyDomainId {
 impl PyDomainId {
     #[new]
     fn new(value: &str) -> PyResult<Self> {
-        let inner = value
-            .parse()
+        let inner = DomainId::parse_fully_qualified(value)
             .map_err(|err| PyValueError::new_err(format!("invalid domain id `{value}`: {err}")))?;
         Ok(Self { inner })
     }
@@ -5346,7 +6097,7 @@ impl Instruction {
         domain_id: &str,
         metadata: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
-        let domain_id: DomainId = domain_id.parse().map_err(|err| {
+        let domain_id = DomainId::parse_fully_qualified(domain_id).map_err(|err| {
             PyValueError::new_err(format!("invalid domain id `{domain_id}`: {err}"))
         })?;
         let metadata = py_to_metadata(py, metadata)?;
@@ -5364,14 +6115,8 @@ impl Instruction {
     ) -> PyResult<Self> {
         let account_id: AccountId = parse_account_id(account_id)?;
         ensure_ed25519_account(&account_id)?;
-        let home_domain: DomainId = iroha_data_model::account::address::default_domain_name()
-            .as_ref()
-            .parse()
-            .map_err(|err| {
-                PyValueError::new_err(format!("invalid default account domain label: {err}"))
-            })?;
         let metadata = py_to_metadata(py, metadata)?;
-        let mut new_account = Account::new(account_id.to_account_id(home_domain));
+        let mut new_account = Account::new(account_id);
         new_account.metadata = metadata;
         let instruction = Register::<Account>::account(new_account);
         Ok(Instruction::new(instruction.into()))
@@ -5502,6 +6247,19 @@ impl Instruction {
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid metadata key `{key}`: {err}")))?;
         let instruction = RemoveKeyValue::account(account_id, key);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn register_rwa<'py>(cls: &Bound<'py, PyType>, rwa: &Bound<'py, PyAny>) -> PyResult<Self> {
+        let rwa = parse_new_rwa_payload(cls.py(), rwa)?;
+        let instruction = iroha_data_model::isi::rwa::RegisterRwa { rwa };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn merge_rwas<'py>(cls: &Bound<'py, PyType>, merge: &Bound<'py, PyAny>) -> PyResult<Self> {
+        let instruction = parse_merge_rwas_payload(cls.py(), merge)?;
         Ok(Instruction::new(instruction.into()))
     }
 
@@ -5675,7 +6433,7 @@ impl Instruction {
         ensure_ed25519_account(&source)?;
         let destination = parse_account_id(destination)?;
         ensure_ed25519_account(&destination)?;
-        let domain_id: DomainId = domain_id.parse().map_err(|err| {
+        let domain_id = DomainId::parse_fully_qualified(domain_id).map_err(|err| {
             PyValueError::new_err(format!("invalid domain id `{domain_id}`: {err}"))
         })?;
         let instruction = Transfer::domain(source, domain_id, destination);
@@ -5717,6 +6475,169 @@ impl Instruction {
             .parse()
             .map_err(|err| PyValueError::new_err(format!("invalid NFT id `{nft_id}`: {err}")))?;
         let instruction = Transfer::nft(source, nft_id, destination);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn transfer_rwa(
+        _cls: &Bound<'_, PyType>,
+        source: &str,
+        rwa_id: &str,
+        quantity: &Bound<'_, PyAny>,
+        destination: &str,
+    ) -> PyResult<Self> {
+        let source = parse_account_id(source)?;
+        ensure_ed25519_account(&source)?;
+        let destination = parse_account_id(destination)?;
+        ensure_ed25519_account(&destination)?;
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let quantity = numeric_from_py(quantity)?;
+        let instruction = iroha_data_model::isi::rwa::TransferRwa {
+            source,
+            rwa: rwa_id,
+            quantity,
+            destination,
+        };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn redeem_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        quantity: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let quantity = numeric_from_py(quantity)?;
+        let instruction = iroha_data_model::isi::rwa::RedeemRwa {
+            rwa: rwa_id,
+            quantity,
+        };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn freeze_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let instruction = iroha_data_model::isi::rwa::FreezeRwa { rwa: rwa_id };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn unfreeze_rwa(_cls: &Bound<'_, PyType>, rwa_id: &str) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let instruction = iroha_data_model::isi::rwa::UnfreezeRwa { rwa: rwa_id };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn hold_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        quantity: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let quantity = numeric_from_py(quantity)?;
+        let instruction = iroha_data_model::isi::rwa::HoldRwa {
+            rwa: rwa_id,
+            quantity,
+        };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn release_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        quantity: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let quantity = numeric_from_py(quantity)?;
+        let instruction = iroha_data_model::isi::rwa::ReleaseRwa {
+            rwa: rwa_id,
+            quantity,
+        };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn force_transfer_rwa(
+        _cls: &Bound<'_, PyType>,
+        rwa_id: &str,
+        quantity: &Bound<'_, PyAny>,
+        destination: &str,
+    ) -> PyResult<Self> {
+        let destination = parse_account_id(destination)?;
+        ensure_ed25519_account(&destination)?;
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let quantity = numeric_from_py(quantity)?;
+        let instruction = iroha_data_model::isi::rwa::ForceTransferRwa {
+            rwa: rwa_id,
+            quantity,
+            destination,
+        };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn set_rwa_controls<'py>(
+        cls: &Bound<'py, PyType>,
+        rwa_id: &str,
+        controls: &Bound<'py, PyAny>,
+    ) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let controls = py_to_json_model::<RwaControlPolicy>(cls.py(), controls, "controls")?;
+        let instruction = iroha_data_model::isi::rwa::SetRwaControls {
+            rwa: rwa_id,
+            controls,
+        };
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (rwa_id, key, value=None))]
+    fn set_rwa_key_value<'py>(
+        cls: &Bound<'py, PyType>,
+        rwa_id: &str,
+        key: &str,
+        value: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let key: Name = key
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid metadata key `{key}`: {err}")))?;
+        let json_value = py_to_json_value(cls.py(), value)?;
+        let instruction = SetKeyValue::rwa(rwa_id, key, json_value);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn remove_rwa_key_value(_cls: &Bound<'_, PyType>, rwa_id: &str, key: &str) -> PyResult<Self> {
+        let rwa_id: RwaId = rwa_id
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid RWA id `{rwa_id}`: {err}")))?;
+        let key: Name = key
+            .parse()
+            .map_err(|err| PyValueError::new_err(format!("invalid metadata key `{key}`: {err}")))?;
+        let instruction = RemoveKeyValue::rwa(rwa_id, key);
         Ok(Instruction::new(instruction.into()))
     }
 
@@ -6386,6 +7307,168 @@ impl SignedTransactionEnvelope {
 }
 
 #[pyfunction]
+#[pyo3(name = "supported_crypto_algorithms")]
+/// Return the canonical names of signature algorithms compiled into the Python SDK.
+fn supported_crypto_algorithms_py() -> Vec<String> {
+    supported_crypto_algorithms()
+        .into_iter()
+        .map(|algorithm| algorithm.as_static_str().to_owned())
+        .collect()
+}
+
+#[pyfunction]
+#[pyo3(name = "normalize_crypto_algorithm")]
+/// Normalize a crypto algorithm alias to the canonical `iroha_crypto` label.
+fn normalize_crypto_algorithm_py(algorithm: &str) -> PyResult<String> {
+    parse_algorithm_arg(algorithm).map(|algorithm| algorithm.as_static_str().to_owned())
+}
+
+#[pyfunction]
+#[pyo3(name = "generate_keypair")]
+/// Generate a random key pair for any signature algorithm compiled into the SDK.
+fn generate_keypair_py(py: Python<'_>, algorithm: &str) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let key_pair = KeyPair::random_with_algorithm(algorithm);
+    keypair_to_py(py, key_pair)
+}
+
+#[pyfunction]
+#[pyo3(name = "derive_keypair_from_seed")]
+/// Derive a key pair for any supported algorithm from arbitrary seed material.
+fn derive_keypair_from_seed_py(
+    py: Python<'_>,
+    seed: &[u8],
+    algorithm: &str,
+) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let key_pair = KeyPair::from_seed(seed.to_vec(), algorithm);
+    keypair_to_py(py, key_pair)
+}
+
+#[pyfunction]
+#[pyo3(name = "load_keypair")]
+/// Reconstruct a key pair for any supported algorithm from raw private-key payload bytes.
+fn load_keypair_py(
+    py: Python<'_>,
+    private_key: &[u8],
+    algorithm: &str,
+) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let private = parse_private_key_for_algorithm(algorithm, private_key)?;
+    let key_pair = KeyPair::from_private_key(private)
+        .map_err(|err| PyValueError::new_err(format!("failed to reconstruct key pair: {err}")))?;
+    keypair_to_py(py, key_pair)
+}
+
+#[pyfunction]
+#[pyo3(name = "sign")]
+/// Sign `message` with the private-key payload for any supported signature algorithm.
+fn sign_py(
+    py: Python<'_>,
+    algorithm: &str,
+    private_key: &[u8],
+    message: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let private_key = parse_private_key_for_algorithm(algorithm, private_key)?;
+    let signature = Signature::new(&private_key, message);
+    Ok(Py::from(PyBytes::new(py, signature.payload())))
+}
+
+#[pyfunction]
+#[pyo3(name = "verify")]
+/// Verify a raw signature against a public-key payload for any supported signature algorithm.
+fn verify_py(
+    algorithm: &str,
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> PyResult<bool> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let public_key = parse_public_key_for_algorithm(algorithm, public_key)?;
+    let signature = Signature::from_bytes(signature);
+    Ok(signature.verify(&public_key, message).is_ok())
+}
+
+#[pyfunction]
+#[pyo3(name = "public_key_multihash", signature = (algorithm, public_key, prefixed=false))]
+/// Return the canonical multihash encoding for a public-key payload.
+fn public_key_multihash_py(algorithm: &str, public_key: &[u8], prefixed: bool) -> PyResult<String> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let public_key = parse_public_key_for_algorithm(algorithm, public_key)?;
+    Ok(if prefixed {
+        public_key.to_prefixed_string()
+    } else {
+        public_key.to_string()
+    })
+}
+
+#[pyfunction]
+#[pyo3(name = "private_key_multihash", signature = (algorithm, private_key, prefixed=false))]
+/// Return the canonical multihash encoding for a private-key payload.
+fn private_key_multihash_py(
+    algorithm: &str,
+    private_key: &[u8],
+    prefixed: bool,
+) -> PyResult<String> {
+    let algorithm = parse_algorithm_arg(algorithm)?;
+    let private_key = parse_private_key_for_algorithm(algorithm, private_key)?;
+    let exposed = ExposedPrivateKey(private_key);
+    Ok(if prefixed {
+        exposed.to_prefixed_string()
+    } else {
+        exposed.to_string()
+    })
+}
+
+#[pyfunction]
+#[pyo3(name = "parse_public_key_multihash")]
+/// Decode a public key from a bare or algorithm-prefixed multihash string.
+fn parse_public_key_multihash_py(py: Python<'_>, encoded: &str) -> PyResult<(String, Py<PyBytes>)> {
+    let public_key = encoded.parse::<PublicKey>().map_err(|err| {
+        PyValueError::new_err(format!("failed to parse public key multihash: {err}"))
+    })?;
+    let (algorithm, payload) = public_key.to_bytes();
+    Ok((
+        algorithm.as_static_str().to_owned(),
+        Py::from(PyBytes::new(py, payload)),
+    ))
+}
+
+#[pyfunction]
+#[pyo3(name = "parse_private_key_multihash")]
+/// Decode a private key from a bare or algorithm-prefixed multihash string.
+fn parse_private_key_multihash_py(
+    py: Python<'_>,
+    encoded: &str,
+) -> PyResult<(String, Py<PyBytes>)> {
+    let exposed = encoded.parse::<ExposedPrivateKey>().map_err(|err| {
+        PyValueError::new_err(format!("failed to parse private key multihash: {err}"))
+    })?;
+    let (algorithm, mut payload) = exposed.0.to_bytes();
+    let bytes = Py::from(PyBytes::new(py, payload.as_slice()));
+    payload.fill(0);
+    Ok((algorithm.as_static_str().to_owned(), bytes))
+}
+
+#[pyfunction]
+#[pyo3(name = "load_keypair_from_multihash")]
+/// Reconstruct a key pair from a private-key multihash string.
+fn load_keypair_from_multihash_py(
+    py: Python<'_>,
+    encoded: &str,
+) -> PyResult<(String, Py<PyBytes>, Py<PyBytes>)> {
+    let exposed = encoded.parse::<ExposedPrivateKey>().map_err(|err| {
+        PyValueError::new_err(format!("failed to parse private key multihash: {err}"))
+    })?;
+    let algorithm = exposed.0.algorithm();
+    let key_pair = KeyPair::from_private_key(exposed.0)
+        .map_err(|err| PyValueError::new_err(format!("failed to reconstruct key pair: {err}")))?;
+    let (private, public) = keypair_to_py(py, key_pair)?;
+    Ok((algorithm.as_static_str().to_owned(), private, public))
+}
+
+#[pyfunction]
 #[pyo3(name = "generate_ed25519_keypair")]
 /// Generate a random Ed25519 key pair using `iroha_crypto` defaults.
 fn generate_ed25519_keypair_py(py: Python<'_>) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
@@ -6730,6 +7813,15 @@ fn bn254_add_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
 }
 
 #[pyfunction]
+/// Add many BN254 field-element pairs using the CUDA backend when available.
+///
+/// Returns `None` when CUDA support is unavailable or disabled at runtime, or
+/// when the input vectors differ in length.
+fn bn254_add_cuda_many_py(lhs: Vec<[u64; 4]>, rhs: Vec<[u64; 4]>) -> Option<Vec<[u64; 4]>> {
+    ivm::bn254_add_batch_cuda(&lhs, &rhs)
+}
+
+#[pyfunction]
 /// Subtract two BN254 field elements using the CUDA backend when available.
 ///
 /// Returns `None` when CUDA support is unavailable or disabled at runtime.
@@ -6738,11 +7830,29 @@ fn bn254_sub_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
 }
 
 #[pyfunction]
+/// Subtract many BN254 field-element pairs using the CUDA backend when available.
+///
+/// Returns `None` when CUDA support is unavailable or disabled at runtime, or
+/// when the input vectors differ in length.
+fn bn254_sub_cuda_many_py(lhs: Vec<[u64; 4]>, rhs: Vec<[u64; 4]>) -> Option<Vec<[u64; 4]>> {
+    ivm::bn254_sub_batch_cuda(&lhs, &rhs)
+}
+
+#[pyfunction]
 /// Multiply two BN254 field elements using the CUDA backend when available.
 ///
 /// Returns `None` when CUDA support is unavailable or disabled at runtime.
 fn bn254_mul_cuda_py(a: [u64; 4], b: [u64; 4]) -> Option<[u64; 4]> {
     ivm::bn254_mul_cuda(a, b)
+}
+
+#[pyfunction]
+/// Multiply many BN254 field-element pairs using the CUDA backend when available.
+///
+/// Returns `None` when CUDA support is unavailable or disabled at runtime, or
+/// when the input vectors differ in length.
+fn bn254_mul_cuda_many_py(lhs: Vec<[u64; 4]>, rhs: Vec<[u64; 4]>) -> Option<Vec<[u64; 4]>> {
+    ivm::bn254_mul_batch_cuda(&lhs, &rhs)
 }
 
 #[pyfunction]
@@ -6849,6 +7959,18 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Instruction>()?;
     module.add_class::<TransactionBuilder>()?;
     module.add_class::<SignedTransactionEnvelope>()?;
+    module.add_function(wrap_pyfunction!(supported_crypto_algorithms_py, module)?)?;
+    module.add_function(wrap_pyfunction!(normalize_crypto_algorithm_py, module)?)?;
+    module.add_function(wrap_pyfunction!(generate_keypair_py, module)?)?;
+    module.add_function(wrap_pyfunction!(derive_keypair_from_seed_py, module)?)?;
+    module.add_function(wrap_pyfunction!(load_keypair_py, module)?)?;
+    module.add_function(wrap_pyfunction!(sign_py, module)?)?;
+    module.add_function(wrap_pyfunction!(verify_py, module)?)?;
+    module.add_function(wrap_pyfunction!(public_key_multihash_py, module)?)?;
+    module.add_function(wrap_pyfunction!(private_key_multihash_py, module)?)?;
+    module.add_function(wrap_pyfunction!(parse_public_key_multihash_py, module)?)?;
+    module.add_function(wrap_pyfunction!(parse_private_key_multihash_py, module)?)?;
+    module.add_function(wrap_pyfunction!(load_keypair_from_multihash_py, module)?)?;
     module.add_function(wrap_pyfunction!(generate_ed25519_keypair_py, module)?)?;
     module.add_function(wrap_pyfunction!(
         derive_ed25519_keypair_from_seed_py,
@@ -6912,8 +8034,11 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(poseidon6_cuda_py, module)?)?;
     module.add_function(wrap_pyfunction!(poseidon6_cuda_many_py, module)?)?;
     module.add_function(wrap_pyfunction!(bn254_add_cuda_py, module)?)?;
+    module.add_function(wrap_pyfunction!(bn254_add_cuda_many_py, module)?)?;
     module.add_function(wrap_pyfunction!(bn254_sub_cuda_py, module)?)?;
+    module.add_function(wrap_pyfunction!(bn254_sub_cuda_many_py, module)?)?;
     module.add_function(wrap_pyfunction!(bn254_mul_cuda_py, module)?)?;
+    module.add_function(wrap_pyfunction!(bn254_mul_cuda_many_py, module)?)?;
     module.add(
         "__doc__",
         "Iroha crypto and transaction helpers exposed to Python via PyO3.",

@@ -56,9 +56,6 @@ const ACCOUNTS_ASSETS_QUERY_CTX: &str = "/v1/accounts/{account_id}/assets/query"
 const KAIGI_RELAY_DETAIL_CTX: &str = "/v1/kaigi/relays/{relay_id}";
 const NEXUS_PUBLIC_LANE_STAKE_CTX: &str = "/v1/nexus/public_lanes/{lane_id}/stake";
 const REPO_AGREEMENTS_ENDPOINT: &str = "/v1/repo/agreements";
-const OFFLINE_ALLOWANCES_ENDPOINT: &str = "/v1/offline/allowances";
-const OFFLINE_REVOCATIONS_ENDPOINT: &str = "/v1/offline/revocations";
-const OFFLINE_REVOCATIONS_QUERY_ENDPOINT: &str = "/v1/offline/revocations/query";
 
 fn query_envelope_with_account_filter(field: &str, literal: &str) -> Vec<u8> {
     let filter = FilterExpr::Eq(FieldPath(field.to_string()), json::Value::from(literal));
@@ -71,20 +68,6 @@ fn query_envelope_with_account_filter(field: &str, literal: &str) -> Vec<u8> {
         ..QueryEnvelope::default()
     };
     norito::json::to_vec(&envelope).expect("serialize envelope")
-}
-
-fn encode_filter(expr: &FilterExpr) -> String {
-    let raw_value = json::to_value(expr).expect("serialize filter expr");
-    let raw = json::to_string(&raw_value).expect("serialize filter expr");
-    encode(&raw).into_owned()
-}
-
-fn encoded_issuer_filter(literal: &str) -> String {
-    let expr = FilterExpr::Eq(
-        FieldPath("issuer_id".to_string()),
-        json::Value::from(literal),
-    );
-    encode_filter(&expr)
 }
 
 fn encode_query_value(value: &str) -> String {
@@ -119,7 +102,7 @@ async fn transactions_endpoint_accepts_encoded_account_segments() {
 #[tokio::test]
 async fn transactions_endpoint_rejects_invalid_account_segment() {
     let app = test_router();
-    let literal = "not-an-i105@wonderland";
+    let literal = "not-an-i105@banka.dataspace";
     let resp = app
         .clone()
         .oneshot(
@@ -188,7 +171,7 @@ async fn transactions_query_accepts_default_domain_without_suffix() {
 #[tokio::test]
 async fn transactions_endpoint_rejects_public_key_segments() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = format!("{ACCOUNT_SIGNATORY}@wonderland");
+    let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("public-key literal must fail to parse")
         .reason();
@@ -401,7 +384,7 @@ async fn transactions_query_rejects_checksum_mismatch() {
 #[tokio::test]
 async fn transactions_query_placeholder_literal_rejected_without_shim() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "ignored@wonderland";
+    let literal = "ignored@banka.dataspace";
     let reason = AccountId::parse_encoded(literal)
         .expect_err("placeholder literal should fail checksum validation")
         .reason();
@@ -470,7 +453,7 @@ async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
 #[tokio::test]
 async fn transactions_query_endpoint_rejects_public_key_segment() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = format!("{ACCOUNT_SIGNATORY}@wonderland");
+    let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("public-key literal must fail to parse")
         .reason();
@@ -604,7 +587,7 @@ async fn assets_endpoint_invalid_segments_increment_metric() {
 #[tokio::test]
 async fn assets_endpoint_rejects_public_key_segments() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = format!("{ACCOUNT_SIGNATORY}@wonderland");
+    let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("public-key literal must fail to parse")
         .reason();
@@ -698,7 +681,7 @@ async fn assets_query_endpoint_invalid_segments_increment_metric() {
 #[tokio::test]
 async fn assets_query_endpoint_rejects_public_key_segments() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = format!("{ACCOUNT_SIGNATORY}@wonderland");
+    let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("public-key literal must fail to parse")
         .reason();
@@ -1097,489 +1080,6 @@ async fn repo_agreements_query_filter_rejects_local8_literal() {
 }
 
 #[tokio::test]
-async fn offline_allowances_endpoint_accepts_controller_literals() {
-    let app = test_router();
-    for literal in accepted_account_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!(
-                        "/v1/offline/allowances?limit=1&controller_id={literal}"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for offline allowances controller literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_allowances_endpoint_accepts_default_domain_literals() {
-    let app = test_router();
-    for literal in accepted_default_domain_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!(
-                        "/v1/offline/allowances?limit=1&controller_id={literal}"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for default-domain controller literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_allowances_endpoint_rejects_public_key_controller() {
-    let (app, metrics) = test_router_with_metrics();
-    let literal = format!("{ACCOUNT_SIGNATORY}@wonderland");
-    let reason = AccountId::parse_encoded(&literal)
-        .expect_err("public-key literal must fail to parse")
-        .reason();
-    let counter = metrics
-        .torii_address_invalid_total
-        .with_label_values(&[OFFLINE_ALLOWANCES_ENDPOINT, reason]);
-    let before = counter.get();
-
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/offline/allowances?limit=1&controller_id={literal}"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        counter.get(),
-        before + 1,
-        "public-key controller literals must increment invalid counter"
-    );
-}
-
-#[tokio::test]
-async fn offline_allowances_query_accepts_default_domain_literals() {
-    let app = test_router();
-    for literal in accepted_default_domain_segments() {
-        let body = query_envelope_with_account_filter("controller_id", &literal);
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/offline/allowances/query")
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(body.clone()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for default-domain controller filter literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_transfers_endpoint_accepts_controller_literals() {
-    let app = test_router();
-    for literal in accepted_account_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!(
-                        "/v1/offline/transfers?limit=1&controller_id={literal}"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for offline transfers controller literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_transfers_endpoint_accepts_default_domain_literals() {
-    let app = test_router();
-    for literal in accepted_default_domain_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!(
-                        "/v1/offline/transfers?limit=1&controller_id={literal}"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for default-domain controller literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_transfers_query_accepts_default_domain_literals() {
-    let app = test_router();
-    for literal in accepted_default_domain_segments() {
-        let body = query_envelope_with_account_filter("controller_id", &literal);
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/offline/transfers/query")
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(body.clone()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for default-domain controller filter literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_summaries_endpoint_accepts_controller_literals() {
-    let app = test_router();
-    for literal in accepted_account_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!(
-                        "/v1/offline/summaries?limit=1&controller_id={literal}"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for offline summaries controller literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_summaries_endpoint_accepts_default_domain_literals() {
-    let app = test_router();
-    for literal in accepted_default_domain_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!(
-                        "/v1/offline/summaries?limit=1&controller_id={literal}"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for default-domain controller literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_summaries_query_accepts_default_domain_literals() {
-    let app = test_router();
-    for literal in accepted_default_domain_segments() {
-        let body = query_envelope_with_account_filter("controller_id", &literal);
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/offline/summaries/query")
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(body.clone()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for default-domain controller filter literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_revocations_endpoint_accepts_filter_literals() {
-    let app = test_router();
-    for literal in accepted_account_segments() {
-        let filter = encoded_issuer_filter(&literal);
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/offline/revocations?filter={filter}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for issuer_id filter literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_revocations_endpoint_accepts_default_domain_filter_literals() {
-    let app = test_router();
-    for literal in accepted_default_domain_segments() {
-        let filter = encoded_issuer_filter(&literal);
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/offline/revocations?filter={filter}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for default-domain issuer_id literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_revocations_endpoint_filter_rejects_invalid_literal() {
-    let (app, metrics) = test_router_with_metrics();
-    let literal = "sorabaddigest";
-    let reason = AccountId::parse_encoded(literal)
-        .expect_err("literal must fail to parse")
-        .reason();
-    let counter = metrics
-        .torii_address_invalid_total
-        .with_label_values(&[OFFLINE_REVOCATIONS_ENDPOINT, reason]);
-    let before = counter.get();
-    let filter = encoded_issuer_filter(literal);
-
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/offline/revocations?filter={filter}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        counter.get(),
-        before + 1,
-        "invalid issuer_id filter literal should increment torii_address_invalid_total"
-    );
-}
-
-#[tokio::test]
-async fn offline_revocations_query_filter_accepts_encoded_literals() {
-    let app = test_router();
-    for literal in accepted_account_segments() {
-        let body = query_envelope_with_account_filter("issuer_id", &literal);
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/offline/revocations/query")
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(body.clone()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for issuer_id filter literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_revocations_query_filter_accepts_default_domain_literals() {
-    let app = test_router();
-    for literal in accepted_default_domain_segments() {
-        let body = query_envelope_with_account_filter("issuer_id", &literal);
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/offline/revocations/query")
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(body.clone()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert!(
-            matches!(
-                resp.status(),
-                StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
-            ),
-            "unexpected status {} for default-domain issuer_id literal {literal}",
-            resp.status()
-        );
-    }
-}
-
-#[tokio::test]
-async fn offline_revocations_query_filter_rejects_invalid_literal() {
-    let (app, metrics) = test_router_with_metrics();
-    let literal = "sorabaddigest";
-    let reason = AccountId::parse_encoded(literal)
-        .expect_err("literal must fail")
-        .reason();
-    let counter = metrics
-        .torii_address_invalid_total
-        .with_label_values(&[OFFLINE_REVOCATIONS_QUERY_ENDPOINT, reason]);
-    let before = counter.get();
-    let body = query_envelope_with_account_filter("issuer_id", literal);
-
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/offline/revocations/query")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        counter.get(),
-        before + 1,
-        "invalid literal should increment torii_address_invalid_total"
-    );
-}
-
-#[tokio::test]
-async fn offline_revocations_query_filter_rejects_local8_literal() {
-    let (app, metrics) = test_router_with_metrics();
-    let literal = "sn1short";
-    let reason = AccountId::parse_encoded(literal)
-        .expect_err("literal must fail")
-        .reason();
-    let invalid_counter = metrics
-        .torii_address_invalid_total
-        .with_label_values(&[OFFLINE_REVOCATIONS_QUERY_ENDPOINT, reason]);
-    let invalid_before = invalid_counter.get();
-    let body = query_envelope_with_account_filter("issuer_id", literal);
-
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/offline/revocations/query")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(
-        invalid_counter.get(),
-        invalid_before + 1,
-        "invalid literal should increment torii_address_invalid_total"
-    );
-}
-
-#[tokio::test]
 async fn kaigi_relay_detail_accepts_encoded_segments() {
     let app = test_router();
     for literal in accepted_account_segments() {
@@ -1674,7 +1174,6 @@ async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
 }
 
 #[tokio::test]
-#[ignore = "validator query-literal parsing rebaseline pending i105-only hard cut"]
 async fn nexus_public_lane_stake_accepts_validator_literals() {
     let app = test_router();
     for literal in accepted_account_segments() {
@@ -1684,7 +1183,7 @@ async fn nexus_public_lane_stake_accepts_validator_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v1/nexus/public_lanes/42/stake?validator={encoded}"
+                        "/v1/nexus/public_lanes/0/stake?validator={encoded}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1711,7 +1210,7 @@ async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/42/stake?validator={literal}"
+                    "/v1/nexus/public_lanes/0/stake?validator={literal}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1722,7 +1221,6 @@ async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
 }
 
 #[tokio::test]
-#[ignore = "validator query-literal parsing rebaseline pending i105-only hard cut"]
 async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
     let app = test_router();
     for literal in accepted_default_domain_segments() {
@@ -1732,7 +1230,7 @@ async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
             .oneshot(
                 Request::builder()
                     .uri(format!(
-                        "/v1/nexus/public_lanes/42/stake?validator={encoded}"
+                        "/v1/nexus/public_lanes/0/stake?validator={encoded}"
                     ))
                     .body(Body::empty())
                     .unwrap(),
@@ -1751,10 +1249,9 @@ async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
 }
 
 #[tokio::test]
-#[ignore = "validator query-literal parsing rebaseline pending i105-only hard cut"]
 async fn nexus_public_lane_stake_rejects_public_key_validator() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = format!("{ACCOUNT_SIGNATORY}@wonderland");
+    let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let encoded = encode_query_value(&literal);
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("public-key literal must fail to parse")
@@ -1769,7 +1266,7 @@ async fn nexus_public_lane_stake_rejects_public_key_validator() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/42/stake?validator={encoded}"
+                    "/v1/nexus/public_lanes/0/stake?validator={encoded}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1785,7 +1282,6 @@ async fn nexus_public_lane_stake_rejects_public_key_validator() {
 }
 
 #[tokio::test]
-#[ignore = "validator query-literal parsing rebaseline pending i105-only hard cut"]
 async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sorainvalid";
@@ -1803,7 +1299,7 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/42/stake?validator={encoded}"
+                    "/v1/nexus/public_lanes/0/stake?validator={encoded}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1815,7 +1311,6 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
 }
 
 #[tokio::test]
-#[ignore = "validator query-literal parsing rebaseline pending i105-only hard cut"]
 async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
     let (app, metrics) = test_router_with_metrics();
     let literal = "sn1short";
@@ -1833,7 +1328,7 @@ async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
         .oneshot(
             Request::builder()
                 .uri(format!(
-                    "/v1/nexus/public_lanes/42/stake?validator={encoded}"
+                    "/v1/nexus/public_lanes/0/stake?validator={encoded}"
                 ))
                 .body(Body::empty())
                 .unwrap(),
@@ -1860,15 +1355,20 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let domain_id: DomainId = "wonderland".parse().expect("domain parses");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain parses");
     let signatory: PublicKey = ACCOUNT_SIGNATORY.parse().expect("key parses");
     let account_id = AccountId::new(signatory);
-    let account =
-        Account::new(account_id.clone().to_account_id(domain_id.clone())).build(&account_id);
+    let account = Account::new(account_id.clone()).build(&account_id);
     let domain = Domain::new(domain_id).build(&account_id);
     let mut world = World::with([domain], [account], Vec::<AssetDefinition>::new());
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let mut state = State::new_for_testing(world, kura.clone(), query);
+    let mut nexus = state.nexus_snapshot();
+    nexus.enabled = true;
+    state
+        .set_nexus(nexus)
+        .expect("enable Nexus for public-lane address parsing");
+    let state = Arc::new(state);
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(

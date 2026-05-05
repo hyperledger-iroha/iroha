@@ -1,27 +1,29 @@
+<!-- Auto-generated stub for Chinese (Simplified) (zh-hans) translation. Replace this content with the full translation. -->
+
 ---
 lang: zh-hans
 direction: ltr
 source: docs/source/data_model.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 683bfb31442f8f4ce7b1bf5038f9dba92fe092545e655f43b51195c21535d3c4
-source_last_modified: "2026-03-12T11:24:23.059339+00:00"
-translation_last_reviewed: 2026-03-12
+source_hash: 8055b28096f5884d2636a19a98e92a74599802fa1bd3ff350dbb636d1300b1f8
+source_last_modified: "2026-03-30T18:22:55.957443+00:00"
+translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---
 
 # Iroha v2 数据模型 – 深入探讨
 
-本文档解释了构成 Iroha v2 数据模型的结构、标识符、特征和协议，这些模型在 `iroha_data_model` 包中实现并在整个工作区中使用。它旨在成为您可以查看并提出更新建议的精确参考。
+本文档解释了构成 Iroha v2 数据模型的结构、标识符、特征和协议，这些模型在 `iroha_data_model` 包中实现并在工作区中使用。它旨在成为您可以查看并提出更新建议的精确参考。
 
 ## 范围和基础
 
 - 目的：为域对象（域、账户、资产、NFT、角色、权限、对等点）、状态更改指令（ISI）、查询、触发器、交易、区块和参数提供规范类型。
 - 序列化：所有公共类型派生 Norito 编解码器 (`norito::codec::{Encode, Decode}`) 和架构 (`iroha_schema::IntoSchema`)。 JSON 在功能标志后面有选择地使用（例如，用于 HTTP 和 `Json` 有效负载）。
 - IVM 注意：当以 Iroha 虚拟机 (IVM) 为目标时，某些反序列化时验证被禁用，因为主机在调用合约之前执行验证（请参阅 `src/lib.rs` 中的 crate 文档）。
-- FFI gates: Some types are conditionally annotated for FFI via `iroha_ffi` behind `ffi_export`/`ffi_import` to avoid overhead when FFI is not needed.
+- FFI 门：某些类型通过 `ffi_export`/`ffi_import` 后面的 `iroha_ffi` 有条件地注释 FFI，以避免不需要 FFI 时的开销。
 
-## 核心特征和助手- `Identifiable`：实体具有稳定的`Id`和`fn id(&self) -> &Self::Id`。应使用 `IdEqOrdHash` 导出，以实现地图/设置的友好性。
+## 核心特征和助手- `Identifiable`：实体具有稳定的 `Id` 和 `fn id(&self) -> &Self::Id`。应使用 `IdEqOrdHash` 导出，以实现地图/设置的友好性。
 - `Registrable`/`Registered`：许多实体（例如，`Domain`、`AssetDefinition`、`Role`）使用构建器模式。 `Registered` 将运行时类型与适合注册事务的轻量级构建器类型 (`With`) 联系起来。
 - `HasMetadata`：统一访问键/值 `Metadata` 映射。
 - `IntoKeyValue`：存储分割助手，分别存储 `Key`（ID）和 `Value`（数据）以减少重复。
@@ -31,37 +33,44 @@ translator: machine-google-reviewed
 - `IdBox`：任何支持的 ID 的求和型信封（`DomainId`、`AccountId`、`AssetDefinitionId`、`AssetId`、`NftId`、`PeerId`、 `TriggerId`、`RoleId`、`Permission`、`CustomParameterId`）。对于通用流和 Norito 编码作为单一类型很有用。
 - `ChainId`：用于交易中重放保护的不透明链标识符。ID 的字符串形式（可与 `Display`/`FromStr` 进行往返）：
 - `DomainId`：`name`（例如，`wonderland`）。
-- `AccountId`：仅通过 `AccountAddress` 编码为 I105 的规范无域帐户标识符。解析器输入必须是规范的 I105；域后缀 (`@domain`)、规范 I105 文字、别名文字、规范十六进制解析器输入、旧版 `norito:` 有效负载和 `uaid:`/`opaque:` 帐户解析器形式将被拒绝。
-- `AssetDefinitionId`：规范 `aid:<32-lower-hex-no-dash>`（UUID-v4 字节）。
-- `AssetId`：规范编码文字 `norito:<hex>`（第一个版本不支持旧文本形式）。
+- `AccountId`：仅通过 `AccountAddress` 编码为 I105 的规范无域帐户标识符。严格的解析器输入必须是规范的 I105；域后缀 (`@domain`)、帐户别名文字、规范十六进制解析器输入、旧版 `norito:` 有效负载和 `uaid:`/`opaque:` 帐户解析器形式将被拒绝。链上账户别名使用 `name@domain.dataspace` 或 `name@dataspace` 并解析为规范的 `AccountId` 值。
+- `AssetDefinitionId`：规范资产定义字节上的规范无前缀 Base58 地址。这是公共资产 ID。链上资产别名使用 `name#domain.dataspace` 或 `name#dataspace` 并仅解析为此规范的 Base58 资产 ID。
+- `AssetId`：规范裸 Base58 形式的公共资产标识符。 `name#dataspace` 或 `name#domain.dataspace` 等资产别名解析为 `AssetId`。内部账本持有量可能会在需要时额外公开拆分的 `asset + account + optional dataspace` 字段，但该复合形状不是公共 `AssetId`。
 - `NftId`：`nft$domain`（例如，`rose$garden`）。
 - `PeerId`：`public_key`（对等平等由公钥决定）。
 
-## 实体
-
-### 域名
+## 实体### 域名
 - `DomainId { name: Name }` – 唯一名称。
 - `Domain { id, logo: Option<SorafsUri>, metadata: Metadata, owned_by: AccountId }`。
 - 生成器：`NewDomain` 与 `with_logo`、`with_metadata`，然后 `Registrable::build(authority)` 设置 `owned_by`。### 账户
 - `AccountId` 是由控制器键入并编码为规范 I105 的规范无域帐户身份。
-- `ScopedAccountId { account: AccountId, domain: DomainId }` 仅在需要范围视图时才携带显式域上下文。
-- `Account { id, metadata, label?, uaid? }` — `label` 是密钥更新记录使用的可选稳定别名，`uaid` 携带可选的 Nexus 范围 [通用帐户 ID](./universal_accounts_guide.md)。
-- 生成器：`NewAccount` 通过 `Account::new(id)`；注册需要明确的 `ScopedAccountId` 域，并且不会从默认值中推断出域。
-
-### 资产定义和资产
-- `AssetDefinitionId { aid_bytes: [u8; 16] }` 在文本上显示为 `aid:<32-hex-no-dash>`。
+- `Account { id, metadata, label?, uaid?, opaque_ids[] }` — `label` 是密钥更新记录使用的可选主 `AccountAlias`，`uaid` 携带可选的 Nexus 范围 [通用帐户 ID](./universal_accounts_guide.md)，以及`opaque_ids` 跟踪绑定到该 UAID 的隐藏标识符。存储的帐户状态不再携带任何链接域字段。
+- 建设者：
+  - `NewAccount` 通过 `Account::new(id)` 注册规范的无域帐户主题。
+- 别名模型：
+  - 规范帐户身份从不包含域或数据空间段。
+  - `AccountAlias` 值是位于 `AccountId` 之上的单独 SNS 绑定。
+  - 域限定别名（例如 `merchant@banka.paynet`）在别名绑定中同时携带域和数据空间。
+  - 数据空间根别名（例如 `merchant@paynet`）仅包含数据空间，因此与 `Account::new(...)` 自然配对。
+  - 测试和固定装置应首先播种通用 `AccountId`，然后分别添加别名租约、别名权限和任何域拥有的状态，而不是将域假设编码到帐户身份本身中。
+  - 公共单一帐户查找现在侧重于别名（`FindAliasesByAccountId`）；帐户身份本身保持无域状态。### 资产定义和资产
+- `AssetDefinitionId { aid_bytes: [u8; 16] }` 以文本方式公开为带有版本控制和校验和的无前缀 Base58 地址。
 - `AssetDefinition { id, name, description?, alias?, spec: NumericSpec, mintable: Mintable, logo: Option<SorafsUri>, metadata, owned_by: AccountId, total_quantity: Numeric }`。
-  - `name` 是必需的人性化显示文本，并且不得包含 `#`/`@`。
+  - `name` 是必需的面向人的显示文本，并且不得包含 `#`/`@`。
   - `alias` 是可选的，并且必须是以下之一：
-    - `<name>#<domain>@<dataspace>`
+    - `<name>#<domain>.<dataspace>`
     - `<name>#<dataspace>`
-    左侧段与 `AssetDefinition.name` 完全匹配。
+    左侧片段与 `AssetDefinition.name` 完全匹配。
+  - 别名租用状态权威地存储在持久化别名绑定记录中；当通过 core/Torii API 读回定义时，会派生内联 `alias` 字段。
+  - Torii 资产定义响应可以包括 `alias_binding { alias, status, lease_expiry_ms, grace_until_ms, bound_at_ms }`，其中 `status` 是 `permanent`、`leased_active`、`leased_grace` 或 `expired_pending_cleanup` 之一。
+  - 别名解析使用最新提交的块时间戳而不是节点挂钟。一旦 `grace_until_ms` 过去，别名选择器将立即停止解析，即使清除清理尚未删除过时的绑定；直接定义读取仍可能将延迟绑定报告为 `expired_pending_cleanup`。
   - `Mintable`: `Infinitely` | `Once` | `Limited(u32)` | `Not`。
   - 建造者：`AssetDefinition::new(id, spec)` 或便利 `numeric(id)`； `name` 是必需的，并且必须通过 `.with_name(...)` 设置。
 - `AssetId { account: AccountId, definition: AssetDefinitionId, scope: AssetBalanceScope }`。
-- `Asset { id, value: Numeric }` 与存储友好型 `AssetEntry`/`AssetValue`。
-- `AssetBalanceScope`：`Global` 用于无限制余额，`Dataspace(DataSpaceId)` 用于数据空间受限余额。
-- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` 公开用于摘要 API。### NFT
+- `Asset { id, value: Numeric }` 与存储友好的 `AssetEntry`/`AssetValue`。- `AssetBalanceScope`：`Global` 用于无限制余额，`Dataspace(DataSpaceId)` 用于数据空间受限余额。
+- `AssetTotalQuantityMap = BTreeMap<AssetDefinitionId, Numeric>` 公开用于摘要 API。
+
+### NFT
 - `NftId { domain: DomainId, name: Name }`。
 - `Nft { id, content: Metadata, owned_by: AccountId }`（内容是任意键/值元数据）。
 - 生成器：`NewNft` 通过 `Nft::new(id, content)`。
@@ -69,7 +78,7 @@ translator: machine-google-reviewed
 ### 角色和权限
 - `RoleId { name: Name }`。
 - `Role { id, permissions: BTreeSet<Permission> }` 与构建器 `NewRole { inner: Role, grant_to: AccountId }`。
-- `Permission { name: Ident, payload: Json }` – `name` 和有效负载架构必须与活动的 `ExecutorDataModel` 一致（见下文）。
+- `Permission { name: Ident, payload: Json }` – `name` 和有效负载模式必须与活动的 `ExecutorDataModel` 一致（见下文）。
 
 ### 同行
 - `PeerId { public_key: PublicKey }`。
@@ -83,7 +92,7 @@ translator: machine-google-reviewed
 - `TriggerId { name: Name }` 和 `Trigger { id, action: action::Action }`。
 - `action::Action { executable: Executable, repeats: Repeats, authority: AccountId, filter: EventFilterBox, metadata }`。
   - `Repeats`：`Indefinitely` 或 `Exactly(u32)`；包括排序和消耗实用程序。
-  - 安全性：`TriggerCompleted` 不能用作操作的过滤器（在（反）序列化期间验证）。
+  - 安全：`TriggerCompleted` 不能用作操作的过滤器（在（反）序列化期间验证）。
 - `EventBox`：管道、管道批、数据、时间、执行触发和触发完成事件的总和类型； `EventFilterBox` 镜像订阅和触发过滤器。
 
 ## 参数及配置
@@ -94,7 +103,7 @@ translator: machine-google-reviewed
   - `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes }`。
   - `SmartContractParameters { fuel, memory, execution_depth }`。
 - `Parameters` 将所有系列和 `custom: BTreeMap<CustomParameterId, CustomParameter>` 分组。
-- 单参数枚举：`SumeragiParameter`、`BlockParameter`、`TransactionParameter`、`SmartContractParameter` 用于类似 diff 的更新和迭代。
+- 单参数枚举：`SumeragiParameter`、`BlockParameter`、`TransactionParameter`、`SmartContractParameter`，用于类似 diff 的更新和迭代。
 - 自定义参数：执行器定义，携带为`Json`，由`CustomParameterId`（a `Name`）标识。
 
 ## ISI（Iroha 特别说明）- 核心特征：`Instruction` 与 `dyn_encode`、`as_any` 和稳定的每类型标识符 `id()`（默认为具体类型名称）。所有指令均为 `Send + Sync + 'static`。
@@ -110,7 +119,7 @@ translator: machine-google-reviewed
   - 帮助程序：`with_instructions`、`with_bytecode`、`with_executable`、`with_metadata`、`set_nonce`、`set_ttl`、`set_creation_time`、`sign`。
 - `SignedTransaction`（版本为`iroha_version`）：携带`TransactionSignature`和有效负载；提供哈希和签名验证。
 - 切入点和结果：
-  - `TransactionEntrypoint`: `External(SignedTransaction)` | `Time(TimeTriggerEntrypoint)`。
+  - `TransactionEntrypoint`：`External(SignedTransaction)` | `Time(TimeTriggerEntrypoint)`。
   - `TransactionResult` = `Result<DataTriggerSequence, TransactionRejectionReason>` 带有哈希助手。
   - `ExecutionStep(ConstVec<InstructionBox>)`：事务中的单个有序批次指令。
 
@@ -128,11 +137,11 @@ translator: machine-google-reviewed
   - 可迭代：实现 `Query<Item>`（例如，`FindAccounts`、`FindAssets`、`FindDomains` 等）。
 - 类型擦除表格：
   - `QueryBox<T>` 是一个盒装的、已擦除的 `Query<Item = T>`，带有由全局注册表支持的 Norito serde。
-  - `QueryWithFilter<T> { query, predicate, selector }` 将查询与 DSL 谓词/选择器配对；通过 `From` 转换为擦除的可迭代查询。
+  - `QueryWithFilter<T> { query, predicate, selector }` 将查询与 DSL 谓词/选择器配对；通过 `From` 转换为已擦除的可迭代查询。
 - 注册表和编解码器：
   - `query_registry!{ ... }` 构建一个全局注册表，按类型名称将具体查询类型映射到构造函数以进行动态解码。
   - `QueryRequest = Singular(SingularQueryBox) | Start(QueryWithParams) | Continue(ForwardCursor)` 和 `QueryResponse = Singular(..) | Iterable(QueryOutput)`。
-  - `QueryOutputBatchBox` 是同质向量的求和类型（例如，`Vec<Account>`、`Vec<Name>`、`Vec<AssetDefinition>`、`Vec<BlockHeader>`），以及用于高效分页的元组和扩展帮助程序。
+  - `QueryOutputBatchBox` 是同质向量的求和类型（例如，`Vec<Account>`、`Vec<Name>`、`Vec<AssetDefinition>`、`Vec<BlockHeader>`），以及用于高效分页的元组和扩展助手。
 - DSL：在 `query::dsl` 中实现，具有用于编译时检查谓词和选择器的投影特征 (`HasProjection<PredicateMarker>` / `SelectorMarker`)。如果需要，`fast_dsl` 功能会公开更轻的变体。
 
 ## 执行器和可扩展性- `Executor { bytecode: IvmBytecode }`：验证器执行的代码包。
@@ -176,17 +185,20 @@ use iroha_crypto::KeyPair;
 use iroha_primitives::numeric::Numeric;
 
 // Domain
-let domain_id: DomainId = "wonderland".parse().unwrap();
+let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
 let new_domain = Domain::new(domain_id.clone()).with_metadata(Metadata::default());
 
 // Account
 let kp = KeyPair::random();
 let account_id = AccountId::new(kp.public_key().clone());
-let new_account = Account::new(account_id.to_account_id(domain_id.clone()))
+let new_account = Account::new(account_id.clone())
     .with_metadata(Metadata::default());
 
 // Asset definition and an asset for the account
-let asset_def_id: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f".parse().unwrap();
+let asset_def_id = AssetDefinitionId::new(
+    domain_id.clone(),
+    "usd".parse().unwrap(),
+);
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
     .with_name("USD Coin".to_owned())
     .with_metadata(Metadata::default());
@@ -230,36 +242,36 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
     .sign(kp.private_key());
 ```
 
-`aid` / 别名快速参考 (CLI + Torii)：
+资产定义 ID/别名快速参考 (CLI + Torii)：
 
 ```bash
-# Register an asset definition with canonical aid + explicit name + alias
+# Register an asset definition with a canonical Base58 id + explicit name + alias
 iroha ledger asset definition register \
-  --id aid:2f17c72466f84a4bb8a8e24884fdcd2f \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl@sbp
+  --alias pkr#bankb.paynet
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
-  --id aid:550e8400e29b41d4a7164466554400dd \
+  --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#sbp
+  --alias pkr#paynet
 
-# Mint using alias + account components (no manual norito hex copy/paste)
+# Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl@sbp \
-  --account sorauﾛ1P... \
+  --definition-alias pkr#bankb.paynet \
+  --account sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB \
   --quantity 500
 
-# Resolve alias to canonical aid via Torii
+# Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl@sbp"}'
+  -d '{"alias":"pkr#bankb.paynet"}'
 ```迁移注意事项：
 - v1 中不接受旧的 `name#domain` 资产定义 ID。
-- 用于铸币/销毁/转移的资产 ID 仍然是规范的 `norito:<hex>`；构建它们：
-  - `iroha tools encode asset-id --definition aid:... --account <i105>`
-  - 或 `--alias <name>#<domain>@<dataspace>` / `--alias <name>#<dataspace>` + `--account`。
+- 公共资产选择器仅使用一种资产定义格式：规范的 Base58 id。别名仍然是可选选择器，但解析为相同的规范 ID。
+- 公共资产查找通过 `asset + account + optional scope` 解决自有余额；原始编码的 `AssetId` 文字是内部表示，不是 Torii/CLI 选择器表面的一部分。
+- 除了 `id` 之外，`POST /v1/assets/definitions/query` 和 `GET /v1/assets/definitions` 还接受 `alias_binding.status`、`alias_binding.lease_expiry_ms`、`alias_binding.grace_until_ms` 和 `alias_binding.bound_at_ms` 上的资产定义过滤器/排序， `name`、`alias` 和 `metadata.*`。
 
 ## 版本控制
 

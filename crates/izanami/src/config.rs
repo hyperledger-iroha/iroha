@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 //! Runtime configuration and CLI parsing for the Izanami chaos tool.
 
-use std::{ops::RangeInclusive, sync::OnceLock, time::Duration};
+use std::{ops::RangeInclusive, path::PathBuf, sync::OnceLock, time::Duration};
 
 use clap::{Args, Parser, ValueEnum};
 use color_eyre::{Result, eyre::eyre};
@@ -12,14 +12,19 @@ use iroha_config::{
         toml::{TomlSource, Writer as TomlWriter},
     },
     parameters::actual::{
-        Commit, ConsensusMode, Da, Fusion, LaneRoutingPolicy, LaneRoutingRule,
+        Commit, ConsensusMode, Da, Fusion, LaneRoutingPolicy, LaneRoutingRule, LaneValidatorMode,
         Nexus as ActualNexus, Sumeragi as ActualSumeragi,
     },
 };
-use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog};
+use iroha_data_model::{
+    asset::{AssetDefinitionAlias, AssetDefinitionId},
+    nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId},
+};
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use toml::{Table, Value};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+use crate::faults::DEFAULT_NETWORK_PACKET_LOSS_PERCENT;
 
 /// Command-line arguments exposed by the `izanami` binary.
 #[derive(Debug, Parser, Clone)]
@@ -52,9 +57,18 @@ pub struct IzanamiArgs {
     /// Maximum time without block progress before failing when a target is set.
     #[arg(long, default_value = "120s", value_parser = parse_duration)]
     pub progress_timeout: Duration,
+    /// Bounded grace period for draining spawned submission tasks after workload shutdown.
+    #[arg(long, default_value = "15s", value_parser = parse_duration)]
+    pub shutdown_drain_timeout: Duration,
     /// Optional p95 block-interval threshold enforced when `target_blocks` is set.
     #[arg(long, value_parser = parse_duration)]
     pub latency_p95_threshold: Option<Duration>,
+    /// Optional run-relative offset before fault workers start injecting faults.
+    #[arg(long, value_parser = parse_duration)]
+    pub fault_window_start: Option<Duration>,
+    /// Optional run-relative offset after which fault workers stop injecting faults.
+    #[arg(long, value_parser = parse_duration)]
+    pub fault_window_end: Option<Duration>,
     /// Optional deterministic seed for reproducible chaos runs.
     #[arg(long)]
     pub seed: Option<u64>,
@@ -64,6 +78,15 @@ pub struct IzanamiArgs {
     /// Upper bound on the number of concurrently in-flight transactions submitted by Izanami.
     #[arg(long, default_value_t = 32)]
     pub max_inflight: usize,
+    /// Number of independent transaction submitter loops sharing the global inflight budget.
+    #[arg(long, default_value_t = 1)]
+    pub submitters: usize,
+    /// Number of transactions to sign, encode, and cache before the timed load window starts.
+    #[arg(long, default_value_t = 0)]
+    pub prebuild_tx_buffer: usize,
+    /// Number of workers used to fill the prebuilt transaction buffer; 0 chooses a host-aware default.
+    #[arg(long, default_value_t = 0)]
+    pub prebuild_tx_workers: usize,
     /// Workload profile controlling which recipes are scheduled.
     #[arg(long, value_enum, default_value_t = WorkloadProfile::Stable)]
     pub workload_profile: WorkloadProfile,
@@ -82,9 +105,19 @@ pub struct IzanamiArgs {
     /// Fault toggle switches parsed from CLI flags.
     #[command(flatten)]
     pub faults: FaultArgs,
+    /// P2P application-frame packet-loss percentage used when packet-loss faults are enabled.
+    #[arg(
+        long = "fault-network-packet-loss-percent",
+        default_value_t = DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
+        value_parser = clap::value_parser!(u8).range(0..=100),
+    )]
+    pub packet_loss_percent: u8,
     /// Enable Nexus/Sora multi-lane defaults from `defaults/nexus/config.toml`.
     #[arg(long)]
     pub nexus: bool,
+    /// Optional directory where Izanami copies test-network diagnostics before cleanup.
+    #[arg(long)]
+    pub diagnostic_dir: Option<PathBuf>,
 }
 
 /// Workload profiles for recipe selection.
@@ -99,6 +132,7 @@ pub enum WorkloadProfile {
 
 pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(15);
 pub const DEFAULT_PROGRESS_TIMEOUT: Duration = Duration::from_secs(120);
+pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
 /// Minimum pipeline time accepted by the test-network builder (must stay in sync).
 pub const MIN_PIPELINE_TIME: Duration = Duration::from_millis(2);
 
@@ -106,25 +140,97 @@ pub const MIN_PIPELINE_TIME: Duration = Duration::from_millis(2);
 #[derive(Debug, Clone, Args)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct FaultArgs {
+    /// Enable crash-and-restart faults.
+    #[arg(
+        long = "fault-enable-crash-restart",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
+    pub crash_restart: bool,
+    /// Enable wipe-storage-and-restart faults.
+    #[arg(
+        long = "fault-enable-wipe-storage",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
+    pub wipe_storage: bool,
+    /// Enable invalid-transaction spam faults.
+    #[arg(
+        long = "fault-enable-spam-invalid-transactions",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
+    pub spam_invalid_transactions: bool,
     /// Enable transient network latency faults.
-    #[arg(long = "fault-enable-network-latency", default_value_t = true)]
+    #[arg(
+        long = "fault-enable-network-latency",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
     pub network_latency: bool,
     /// Enable network partition faults.
-    #[arg(long = "fault-enable-network-partition", default_value_t = true)]
+    #[arg(
+        long = "fault-enable-network-partition",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
     pub network_partition: bool,
+    /// Enable P2P packet-loss faults.
+    #[arg(
+        long = "fault-enable-network-packet-loss",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
+    pub network_packet_loss: bool,
     /// Enable CPU stress faults.
-    #[arg(long = "fault-enable-cpu-stress", default_value_t = true)]
+    #[arg(
+        long = "fault-enable-cpu-stress",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
     pub cpu_stress: bool,
     /// Enable disk saturation faults.
-    #[arg(long = "fault-enable-disk-saturation", default_value_t = true)]
+    #[arg(
+        long = "fault-enable-disk-saturation",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "true",
+    )]
     pub disk_saturation: bool,
 }
 
 impl FaultArgs {
     pub fn to_toggles(&self) -> FaultToggles {
-        FaultToggles::from_array([
+        FaultToggles::from_explicit_array_with_packet_loss([
+            self.crash_restart,
+            self.wipe_storage,
+            self.spam_invalid_transactions,
             self.network_latency,
             self.network_partition,
+            self.network_packet_loss,
             self.cpu_stress,
             self.disk_saturation,
         ])
@@ -134,8 +240,12 @@ impl FaultArgs {
 impl Default for FaultArgs {
     fn default() -> Self {
         Self {
+            crash_restart: true,
+            wipe_storage: true,
+            spam_invalid_transactions: true,
             network_latency: true,
             network_partition: true,
+            network_packet_loss: true,
             cpu_stress: true,
             disk_saturation: true,
         }
@@ -145,8 +255,12 @@ impl Default for FaultArgs {
 impl From<FaultToggles> for FaultArgs {
     fn from(toggles: FaultToggles) -> Self {
         Self {
+            crash_restart: toggles.crash_restart(),
+            wipe_storage: toggles.wipe_storage(),
+            spam_invalid_transactions: toggles.spam_invalid_transactions(),
             network_latency: toggles.network_latency(),
             network_partition: toggles.network_partition(),
+            network_packet_loss: toggles.network_packet_loss(),
             cpu_stress: toggles.cpu_stress(),
             disk_saturation: toggles.disk_saturation(),
         }
@@ -160,34 +274,89 @@ pub struct FaultToggles {
 }
 
 impl FaultToggles {
-    const NETWORK_LATENCY: u8 = 1 << 0;
-    const NETWORK_PARTITION: u8 = 1 << 1;
-    const CPU_STRESS: u8 = 1 << 2;
-    const DISK_SATURATION: u8 = 1 << 3;
+    const CRASH_RESTART: u8 = 1 << 0;
+    const WIPE_STORAGE: u8 = 1 << 1;
+    const SPAM_INVALID_TRANSACTIONS: u8 = 1 << 2;
+    const NETWORK_LATENCY: u8 = 1 << 3;
+    const NETWORK_PARTITION: u8 = 1 << 4;
+    const NETWORK_PACKET_LOSS: u8 = 1 << 5;
+    const CPU_STRESS: u8 = 1 << 6;
+    const DISK_SATURATION: u8 = 1 << 7;
+    const ALL_BITS: u8 = Self::CRASH_RESTART
+        | Self::WIPE_STORAGE
+        | Self::SPAM_INVALID_TRANSACTIONS
+        | Self::NETWORK_LATENCY
+        | Self::NETWORK_PARTITION
+        | Self::NETWORK_PACKET_LOSS
+        | Self::CPU_STRESS
+        | Self::DISK_SATURATION;
 
+    /// Legacy helper preserving the historical "optional add-on faults" semantics used by tests.
     pub const fn from_array(flags: [bool; 4]) -> Self {
+        Self::from_explicit_array_with_packet_loss([
+            true, true, true, flags[0], flags[1], false, flags[2], flags[3],
+        ])
+    }
+
+    pub const fn from_explicit_array(flags: [bool; 7]) -> Self {
+        Self::from_explicit_array_with_packet_loss([
+            flags[0], flags[1], flags[2], flags[3], flags[4], false, flags[5], flags[6],
+        ])
+    }
+
+    pub const fn from_explicit_array_with_packet_loss(flags: [bool; 8]) -> Self {
         let mut bits = 0u8;
         if flags[0] {
-            bits |= Self::NETWORK_LATENCY;
+            bits |= Self::CRASH_RESTART;
         }
         if flags[1] {
-            bits |= Self::NETWORK_PARTITION;
+            bits |= Self::WIPE_STORAGE;
         }
         if flags[2] {
-            bits |= Self::CPU_STRESS;
+            bits |= Self::SPAM_INVALID_TRANSACTIONS;
         }
         if flags[3] {
+            bits |= Self::NETWORK_LATENCY;
+        }
+        if flags[4] {
+            bits |= Self::NETWORK_PARTITION;
+        }
+        if flags[5] {
+            bits |= Self::NETWORK_PACKET_LOSS;
+        }
+        if flags[6] {
+            bits |= Self::CPU_STRESS;
+        }
+        if flags[7] {
             bits |= Self::DISK_SATURATION;
         }
         Self { bits }
     }
 
     pub const fn from_bits(bits: u8) -> Self {
-        Self { bits: bits & 0x0F }
+        Self {
+            bits: bits & Self::ALL_BITS,
+        }
     }
 
     pub const fn bits(self) -> u8 {
         self.bits
+    }
+
+    pub const fn any_enabled(self) -> bool {
+        self.bits != 0
+    }
+
+    pub const fn crash_restart(self) -> bool {
+        self.bits & Self::CRASH_RESTART != 0
+    }
+
+    pub const fn wipe_storage(self) -> bool {
+        self.bits & Self::WIPE_STORAGE != 0
+    }
+
+    pub const fn spam_invalid_transactions(self) -> bool {
+        self.bits & Self::SPAM_INVALID_TRANSACTIONS != 0
     }
 
     pub const fn network_latency(self) -> bool {
@@ -196,6 +365,10 @@ impl FaultToggles {
 
     pub const fn network_partition(self) -> bool {
         self.bits & Self::NETWORK_PARTITION != 0
+    }
+
+    pub const fn network_packet_loss(self) -> bool {
+        self.bits & Self::NETWORK_PACKET_LOSS != 0
     }
 
     pub const fn cpu_stress(self) -> bool {
@@ -219,16 +392,24 @@ pub struct ChaosConfig {
     pub target_blocks: Option<u64>,
     pub progress_interval: Duration,
     pub progress_timeout: Duration,
+    pub shutdown_drain_timeout: Duration,
     pub latency_p95_threshold: Option<Duration>,
+    pub fault_window_start: Option<Duration>,
+    pub fault_window_end: Option<Duration>,
     pub seed: Option<u64>,
     pub tps: f64,
     pub max_inflight: usize,
+    pub submitters: usize,
+    pub prebuild_tx_buffer: usize,
+    pub prebuild_tx_workers: usize,
     pub workload_profile: WorkloadProfile,
     pub allow_contract_deploy_in_stable: bool,
     pub fault_interval: RangeInclusive<Duration>,
+    pub packet_loss_percent: u8,
     pub log_filter: String,
     pub faults: FaultToggles,
     pub nexus: Option<NexusProfile>,
+    pub diagnostic_dir: Option<PathBuf>,
 }
 
 impl TryFrom<IzanamiArgs> for ChaosConfig {
@@ -271,6 +452,9 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         if args.progress_timeout.is_zero() {
             return Err(eyre!("progress_timeout must be greater than zero"));
         }
+        if args.shutdown_drain_timeout.is_zero() {
+            return Err(eyre!("shutdown_drain_timeout must be greater than zero"));
+        }
         if args.progress_interval > args.progress_timeout {
             return Err(eyre!(
                 "progress_interval ({:?}) must not exceed progress_timeout ({:?})",
@@ -289,6 +473,33 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
                 "latency_p95_threshold requires target_blocks to be set"
             ));
         }
+        if args
+            .fault_window_start
+            .is_some_and(|offset| offset >= args.duration)
+        {
+            return Err(eyre!(
+                "fault_window_start ({:?}) must be before duration ({:?})",
+                args.fault_window_start.expect("checked above"),
+                args.duration
+            ));
+        }
+        if args
+            .fault_window_end
+            .is_some_and(|offset| offset > args.duration)
+        {
+            return Err(eyre!(
+                "fault_window_end ({:?}) must not exceed duration ({:?})",
+                args.fault_window_end.expect("checked above"),
+                args.duration
+            ));
+        }
+        if let (Some(start), Some(end)) = (args.fault_window_start, args.fault_window_end)
+            && end <= start
+        {
+            return Err(eyre!(
+                "fault_window_end ({end:?}) must be after fault_window_start ({start:?})"
+            ));
+        }
         if args.tps <= 0.0 {
             return Err(eyre!("tps must be positive"));
         }
@@ -304,6 +515,9 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         if args.max_inflight == 0 {
             return Err(eyre!("max_inflight must be greater than zero"));
         }
+        if args.submitters == 0 {
+            return Err(eyre!("submitters must be greater than zero"));
+        }
         if args.fault_interval_min > args.fault_interval_max {
             return Err(eyre!(
                 "fault interval min ({:?}) cannot be greater than max ({:?})",
@@ -311,8 +525,19 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
                 args.fault_interval_max,
             ));
         }
+        if args.packet_loss_percent > 100 {
+            return Err(eyre!(
+                "fault-network-packet-loss-percent ({}) must be between 0 and 100",
+                args.packet_loss_percent
+            ));
+        }
 
         let toggles = args.faults.to_toggles();
+        if args.faulty > 0 && !toggles.any_enabled() {
+            return Err(eyre!(
+                "at least one fault scenario must be enabled when faulty peers are configured"
+            ));
+        }
         let IzanamiArgs {
             tui: _,
             peers,
@@ -322,17 +547,25 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             target_blocks,
             progress_interval,
             progress_timeout,
+            shutdown_drain_timeout,
             latency_p95_threshold,
+            fault_window_start,
+            fault_window_end,
             seed,
             tps,
             max_inflight,
+            submitters,
+            prebuild_tx_buffer,
+            prebuild_tx_workers,
             workload_profile,
             allow_contract_deploy_in_stable,
             log_filter,
             fault_interval_min,
             fault_interval_max,
             faults: _faults,
+            packet_loss_percent,
             nexus,
+            diagnostic_dir,
             allow_net,
         } = args;
         let nexus = if nexus {
@@ -350,16 +583,24 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             target_blocks,
             progress_interval,
             progress_timeout,
+            shutdown_drain_timeout,
             latency_p95_threshold,
+            fault_window_start,
+            fault_window_end,
             seed,
             tps,
             max_inflight,
+            submitters,
+            prebuild_tx_buffer,
+            prebuild_tx_workers,
             workload_profile,
             allow_contract_deploy_in_stable,
             fault_interval: fault_interval_min..=fault_interval_max,
+            packet_loss_percent,
             log_filter,
             faults: toggles,
             nexus,
+            diagnostic_dir,
         })
     }
 }
@@ -388,18 +629,26 @@ impl IzanamiArgs {
             target_blocks: cfg.target_blocks,
             progress_interval: cfg.progress_interval,
             progress_timeout: cfg.progress_timeout,
+            shutdown_drain_timeout: cfg.shutdown_drain_timeout,
             latency_p95_threshold: cfg.latency_p95_threshold,
+            fault_window_start: cfg.fault_window_start,
+            fault_window_end: cfg.fault_window_end,
             seed: cfg.seed,
             tps: cfg.tps,
             max_inflight: cfg.max_inflight,
+            submitters: cfg.submitters,
+            prebuild_tx_buffer: cfg.prebuild_tx_buffer,
+            prebuild_tx_workers: cfg.prebuild_tx_workers,
             workload_profile: cfg.workload_profile,
             allow_contract_deploy_in_stable: cfg.allow_contract_deploy_in_stable,
             log_filter: cfg.log_filter.clone(),
             fault_interval_min: min,
             fault_interval_max: max,
             faults: FaultArgs::from(cfg.faults),
+            packet_loss_percent: cfg.packet_loss_percent,
             nexus: cfg.nexus.is_some(),
             allow_net: cfg.allow_net,
+            diagnostic_dir: cfg.diagnostic_dir.clone(),
         }
     }
 
@@ -413,6 +662,9 @@ impl IzanamiArgs {
 pub struct NexusProfile {
     pub lane_catalog: LaneCatalog,
     pub dataspace_catalog: DataSpaceCatalog,
+    pub bootstrap_public_lanes: Vec<LaneId>,
+    pub stake_asset_id: AssetDefinitionId,
+    pub fee_asset_id: AssetDefinitionId,
     pub routing_policy: LaneRoutingPolicy,
     pub fusion: Fusion,
     pub commit: Commit,
@@ -426,6 +678,28 @@ fn canonical_addr_literal(addr: &str) -> Result<String> {
         .parse()
         .map_err(|err| eyre!("failed to parse embedded socket address `{addr}`: {err}"))?;
     Ok(IrohaSocketAddr::from(parsed).to_literal())
+}
+
+fn resolve_embedded_asset_selector(
+    field_path: &str,
+    selector: &str,
+    canonical_default: &str,
+) -> Result<AssetDefinitionId> {
+    if let Ok(asset_id) = selector.parse() {
+        return Ok(asset_id);
+    }
+
+    selector.parse::<AssetDefinitionAlias>().map_err(|err| {
+        eyre!(
+            "failed to parse embedded {field_path} `{selector}` as a canonical asset definition id or alias: {err}"
+        )
+    })?;
+
+    canonical_default.parse().map_err(|err| {
+        eyre!(
+            "failed to resolve embedded {field_path} alias `{selector}` to canonical asset definition id `{canonical_default}`: {err}"
+        )
+    })
 }
 
 impl NexusProfile {
@@ -492,11 +766,25 @@ impl NexusProfile {
 
         let nexus = actual.nexus.clone();
         let sumeragi = actual.sumeragi;
-        let config_layer = build_nexus_layer(&nexus, &sumeragi);
+        let bootstrap_public_lanes = derive_bootstrap_public_lanes(&nexus);
+        let stake_asset_id = resolve_embedded_asset_selector(
+            "nexus.staking.stake_asset_id",
+            &nexus.staking.stake_asset_id,
+            &iroha_config::parameters::defaults::nexus::staking::stake_asset_id(),
+        )?;
+        let fee_asset_id = resolve_embedded_asset_selector(
+            "nexus.fees.fee_asset_id",
+            &nexus.fees.fee_asset_id,
+            &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+        )?;
+        let config_layer = build_nexus_layer(&nexus, &sumeragi, &stake_asset_id, &fee_asset_id);
 
         Ok(Self {
             lane_catalog: nexus.lane_catalog,
             dataspace_catalog: nexus.dataspace_catalog,
+            bootstrap_public_lanes,
+            stake_asset_id,
+            fee_asset_id,
             routing_policy: nexus.routing_policy,
             fusion: nexus.fusion,
             commit: nexus.commit,
@@ -505,6 +793,29 @@ impl NexusProfile {
             config_layer,
         })
     }
+}
+
+fn derive_bootstrap_public_lanes(nexus: &ActualNexus) -> Vec<LaneId> {
+    let lanes: Vec<LaneId> = if nexus.lane_catalog.lanes().is_empty() {
+        vec![LaneId::SINGLE]
+    } else {
+        nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| lane.id)
+            .collect()
+    };
+
+    lanes
+        .into_iter()
+        .filter(|lane| {
+            matches!(
+                nexus.staking.validator_mode(*lane, &nexus.lane_catalog),
+                LaneValidatorMode::StakeElected
+            )
+        })
+        .collect()
 }
 
 fn normalize_lane_metadata(raw: &mut Table) {
@@ -521,7 +832,12 @@ fn normalize_lane_metadata(raw: &mut Table) {
     }
 }
 
-fn build_nexus_layer(nexus: &ActualNexus, sumeragi: &ActualSumeragi) -> Table {
+fn build_nexus_layer(
+    nexus: &ActualNexus,
+    sumeragi: &ActualSumeragi,
+    stake_asset_id: &AssetDefinitionId,
+    fee_asset_id: &AssetDefinitionId,
+) -> Table {
     let mut layer = Table::new();
     TomlWriter::new(&mut layer).write(["nexus", "enabled"], true);
     TomlWriter::new(&mut layer).write(
@@ -624,6 +940,11 @@ fn build_nexus_layer(nexus: &ActualNexus, sumeragi: &ActualSumeragi) -> Table {
     TomlWriter::new(&mut layer).write(
         ["nexus", "routing_policy", "rules"],
         Value::Array(rule_values),
+    );
+    TomlWriter::new(&mut layer).write(["nexus", "fees", "fee_asset_id"], fee_asset_id.to_string());
+    TomlWriter::new(&mut layer).write(
+        ["nexus", "staking", "stake_asset_id"],
+        stake_asset_id.to_string(),
     );
 
     TomlWriter::new(&mut layer).write(
@@ -777,22 +1098,34 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(2),
             faults: FaultArgs {
+                crash_restart: true,
+                wipe_storage: true,
+                spam_invalid_transactions: true,
                 network_latency: true,
                 network_partition: true,
+                network_packet_loss: true,
                 cpu_stress: true,
                 disk_saturation: true,
             },
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         assert!(ChaosConfig::try_from(args).is_err());
     }
@@ -809,17 +1142,25 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: Some(42),
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "warn".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         init_tracing_with_filter(&args.log_filter);
         init_tracing_with_filter(&args.log_filter);
@@ -837,17 +1178,25 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("allow_net=false should prevent ChaosConfig construction");
@@ -870,17 +1219,25 @@ mod tests {
             target_blocks: Some(0),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         assert!(ChaosConfig::try_from(args).is_err());
     }
@@ -901,17 +1258,25 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("pipeline_time below minimum should fail");
@@ -939,6 +1304,41 @@ mod tests {
     }
 
     #[test]
+    fn nexus_profile_derives_bootstrap_public_lanes() {
+        let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
+        assert_eq!(
+            profile.bootstrap_public_lanes,
+            vec![LaneId::new(0), LaneId::new(1), LaneId::new(2)],
+            "embedded nexus profile should expose every stake-elected bootstrap lane"
+        );
+    }
+
+    #[test]
+    fn nexus_profile_preserves_effective_bootstrap_asset_ids() {
+        let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
+        let expected_fee_asset = profile.fee_asset_id.to_string();
+        let expected_stake_asset = profile.stake_asset_id.to_string();
+        let fee_asset = profile
+            .config_layer
+            .get("nexus")
+            .and_then(Value::as_table)
+            .and_then(|nexus| nexus.get("fees"))
+            .and_then(Value::as_table)
+            .and_then(|fees| fees.get("fee_asset_id"))
+            .and_then(Value::as_str);
+        let stake_asset = profile
+            .config_layer
+            .get("nexus")
+            .and_then(Value::as_table)
+            .and_then(|nexus| nexus.get("staking"))
+            .and_then(Value::as_table)
+            .and_then(|staking| staking.get("stake_asset_id"))
+            .and_then(Value::as_str);
+        assert_eq!(fee_asset, Some(expected_fee_asset.as_str()));
+        assert_eq!(stake_asset, Some(expected_stake_asset.as_str()));
+    }
+
+    #[test]
     fn chaos_config_rejects_progress_interval_over_timeout() {
         let args = IzanamiArgs {
             tui: false,
@@ -950,17 +1350,25 @@ mod tests {
             target_blocks: Some(5),
             progress_interval: Duration::from_secs(10),
             progress_timeout: Duration::from_secs(5),
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("progress_interval > progress_timeout should fail");
@@ -983,17 +1391,25 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: f64::NAN,
             max_inflight: 1,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("non-finite tps should fail");
@@ -1016,17 +1432,25 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: f64::MAX,
             max_inflight: 1,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("tps too high for timer resolution should fail");
@@ -1049,17 +1473,25 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: f64::MIN_POSITIVE,
             max_inflight: 1,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("tps too low for timer range should fail");
@@ -1082,17 +1514,25 @@ mod tests {
             target_blocks: None,
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: Some(Duration::from_millis(900)),
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("latency threshold without target_blocks should fail");
@@ -1115,17 +1555,25 @@ mod tests {
             target_blocks: Some(5),
             progress_interval: DEFAULT_PROGRESS_INTERVAL,
             progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
             latency_p95_threshold: Some(Duration::ZERO),
+            fault_window_start: None,
+            fault_window_end: None,
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(1),
             faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
             nexus: false,
+            diagnostic_dir: None,
         };
         let Err(err) = ChaosConfig::try_from(args) else {
             panic!("zero latency threshold should fail");
@@ -1133,6 +1581,142 @@ mod tests {
         assert!(
             err.to_string().contains("latency_p95_threshold"),
             "error should mention latency_p95_threshold: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_accepts_bounded_fault_window() {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.duration = Duration::from_secs(800);
+        args.fault_window_start = Some(Duration::from_secs(133));
+        args.fault_window_end = Some(Duration::from_secs(266));
+
+        let config = ChaosConfig::try_from(args).expect("paper fault window should be valid");
+
+        assert_eq!(config.fault_window_start, Some(Duration::from_secs(133)));
+        assert_eq!(config.fault_window_end, Some(Duration::from_secs(266)));
+    }
+
+    #[test]
+    fn chaos_config_rejects_fault_window_end_before_start() {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.duration = Duration::from_secs(800);
+        args.fault_window_start = Some(Duration::from_secs(266));
+        args.fault_window_end = Some(Duration::from_secs(133));
+
+        let err = ChaosConfig::try_from(args).expect_err("inverted fault window must fail");
+
+        assert!(
+            err.to_string().contains("fault_window_end"),
+            "error should mention fault_window_end: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_fault_window_start_after_duration() {
+        let mut args = IzanamiArgs::defaults();
+        args.allow_net = true;
+        args.duration = Duration::from_secs(30);
+        args.fault_window_start = Some(Duration::from_secs(30));
+
+        let err = ChaosConfig::try_from(args).expect_err("late fault window must fail");
+
+        assert!(
+            err.to_string().contains("fault_window_start"),
+            "error should mention fault_window_start: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_zero_submitters() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
+            latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
+            seed: None,
+            tps: 1.0,
+            max_inflight: 1,
+            submitters: 0,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
+            nexus: false,
+            diagnostic_dir: None,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("zero submitters should fail");
+        };
+        assert!(
+            err.to_string().contains("submitters"),
+            "error should mention submitters: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_faulty_peers_with_no_enabled_faults() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 4,
+            faulty: 1,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            shutdown_drain_timeout: DEFAULT_SHUTDOWN_DRAIN_TIMEOUT,
+            latency_p95_threshold: None,
+            fault_window_start: None,
+            fault_window_end: None,
+            seed: None,
+            tps: 1.0,
+            max_inflight: 1,
+            submitters: 1,
+            prebuild_tx_buffer: 0,
+            prebuild_tx_workers: 0,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs {
+                crash_restart: false,
+                wipe_storage: false,
+                spam_invalid_transactions: false,
+                network_latency: false,
+                network_partition: false,
+                network_packet_loss: false,
+                cpu_stress: false,
+                disk_saturation: false,
+            },
+            packet_loss_percent: DEFAULT_NETWORK_PACKET_LOSS_PERCENT,
+            nexus: false,
+            diagnostic_dir: None,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("faulty peers without enabled faults should fail");
+        };
+        assert!(
+            err.to_string().contains("fault scenario"),
+            "error should mention enabled fault scenarios: {err}"
         );
     }
 }

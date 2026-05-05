@@ -25,9 +25,7 @@ use std::{
 
 use http::StatusCode;
 use iroha_config::parameters::actual::{DataspaceGossipFallback, RestrictedPublicPayload};
-use iroha_crypto::Hash;
-#[cfg(debug_assertions)]
-use iroha_crypto::HashOf;
+use iroha_crypto::{Hash, HashOf};
 #[cfg_attr(not(feature = "telemetry"), allow(unused_imports))]
 use iroha_data_model::da::types::DaRentQuote;
 #[cfg(feature = "telemetry")]
@@ -118,6 +116,14 @@ const PHASE_PREPARE: &str = "prepare";
 const PHASE_COMMIT: &str = "commit";
 const PHASE_NEW_VIEW: &str = "new_view";
 const PIPELINE_BUCKET_LABELS: [&str; 8] = ["1", "2", "4", "8", "16", "32", "64", "128"];
+
+fn numeric_metric_parts(amount: &Numeric) -> (u64, u64) {
+    let units = amount
+        .try_mantissa_u128()
+        .map(|value| u64::try_from(value).unwrap_or(u64::MAX))
+        .unwrap_or(u64::MAX);
+    (units, u64::from(amount.scale()))
+}
 
 #[cfg(feature = "telemetry")]
 fn json_value<T: norito::json::JsonSerialize + ?Sized>(value: &T) -> norito::json::Value {
@@ -299,7 +305,7 @@ impl Default for LaneMetadataSnapshot {
     fn default() -> Self {
         Self {
             alias: String::new(),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             dataspace_alias: None,
             visibility: LaneVisibility::Public,
             storage_profile: LaneStorageProfile::FullReplica,
@@ -1623,7 +1629,7 @@ impl StateTelemetry {
         push_nexus_diff(
             &mut diffs,
             "nexus.routing.default_dataspace",
-            json_value(&DataSpaceId::GLOBAL.as_u64()),
+            json_value(&DataSpaceId::UNIVERSAL.as_u64()),
             json_value(&nexus.routing_policy.default_dataspace.as_u64()),
         );
         let routing_rules: Vec<norito::json::Value> = nexus
@@ -2447,7 +2453,7 @@ impl StateTelemetry {
     }
 
     fn record_lane_placeholders(&self, lane_id: LaneId) {
-        self.record_lane_with_dataspace(lane_id, DataSpaceId::GLOBAL);
+        self.record_lane_with_dataspace(lane_id, DataSpaceId::UNIVERSAL);
     }
 
     fn record_lane_with_dataspace(&self, lane_id: LaneId, dataspace_id: DataSpaceId) {
@@ -2466,7 +2472,7 @@ impl StateTelemetry {
             .read()
             .ok()
             .and_then(|guard| guard.get(&lane_id.as_u32()).map(|entry| entry.dataspace_id))
-            .unwrap_or(DataSpaceId::GLOBAL)
+            .unwrap_or(DataSpaceId::UNIVERSAL)
             .as_u64()
             .to_string();
         (lane_label, dataspace_label)
@@ -4380,13 +4386,20 @@ impl StateTelemetry {
         }
     }
 
-    /// Add to the total fee units for the current (latest) block.
-    pub fn add_block_fee_units(&self, delta_units: u64) {
+    /// Add to the total fee amount for the current (latest) block.
+    pub fn add_block_fee_amount(&self, delta_amount: &Numeric) {
         if self.is_enabled() {
-            let cur = self.metrics.block_fee_total_units.get();
-            self.metrics
-                .block_fee_total_units
-                .set(cur.saturating_add(delta_units));
+            let current = Numeric::new(
+                self.metrics.block_fee_total_units.get(),
+                u32::try_from(self.metrics.block_fee_total_scale.get()).unwrap_or(u32::MAX),
+            );
+            let updated = current
+                .checked_add(delta_amount.clone())
+                .expect("block fee metric exceeds supported numeric bounds")
+                .trim_trailing_zeros();
+            let (units, scale) = numeric_metric_parts(&updated);
+            self.metrics.block_fee_total_units.set(units);
+            self.metrics.block_fee_total_scale.set(scale);
         }
     }
 
@@ -4394,6 +4407,7 @@ impl StateTelemetry {
     pub fn reset_block_fee_units(&self) {
         if self.is_enabled() {
             self.metrics.block_fee_total_units.set(0);
+            self.metrics.block_fee_total_scale.set(0);
         }
     }
 
@@ -6230,6 +6244,33 @@ impl Telemetry {
         }
     }
 
+    /// Record a Torii DA spool batch write outcome.
+    pub fn record_torii_da_spool_batch(&self, outcome: &'static str, write_ms: f64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.record_torii_da_spool_batch(outcome, write_ms);
+        }
+    }
+
+    /// Record Torii DA spool artifact outcomes.
+    pub fn record_torii_da_spool_artifact(
+        &self,
+        kind: &'static str,
+        outcome: &'static str,
+        count: u64,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .record_torii_da_spool_artifact(kind, outcome, count);
+        }
+    }
+
+    /// Set the current Torii DA spool queue depth.
+    pub fn set_torii_da_spool_queue_depth(&self, depth: u64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.set_torii_da_spool_queue_depth(depth);
+        }
+    }
+
     /// Record the result of a DA receipt ingestion attempt.
     pub fn record_da_receipt_outcome(
         &self,
@@ -6754,6 +6795,71 @@ impl Telemetry {
         }
     }
 
+    /// Increment RBC targeted INIT repair requests counter.
+    pub fn inc_rbc_init_requests(&self) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.sumeragi_rbc_init_requests_total.inc();
+        }
+    }
+
+    /// Increment RBC targeted chunk repair requests counter.
+    pub fn inc_rbc_chunk_requests(&self) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.sumeragi_rbc_chunk_requests_total.inc();
+        }
+    }
+
+    /// Add to the total number of encoded chunk indices requested via targeted repair.
+    pub fn add_rbc_requested_chunks(&self, count: u64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_rbc_requested_chunks_total
+                .inc_by(count);
+        }
+    }
+
+    /// Add initial RBC chunk target counters grouped by encoding/fanout policy.
+    pub fn add_rbc_initial_chunk_targets(
+        &self,
+        encoding: &'static str,
+        fanout: &'static str,
+        planned: u64,
+        posted: u64,
+        skipped: u64,
+    ) {
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        if planned != 0 {
+            self.metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&[encoding, fanout, "planned"])
+                .inc_by(planned);
+        }
+        if posted != 0 {
+            self.metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&[encoding, fanout, "posted"])
+                .inc_by(posted);
+        }
+        if skipped != 0 {
+            self.metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&[encoding, fanout, "skipped"])
+                .inc_by(skipped);
+        }
+    }
+
+    /// Increment RBC targeted-repair fallback counter labeled by kind.
+    pub fn inc_rbc_repair_fallback(&self, kind: &'static str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_rbc_repair_fallback_total
+                .with_label_values(&[kind])
+                .inc();
+        }
+    }
+
     /// Increment RBC READY broadcasts counter.
     pub fn inc_rbc_ready_broadcasts(&self) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -6788,6 +6894,24 @@ impl Telemetry {
             self.metrics
                 .sumeragi_rbc_payload_bytes_delivered_total
                 .set(cur.saturating_add(bytes));
+        }
+    }
+
+    /// Add to the cumulative RS16 stripes reconstructed from parity.
+    pub fn add_rbc_reconstructed_stripes(&self, count: u64) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_rbc_reconstructed_stripes_total
+                .inc_by(count);
+        }
+    }
+
+    /// Observe RBC seed/preprocessing latency in milliseconds.
+    pub fn observe_rbc_seed_latency(&self, duration: Duration) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .sumeragi_rbc_seed_latency_ms
+                .observe(duration.as_secs_f64() * 1_000.0);
         }
     }
 
@@ -7342,6 +7466,65 @@ impl Telemetry {
                     .torii_http_response_bytes_total
                     .with_label_values(&[content_label.as_str(), method, status_label.as_str()])
                     .inc_by(bytes);
+            }
+        }
+    }
+
+    /// Record Torii transaction lane-admission latency without synchronizing the telemetry actor.
+    pub fn observe_torii_lane_admission_latency(
+        &self,
+        endpoint: &str,
+        lane_id: LaneId,
+        elapsed_seconds: f64,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            let lane_label = lane_id.as_u32().to_string();
+            self.metrics
+                .torii_lane_admission_latency_seconds
+                .with_label_values(&[lane_label.as_str(), endpoint])
+                .observe(elapsed_seconds);
+        }
+    }
+
+    /// Record Torii route-stage latency without synchronizing the telemetry actor.
+    pub fn observe_torii_route_stage_latency(
+        &self,
+        route_kind: &str,
+        stage: &str,
+        outcome: &str,
+        duration: Duration,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .torii_route_stage_latency_seconds
+                .with_label_values(&[route_kind, stage, outcome])
+                .observe(duration.as_secs_f64());
+        }
+    }
+
+    /// Record Torii snapshot query metrics without synchronizing the telemetry actor.
+    pub fn observe_torii_query_snapshot(
+        &self,
+        mode: &str,
+        first_batch_latency_ms: Option<f64>,
+        gas_units: &[u64],
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .torii_query_snapshot_requests
+                .with_label_values(&[mode])
+                .inc();
+            if let Some(ms) = first_batch_latency_ms {
+                self.metrics
+                    .torii_query_snapshot_first_batch_ms
+                    .with_label_values(&[mode])
+                    .observe(ms);
+            }
+            for units in gas_units {
+                self.metrics
+                    .torii_query_snapshot_gas_consumed_units_total
+                    .with_label_values(&[mode])
+                    .inc_by(*units);
             }
         }
     }
@@ -8341,13 +8524,24 @@ impl Telemetry {
             self.metrics.da_quorum_ratio.set(ratio);
         }
 
-        // This function is called from within the main loop.
-        // We absolutely don't want to block it.
-        // However, there is only one reader (the actor loop),
-        // and it acquires the lock for a very brief period of time;
-        // thus it shouldn't be a problem.
-        let mut lock = self.last_reported_block.blocking_write();
-        *lock = Some(report);
+        // This function is called from within the main loop. Avoid
+        // `blocking_write`: async tests and runtime-driven commit paths can
+        // execute this code on a Tokio worker thread, where blocking the
+        // runtime panics.
+        match self.last_reported_block.try_write() {
+            Ok(mut lock) => *lock = Some(report),
+            Err(_) if tokio::runtime::Handle::try_current().is_ok() => {
+                let last_reported_block = Arc::clone(&self.last_reported_block);
+                tokio::spawn(async move {
+                    let mut lock = last_reported_block.write().await;
+                    *lock = Some(report);
+                });
+            }
+            Err(_) => {
+                let mut lock = self.last_reported_block.blocking_write();
+                *lock = Some(report);
+            }
+        }
     }
 
     /// Some metrics are updated lazily, on demand.
@@ -8374,6 +8568,7 @@ impl Telemetry {
                 "telemetry sync failed; returning last metrics snapshot"
             );
         }
+        refresh_ivm_cache_metrics(&self.metrics);
         &self.metrics
     }
 
@@ -8823,7 +9018,7 @@ impl Actor {
         //     .p2p_dns_reconnect_success_total
         //     .set(iroha_p2p::network::dns_reconnect_success_count());
 
-        let last_reported_block = {
+        let mut last_reported_block = {
             let mut lock = self.last_reported_block.write().await;
             if lock.is_none() {
                 *lock = self.seed_last_reported_block();
@@ -8851,14 +9046,13 @@ impl Actor {
             value
         };
 
-        let world_view = self.state.world_view();
-
         let start_index = self.last_sync_block;
         {
             let mut inc_txs_accepted = 0;
             let mut inc_txs_rejected = 0;
             let mut inc_blocks = 0;
             let mut inc_blocks_non_empty = 0;
+            let mut corrected_last_report = false;
 
             let mut block_index = start_index;
             while block_index < last_reported_block.height {
@@ -8889,16 +9083,10 @@ impl Actor {
                 }
 
                 if block_index == last_reported_block.height {
-                    // for some reason, using `debug_assert!(..)` doesn't work here
-                    // in release build Rust complains about the absent `.hash` field (feature gated via
-                    // `debug_assertions`), which doesn't make sense - the whole statement should be feature-gated too
-                    #[cfg(debug_assertions)]
-                    assert_eq!(
-                        block.hash(),
-                        last_reported_block.hash,
-                        "BUG: Reported block hash is different (reported {}, actual {})",
-                        last_reported_block.hash,
-                        block.hash()
+                    corrected_last_report |= reconcile_last_reported_block_with_kura(
+                        &mut last_reported_block,
+                        &block.header(),
+                        &self.time_source,
                     );
                     #[allow(clippy::cast_precision_loss)]
                     self.metrics.last_commit_time_ms.set(
@@ -8914,6 +9102,23 @@ impl Actor {
             }
             self.last_sync_block = block_index;
 
+            if corrected_last_report {
+                let mut lock = self.last_reported_block.write().await;
+                let should_replace = match *lock {
+                    Some(current)
+                        if current.height > last_reported_block.height
+                            || (current.height == last_reported_block.height
+                                && current.hash == last_reported_block.hash) =>
+                    {
+                        false
+                    }
+                    _ => true,
+                };
+                if should_replace {
+                    *lock = Some(last_reported_block);
+                }
+            }
+
             self.metrics
                 .txs
                 .with_label_values(&["accepted"])
@@ -8922,6 +9127,12 @@ impl Actor {
                 .txs
                 .with_label_values(&["rejected"])
                 .inc_by(inc_txs_rejected);
+            if inc_txs_rejected != 0 {
+                let observed_at_ms =
+                    u64::try_from(self.time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX);
+                self.metrics
+                    .record_rejected_transactions(inc_txs_rejected, observed_at_ms);
+            }
             self.metrics
                 .txs
                 .with_label_values(&["total"])
@@ -8931,6 +9142,8 @@ impl Actor {
                 .block_height_non_empty
                 .inc_by(inc_blocks_non_empty);
         }
+
+        let world_view = self.state.world_view();
 
         #[allow(clippy::cast_possible_truncation)]
         if self.state.committed_height() > 0 {
@@ -8982,24 +9195,23 @@ impl Actor {
             .runtime_abi_version
             .set(u64::from(world_view.abi_version()));
 
-        // Update IVM pre-decode cache counters from global ivm cache
-        let stats = ivm::ivm_cache::global_stats();
-        self.metrics.ivm_cache_hits.set(stats.hits);
-        self.metrics.ivm_cache_misses.set(stats.misses);
-        self.metrics.ivm_cache_evictions.set(stats.evictions);
-        self.metrics
-            .ivm_cache_decoded_streams
-            .set(stats.decoded_streams);
-        self.metrics
-            .ivm_cache_decoded_ops_total
-            .set(stats.decoded_ops_total);
-        self.metrics
-            .ivm_cache_decode_failures
-            .set(stats.decode_failures);
-        self.metrics
-            .ivm_cache_decode_time_ns_total
-            .set(stats.decode_time_ns_total);
+        refresh_ivm_cache_metrics(&self.metrics);
     }
+}
+
+fn refresh_ivm_cache_metrics(metrics: &Metrics) {
+    let stats = ivm::ivm_cache::global_stats();
+    metrics.ivm_cache_hits.set(stats.hits);
+    metrics.ivm_cache_misses.set(stats.misses);
+    metrics.ivm_cache_evictions.set(stats.evictions);
+    metrics.ivm_cache_decoded_streams.set(stats.decoded_streams);
+    metrics
+        .ivm_cache_decoded_ops_total
+        .set(stats.decoded_ops_total);
+    metrics.ivm_cache_decode_failures.set(stats.decode_failures);
+    metrics
+        .ivm_cache_decode_time_ns_total
+        .set(stats.decode_time_ns_total);
 }
 
 fn block_counts_as_non_empty(block: &iroha_data_model::block::SignedBlock) -> bool {
@@ -9008,8 +9220,6 @@ fn block_counts_as_non_empty(block: &iroha_data_model::block::SignedBlock) -> bo
 
 #[derive(Copy, Clone, Debug)]
 struct BlockCommitReport {
-    /// Only in debug, to ensure consistency
-    #[cfg(debug_assertions)]
     hash: HashOf<BlockHeader>,
     height: usize,
     commit_time: Duration,
@@ -9025,13 +9235,33 @@ impl BlockCommitReport {
             now.checked_sub(created_at).unwrap_or(Duration::ZERO)
         };
         Self {
-            #[cfg(debug_assertions)]
             hash: block_header.hash(),
             height: usize::try_from(block_header.height().get())
                 .expect("block height should fit into usize"),
             commit_time,
         }
     }
+}
+
+fn reconcile_last_reported_block_with_kura(
+    reported: &mut BlockCommitReport,
+    block_header: &BlockHeader,
+    time_source: &TimeSource,
+) -> bool {
+    let actual = BlockCommitReport::new(block_header, time_source);
+    if reported.height == actual.height && reported.hash == actual.hash {
+        return false;
+    }
+
+    iroha_logger::warn!(
+        reported_height = reported.height,
+        reported_hash = %reported.hash,
+        actual_height = actual.height,
+        actual_hash = %actual.hash,
+        "telemetry last reported block diverged from persisted block; using Kura block as authoritative"
+    );
+    *reported = actual;
+    true
 }
 
 /// Start the telemetry service
@@ -9110,8 +9340,8 @@ mod tests {
     #[cfg(feature = "telemetry")]
     use iroha_data_model::social::ViralEscrowRecord;
     use iroha_data_model::{
-        ChainId, Level,
-        account::AccountId,
+        ChainId, Level, Registrable,
+        account::{Account, AccountId},
         asset::{AssetDefinitionId, AssetId},
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         events::{
@@ -9170,12 +9400,140 @@ mod tests {
             .expect("metrics() should not hang when the actor channel is closed");
     }
 
+    #[test]
+    fn direct_torii_lane_admission_metric_records_without_actor() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+        let histogram = metrics
+            .torii_lane_admission_latency_seconds
+            .with_label_values(&["0", "transaction"]);
+        let before = histogram.get_sample_count();
+
+        telemetry.observe_torii_lane_admission_latency("transaction", LaneId::SINGLE, 0.25);
+
+        assert_eq!(histogram.get_sample_count(), before + 1);
+    }
+
+    #[test]
+    fn direct_torii_route_stage_metric_records_without_actor() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+        let histogram = metrics
+            .torii_route_stage_latency_seconds
+            .with_label_values(&["query", "verify", "ok"]);
+        let before = histogram.get_sample_count();
+
+        telemetry.observe_torii_route_stage_latency(
+            "query",
+            "verify",
+            "ok",
+            Duration::from_micros(25),
+        );
+
+        assert_eq!(histogram.get_sample_count(), before + 1);
+    }
+
+    #[test]
+    fn direct_torii_query_snapshot_metric_records_request_latency_and_gas() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.observe_torii_query_snapshot("stored", Some(7.5), &[11, 13]);
+
+        assert_eq!(
+            metrics
+                .torii_query_snapshot_requests
+                .with_label_values(&["stored"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_query_snapshot_first_batch_ms
+                .with_label_values(&["stored"])
+                .get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_query_snapshot_gas_consumed_units_total
+                .with_label_values(&["stored"])
+                .get(),
+            24
+        );
+    }
+
     #[tokio::test]
     async fn commit_time_clamps_when_block_created_in_future() {
         let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 2_000, 0);
         let report = BlockCommitReport::new(&header, &time_source);
         assert_eq!(report.commit_time, Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn reconcile_last_reported_block_keeps_matching_report() {
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 900, 0);
+        let mut report = BlockCommitReport::new(&header, &time_source);
+
+        let corrected = reconcile_last_reported_block_with_kura(&mut report, &header, &time_source);
+
+        assert!(!corrected);
+        assert_eq!(report.hash, header.hash());
+        assert_eq!(report.height, 2);
+        assert_eq!(report.commit_time, Duration::from_millis(100));
+    }
+
+    #[tokio::test]
+    async fn reconcile_last_reported_block_uses_kura_block_on_hash_mismatch() {
+        let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
+        let stale_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 900, 0);
+        let persisted_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 800, 0);
+        let mut report = BlockCommitReport::new(&stale_header, &time_source);
+
+        let corrected =
+            reconcile_last_reported_block_with_kura(&mut report, &persisted_header, &time_source);
+
+        assert!(corrected);
+        assert_eq!(report.hash, persisted_header.hash());
+        assert_eq!(report.height, 2);
+        assert_eq!(report.commit_time, Duration::from_millis(200));
+    }
+
+    #[tokio::test]
+    async fn metrics_sync_reconciles_last_reported_block_without_blocking_runtime() {
+        let sut = SystemUnderTest::new();
+        let block = sut.commit_block(sut.create_block());
+        let header = block.as_ref().header();
+        let stale_header = BlockHeader::new(
+            header.height(),
+            None,
+            None,
+            None,
+            u64::try_from(header.creation_time().as_millis()).expect("time should fit into u64")
+                + 1,
+            0,
+        );
+
+        {
+            let mut lock = sut.telemetry.last_reported_block.write().await;
+            *lock = Some(BlockCommitReport::new(&stale_header, &sut.time_source));
+        }
+
+        sut.force_sync().await;
+
+        let report = sut
+            .telemetry
+            .last_reported_block
+            .read()
+            .await
+            .expect("telemetry sync should preserve a commit report");
+        assert_eq!(report.hash, header.hash());
+        assert_eq!(
+            report.height,
+            usize::try_from(header.height().get()).expect("height should fit into usize")
+        );
     }
 
     #[test]
@@ -9389,12 +9747,17 @@ mod tests {
     fn settlement_conversion_metrics_update_when_enabled() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
-        telemetry.inc_settlement_conversion_total("lane-1", "ds-9", "xor#sora", 3);
+        telemetry.inc_settlement_conversion_total(
+            "lane-1",
+            "ds-9",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            3,
+        );
         telemetry.inc_settlement_haircut_total("lane-1", "ds-9", 2_000_000);
 
         let conversions = metrics
             .settlement_conversion_total
-            .with_label_values(&["lane-1", "ds-9", "xor#sora"])
+            .with_label_values(&["lane-1", "ds-9", "61CtjvNd9T3THAR65GsMVHr82Bjc"])
             .get();
         assert_eq!(conversions, 3);
 
@@ -9567,14 +9930,14 @@ mod tests {
             nonzero!(2_u32),
             vec![
                 LaneConfig {
-                    id: LaneId::new(1),
+                    id: LaneId::new(0),
                     dataspace_id: DataSpaceId::new(7),
                     alias: "restricted-alpha".to_owned(),
                     visibility: LaneVisibility::Restricted,
                     ..LaneConfig::default()
                 },
                 LaneConfig {
-                    id: LaneId::new(2),
+                    id: LaneId::new(1),
                     dataspace_id: DataSpaceId::new(9),
                     alias: "restricted-beta".to_owned(),
                     visibility: LaneVisibility::Restricted,
@@ -9604,7 +9967,7 @@ mod tests {
         telemetry.record_tx_gossip_attempt(
             GossipPlane::Restricted,
             DataSpaceId::new(7),
-            &[LaneId::new(1)],
+            &[LaneId::new(0)],
             &[peer],
             Some(nonzero!(3usize)),
             true,
@@ -9617,7 +9980,7 @@ mod tests {
         telemetry.record_tx_gossip_attempt(
             GossipPlane::Restricted,
             DataSpaceId::new(9),
-            &[LaneId::new(2)],
+            &[LaneId::new(1)],
             &[],
             Some(nonzero!(2usize)),
             false,
@@ -9637,7 +10000,7 @@ mod tests {
             .find(|entry| entry.dataspace_id == 7)
             .expect("alpha dataspace entry");
         assert_eq!(alpha.dataspace_alias.as_deref(), Some("alpha"));
-        assert_eq!(alpha.lane_ids, vec![1]);
+        assert_eq!(alpha.lane_ids, vec![0]);
         assert_eq!(alpha.targets, 1);
         assert_eq!(alpha.target_peers.len(), 1);
         assert_eq!(alpha.outcome, "sent");
@@ -9651,7 +10014,7 @@ mod tests {
             .find(|entry| entry.dataspace_id == 9)
             .expect("beta dataspace entry");
         assert_eq!(beta.dataspace_alias.as_deref(), Some("beta"));
-        assert_eq!(beta.lane_ids, vec![2]);
+        assert_eq!(beta.lane_ids, vec![1]);
         assert_eq!(beta.targets, 0);
         assert_eq!(beta.outcome, "dropped");
         assert_eq!(beta.reason.as_deref(), Some("no_restricted_targets"));
@@ -9666,12 +10029,17 @@ mod tests {
     fn settlement_conversion_metrics_skip_when_disabled() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), false);
-        telemetry.inc_settlement_conversion_total("lane-2", "ds-4", "xor#sora", 5);
+        telemetry.inc_settlement_conversion_total(
+            "lane-2",
+            "ds-4",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            5,
+        );
         telemetry.inc_settlement_haircut_total("lane-2", "ds-4", 5_000_000);
 
         let conversions = metrics
             .settlement_conversion_total
-            .with_label_values(&["lane-2", "ds-4", "xor#sora"])
+            .with_label_values(&["lane-2", "ds-4", "61CtjvNd9T3THAR65GsMVHr82Bjc"])
             .get();
         assert_eq!(
             conversions, 0,
@@ -9933,6 +10301,36 @@ mod tests {
     }
 
     #[test]
+    fn rbc_initial_chunk_target_metrics_record_outcomes() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.add_rbc_initial_chunk_targets("rs16", "data_plus_one", 10, 7, 3);
+
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&["rs16", "data_plus_one", "planned"])
+                .get(),
+            10
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&["rs16", "data_plus_one", "posted"])
+                .get(),
+            7
+        );
+        assert_eq!(
+            metrics
+                .sumeragi_rbc_initial_chunk_targets_total
+                .with_label_values(&["rs16", "data_plus_one", "skipped"])
+                .get(),
+            3
+        );
+    }
+
+    #[test]
     fn da_manifest_cache_metrics_record_hits_and_misses() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = Telemetry::new(metrics.clone(), true);
@@ -10082,7 +10480,7 @@ mod tests {
                 .axt_policy_reject_total
                 .with_label_values(&["3", "manifest"])
                 .get(),
-            1,
+            0,
             "disabled telemetry must not record additional rejects"
         );
     }
@@ -10327,7 +10725,7 @@ mod tests {
             LaneManifestStatus {
                 lane: LaneId::new(0),
                 alias: "gov".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
                 governance: Some("parliament".to_string()),
@@ -10355,7 +10753,7 @@ mod tests {
             LaneManifestStatus {
                 lane: LaneId::new(0),
                 alias: "gov".to_string(),
-                dataspace: DataSpaceId::GLOBAL,
+                dataspace: DataSpaceId::UNIVERSAL,
                 visibility: LaneVisibility::Public,
                 storage: LaneStorageProfile::FullReplica,
                 governance: Some("parliament".to_string()),
@@ -10415,7 +10813,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), false);
         let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::GLOBAL;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
 
         telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "missing");
 
@@ -10435,7 +10833,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::GLOBAL;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
         telemetry.set_nexus_enabled(false);
 
         telemetry.record_lane_relay_emergency_override(lane_id, dataspace_id, "missing");
@@ -10493,7 +10891,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_catalog = LaneCatalog::new(
-            nonzero!(1_u32),
+            nonzero!(8_u32),
             vec![LaneConfig {
                 id: LaneId::new(7),
                 alias: "exec".to_string(),
@@ -10618,7 +11016,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "sora".parse().unwrap(),
+            DomainId::try_new("sora", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let label = asset_id.to_string();
@@ -10770,7 +11168,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), false);
         let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "sora".parse().unwrap(),
+            DomainId::try_new("sora", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let label = asset_id.to_string();
@@ -10873,10 +11271,12 @@ mod tests {
     fn block_fee_units_reset_clears_gauge() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
-        telemetry.add_block_fee_units(42);
+        telemetry.add_block_fee_amount(&Numeric::new(42, 3));
         assert_eq!(metrics.block_fee_total_units.get(), 42);
+        assert_eq!(metrics.block_fee_total_scale.get(), 3);
         telemetry.reset_block_fee_units();
         assert_eq!(metrics.block_fee_total_units.get(), 0);
+        assert_eq!(metrics.block_fee_total_scale.get(), 0);
     }
 
     #[test]
@@ -11580,7 +11980,7 @@ mod tests {
         telemetry.inc_nexus_scheduler_must_serve_truncations(LaneId::SINGLE, 2);
         telemetry.record_nexus_scheduler_dataspace_teu(
             LaneId::SINGLE,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
             DataspaceTeuGaugeUpdate {
                 backlog: 5,
                 age_slots: 3,
@@ -11639,7 +12039,7 @@ mod tests {
         assert_eq!(snapshot.deferrals.cap_exceeded, 3);
         assert_eq!(snapshot.must_serve_truncations, 2);
 
-        let ds_label = DataSpaceId::GLOBAL.as_u64().to_string();
+        let ds_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
         assert_eq!(
             metrics
                 .nexus_scheduler_dataspace_teu_backlog
@@ -11652,7 +12052,7 @@ mod tests {
             .read()
             .expect("dataspace TEU cache poisoned");
         let ds_snapshot = ds_snapshots
-            .get(&(LaneId::SINGLE.as_u32(), DataSpaceId::GLOBAL.as_u64()))
+            .get(&(LaneId::SINGLE.as_u32(), DataSpaceId::UNIVERSAL.as_u64()))
             .expect("dataspace snapshot missing");
         assert_eq!(ds_snapshot.backlog, 5);
         assert_eq!(ds_snapshot.age_slots, 3);
@@ -11664,7 +12064,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_id = LaneId::SINGLE;
-        let dataspace_id = DataSpaceId::GLOBAL;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
 
         telemetry.record_dataspace_pipeline_summary(
             lane_id,
@@ -11711,7 +12111,7 @@ mod tests {
         telemetry.inc_nexus_scheduler_lane_teu_deferral(LaneId::SINGLE, "cap_exceeded", 2);
         telemetry.record_nexus_scheduler_dataspace_teu(
             LaneId::SINGLE,
-            DataSpaceId::GLOBAL,
+            DataSpaceId::UNIVERSAL,
             DataspaceTeuGaugeUpdate {
                 backlog: 9,
                 age_slots: 3,
@@ -11721,7 +12121,7 @@ mod tests {
         telemetry.set_pipeline_layer_count(LaneId::SINGLE, 7);
 
         let lane_label = LaneId::SINGLE.as_u32().to_string();
-        let ds_label = DataSpaceId::GLOBAL.as_u64().to_string();
+        let ds_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
         assert_eq!(
             metrics
                 .nexus_scheduler_lane_teu_capacity
@@ -12246,8 +12646,8 @@ mod tests {
 
         telemetry.record_manifest_activation(None, "manifest_inserted");
         let activation = GovernanceManifestActivation {
-            namespace: "apps".to_string(),
-            contract_id: "demo.contract".to_string(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .to_string(),
             code_hash_hex: "deadbeef".to_string(),
             abi_hash_hex: Some("cafebabe".to_string()),
             height: 9,
@@ -12273,7 +12673,7 @@ mod tests {
             .read()
             .expect("governance manifest cache lock poisoned");
         assert_eq!(recent.len(), 1);
-        assert_eq!(recent[0].namespace, activation.namespace);
+        assert_eq!(recent[0].contract_address, activation.contract_address);
     }
 
     impl SystemUnderTest {
@@ -12285,7 +12685,9 @@ mod tests {
             let (leader_public_key, leader_private_key) =
                 KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
             let local_peer_id = PeerId::new(leader_public_key);
-            let world = World::default();
+            let (account_id, account_keypair) = gen_account_in("wonderland");
+            let account = Account::new(account_id.clone()).build(&account_id);
+            let world = World::with([], [account], []);
             {
                 let mut peers_block = world.peers.block();
                 let _ = peers_block.get_mut().push(local_peer_id.clone());
@@ -12322,7 +12724,6 @@ mod tests {
 
             let chain_id = state.chain_id.clone();
             let topology = Topology::new(vec![local_peer_id.clone()]);
-            let (account_id, account_keypair) = gen_account_in("wonderland");
 
             Self {
                 telemetry,
@@ -12657,34 +13058,53 @@ mod tests {
     #[tokio::test]
     async fn ivm_cache_counters_exposed() {
         use ivm::ivm_cache::global_get_with_meta;
+        static CACHE_TEST_NONCE: std::sync::atomic::AtomicUsize =
+            std::sync::atomic::AtomicUsize::new(0);
+
         // Arrange system and baseline
         let sut = SystemUnderTest::new();
         let stats0 = ivm::ivm_cache::global_stats();
-        // Build tiny code (HALT) and matching metadata
+        // Build unique valid code so this test observes its own miss even when
+        // other tests have already warmed common HALT programs.
+        let nonce = CACHE_TEST_NONCE.fetch_add(1, Ordering::Relaxed);
+        let halt = ivm::encoding::wide::encode_halt().to_le_bytes();
+        let decoded_ops_added = 257 + nonce;
         let mut code = Vec::new();
-        code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-        let meta = ivm::ProgramMetadata::default();
+        for _ in 0..decoded_ops_added {
+            code.extend_from_slice(&halt);
+        }
+        let mut meta = ivm::ProgramMetadata::default();
+        meta.version_minor = 237_u8.wrapping_add(u8::try_from(nonce % 17).expect("nonce fits"));
         // Miss on first get, hit on second
         let _ = global_get_with_meta(&code, &meta).expect("predecode ok");
         let _ = global_get_with_meta(&code, &meta).expect("predecode hit");
+        let stats1 = ivm::ivm_cache::global_stats();
+        assert!(
+            stats1.misses > stats0.misses,
+            "test program should add an IVM cache miss"
+        );
+        assert!(
+            stats1.hits > stats0.hits,
+            "second lookup should add an IVM cache hit"
+        );
 
         // Force telemetry sync
         sut.force_sync().await;
         let metrics = sut.telemetry.metrics().await;
         // Verify the counters are >= baseline + 1
-        assert!(metrics.ivm_cache_misses.get() > stats0.misses);
-        assert!(metrics.ivm_cache_hits.get() > stats0.hits);
+        assert!(metrics.ivm_cache_misses.get() >= stats1.misses);
+        assert!(metrics.ivm_cache_hits.get() >= stats1.hits);
         // Evictions may or may not have changed, but the gauge should be >= baseline
         assert!(metrics.ivm_cache_evictions.get() >= stats0.evictions);
-        assert_eq!(
-            metrics.ivm_cache_decoded_streams.get(),
-            stats0.decoded_streams + 1,
-            "expected exactly one new decoded stream"
+        assert!(
+            metrics.ivm_cache_decoded_streams.get() >= stats0.decoded_streams + 1,
+            "expected at least one new decoded stream"
         );
-        assert_eq!(
-            metrics.ivm_cache_decoded_ops_total.get(),
-            stats0.decoded_ops_total + 1,
-            "expected HALT decode to add one op"
+        assert!(
+            metrics.ivm_cache_decoded_ops_total.get()
+                >= stats0.decoded_ops_total
+                    + u64::try_from(decoded_ops_added).expect("op count fits"),
+            "expected HALT stream decode to add its op count"
         );
         assert!(
             metrics.ivm_cache_decode_time_ns_total.get() >= stats0.decode_time_ns_total,
@@ -12927,7 +13347,7 @@ mod tests {
 
         let trigger_id: TriggerId = "telemetry_time_trigger".parse().expect("trigger id");
         let missing_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "ghost".parse().unwrap(),
+            DomainId::try_new("ghost", "universal").unwrap(),
             "ghost".parse().unwrap(),
         );
         let missing_asset = AssetId::new(missing_def, sut.account_id.clone());
@@ -13121,9 +13541,8 @@ mod tests {
     #[tokio::test]
     async fn prevote_timeout_metrics_track_mode() {
         let sut = SystemUnderTest::new();
-        let guard = super::status::prevote_timeout_test_guard();
+        let _guard = super::status::prevote_timeout_test_guard();
         super::status::reset_prevote_timeout_for_tests();
-        drop(guard);
         let metrics = sut.telemetry.metrics().await;
         let baseline = metrics
             .sumeragi_prevote_timeout_total
@@ -13153,9 +13572,8 @@ mod tests {
     #[tokio::test]
     async fn prevote_timeout_metrics_track_npos_mode() {
         let sut = SystemUnderTest::new();
-        let guard = super::status::prevote_timeout_test_guard();
+        let _guard = super::status::prevote_timeout_test_guard();
         super::status::reset_prevote_timeout_for_tests();
-        drop(guard);
         let metrics = sut.telemetry.metrics().await;
         let baseline = metrics
             .sumeragi_prevote_timeout_total
@@ -13786,22 +14204,25 @@ mod tests {
         telemetry.set_nexus_enabled(false);
 
         assert_eq!(metrics.nexus_lane_configured_total.get(), 0);
+        let lane_block_height = metrics.nexus_lane_block_height.collect();
         assert!(
-            metrics.nexus_lane_block_height.collect().is_empty(),
+            lane_block_height
+                .iter()
+                .all(|family| family.get_metric().is_empty()),
             "lane block height metrics should reset when Nexus is disabled"
         );
+        let lane_teu_capacity = metrics.nexus_scheduler_lane_teu_capacity.collect();
         assert!(
-            metrics
-                .nexus_scheduler_lane_teu_capacity
-                .collect()
-                .is_empty(),
+            lane_teu_capacity
+                .iter()
+                .all(|family| family.get_metric().is_empty()),
             "scheduler lane metrics should reset when Nexus is disabled"
         );
+        let public_lane_validators = metrics.nexus_public_lane_validator_total.collect();
         assert!(
-            metrics
-                .nexus_public_lane_validator_total
-                .collect()
-                .is_empty(),
+            public_lane_validators
+                .iter()
+                .all(|family| family.get_metric().is_empty()),
             "public-lane validator metrics should reset when Nexus is disabled"
         );
         assert!(

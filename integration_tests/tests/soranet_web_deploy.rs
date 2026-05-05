@@ -303,7 +303,7 @@ async fn soranet_webpage_deploy_and_dns_settings() -> Result<()> {
     let manifest_bytes = manifest.encode()?;
 
     let client = network.client();
-    let response = client.post_sorafs_storage_pin(&manifest_bytes, &payload)?;
+    let response = client.post_sorafs_storage_pin(&manifest_bytes, &payload, None)?;
     assert!(
         response.status().is_success(),
         "storage pin rejected: {}",

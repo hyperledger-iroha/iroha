@@ -3,10 +3,11 @@ import Foundation
 public struct TransferRequest {
     public let chainId: String
     public let authority: String
-    public let assetDefinitionId: String // e.g., "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
+    public let assetDefinitionId: String // e.g., "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
     public let quantity: String         // decimal string
-    public let destination: String      // account id
+    public let destination: String      // i105 account id
     public let description: String?
+    public let feeSponsor: String?
     public let ttlMs: UInt64?
     public let nonce: UInt32?
 
@@ -16,6 +17,7 @@ public struct TransferRequest {
                 quantity: String,
                 destination: String,
                 description: String?,
+                feeSponsor: String? = nil,
                 ttlMs: UInt64? = nil,
                 nonce: UInt32? = nil) {
         self.chainId = chainId
@@ -24,6 +26,7 @@ public struct TransferRequest {
         self.quantity = quantity
         self.destination = destination
         self.description = description
+        self.feeSponsor = feeSponsor
         self.ttlMs = ttlMs
         self.nonce = nonce
     }
@@ -84,6 +87,7 @@ public struct BurnRequest {
 public enum MetadataTarget: Sendable {
     case domain(String)
     case account(String)
+    case rwa(String)
     case assetDefinition(String)
     case asset(String)
 
@@ -93,6 +97,8 @@ public enum MetadataTarget: Sendable {
             return 0
         case .account:
             return 1
+        case .rwa:
+            return 4
         case .assetDefinition:
             return 2
         case .asset:
@@ -106,6 +112,8 @@ public enum MetadataTarget: Sendable {
             return domainId
         case .account(let accountId):
             return accountId
+        case .rwa(let rwaId):
+            return rwaId
         case .assetDefinition(let definitionId):
             return definitionId
         case .asset(let assetId):
@@ -188,6 +196,52 @@ public struct MultisigRegisterRequest {
         self.authority = authority
         self.accountId = accountId
         self.spec = spec
+        self.ttlMs = ttlMs
+    }
+}
+
+public struct ClaimIdentifierRequest {
+    public let chainId: String
+    public let authority: String
+    public let accountId: String
+    public let receipt: ToriiIdentifierResolutionReceipt
+    public let ttlMs: UInt64?
+
+    public init(chainId: String,
+                authority: String,
+                accountId: String,
+                receipt: ToriiIdentifierResolutionReceipt,
+                ttlMs: UInt64? = nil) {
+        self.chainId = chainId
+        self.authority = authority
+        self.accountId = accountId
+        self.receipt = receipt
+        self.ttlMs = ttlMs
+    }
+}
+
+public struct SetPrimaryAccountAliasRequest {
+    public let chainId: String
+    public let authority: String
+    public let accountId: String
+    public let aliasDomain: String?
+    public let aliasDataspaceId: UInt64
+    public let alias: String
+    public let ttlMs: UInt64?
+
+    public init(chainId: String,
+                authority: String,
+                accountId: String,
+                aliasDomain: String? = nil,
+                aliasDataspaceId: UInt64,
+                alias: String,
+                ttlMs: UInt64? = nil) {
+        self.chainId = chainId
+        self.authority = authority
+        self.accountId = accountId
+        self.aliasDomain = aliasDomain
+        self.aliasDataspaceId = aliasDataspaceId
+        self.alias = alias
         self.ttlMs = ttlMs
     }
 }
@@ -488,14 +542,13 @@ public enum BallotDirection: UInt8, Sendable {
 
 public enum CouncilDerivation: UInt8, Sendable {
     case vrf = 0
-    case fallback = 1
+    case backup = 1
 }
 
 public struct ProposeDeployContractRequest {
     public let chainId: String
     public let authority: String
-    public let namespace: String
-    public let contractId: String
+    public let contractAddress: String
     public let codeHashHex: String
     public let abiHashHex: String
     public let abiVersion: String
@@ -505,8 +558,7 @@ public struct ProposeDeployContractRequest {
 
     public init(chainId: String,
                 authority: String,
-                namespace: String,
-                contractId: String,
+                contractAddress: String,
                 codeHashHex: String,
                 abiHashHex: String,
                 abiVersion: String,
@@ -515,8 +567,7 @@ public struct ProposeDeployContractRequest {
                 ttlMs: UInt64? = nil) {
         self.chainId = chainId
         self.authority = authority
-        self.namespace = namespace
-        self.contractId = contractId
+        self.contractAddress = contractAddress
         self.codeHashHex = codeHashHex
         self.abiHashHex = abiHashHex
         self.abiVersion = abiVersion
@@ -702,7 +753,7 @@ public struct PipelineSubmitOptions: Sendable {
 }
 
 public struct PipelineStatusPollOptions: Sendable {
-    public static let defaultSuccessStates: Set<PipelineTransactionState> = [.approved, .committed, .applied]
+    public static let defaultSuccessStates: Set<PipelineTransactionState> = [.committed, .applied]
     public static let defaultFailureStates: Set<PipelineTransactionState> = [.rejected, .expired]
     public static let `default` = PipelineStatusPollOptions()
 
@@ -774,9 +825,9 @@ public enum PipelineStatusError: Error, LocalizedError {
             return explicit
         }
         if payload.content.status.kind == "Rejected",
-           let fallback = payload.content.status.content?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !fallback.isEmpty {
-            return fallback
+           let contentMessage = payload.content.status.content?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !contentMessage.isEmpty {
+            return contentMessage
         }
         return nil
     }
@@ -784,6 +835,7 @@ public enum PipelineStatusError: Error, LocalizedError {
 
 public final class IrohaSDK: @unchecked Sendable {
     public let baseURL: URL
+    public let defaultSigningAlgorithm: SigningAlgorithm
     private let toriiClient: ToriiTransactionSubmitting
     private let toriiRestClient: ToriiClient?
 
@@ -809,12 +861,14 @@ public final class IrohaSDK: @unchecked Sendable {
 
     public init(baseURL: URL,
                 session: URLSession = .shared,
+                defaultSigningAlgorithm: SigningAlgorithm = .ed25519,
                 accelerationSettings: AccelerationSettings = AccelerationSettings(),
                 pipelineSubmitOptions: PipelineSubmitOptions = .default,
                 pipelinePollOptions: PipelineStatusPollOptions = .default,
                 pipelineEndpointMode: PipelineEndpointMode = .pipeline,
-                creationTimeProvider: @escaping @Sendable () -> UInt64 = IrohaSDK.defaultCreationTimeMs) {
+                creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.baseURL = baseURL
+        self.defaultSigningAlgorithm = defaultSigningAlgorithm
         let client = ToriiClient(baseURL: baseURL, session: session)
         self.toriiClient = client
         self.toriiRestClient = client
@@ -823,17 +877,19 @@ public final class IrohaSDK: @unchecked Sendable {
         self.pipelineSubmitOptions = pipelineSubmitOptions
         self.pipelinePollOptions = pipelinePollOptions
         self.pipelineEndpointMode = pipelineEndpointMode
-        self.creationTimeProvider = creationTimeProvider
+        self.creationTimeProvider = creationTimeProvider ?? { client.recommendedCreationTimeMs() }
     }
 
     public init(toriiClient: ToriiTransactionSubmitting,
                 baseURL: URL,
+                defaultSigningAlgorithm: SigningAlgorithm = .ed25519,
                 accelerationSettings: AccelerationSettings = AccelerationSettings(),
                 pipelineSubmitOptions: PipelineSubmitOptions = .default,
                 pipelinePollOptions: PipelineStatusPollOptions = .default,
                 pipelineEndpointMode: PipelineEndpointMode = .pipeline,
-                creationTimeProvider: @escaping @Sendable () -> UInt64 = IrohaSDK.defaultCreationTimeMs) {
+                creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.baseURL = baseURL
+        self.defaultSigningAlgorithm = defaultSigningAlgorithm
         self.toriiClient = toriiClient
         self.toriiRestClient = toriiClient as? ToriiClient
         self.accelerationSettings = accelerationSettings
@@ -841,22 +897,82 @@ public final class IrohaSDK: @unchecked Sendable {
         self.pipelineSubmitOptions = pipelineSubmitOptions
         self.pipelinePollOptions = pipelinePollOptions
         self.pipelineEndpointMode = pipelineEndpointMode
-        self.creationTimeProvider = creationTimeProvider
+        if let creationTimeProvider {
+            self.creationTimeProvider = creationTimeProvider
+        } else if let restClient = toriiClient as? ToriiClient {
+            self.creationTimeProvider = { restClient.recommendedCreationTimeMs() }
+        } else {
+            self.creationTimeProvider = IrohaSDK.defaultCreationTimeMs
+        }
     }
 
     public convenience init(toriiClient: ToriiClient,
+                             defaultSigningAlgorithm: SigningAlgorithm = .ed25519,
                              accelerationSettings: AccelerationSettings = AccelerationSettings(),
                              pipelineSubmitOptions: PipelineSubmitOptions = .default,
                              pipelinePollOptions: PipelineStatusPollOptions = .default,
                              pipelineEndpointMode: PipelineEndpointMode = .pipeline,
-                             creationTimeProvider: @escaping @Sendable () -> UInt64 = IrohaSDK.defaultCreationTimeMs) {
+                             creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.init(toriiClient: toriiClient,
                   baseURL: toriiClient.baseURL,
+                  defaultSigningAlgorithm: defaultSigningAlgorithm,
                   accelerationSettings: accelerationSettings,
                   pipelineSubmitOptions: pipelineSubmitOptions,
                   pipelinePollOptions: pipelinePollOptions,
                   pipelineEndpointMode: pipelineEndpointMode,
                   creationTimeProvider: creationTimeProvider)
+    }
+
+    /// Generates a new signing key using `defaultSigningAlgorithm`.
+    @available(macOS 10.15, iOS 13.0, *)
+    public func generateSigningKey(
+        metadata: SigningMetadata = SigningMetadata()
+    ) throws -> SigningKey {
+        switch defaultSigningAlgorithm {
+        case .ed25519:
+            let keypair = try Keypair.generate()
+            return try SigningKey.ed25519(privateKey: keypair.privateKeyBytes, metadata: metadata)
+        default:
+            var seed = Data((0..<32).map { _ in UInt8.random(in: UInt8.min...UInt8.max) })
+            defer { seed.resetBytes(in: 0..<seed.count) }
+            guard let derived = NoritoNativeBridge.shared.keypairFromSeed(
+                algorithm: defaultSigningAlgorithm,
+                seed: seed
+            ) else {
+                throw SigningKeyError.unsupportedAlgorithm(defaultSigningAlgorithm.wireName)
+            }
+            return try SigningKey.native(algorithm: defaultSigningAlgorithm,
+                                         privateKey: derived.privateKey,
+                                         metadata: metadata)
+        }
+    }
+
+    /// Derives a signing key from seed material using `defaultSigningAlgorithm`.
+    @available(macOS 10.15, iOS 13.0, *)
+    public func signingKey(
+        fromSeed seed: Data,
+        metadata: SigningMetadata = SigningMetadata()
+    ) throws -> SigningKey {
+        switch defaultSigningAlgorithm {
+        case .ed25519:
+            guard let derived = NoritoNativeBridge.shared.keypairFromSeed(
+                algorithm: .ed25519,
+                seed: seed
+            ) else {
+                throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))
+            }
+            return try SigningKey.ed25519(privateKey: derived.privateKey, metadata: metadata)
+        default:
+            guard let derived = NoritoNativeBridge.shared.keypairFromSeed(
+                algorithm: defaultSigningAlgorithm,
+                seed: seed
+            ) else {
+                throw SigningKeyError.unsupportedAlgorithm(defaultSigningAlgorithm.wireName)
+            }
+            return try SigningKey.native(algorithm: defaultSigningAlgorithm,
+                                         privateKey: derived.privateKey,
+                                         metadata: metadata)
+        }
     }
 
     /// Default wall-clock provider for transaction creation timestamps (ms since epoch, clamped at zero).
@@ -865,7 +981,9 @@ public final class IrohaSDK: @unchecked Sendable {
         if millis < 0 {
             return 0
         }
-        return UInt64(millis.rounded())
+        let rounded = UInt64(millis.rounded())
+        let safetyMarginMs: UInt64 = 10_000
+        return rounded > safetyMarginMs ? rounded - safetyMarginMs : 0
     }
 
     private func makeCreationTimeMs() -> UInt64 {
@@ -900,6 +1018,20 @@ public final class IrohaSDK: @unchecked Sendable {
         submit(envelope: envelope, completion: completion)
     }
 
+    public func submit(claimIdentifier request: ClaimIdentifierRequest,
+                       keypair: Keypair,
+                       completion: @Sendable @escaping (Error?) -> Void) throws {
+        let envelope = try buildClaimIdentifier(request: request, keypair: keypair)
+        submit(envelope: envelope, completion: completion)
+    }
+
+    public func submit(claimIdentifier request: ClaimIdentifierRequest,
+                       signingKey: SigningKey,
+                       completion: @Sendable @escaping (Error?) -> Void) throws {
+        let envelope = try buildClaimIdentifier(request: request, signingKey: signingKey)
+        submit(envelope: envelope, completion: completion)
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     public func submit(transfer: TransferRequest, keypair: Keypair) async throws {
         let envelope = try buildSignedTransfer(transfer: transfer, keypair: keypair)
@@ -909,6 +1041,20 @@ public final class IrohaSDK: @unchecked Sendable {
     @available(iOS 15.0, macOS 12.0, *)
     public func submit(transfer: TransferRequest, signingKey: SigningKey) async throws {
         let envelope = try buildSignedTransfer(transfer: transfer, signingKey: signingKey)
+        try await submit(envelope: envelope)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func submit(claimIdentifier request: ClaimIdentifierRequest,
+                       keypair: Keypair) async throws {
+        let envelope = try buildClaimIdentifier(request: request, keypair: keypair)
+        try await submit(envelope: envelope)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    public func submit(claimIdentifier request: ClaimIdentifierRequest,
+                       signingKey: SigningKey) async throws {
+        let envelope = try buildClaimIdentifier(request: request, signingKey: signingKey)
         try await submit(envelope: envelope)
     }
 
@@ -954,6 +1100,42 @@ public final class IrohaSDK: @unchecked Sendable {
         return try SwiftTransactionEncoder.encodeMultisigRegister(request: request,
                                                                   signingKey: signingKey,
                                                                   creationTimeMs: creationTimeMs)
+    }
+
+    public func buildClaimIdentifier(request: ClaimIdentifierRequest,
+                                     keypair: Keypair) throws -> SignedTransactionEnvelope {
+        let creationTimeMs = makeCreationTimeMs()
+        return try SwiftTransactionEncoder.encodeClaimIdentifier(request: request,
+                                                                 keypair: keypair,
+                                                                 creationTimeMs: creationTimeMs)
+    }
+
+    public func buildClaimIdentifier(request: ClaimIdentifierRequest,
+                                     signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        let creationTimeMs = makeCreationTimeMs()
+        return try SwiftTransactionEncoder.encodeClaimIdentifier(request: request,
+                                                                 signingKey: signingKey,
+                                                                 creationTimeMs: creationTimeMs)
+    }
+
+    public func buildSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
+                                            keypair: Keypair) throws -> SignedTransactionEnvelope {
+        let creationTimeMs = makeCreationTimeMs()
+        return try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
+            request: request,
+            keypair: keypair,
+            creationTimeMs: creationTimeMs
+        )
+    }
+
+    public func buildSetPrimaryAccountAlias(request: SetPrimaryAccountAliasRequest,
+                                            signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        let creationTimeMs = makeCreationTimeMs()
+        return try SwiftTransactionEncoder.encodeSetPrimaryAccountAlias(
+            request: request,
+            signingKey: signingKey,
+            creationTimeMs: creationTimeMs
+        )
     }
 
     public func buildShield(shield: ShieldRequest, keypair: Keypair) throws -> SignedTransactionEnvelope {
@@ -1444,45 +1626,22 @@ public final class IrohaSDK: @unchecked Sendable {
     public func deriveConfidentialKeyset(seedHex: String? = nil,
                                          seedBase64: String? = nil,
                                          completion: @escaping (Result<ConfidentialKeyset, Error>) -> Void) {
-        guard let toriiRestClient else {
-            completion(.failure(Self.restUnavailableError()))
-            return
-        }
         let trimmedHex = seedHex?.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBase64 = seedBase64?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !(trimmedHex?.isEmpty ?? true) || !(trimmedBase64?.isEmpty ?? true) else {
-            completion(.failure(ToriiClientError.invalidPayload("Provide either seedHex or seedBase64.")))
-            return
-        }
-        toriiRestClient.deriveConfidentialKeyset(seedHex: trimmedHex, seedBase64: trimmedBase64) { result in
-            switch result {
-            case .success(let response):
-                do {
-                    let keyset = try response.asKeyset()
-                    completion(.success(keyset))
-                } catch {
-                    completion(.failure(error))
-                }
-            case .failure(let error):
-                completion(.failure(error))
-            }
+        do {
+            let keyset = try ConfidentialKeyset.derive(seedHex: trimmedHex, seedBase64: trimmedBase64)
+            completion(.success(keyset))
+        } catch {
+            completion(.failure(error))
         }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     public func deriveConfidentialKeyset(seedHex: String? = nil,
                                          seedBase64: String? = nil) async throws -> ConfidentialKeyset {
-        guard let toriiRestClient else {
-            throw Self.restUnavailableError()
-        }
         let trimmedHex = seedHex?.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBase64 = seedBase64?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !(trimmedHex?.isEmpty ?? true) || !(trimmedBase64?.isEmpty ?? true) else {
-            throw ToriiClientError.invalidPayload("Provide either seedHex or seedBase64.")
-        }
-        let response = try await toriiRestClient.deriveConfidentialKeyset(seedHex: trimmedHex,
-                                                                          seedBase64: trimmedBase64)
-        return try response.asKeyset()
+        return try ConfidentialKeyset.derive(seedHex: trimmedHex, seedBase64: trimmedBase64)
     }
 
     public func submitGovernanceDeployContractProposal(_ request: ToriiGovernanceDeployContractProposalRequest,
@@ -2043,18 +2202,19 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     public func decodeSignedTransaction(envelope: SignedTransactionEnvelope) -> String? {
-        NoritoNativeBridge.shared.decodeSignedTransaction(envelope.signedTransaction)
+        NoritoNativeBridge.shared.decodeSignedTransaction(envelope.norito)
     }
 
     public func getAssets(accountId: String,
                           limit: Int = 100,
-                          assetId: String? = nil,
+                          asset: String? = nil,
+                          scope: String? = nil,
                           completion: @Sendable @escaping (Result<[ToriiAssetBalance], Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
             return
         }
-        toriiRestClient.getAssets(accountId: accountId, limit: limit, assetId: assetId, completion: completion)
+        toriiRestClient.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope, completion: completion)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -2105,7 +2265,6 @@ public final class IrohaSDK: @unchecked Sendable {
     public func getExplorerTransfers(params: ToriiExplorerInstructionsParams? = nil,
                                      matchingAccount accountId: String? = nil,
                                      assetDefinitionId: String? = nil,
-                                     assetId: String? = nil,
                                      completion: @Sendable @escaping (Result<[ToriiExplorerTransferRecord], Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
@@ -2114,7 +2273,6 @@ public final class IrohaSDK: @unchecked Sendable {
         toriiRestClient.getExplorerTransfers(params: params,
                                              matchingAccount: accountId,
                                              assetDefinitionId: assetDefinitionId,
-                                             assetId: assetId,
                                              completion: completion)
     }
 
@@ -2122,7 +2280,6 @@ public final class IrohaSDK: @unchecked Sendable {
     public func getExplorerTransferSummaries(params: ToriiExplorerInstructionsParams? = nil,
                                              matchingAccount accountId: String? = nil,
                                              assetDefinitionId: String? = nil,
-                                             assetId: String? = nil,
                                              relativeTo relativeAccountId: String? = nil,
                                              completion: @Sendable @escaping (Result<[ToriiExplorerTransferSummary], Error>) -> Void) {
         guard let toriiRestClient else {
@@ -2132,7 +2289,6 @@ public final class IrohaSDK: @unchecked Sendable {
         toriiRestClient.getExplorerTransferSummaries(params: params,
                                                      matchingAccount: accountId,
                                                      assetDefinitionId: assetDefinitionId,
-                                                     assetId: assetId,
                                                      relativeTo: relativeAccountId,
                                                      completion: completion)
     }
@@ -2141,7 +2297,6 @@ public final class IrohaSDK: @unchecked Sendable {
     public func getExplorerTransactionTransfers(hashHex: String,
                                                 matchingAccount accountId: String? = nil,
                                                 assetDefinitionId: String? = nil,
-                                                assetId: String? = nil,
                                                 maxItems: UInt64? = nil,
                                                 completion: @Sendable @escaping (Result<[ToriiExplorerTransferRecord], Error>) -> Void) {
         guard let toriiRestClient else {
@@ -2151,7 +2306,6 @@ public final class IrohaSDK: @unchecked Sendable {
         toriiRestClient.getExplorerTransactionTransfers(hashHex: hashHex,
                                                         matchingAccount: accountId,
                                                         assetDefinitionId: assetDefinitionId,
-                                                        assetId: assetId,
                                                         maxItems: maxItems,
                                                         completion: completion)
     }
@@ -2160,7 +2314,6 @@ public final class IrohaSDK: @unchecked Sendable {
     public func getExplorerTransactionTransferSummaries(hashHex: String,
                                                         matchingAccount accountId: String? = nil,
                                                         assetDefinitionId: String? = nil,
-                                                        assetId: String? = nil,
                                                         relativeTo relativeAccountId: String? = nil,
                                                         maxItems: UInt64? = nil,
                                                         completion: @Sendable @escaping (Result<[ToriiExplorerTransferSummary], Error>) -> Void) {
@@ -2171,7 +2324,6 @@ public final class IrohaSDK: @unchecked Sendable {
         toriiRestClient.getExplorerTransactionTransferSummaries(hashHex: hashHex,
                                                                 matchingAccount: accountId,
                                                                 assetDefinitionId: assetDefinitionId,
-                                                                assetId: assetId,
                                                                 relativeTo: relativeAccountId,
                                                                 maxItems: maxItems,
                                                                 completion: completion)
@@ -2182,7 +2334,6 @@ public final class IrohaSDK: @unchecked Sendable {
                                           page: UInt64? = nil,
                                           perPage: UInt64? = nil,
                                           assetDefinitionId: String? = nil,
-                                          assetId: String? = nil,
                                           completion: @Sendable @escaping (Result<[ToriiExplorerTransferSummary], Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
@@ -2192,7 +2343,6 @@ public final class IrohaSDK: @unchecked Sendable {
                                                   page: page,
                                                   perPage: perPage,
                                                   assetDefinitionId: assetDefinitionId,
-                                                  assetId: assetId,
                                                   completion: completion)
     }
 
@@ -2201,7 +2351,6 @@ public final class IrohaSDK: @unchecked Sendable {
                                       page: UInt64? = nil,
                                       perPage: UInt64? = nil,
                                       assetDefinitionId: String? = nil,
-                                      assetId: String? = nil,
                                       completion: @Sendable @escaping (Result<[ToriiExplorerTransferSummary], Error>) -> Void) {
         guard let toriiRestClient else {
             completion(.failure(Self.restUnavailableError()))
@@ -2211,7 +2360,6 @@ public final class IrohaSDK: @unchecked Sendable {
                                               page: page,
                                               perPage: perPage,
                                               assetDefinitionId: assetDefinitionId,
-                                              assetId: assetId,
                                               completion: completion)
     }
 
@@ -2328,18 +2476,20 @@ extension IrohaSDK {
 
 @available(iOS 15.0, macOS 12.0, *)
 public extension IrohaSDK {
-    func getAssets(accountId: String, limit: Int = 100, assetId: String? = nil) async throws -> [ToriiAssetBalance] {
+    func getAssets(accountId: String,
+                   limit: Int = 100,
+                   asset: String? = nil,
+                   scope: String? = nil) async throws -> [ToriiAssetBalance] {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
-        return try await toriiRestClient.getAssets(accountId: accountId, limit: limit, assetId: assetId)
+        return try await toriiRestClient.getAssets(accountId: accountId, limit: limit, asset: asset, scope: scope)
     }
 
     func iterateAccountTransferHistory(accountId: String,
                                        page: UInt64? = nil,
                                        perPage: UInt64? = nil,
                                        assetDefinitionId: String? = nil,
-                                       assetId: String? = nil,
                                        maxItems: UInt64? = nil) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
         guard let toriiRestClient else {
             return AsyncThrowingStream { continuation in
@@ -2350,7 +2500,6 @@ public extension IrohaSDK {
                                                              page: page,
                                                              perPage: perPage,
                                                              assetDefinitionId: assetDefinitionId,
-                                                             assetId: assetId,
                                                              maxItems: maxItems)
     }
 
@@ -2374,8 +2523,7 @@ public extension IrohaSDK {
 
     func streamExplorerTransfers(lastEventId: String? = nil,
                                  matchingAccount accountId: String? = nil,
-                                 assetDefinitionId: String? = nil,
-                                 assetId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransferRecord, Error> {
+                                 assetDefinitionId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransferRecord, Error> {
         guard let toriiRestClient else {
             return AsyncThrowingStream { continuation in
                 continuation.finish(throwing: Self.restUnavailableError())
@@ -2383,14 +2531,12 @@ public extension IrohaSDK {
         }
         return toriiRestClient.streamExplorerTransfers(lastEventId: lastEventId,
                                                        matchingAccount: accountId,
-                                                       assetDefinitionId: assetDefinitionId,
-                                                       assetId: assetId)
+                                                       assetDefinitionId: assetDefinitionId)
     }
 
     func streamExplorerTransferSummaries(lastEventId: String? = nil,
                                          matchingAccount accountId: String? = nil,
                                          assetDefinitionId: String? = nil,
-                                         assetId: String? = nil,
                                          relativeTo relativeAccountId: String? = nil) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
         guard let toriiRestClient else {
             return AsyncThrowingStream { continuation in
@@ -2400,7 +2546,6 @@ public extension IrohaSDK {
         return toriiRestClient.streamExplorerTransferSummaries(lastEventId: lastEventId,
                                                                matchingAccount: accountId,
                                                                assetDefinitionId: assetDefinitionId,
-                                                               assetId: assetId,
                                                                relativeTo: relativeAccountId)
     }
 
@@ -2408,7 +2553,6 @@ public extension IrohaSDK {
                                       page: UInt64? = nil,
                                       perPage: UInt64? = nil,
                                       assetDefinitionId: String? = nil,
-                                      assetId: String? = nil,
                                       lastEventId: String? = nil,
                                       maxItems: UInt64? = nil,
                                       dedupeLimit: Int = 10_000) -> AsyncThrowingStream<ToriiExplorerTransferSummary, Error> {
@@ -2421,7 +2565,6 @@ public extension IrohaSDK {
                                                             page: page,
                                                             perPage: perPage,
                                                             assetDefinitionId: assetDefinitionId,
-                                                            assetId: assetId,
                                                             lastEventId: lastEventId,
                                                             maxItems: maxItems,
                                                             dedupeLimit: dedupeLimit)
@@ -2430,7 +2573,6 @@ public extension IrohaSDK {
     func streamTransactionTransferSummaries(hashHex: String,
                                            matchingAccount accountId: String? = nil,
                                            assetDefinitionId: String? = nil,
-                                           assetId: String? = nil,
                                            relativeTo relativeAccountId: String? = nil,
                                            lastEventId: String? = nil,
                                            maxItems: UInt64? = nil,
@@ -2443,7 +2585,6 @@ public extension IrohaSDK {
         return toriiRestClient.streamTransactionTransferSummaries(hashHex: hashHex,
                                                                   matchingAccount: accountId,
                                                                   assetDefinitionId: assetDefinitionId,
-                                                                  assetId: assetId,
                                                                   relativeTo: relativeAccountId,
                                                                   lastEventId: lastEventId,
                                                                   maxItems: maxItems,
@@ -2482,21 +2623,18 @@ public extension IrohaSDK {
 
     func getExplorerTransfers(params: ToriiExplorerInstructionsParams? = nil,
                               matchingAccount accountId: String? = nil,
-                              assetDefinitionId: String? = nil,
-                              assetId: String? = nil) async throws -> [ToriiExplorerTransferRecord] {
+                              assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferRecord] {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
         return try await toriiRestClient.getExplorerTransfers(params: params,
                                                               matchingAccount: accountId,
-                                                              assetDefinitionId: assetDefinitionId,
-                                                              assetId: assetId)
+                                                              assetDefinitionId: assetDefinitionId)
     }
 
     func getExplorerTransferSummaries(params: ToriiExplorerInstructionsParams? = nil,
                                       matchingAccount accountId: String? = nil,
                                       assetDefinitionId: String? = nil,
-                                      assetId: String? = nil,
                                       relativeTo relativeAccountId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
@@ -2504,14 +2642,12 @@ public extension IrohaSDK {
         return try await toriiRestClient.getExplorerTransferSummaries(params: params,
                                                                       matchingAccount: accountId,
                                                                       assetDefinitionId: assetDefinitionId,
-                                                                      assetId: assetId,
                                                                       relativeTo: relativeAccountId)
     }
 
     func getExplorerTransactionTransfers(hashHex: String,
                                          matchingAccount accountId: String? = nil,
                                          assetDefinitionId: String? = nil,
-                                         assetId: String? = nil,
                                          maxItems: UInt64? = nil) async throws -> [ToriiExplorerTransferRecord] {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
@@ -2519,14 +2655,12 @@ public extension IrohaSDK {
         return try await toriiRestClient.getExplorerTransactionTransfers(hashHex: hashHex,
                                                                          matchingAccount: accountId,
                                                                          assetDefinitionId: assetDefinitionId,
-                                                                         assetId: assetId,
                                                                          maxItems: maxItems)
     }
 
     func getExplorerTransactionTransferSummaries(hashHex: String,
                                                  matchingAccount accountId: String? = nil,
                                                  assetDefinitionId: String? = nil,
-                                                 assetId: String? = nil,
                                                  relativeTo relativeAccountId: String? = nil,
                                                  maxItems: UInt64? = nil) async throws -> [ToriiExplorerTransferSummary] {
         guard let toriiRestClient else {
@@ -2535,7 +2669,6 @@ public extension IrohaSDK {
         return try await toriiRestClient.getExplorerTransactionTransferSummaries(hashHex: hashHex,
                                                                                  matchingAccount: accountId,
                                                                                  assetDefinitionId: assetDefinitionId,
-                                                                                 assetId: assetId,
                                                                                  relativeTo: relativeAccountId,
                                                                                  maxItems: maxItems)
     }
@@ -2543,31 +2676,27 @@ public extension IrohaSDK {
     func getAccountTransferHistory(accountId: String,
                                    page: UInt64? = nil,
                                    perPage: UInt64? = nil,
-                                   assetDefinitionId: String? = nil,
-                                   assetId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
+                                   assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
         return try await toriiRestClient.getAccountTransferHistory(accountId: accountId,
                                                                    page: page,
                                                                    perPage: perPage,
-                                                                   assetDefinitionId: assetDefinitionId,
-                                                                   assetId: assetId)
+                                                                   assetDefinitionId: assetDefinitionId)
     }
 
     func getTransactionHistory(accountId: String,
                                page: UInt64? = nil,
                                perPage: UInt64? = nil,
-                               assetDefinitionId: String? = nil,
-                               assetId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
+                               assetDefinitionId: String? = nil) async throws -> [ToriiExplorerTransferSummary] {
         guard let toriiRestClient else {
             throw Self.restUnavailableError()
         }
         return try await toriiRestClient.getTransactionHistory(accountId: accountId,
                                                                page: page,
                                                                perPage: perPage,
-                                                               assetDefinitionId: assetDefinitionId,
-                                                               assetId: assetId)
+                                                               assetDefinitionId: assetDefinitionId)
     }
 
     func getTransactionStatus(hashHex: String) async throws -> ToriiPipelineTransactionStatus? {

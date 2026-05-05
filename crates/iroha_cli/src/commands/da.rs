@@ -995,7 +995,7 @@ pub struct RentLedgerArgs {
     /// Account earmarked for `PoTR` bonus payouts.
     #[arg(long = "potr-bonus-account", value_name = "ACCOUNT_ID")]
     pub potr_bonus_account: String,
-    /// Asset definition identifier used for transfers (e.g., `aid:2f17c72466f84a4bb8a8e24884fdcd2f`).
+    /// Asset definition identifier used for transfers (canonical unprefixed Base58 address).
     #[arg(long = "asset-definition", value_name = "AID")]
     pub asset_definition: String,
 }
@@ -1979,6 +1979,8 @@ mod tests {
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
                 account,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://localhost/").expect("url"),
@@ -1990,6 +1992,7 @@ mod tests {
                 transaction_status_timeout: config::DEFAULT_TRANSACTION_STATUS_TIMEOUT,
                 transaction_add_nonce: config::DEFAULT_TRANSACTION_NONCE,
                 connect_queue_root: config::default_connect_queue_root(),
+                soracloud_http_witness_file: None,
                 sorafs_alias_cache: crate::config_utils::default_alias_cache_policy(),
                 sorafs_anonymity_policy: crate::config_utils::default_anonymity_policy(),
                 sorafs_rollout_phase: crate::config_utils::default_rollout_phase(),
@@ -2633,8 +2636,7 @@ mod tests {
         let pdp = AccountId::new(pdp_key.public_key().clone());
         let potr_key = KeyPair::from_seed(vec![6; 32], Algorithm::Ed25519);
         let potr = AccountId::new(potr_key.public_key().clone());
-        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "sora".parse().unwrap(),
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let accounts = da::DaRentLedgerAccounts {

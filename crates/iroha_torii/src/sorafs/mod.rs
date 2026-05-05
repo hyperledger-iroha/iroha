@@ -15,6 +15,7 @@ pub mod por;
 pub mod quota;
 pub mod registry;
 pub mod repair;
+pub mod site;
 pub mod token;
 
 pub use admission::{AdmissionCheckError, AdmissionRegistry, AdmissionRegistryError};
@@ -51,6 +52,10 @@ pub(crate) use registry::{
 };
 #[cfg(feature = "app_api")]
 pub use repair::RepairWorkerRuntime;
+pub use sorafs_manifest::{
+    pin_registry::ReplicationOrderV1,
+    provider_advert::{EndpointKind, TransportProtocol},
+};
 pub use token::{
     StreamTokenHeaderError, StreamTokenIssuer, StreamTokenIssuerError, TokenOverrides,
     decode_token_base64, encode_token_base64,

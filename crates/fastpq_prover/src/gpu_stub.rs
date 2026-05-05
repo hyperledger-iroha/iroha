@@ -91,6 +91,7 @@ impl LdeDispatch {
 pub fn fft_columns(
     _columns: &mut [Vec<u64>],
     _log_size: u32,
+    _root: u64,
     backend: GpuBackend,
 ) -> Result<(), GpuError> {
     Err(GpuError::Unsupported(backend))
@@ -100,6 +101,7 @@ pub fn fft_columns(
 pub fn fft_columns_async(
     _columns: &mut [Vec<u64>],
     _log_size: u32,
+    _root: u64,
     backend: GpuBackend,
 ) -> Result<ColumnDispatch<'_>, GpuError> {
     Err(GpuError::Unsupported(backend))
@@ -109,6 +111,7 @@ pub fn fft_columns_async(
 pub fn ifft_columns(
     _columns: &mut [Vec<u64>],
     _log_size: u32,
+    _root: u64,
     backend: GpuBackend,
 ) -> Result<(), GpuError> {
     Err(GpuError::Unsupported(backend))
@@ -118,6 +121,7 @@ pub fn ifft_columns(
 pub fn ifft_columns_async(
     _columns: &mut [Vec<u64>],
     _log_size: u32,
+    _root: u64,
     backend: GpuBackend,
 ) -> Result<ColumnDispatch<'_>, GpuError> {
     Err(GpuError::Unsupported(backend))
@@ -128,6 +132,7 @@ pub fn lde_columns(
     _coeffs: &[Vec<u64>],
     _trace_log: u32,
     _blowup_log: u32,
+    _lde_root: u64,
     _coset: u64,
     backend: GpuBackend,
 ) -> Result<Option<Vec<Vec<u64>>>, GpuError> {
@@ -139,6 +144,7 @@ pub fn lde_columns_async(
     _coeffs: &[Vec<u64>],
     _trace_log: u32,
     _blowup_log: u32,
+    _lde_root: u64,
     _coset: u64,
     backend: GpuBackend,
 ) -> Result<LdeDispatch, GpuError> {
@@ -155,32 +161,32 @@ mod tests {
 
         let mut fft_columns_buf = vec![vec![0u64]];
         assert!(matches!(
-            fft_columns(&mut fft_columns_buf, 0, backend).unwrap_err(),
+            fft_columns(&mut fft_columns_buf, 0, 1, backend).unwrap_err(),
             GpuError::Unsupported(GpuBackend::Cuda)
         ));
 
         let mut ifft_columns_buf = vec![vec![0u64]];
         assert!(matches!(
-            ifft_columns(&mut ifft_columns_buf, 0, backend).unwrap_err(),
+            ifft_columns(&mut ifft_columns_buf, 0, 1, backend).unwrap_err(),
             GpuError::Unsupported(GpuBackend::Cuda)
         ));
 
         let coeffs = vec![vec![0u64]];
         assert!(matches!(
-            lde_columns(&coeffs, 0, 0, 1, backend).unwrap_err(),
+            lde_columns(&coeffs, 0, 0, 1, 1, backend).unwrap_err(),
             GpuError::Unsupported(GpuBackend::Cuda)
         ));
 
         assert!(matches!(
-            fft_columns_async(&mut fft_columns_buf, 0, backend).unwrap_err(),
+            fft_columns_async(&mut fft_columns_buf, 0, 1, backend).unwrap_err(),
             GpuError::Unsupported(GpuBackend::Cuda)
         ));
         assert!(matches!(
-            ifft_columns_async(&mut ifft_columns_buf, 0, backend).unwrap_err(),
+            ifft_columns_async(&mut ifft_columns_buf, 0, 1, backend).unwrap_err(),
             GpuError::Unsupported(GpuBackend::Cuda)
         ));
         assert!(matches!(
-            lde_columns_async(&coeffs, 0, 0, 1, backend).unwrap_err(),
+            lde_columns_async(&coeffs, 0, 0, 1, 1, backend).unwrap_err(),
             GpuError::Unsupported(GpuBackend::Cuda)
         ));
     }

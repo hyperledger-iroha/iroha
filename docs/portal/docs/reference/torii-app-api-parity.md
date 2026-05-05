@@ -4,8 +4,8 @@ title: Torii app API parity audit
 description: Mirror of the TORII-APP-1 review so SDK and platform teams can confirm public coverage.
 ---
 
-Status: Completed 2026-03-21  
-Owners: Torii Platform, SDK Program Lead  
+Status: Completed 2026-03-21
+Owners: Torii Platform, SDK Program Lead
 Roadmap reference: TORII-APP-1 — `app_api` parity audit
 
 This page mirrors the internal `TORII-APP-1` audit (`docs/source/torii/app_api_parity_audit.md`)
@@ -35,20 +35,20 @@ for pre-filtering, in addition to the existing pagination/backpressure limits.
 - Example snippets:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "<i105-account-id>", method: "get", path: "/v1/accounts/<i105-account-id>/assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/<i105-account-id>/assets?limit=5`, { headers });
 ```
 ```swift
-let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
+let headers = try CanonicalRequest.signingHeaders(accountId: "<i105-account-id>",
                                                   method: "get",
-                                                  path: "/v1/accounts/i105.../assets",
+                                                  path: "/v1/accounts/<i105-account-id>/assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.signingHeaders("<i105-account-id>", "get", "/v1/accounts/<i105-account-id>/assets", "limit=5", ByteArray(0), signer)
 ```
 
 ## Endpoint inventory
@@ -83,18 +83,15 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 
 ### Contract lifecycle (`/v1/contracts/*`) — Covered
 - Handlers: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
-  `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
-  `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
   `handle_post_contract_call` (`crates/iroha_torii/src/routing.rs:3534-3607`),
   `handle_get_contract_code_bytes` (`crates/iroha_torii/src/routing.rs:3237-3304`).
-- DTOs: `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`
+- DTOs: `DeployContractDto`, `ContractCallDto`
   (`crates/iroha_torii/src/routing.rs:3124-3463`).
 - Router binding: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
-- Tests: router/integration suites `contracts_deploy_integration.rs`, `contracts_activate_integration.rs`,
-  `contracts_instance_activate_integration.rs`, `contracts_call_integration.rs`,
+- Tests: router/integration suites `contracts_deploy_integration.rs`, `contracts_call_integration.rs`,
   `contracts_instances_list_router.rs`.
 - Owner: Smart Contract WG with Torii Platform.
-- Notes: Endpoints queue signed transactions and reuse shared telemetry metrics (`handle_transaction_with_metrics`).
+- Notes: Public contract lifecycle is alias-first: deploy requires `contract_alias`, returns a fresh immutable `contract_address`, and call/view flows accept `contract_address` or `contract_alias`.
 
 ### Verifying key lifecycle (`/v1/zk/vk/*`) — Covered
 - Handlers: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`

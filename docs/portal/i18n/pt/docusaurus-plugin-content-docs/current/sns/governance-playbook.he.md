@@ -75,7 +75,7 @@ necessarias, dashboards e caminhos de escalonamento.
 | Carta + addenda KPI | `docs/source/sns/governance_addenda/` | Cartas assinadas com controle de versao, covenants KPI e decisoes de governanca referenciadas por votos da CLI. |
 | Esquema do registro | [`registry-schema.md`](./registry-schema.md) | Estruturas Norito canonicas (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Contrato do registrar | [`registrar-api.md`](./registrar-api.md) | Payloads REST/gRPC, metricas `sns_registrar_status_total` e expectativas de governance hook. |
-| Guia UX de enderecos | [`address-display-guidelines.md`](./address-display-guidelines.md) | Renderizacoes canonicas I105 (preferido) e comprimidas (segunda melhor opcao) refletidas por wallets/explorers. |
+| Guia UX de enderecos | [`address-display-guidelines.md`](./address-display-guidelines.md) | Renderizacoes canonicas i105 (preferido) e comprimidas (segunda melhor opcao) refletidas por wallets/explorers. |
 | Docs SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Derivacao deterministica de hosts, fluxo do tailer de transparencia e regras de alerta. |
 | Memos regulatorios | `docs/source/sns/regulatory/` | Notas de entrada por jurisdicao (ex. EU DSA), acknowledgements de steward, anexos de template. |
 | Drill log | `ops/drill-log.md` | Registro de ensaios de caos e IR requeridos antes de saidas de fase. |
@@ -119,7 +119,7 @@ acima para que auditores reconstruam o rastro de decisao em 24 horas.
    GAR/zone se propagou (veja 4.5).
 6. **Divulgacao ao cliente:** Atualize o ledger voltado ao cliente (wallet/explorer)
    via os fixtures compartilhados em [`address-display-guidelines.md`](./address-display-guidelines.md),
-   garantindo que renderizacoes I105 e comprimidas correspondam a orientacoes de copy/QR.
+   garantindo que renderizacoes i105 e comprimidas correspondam a orientacoes de copy/QR.
 
 ### 4.3 Renovacoes, cobranca e reconciliacao da tesouraria
 
@@ -149,11 +149,11 @@ acima para que auditores reconstruam o rastro de decisao em 24 horas.
 | Fase | Responsavel | Acao e evidencia | SLA |
 |------|-------------|------------------|-----|
 | Pedido de freeze soft | Steward / suporte | Abrir ticket `SNS-DF-<id>` com provas de pagamento, referencia do bond de disputa e seletor(es) afetados. | <=4 h da entrada. |
-| Ticket guardian | Conselho guardian | `sns governance freeze --selector <I105> --reason <text> --until <ts>` produz `GuardianFreezeTicketV1`. Armazene o JSON do ticket em `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h execucao. |
+| Ticket guardian | Conselho guardian | `sns governance freeze --selector <i105> --reason <text> --until <ts>` produz `GuardianFreezeTicketV1`. Armazene o JSON do ticket em `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h execucao. |
 | Ratificacao do conselho | Conselho de governanca | Aprovar ou rejeitar congelamentos, documentar decisao com link ao ticket guardian e digest do bond de disputa. | Proxima sessao do conselho ou voto assincrono. |
 | Painel de arbitragem | Conformidade + steward | Convocar painel de 7 jurados (conforme roadmap) com cedulas hasheadas via `sns governance dispute ballot`. Anexar recibos de voto anonimizados ao pacote de incidente. | Veredito <=7 dias apos deposito do bond. |
 | Apelacao | Guardian + conselho | Apelacoes dobram o bond e repetem o processo de jurados; registrar manifesto Norito `DisputeAppealV1` e referenciar ticket primario. | <=10 dias. |
-| Descongelar e remediar | Registrar + ops de resolver | Executar `sns governance unfreeze --selector <I105> --ticket <id>`, atualizar status do registrar e propagar diffs GAR/resolver. | Imediatamente apos o veredito. |
+| Descongelar e remediar | Registrar + ops de resolver | Executar `sns governance unfreeze --selector <i105> --ticket <id>`, atualizar status do registrar e propagar diffs GAR/resolver. | Imediatamente apos o veredito. |
 
 Canones de emergencia (congelamentos acionados por guardian <=72 h) seguem o mesmo
 fluxo, mas exigem revisao retroativa do conselho e uma nota de transparencia em

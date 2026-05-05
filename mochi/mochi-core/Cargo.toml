@@ -38,6 +38,7 @@ url = { workspace = true }
 iroha_version = { workspace = true }
 once_cell = { workspace = true }
 base64 = { workspace = true }
+izanami = { path = "../../crates/izanami" }
 
 [dev-dependencies]
 futures = { workspace = true, features = ["std", "async-await"] }

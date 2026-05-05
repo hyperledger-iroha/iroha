@@ -1,8 +1,13 @@
-use std::{env, path::PathBuf, process::Command};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn main() {
     // Teach rustc about our custom cfg so check-cfg doesn't flag it.
     println!("cargo::rustc-check-cfg=cfg(crc64_cuda_available)");
+    println!("cargo::rustc-check-cfg=cfg(jsonstage1_cuda_available)");
     println!("cargo:rerun-if-env-changed=CUDA_HOME");
     println!("cargo:rerun-if-env-changed=CUDA_PATH");
     println!("cargo:rerun-if-env-changed=JSONSTAGE1_CUDA_ARCH");
@@ -20,22 +25,29 @@ fn main() {
         return;
     }
 
-    if !nvcc_available() {
+    let Some(nvcc) = find_nvcc() else {
         println!("cargo:warning=nvcc not found; building jsonstage1_cuda without GPU kernels.");
         return;
-    }
+    };
 
     if let Some(dir) = locate_cuda_lib_dir() {
         println!("cargo:rustc-link-search=native={}", dir.display());
     }
 
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let mut build = cc::Build::new();
     build.cuda(true);
+    build.compiler(nvcc);
+    build.no_default_flags(true);
+    build.warnings(false);
+    build.debug(false);
     build.file("src/cuda_crc64.cu");
     build.flag("-std=c++17");
     build.flag("-O3");
     build.flag("-lineinfo");
-    build.flag("-Xcompiler=-fPIC");
+    if target_os != "windows" {
+        build.flag("-Xcompiler=-fPIC");
+    }
 
     if let Some(arch_flag) = env::var_os("JSONSTAGE1_CUDA_ARCH") {
         build.flag(
@@ -45,14 +57,61 @@ fn main() {
         );
     }
 
+    if let Some(host_compiler) = select_cuda_host_compiler(&target_os) {
+        println!(
+            "cargo:warning=using CUDA host compiler {}",
+            host_compiler.display()
+        );
+        build.ccbin(false);
+        build.flag(format!("-ccbin={}", host_compiler.display()));
+    } else if target_os == "linux" && !explicit_cxx_configured() {
+        println!(
+            "cargo:warning=letting nvcc choose the CUDA host compiler to avoid unsupported default CXX"
+        );
+        build.ccbin(false);
+    }
+
     build.compile("jsonstage1_cuda_kernels");
     println!("cargo:rustc-link-lib=cudart");
-    println!("cargo:rustc-link-lib=stdc++");
+    match target_os.as_str() {
+        "linux" => println!("cargo:rustc-link-lib=stdc++"),
+        "macos" => println!("cargo:rustc-link-lib=c++"),
+        _ => {}
+    }
     println!("cargo:rustc-cfg=crc64_cuda_available");
+    println!("cargo:rustc-cfg=jsonstage1_cuda_available");
 }
 
-fn nvcc_available() -> bool {
-    Command::new("nvcc")
+fn find_nvcc() -> Option<PathBuf> {
+    for var in ["NVCC", "CUDACXX"] {
+        if let Some(path) = env::var_os(var).map(PathBuf::from)
+            && nvcc_works(&path)
+        {
+            return Some(path);
+        }
+    }
+
+    let path_nvcc = PathBuf::from("nvcc");
+    if nvcc_works(&path_nvcc) {
+        return Some(path_nvcc);
+    }
+
+    let exe = if cfg!(windows) { "nvcc.exe" } else { "nvcc" };
+    for root in env::var_os("CUDA_HOME")
+        .into_iter()
+        .chain(env::var_os("CUDA_PATH"))
+    {
+        let candidate = PathBuf::from(root).join("bin").join(exe);
+        if nvcc_works(&candidate) {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn nvcc_works(path: &Path) -> bool {
+    Command::new(path)
         .arg("--version")
         .output()
         .map(|out| out.status.success())
@@ -62,7 +121,11 @@ fn nvcc_available() -> bool {
 fn locate_cuda_lib_dir() -> Option<PathBuf> {
     let root = env::var_os("CUDA_HOME")
         .or_else(|| env::var_os("CUDA_PATH"))
-        .map(PathBuf::from)?;
+        .map(PathBuf::from)
+        .or_else(|| {
+            let default = Path::new("/usr/local/cuda");
+            default.exists().then(|| default.to_path_buf())
+        })?;
     for candidate in ["lib64", "lib"].iter() {
         let joined = root.join(candidate);
         if joined.exists() {
@@ -70,4 +133,28 @@ fn locate_cuda_lib_dir() -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn select_cuda_host_compiler(target_os: &str) -> Option<PathBuf> {
+    if target_os != "linux" || explicit_cxx_configured() {
+        return None;
+    }
+
+    for candidate in [
+        Path::new("/usr/bin/g++-12"),
+        Path::new("/usr/local/bin/g++-12"),
+        Path::new("/bin/g++-12"),
+    ] {
+        if candidate.exists() {
+            return Some(candidate.to_path_buf());
+        }
+    }
+
+    None
+}
+
+fn explicit_cxx_configured() -> bool {
+    env::var_os("CXX").is_some()
+        || env::var_os("HOST_CXX").is_some()
+        || env::vars_os().any(|(key, _)| key.to_string_lossy().starts_with("CXX_"))
 }

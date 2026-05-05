@@ -1,0 +1,29 @@
+[Unit]
+Description=Iroha Taira validator
+Documentation=https://github.com/hyperledger/iroha/tree/main/configs/soranexus/taira
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=iroha
+Group=iroha
+WorkingDirectory=/opt/iroha
+Environment=RUST_LOG=info
+Environment=IROHA_TAIRA_IROHAD_BIN=/opt/iroha/bin/irohad
+Environment=IROHA_TAIRA_CONFIG=/opt/iroha/configs/soranexus/taira/config.toml
+Environment=IROHA_TAIRA_GENESIS=/opt/iroha/configs/soranexus/taira/genesis.json
+EnvironmentFile=-/etc/default/taira-irohad
+# Keep the shipped Taira config and genesis explicit so each validator's direct
+# public Torii hostname exposes the curated MCP surface at /v1/mcp.
+ExecStart=${IROHA_TAIRA_IROHAD_BIN} --sora --config ${IROHA_TAIRA_CONFIG} --genesis-manifest-json ${IROHA_TAIRA_GENESIS}
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/iroha/storage
+
+[Install]
+WantedBy=multi-user.target

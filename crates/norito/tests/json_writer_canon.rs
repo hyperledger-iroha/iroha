@@ -9,6 +9,15 @@ fn json_float_formatting_is_canonical() {
 
     let value = Value::Number(Number::F64(1.25));
     assert_eq!(json::to_string(&value).expect("json"), "1.25");
+
+    let value = Value::Number(Number::F64(1e-6));
+    assert_eq!(json::to_string(&value).expect("json"), "1e-6");
+
+    let value = Value::Number(Number::F64(2.977449932093377e17));
+    assert_eq!(
+        json::to_string(&value).expect("json"),
+        "2.977449932093377e+17"
+    );
 }
 
 #[test]

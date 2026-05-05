@@ -15,6 +15,8 @@ use crate::{
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 
+use super::execution_context::BlockExecutionContextBundle;
+
 #[model]
 mod model {
     use getset::{CopyGetters, Getters, Setters};
@@ -71,6 +73,9 @@ mod model {
         /// Optional hash covering previous-height roster evidence embedded in the block payload.
         #[getset(get_copy = "pub", set = "pub")]
         pub prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
+        /// Optional SCCP commitment root finalized in this block.
+        #[getset(get_copy = "pub", set = "pub")]
+        pub sccp_commitment_root: Option<[u8; 32]>,
         /// Creation timestamp as Unix time in milliseconds.
         #[getset(skip)]
         pub creation_time_ms: u64,
@@ -80,6 +85,11 @@ mod model {
         /// Optional digest advertising the confidential feature set applied in this block.
         #[getset(get_copy = "pub", set = "pub")]
         pub confidential_features: Option<ConfidentialFeatureDigest>,
+        /// Optional hash covering durable execution context embedded in the block payload.
+        #[getset(get_copy = "pub", set = "pub")]
+        #[norito(default)]
+        #[norito(skip_serializing_if = "Option::is_none")]
+        pub execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
     }
 
     /// The validator index and its corresponding signature on the block header.
@@ -129,6 +139,10 @@ pub mod wire {
         pub Option<[u8; 32]>,
         /// Optional hash of previous-height roster evidence embedded in the block payload.
         pub Option<[u8; 32]>,
+        /// Optional hash of durable execution context embedded in the block payload.
+        pub Option<[u8; 32]>,
+        /// Optional SCCP commitment root finalized in this block.
+        pub Option<[u8; 32]>,
         /// Optional confidential feature digest committed in the header.
         pub Option<ConfidentialFeatureDigestWire>,
     );
@@ -136,8 +150,17 @@ pub mod wire {
     impl ncore::NoritoSerialize for BlockHeaderWire {
         fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
             let tuple = (
-                self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9,
-                self.10,
+                self.0,
+                self.1,
+                self.2,
+                self.3,
+                self.4,
+                self.5,
+                self.6,
+                self.7,
+                self.8,
+                self.9,
+                (self.10, self.11, self.12),
             );
             <(
                 NonZeroU64,
@@ -150,13 +173,26 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
-                Option<ConfidentialFeatureDigestWire>,
+                (
+                    Option<[u8; 32]>,
+                    Option<[u8; 32]>,
+                    Option<ConfidentialFeatureDigestWire>,
+                ),
             ) as ncore::NoritoSerialize>::serialize(&tuple, writer)
         }
         fn encoded_len_hint(&self) -> Option<usize> {
             let tuple = (
-                self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9,
-                self.10,
+                self.0,
+                self.1,
+                self.2,
+                self.3,
+                self.4,
+                self.5,
+                self.6,
+                self.7,
+                self.8,
+                self.9,
+                (self.10, self.11, self.12),
             );
             <(
                 NonZeroU64,
@@ -169,13 +205,26 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
-                Option<ConfidentialFeatureDigestWire>,
+                (
+                    Option<[u8; 32]>,
+                    Option<[u8; 32]>,
+                    Option<ConfidentialFeatureDigestWire>,
+                ),
             ) as ncore::NoritoSerialize>::encoded_len_hint(&tuple)
         }
         fn encoded_len_exact(&self) -> Option<usize> {
             let tuple = (
-                self.0, self.1, self.2, self.3, self.4, self.5, self.6, self.7, self.8, self.9,
-                self.10,
+                self.0,
+                self.1,
+                self.2,
+                self.3,
+                self.4,
+                self.5,
+                self.6,
+                self.7,
+                self.8,
+                self.9,
+                (self.10, self.11, self.12),
             );
             <(
                 NonZeroU64,
@@ -188,7 +237,11 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
-                Option<ConfidentialFeatureDigestWire>,
+                (
+                    Option<[u8; 32]>,
+                    Option<[u8; 32]>,
+                    Option<ConfidentialFeatureDigestWire>,
+                ),
             ) as ncore::NoritoSerialize>::encoded_len_exact(&tuple)
         }
     }
@@ -206,7 +259,11 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
-                Option<ConfidentialFeatureDigestWire>,
+                (
+                    Option<[u8; 32]>,
+                    Option<[u8; 32]>,
+                    Option<ConfidentialFeatureDigestWire>,
+                ),
             ) = <(
                 NonZeroU64,
                 Option<[u8; 32]>,
@@ -218,10 +275,29 @@ pub mod wire {
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
                 Option<[u8; 32]>,
-                Option<ConfidentialFeatureDigestWire>,
+                (
+                    Option<[u8; 32]>,
+                    Option<[u8; 32]>,
+                    Option<ConfidentialFeatureDigestWire>,
+                ),
             ) as ncore::NoritoDeserialize>::deserialize(archived.cast());
-            let (h, p, m, r, proof_hash, t, v, d, pins, prev_roster, f) = tuple;
-            Self(h, p, m, r, proof_hash, t, v, d, pins, prev_roster, f)
+            let (h, p, m, r, proof_hash, t, v, d, pins, prev_roster, extensions) = tuple;
+            let (exec_ctx, sccp_root, f) = extensions;
+            Self(
+                h,
+                p,
+                m,
+                r,
+                proof_hash,
+                t,
+                v,
+                d,
+                pins,
+                prev_roster,
+                exec_ctx,
+                sccp_root,
+                f,
+            )
         }
     }
     /// Wire mapping for `ConfidentialFeatureDigest`.
@@ -381,6 +457,8 @@ impl From<BlockHeader> for wire::BlockHeaderWire {
             opt_hash_to_bytes(b.da_commitments_hash),
             opt_hash_to_bytes(b.da_pin_intents_hash),
             opt_hash_to_bytes(b.prev_roster_evidence_hash),
+            opt_hash_to_bytes(b.execution_context_hash),
+            b.sccp_commitment_root,
             digest_to_wire(b.confidential_features),
         )
     }
@@ -408,7 +486,9 @@ impl From<wire::BlockHeaderWire> for BlockHeader {
         header.set_da_commitments_hash(opt_hash_from_bytes::<DaCommitmentBundle>(w.7));
         header.set_da_pin_intents_hash(opt_hash_from_bytes::<DaPinIntentBundle>(w.8));
         header.set_prev_roster_evidence_hash(opt_hash_from_bytes::<PreviousRosterEvidence>(w.9));
-        header.set_confidential_features(digest_from_wire(w.10));
+        header.set_execution_context_hash(opt_hash_from_bytes::<BlockExecutionContextBundle>(w.10));
+        header.set_sccp_commitment_root(w.11);
+        header.set_confidential_features(digest_from_wire(w.12));
         header
     }
 }
@@ -452,6 +532,8 @@ impl BlockHeader {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            execution_context_hash: None,
+            sccp_commitment_root: None,
             creation_time_ms,
             view_change_index,
             confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
@@ -479,7 +561,27 @@ impl BlockHeader {
     /// Computes the header hash without including `result_merkle_root`.
     #[inline]
     fn hash_without_results(&self) -> HashOf<BlockHeader> {
-        /// A view of `BlockHeader` used for consensus hashing, omitting the execution results.
+        #[derive(Encode)]
+        struct BlockHeaderForConsensusLegacy {
+            height: NonZeroU64,
+            prev_block_hash: Option<HashOf<BlockHeader>>,
+            /// Merkle root over externally submitted transactions (time-trigger entrypoints live in [`BlockResult`]).
+            merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
+            /// Optional DA proof policy bundle hash.
+            da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
+            /// Optional DA commitment bundle hash.
+            da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
+            /// Optional DA pin intent bundle hash.
+            da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
+            /// Optional previous-roster evidence hash.
+            prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
+            /// Optional SCCP commitment root.
+            sccp_commitment_root: Option<[u8; 32]>,
+            creation_time_ms: u64,
+            view_change_index: u64,
+            confidential_features: Option<ConfidentialFeatureDigest>,
+        }
+
         #[derive(Encode)]
         struct BlockHeaderForConsensus {
             height: NonZeroU64,
@@ -494,12 +596,16 @@ impl BlockHeader {
             da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
             /// Optional previous-roster evidence hash.
             prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
+            /// Optional durable execution context hash.
+            execution_context_hash: HashOf<BlockExecutionContextBundle>,
+            /// Optional SCCP commitment root.
+            sccp_commitment_root: Option<[u8; 32]>,
             creation_time_ms: u64,
             view_change_index: u64,
             confidential_features: Option<ConfidentialFeatureDigest>,
         }
 
-        impl From<&BlockHeader> for BlockHeaderForConsensus {
+        impl From<&BlockHeader> for BlockHeaderForConsensusLegacy {
             fn from(value: &BlockHeader) -> Self {
                 let BlockHeader {
                     height,
@@ -510,6 +616,8 @@ impl BlockHeader {
                     da_commitments_hash,
                     da_pin_intents_hash,
                     prev_roster_evidence_hash,
+                    execution_context_hash: _,
+                    sccp_commitment_root,
                     creation_time_ms,
                     view_change_index,
                     confidential_features,
@@ -523,6 +631,7 @@ impl BlockHeader {
                     da_commitments_hash,
                     da_pin_intents_hash,
                     prev_roster_evidence_hash,
+                    sccp_commitment_root,
                     creation_time_ms,
                     view_change_index,
                     confidential_features,
@@ -530,7 +639,29 @@ impl BlockHeader {
             }
         }
 
-        HashOf::from_untyped_unchecked(HashOf::new(&BlockHeaderForConsensus::from(self)).into())
+        let Some(execution_context_hash) = self.execution_context_hash else {
+            return HashOf::from_untyped_unchecked(
+                HashOf::new(&BlockHeaderForConsensusLegacy::from(self)).into(),
+            );
+        };
+
+        let legacy = BlockHeaderForConsensusLegacy::from(self);
+        let header = BlockHeaderForConsensus {
+            height: legacy.height,
+            prev_block_hash: legacy.prev_block_hash,
+            merkle_root: legacy.merkle_root,
+            da_proof_policies_hash: legacy.da_proof_policies_hash,
+            da_commitments_hash: legacy.da_commitments_hash,
+            da_pin_intents_hash: legacy.da_pin_intents_hash,
+            prev_roster_evidence_hash: legacy.prev_roster_evidence_hash,
+            execution_context_hash,
+            sccp_commitment_root: legacy.sccp_commitment_root,
+            creation_time_ms: legacy.creation_time_ms,
+            view_change_index: legacy.view_change_index,
+            confidential_features: legacy.confidential_features,
+        };
+
+        HashOf::from_untyped_unchecked(HashOf::new(&header).into())
     }
 }
 
@@ -581,11 +712,12 @@ mod tests {
     use iroha_crypto::{Hash, KeyPair, Signature};
     use nonzero_ext::nonzero;
     use norito::{
-        codec::{DecodeAll as _, decode_adaptive, encode_with_header_flags},
+        codec::{DecodeAll as _, Encode as _, decode_adaptive, encode_with_header_flags},
         core::NoritoSerialize,
     };
 
     use super::*;
+    use crate::block::ExternalExecutionContext;
 
     struct SamplePayload {
         payload: Vec<u8>,
@@ -868,6 +1000,80 @@ mod tests {
         assert_ne!(
             base, with_evidence,
             "previous roster evidence hash must influence header hash"
+        );
+    }
+
+    #[test]
+    fn header_hash_captures_execution_context_hash_and_preserves_legacy_none_hash() {
+        let mut header = BlockHeader::new(nonzero!(6_u64), None, None, None, 123, 0);
+        let base = header.hash();
+        let context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+                [0xC7; Hash::LENGTH],
+            )),
+            crate::nexus::LaneId::new(1),
+            crate::nexus::DataSpaceId::new(2),
+        )]);
+        header.set_execution_context_hash(Some(HashOf::new(&context)));
+        let with_context = header.hash();
+        assert_ne!(
+            base, with_context,
+            "execution context hash must influence header hash"
+        );
+
+        header.set_execution_context_hash(None);
+        assert_eq!(
+            base,
+            header.hash(),
+            "omitting execution context must preserve the legacy header hash"
+        );
+    }
+
+    #[test]
+    fn header_decodes_legacy_payload_without_execution_context_hash() {
+        #[derive(norito::codec::Encode)]
+        struct LegacyBlockHeader {
+            height: NonZeroU64,
+            prev_block_hash: Option<HashOf<BlockHeader>>,
+            merkle_root: Option<HashOf<MerkleTree<TransactionEntrypoint>>>,
+            result_merkle_root: Option<HashOf<MerkleTree<TransactionResult>>>,
+            da_proof_policies_hash: Option<HashOf<DaProofPolicyBundle>>,
+            da_commitments_hash: Option<HashOf<DaCommitmentBundle>>,
+            da_pin_intents_hash: Option<HashOf<DaPinIntentBundle>>,
+            prev_roster_evidence_hash: Option<HashOf<PreviousRosterEvidence>>,
+            sccp_commitment_root: Option<[u8; 32]>,
+            creation_time_ms: u64,
+            view_change_index: u64,
+            confidential_features: Option<ConfidentialFeatureDigest>,
+        }
+
+        let legacy = LegacyBlockHeader {
+            height: nonzero!(7_u64),
+            prev_block_hash: None,
+            merkle_root: None,
+            result_merkle_root: None,
+            da_proof_policies_hash: None,
+            da_commitments_hash: None,
+            da_pin_intents_hash: None,
+            prev_roster_evidence_hash: None,
+            sccp_commitment_root: Some([0x42; 32]),
+            creation_time_ms: 123,
+            view_change_index: 2,
+            confidential_features: Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
+        };
+        let bytes = legacy.encode();
+        let mut cursor = bytes.as_slice();
+        let decoded =
+            BlockHeader::decode_all(&mut cursor).expect("decode legacy BlockHeader payload");
+
+        assert_eq!(decoded.height(), nonzero!(7_u64));
+        assert_eq!(decoded.execution_context_hash(), None);
+        assert_eq!(decoded.sccp_commitment_root(), Some([0x42; 32]));
+        assert_eq!(decoded.creation_time(), Duration::from_millis(123));
+        assert_eq!(decoded.view_change_index(), 2);
+        assert_eq!(
+            decoded.confidential_features(),
+            Some(DEFAULT_CONFIDENTIAL_FEATURE_DIGEST),
         );
     }
 

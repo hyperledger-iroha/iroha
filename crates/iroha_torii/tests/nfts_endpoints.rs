@@ -2,9 +2,9 @@
 //! Smoke tests for Torii NFT endpoints.
 #![cfg(feature = "app_api")]
 
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
-use axum::http::Request;
+use axum::{body::Body, http::Request};
 use http::StatusCode;
 use iroha_core::{
     kiso::KisoHandle,
@@ -14,6 +14,16 @@ use iroha_core::{
 };
 use iroha_torii::Torii;
 use tower::ServiceExt as _;
+
+async fn call_app(app: &axum::Router, request: Request<Body>) -> axum::response::Response {
+    let service = app
+        .clone()
+        .into_make_service_with_connect_info::<SocketAddr>()
+        .oneshot(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .await
+        .expect("nft make service");
+    service.oneshot(request).await.expect("nft response")
+}
 
 #[tokio::test]
 async fn nfts_endpoints_exist() {
@@ -51,33 +61,30 @@ async fn nfts_endpoints_exist() {
     let app = torii.api_router_for_tests();
 
     // GET /v1/nfts
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/nfts?offset=0")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = call_app(
+        &app,
+        Request::builder()
+            .uri("/v1/nfts?offset=0")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
     assert!(matches!(
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS
     ));
 
     // POST /v1/nfts/query
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/nfts/query")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from("{}"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = call_app(
+        &app,
+        Request::builder()
+            .method("POST")
+            .uri("/v1/nfts/query")
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap(),
+    )
+    .await;
     assert!(matches!(
         resp.status(),
         StatusCode::OK | StatusCode::TOO_MANY_REQUESTS

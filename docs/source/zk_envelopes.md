@@ -11,9 +11,9 @@ Scope (current)
   SHA-256 Merkle commitments and a deterministic transcript.
 
 Backends (tags)
-- IPA (Pallas, native): `halo2/ipa-v1/poly-open`
-- IPA (BN254): `halo2/ipa/ipa-v1/poly-open`
-- IPA (Goldilocks): `halo2/goldilocks-ipa-v1/poly-open`
+- Standalone native IPA verifier entrypoint: `halo2/ipa/poly-open`
+  - The envelope selects the concrete curve/backend with `curve_id`
+    (`1 = Pallas`, `2 = Goldilocks`, `20 = BN254`).
 - STARK (native): `stark/fri-v1/<profile>` (e.g., `stark/fri-v1/sha256-goldilocks-v1`)
 
 General notes
@@ -60,9 +60,15 @@ Wire types (as implemented in `crates/iroha_zkp_halo2`)
   - `public: PolyOpenPublic`
   - `proof: IpaProofData`
   - `transcript_label: String` — bound by both prover and verifier
+  - `vk_commitment: Option<[u8; 32]>` — optional outer VK commitment bound into the transcript
+  - `public_inputs_schema_hash: Option<[u8; 32]>` — optional schema hash bound into the transcript
+  - `domain_tag: Option<[u8; 32]>` — optional caller-defined domain separator bound into the transcript
 
 Verifier behavior (native IPA)
 - Re-derives the public vector b = [1, z, z^2, …, z^{n-1}].
+- Binds the claimed statement before the first Fiat-Shamir challenge:
+  `transcript_label`, backend/`n`, `z`, `t`, `p_g`, and any present optional
+  metadata fields (`vk_commitment`, `public_inputs_schema_hash`, `domain_tag`).
 - Replays transcript rounds to fold generators and update Q.
 - Checks the final relation holds with `(a_final, b_final)`.
 - Deterministic transcript over SHA3-256 under crate-defined DST.
@@ -73,14 +79,22 @@ Verifier behavior (native IPA)
 
 Example (Rust)
 ```rust
-use iroha_zkp_halo2::{Params, Polynomial, PrimeField64, Transcript, norito_helpers as nh};
+use iroha_zkp_halo2::{
+    Params, PolyOpenTranscriptMetadata, Polynomial, PrimeField64, Transcript,
+    norito_helpers as nh,
+};
 let n = 8; let params = Params::new(n).unwrap();
 let coeffs = (0..n).map(|i| PrimeField64::from((i+1) as u64)).collect();
 let poly = Polynomial::from_coeffs(coeffs);
 let p_g = poly.commit(&params).unwrap();
 let z = PrimeField64::from(3u64);
 let mut tr = Transcript::new("IROHA-TEST-IPA");
-let (proof, t) = poly.open(&params, &mut tr, z, p_g).unwrap();
+let metadata = PolyOpenTranscriptMetadata {
+    vk_commitment: Some([0x11; 32]),
+    public_inputs_schema_hash: Some([0x22; 32]),
+    domain_tag: Some([0x33; 32]),
+};
+let (proof, t) = poly.open_with_metadata(&params, &mut tr, z, p_g, metadata).unwrap();
 let env = iroha_zkp_halo2::OpenVerifyEnvelope {
     params: nh::params_to_wire(&params),
     public: nh::poly_open_public::<iroha_zkp_halo2::backend::pallas::PallasBackend>(
@@ -91,6 +105,9 @@ let env = iroha_zkp_halo2::OpenVerifyEnvelope {
     ),
     proof: nh::proof_to_wire(&proof),
     transcript_label: "IROHA-TEST-IPA".into(),
+    vk_commitment: metadata.vk_commitment,
+    public_inputs_schema_hash: metadata.public_inputs_schema_hash,
+    domain_tag: metadata.domain_tag,
 };
 let bytes = norito::to_bytes(&env).unwrap();
 ```
@@ -122,21 +139,25 @@ Example (JSON-like, annotated)
     "a_final": "0x...",
     "b_final": "0x..."
   },
-  "transcript_label": "IROHA-TEST-IPA"
+  "transcript_label": "IROHA-TEST-IPA",
+  "vk_commitment": "0x...",             // optional, null when omitted
+  "public_inputs_schema_hash": "0x...", // optional, null when omitted
+  "domain_tag": "0x..."                 // optional, null when omitted
 }
 ```
 
 ## STARK: FRI-Style Multi-Fold Envelope
 
 Hashing and transcript
-- Leaves: `LEAF || u64_le(value)` hashed with SHA-256.
-- Internal nodes: SHA-256(left || right).
+- Leaves: SHA-256 uses `LEAF || u64_le(value)`; Poseidon2 uses the
+  `iroha:zk:stark:leaf:v1` domain over the field value.
+- Internal nodes: SHA-256(left || right), or Poseidon2 under
+  `iroha:zk:stark:node:v1` for Poseidon2 envelopes.
 - Per-layer challenge `r_k = H(label || params || root_k)` mapped to field, where `params` =
   `version || n_log2 || blowup_log2 || fold_arity || merkle_arity || hash_fn || queries ||
   len(domain_tag) || domain_tag`. The same prefix is used for query sampling.
-- Field: Goldilocks-like prime `p = 2^64 - 2^32 + 1` (test backend). Hash selector `hash_fn`
-  currently supports SHA-256 (`1`); Poseidon2 (`2`) is reserved and rejected by the native
-  verifier.
+- Field: Goldilocks-like prime `p = 2^64 - 2^32 + 1`. Hash selector `hash_fn`
+  supports SHA-256 (`1`) and Poseidon2 (`2`).
 
 Wire types (as implemented in `iroha_core::zk_stark`)
 
@@ -147,7 +168,7 @@ Wire types (as implemented in `iroha_core::zk_stark`)
   - `fold_arity: u8` — FRI arity (power-of-two; current backend supports 2)
   - `queries: u16` — expected query count (must match `proof.queries.len()`)
   - `merkle_arity: u8` — Merkle branching factor (binary only in v1)
-  - `hash_fn: u8` — hash selector (`1 = SHA-256`, `2 = Poseidon2` reserved)
+  - `hash_fn: u8` — hash selector (`1 = SHA-256`, `2 = Poseidon2`)
   - `domain_tag: String` — domain separator baked into the transcript/sampler
 
 - `MerklePath`
@@ -163,7 +184,9 @@ Wire types (as implemented in `iroha_core::zk_stark`)
   - `j: u32` — index at this layer
   - `y0: u64`, `y1: u64` — inputs at positions (2*j, 2*j+1)
   - `path_y0: MerklePath`, `path_y1: MerklePath`
-  - `z: u64` — folded value `y0 + r_k*y1`
+  - `z: u64` — domain-aware binary FRI fold
+    `(y0 + y1)/2 + r_k * (y0 - y1)/(2x)`, where `x` is the domain element for
+    the opened `(x, -x)` pair
   - `path_z: MerklePath` — Merkle path for `z` under `roots[k+1]`
 
 - `StarkProofV1`
@@ -202,10 +225,14 @@ Limits and validation
 Verifier behavior (native STARK)
 - For each query, replays all folds:
   - Verifies `y0`, `y1` Merkle openings under `roots[k]` and `z` under `roots[k+1]`.
-  - Checks `z == y0 + r_k*y1` in the field.
+  - Derives the pair domain element `x` from the layer domain and checks
+    `z == (y0 + y1)/2 + r_k * (y0 - y1)/(2x)` in the field.
 - If `comp_root` present, verifies the composition leaf/path and checks it matches
   `constant + z_coeff * z_final + Σ coeff_i * value_i`. Auxiliary terms must appear
   in strictly increasing `wire_index` order.
+- `OpenVerifyEnvelope` STARK verification requires `comp_root` and `comp_values`; the
+  high-level verifier reconstructs the V1 binding-AIR terms from backend, circuit id,
+  VK hash, schema descriptor, and public input columns before accepting the raw FRI proof.
 - Validation: query indices derive from the transcript label + params + roots; the verifier
   rejects mismatched `j`, missing folds, bad roots/paths, non-canonical field encodings,
   unsupported hash selectors, and mismatched query-count headers. Depth/size caps guard
@@ -236,7 +263,8 @@ Verifier behavior (native STARK)
 	  containing the expected `circuit_id` and the FRI parameter set (`n_log2`, `blowup_log2`,
 	  `fold_arity`, `queries`, `merkle_arity`, `hash_fn`).
 	- The verifier enforces that the outer wrapper metadata is bound into the inner STARK
-	  envelope (via `domain_tag`) and that the inner envelope parameters match the VK payload.
+	  envelope (via `domain_tag`), that the inner envelope parameters match the VK payload,
+	  and that the composition terms match the verifier-reconstructed V1 binding AIR.
 
 	Example (JSON-like, annotated)
 	```jsonc

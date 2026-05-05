@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` оборачивает CLI `iroha`, чтобы получить:
   - `audit.json` -- структурированный вывод `iroha tools address audit --format json`.
-  - `normalized.txt` -- преобразованные I105 (предпочтительно) / сжатые (`sora`) (второй выбор) литералы для каждого Селектор локального домена.
+  - `normalized.txt` -- преобразованные i105 (предпочтительно) / сжатые (`sora`) (второй выбор) литералы для каждого Селектор локального домена.
 - Используйте скрипт вместе с приемом адресов панели управления (`dashboards/grafana/address_ingest.json`)
   и режим Alertmanager (`dashboards/alerts/address_ingest_rules.yml`), чтобы обеспечить переключение безопасности Local-8 /
   Местный-12. Следите за панелями коллизий Local-8 и Local-12 и алертами
@@ -33,7 +33,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 Опции:
 
-- `--format I105` для вывода `sora...` вместо I105.
+- `--format i105` для вывода `sora...` вместо i105.
 - `domainless output (default)` для вывода голых литералов.
 - `--audit-only`, чтобы пропустить шаг конвертации.
 - `--allow-errors` для продолжения подтверждения ошибочных строк (поведение соответствует CLI).

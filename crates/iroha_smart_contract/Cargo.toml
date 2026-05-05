@@ -13,7 +13,7 @@ workspace = true
 [features]
 # Enables debugging tools such as `dbg()` and `DebugUnwrapExt`
 debug = ["iroha_smart_contract_utils/debug"]
-trybuild-tests = []
+trybuild-tests = ["dep:trybuild"]
 packed-struct = []
 
 [dependencies]
@@ -28,8 +28,12 @@ norito = {workspace = true}
 derive_more.workspace = true
 
 displaydoc.workspace = true
+trybuild = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Removed `webassembly-test` to eliminate compile-time failures from
 # transitive `mv` crate. Tests rely solely on `trybuild` now.
-trybuild = { workspace = true }
+
+[[test]]
+name = "ui"
+required-features = ["trybuild-tests"]

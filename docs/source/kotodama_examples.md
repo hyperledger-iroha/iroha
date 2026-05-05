@@ -35,9 +35,9 @@ Source: `examples/transfer/transfer.ko`
 seiyaku TransferDemo {
   kotoage fn do_transfer() permission(AssetTransferRole) {
     transfer_asset(
-      account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"),
-      account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU"),
-      asset_definition!("rose#wonderland"),
+      account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+      account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
   }
@@ -47,6 +47,105 @@ seiyaku TransferDemo {
 Mapping (pointer‑ABI):
 - `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, then `SCALL 0x24`
 
+## Native Asset Escrow
+
+Source: `crates/kotodama_lang/src/samples/native_escrow.ko`
+
+```
+seiyaku NativeEscrowAitai {
+  meta { abi_version: 1; }
+
+  kotoage fn open_offer(offer: Name,
+                         asset_definition: AssetDefinitionId,
+                         amount: int) permission(Admin) {
+    assert(amount > 0, "amount must be positive");
+    escrow_open_offer(offer, asset_definition, amount);
+  }
+
+  kotoage fn accept(offer: Name) permission(Admin) {
+    escrow_accept(offer);
+  }
+
+  kotoage fn mark_payment_sent(offer: Name) permission(Admin) {
+    escrow_mark_payment_sent(offer);
+  }
+
+  kotoage fn release(offer: Name) permission(Admin) {
+    escrow_release(offer);
+  }
+}
+```
+
+This sample models the Aitai-style fiat settlement corridor with the native
+ledger escrow ISIs. `open_offer` locks the seller's numeric asset into a
+deterministic protocol custody account. `accept`, `mark_payment_sent`, and
+`release` move the lifecycle forward without giving any contract account or role
+generic authority to debit custody. Dispute entrypoints can call
+`escrow_open_dispute` and `escrow_resolve_dispute`; the latter still requires a
+ledger permission token named `CanResolveEscrowDispute`.
+
+Mapping (pointer‑ABI):
+- `escrow_open_offer(offer, def, amt)` → `r10=&Name`, `r11=&AssetDefinitionId`, `r12=amount`, optional `r13=&NoritoBytes` evidence, then `SCALL 0xB8`
+- `escrow_accept(offer)` → `r10=&Name`, then `SCALL 0xB9`
+- `escrow_mark_payment_sent(offer)` → `r10=&Name`, then `SCALL 0xBA`
+- `escrow_release(offer)` → `r10=&Name`, then `SCALL 0xBB`
+- `escrow_cancel(offer)` → `r10=&Name`, then `SCALL 0xBC`
+- `escrow_open_dispute(offer)` → `r10=&Name`, optional `r11=&NoritoBytes` evidence, then `SCALL 0xBD`
+- `escrow_resolve_dispute(offer, buyer, seller)` → `r10=&Name`, `r11=buyer`, `r12=seller`, optional `r13=&NoritoBytes` evidence, then `SCALL 0xBE`
+
+## Threshold Escrow
+
+Source: `crates/kotodama_lang/src/samples/threshold_escrow.ko`
+
+```
+seiyaku ThresholdEscrow {
+  state AccountId payer_account;
+  state AccountId recipient_account;
+  state AccountId escrow_account_id;
+  state AssetDefinitionId escrow_asset_definition;
+  state int target_amount_value;
+  state int funded_amount_value;
+  state bool is_open;
+  state bool is_released;
+  state bool is_refunded;
+
+  kotoage fn open_escrow(recipient: AccountId,
+                         escrow_account: AccountId,
+                         asset_definition: AssetDefinitionId,
+                         target_amount: int) permission(Admin) {
+    payer_account = authority();
+    recipient_account = recipient;
+    escrow_account_id = escrow_account;
+    escrow_asset_definition = asset_definition;
+    target_amount_value = target_amount;
+    funded_amount_value = 0;
+    is_open = true;
+  }
+
+  kotoage fn deposit(amount: int) permission(Admin) {
+    transfer_asset(payer_account, escrow_account_id, escrow_asset_definition, amount);
+    funded_amount_value = funded_amount_value + amount;
+  }
+}
+```
+
+This legacy sample models one escrow per deployed contract instance. New
+numeric-asset custody flows should prefer the native escrow ISIs above because
+they do not require a contract-controlled escrow account. `open_escrow`
+binds the payer to `authority()`, stores the payer/recipient/escrow/asset
+configuration in durable state, and opens the escrow with an exact target
+amount. `deposit` only accepts positive payer top-ups and rejects deposits that
+would exceed the target. `release_if_ready` transfers the full funded amount
+from the escrow account to the recipient once
+`funded_amount_value == target_amount_value`,
+and `refund` returns the funded amount to the payer while the escrow is still
+open.
+
+Mapping (pointer‑ABI):
+- `authority()` → `SCALL 0xA4` (host writes `&AccountId` into `r10`)
+- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, then `SCALL 0x24`
+- Declared durable state is persisted under logical paths such as `payer_account`, `recipient_account`, `escrow_account_id`, `escrow_asset_definition`, `target_amount_value`, `funded_amount_value`, `is_open`, `is_released`, and `is_refunded`, which Torii exposes through `GET /v1/contracts/state?...&decode=json`
+
 ## NFT Create + Transfer
 
 Source: `examples/nft/nft.ko`
@@ -54,14 +153,14 @@ Source: `examples/nft/nft.ko`
 ```
 seiyaku NftDemo {
   kotoage fn create() permission(NftAuthority) {
-    let owner = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
+    let owner = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
     let nft = nft_id!("dragon$wonderland");
     nft_mint_asset(nft, owner);
   }
 
   kotoage fn transfer() permission(NftAuthority) {
-    let owner = account!("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
-    let recipient = account!("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
+    let owner = account!("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+    let recipient = account!("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
     let nft = nft_id!("dragon$wonderland");
     nft_transfer_asset(owner, nft, recipient);
   }
@@ -83,14 +182,18 @@ lookups without manual FFI glue:
 seiyaku PointerDemo {
   state Owners: Map<int, AccountId>;
 
+  fn owner_at(state Map<int, AccountId> owners, slot: int, fallback: AccountId) -> AccountId {
+    return owners.ensure(slot, fallback);
+  }
+
   fn hajimari() {
-    let alice = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
-    let first = get_or_insert_default(Owners, 7, alice);
+    let alice = account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+    let first = owner_at(Owners, 7, alice);
     assert(first == alice);
 
     // The second call decodes the stored pointer and re-encodes the input.
-    let bob = account_id("6cmzPVPX4Vs6C1nbbQ7UD7Q6AWKJFC12abs4kZtXEE9SsFf6QRpp8rU");
-    let again = get_or_insert_default(Owners, 7, bob);
+    let bob = account_id("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
+    let again = owner_at(Owners, 7, bob);
     assert(again == alice);
   }
 }

@@ -32,8 +32,8 @@ foydalanishni rejalashtirgan hisob identifikatorlari. Standartlar to‘plami all
 demo kalitlardan olingan:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Birinchi bir nechta hisoblarni sanab, qiymatlarni tasdiqlang:
@@ -52,7 +52,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts inside wonderland (replace --limit with a higher number if needed)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions that already exist
@@ -69,7 +69,7 @@ domen:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI topshirilgan tranzaksiya xeshini chop etadi (masalan,
@@ -78,7 +78,7 @@ CLI topshirilgan tranzaksiya xeshini chop etadi (masalan,
 ## 3. Operator hisobiga zarb birliklari
 
 Aktivlar miqdori `(asset definition, account)` juftligi ostida yashaydi. Yalpiz 250
-`coffee#wonderland` birliklari `$ADMIN_ACCOUNT` ga:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` birliklari `$ADMIN_ACCOUNT` ga:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

@@ -874,12 +874,25 @@ fn build_registry(
 
 fn write_manifest(dir: &Path, alias: &str, include_privacy: bool) -> Result<()> {
     fs::create_dir_all(dir)?;
-    let validators = vec![ALICE_ID.to_string(), BOB_ID.to_string()];
+    let alice_peer = PeerId::from(ALICE_ID.signatory().clone()).to_string();
+    let bob_peer = PeerId::from(BOB_ID.signatory().clone()).to_string();
+    let mut alice_binding = norito::json::native::Map::new();
+    alice_binding.insert("validator".into(), ALICE_ID.to_string().into());
+    alice_binding.insert("peer_id".into(), alice_peer.into());
+    let mut bob_binding = norito::json::native::Map::new();
+    bob_binding.insert("validator".into(), BOB_ID.to_string().into());
+    bob_binding.insert("peer_id".into(), bob_peer.into());
     let mut manifest = norito::json::native::Map::new();
     manifest.insert("lane".into(), norito::json!(alias));
     manifest.insert("governance".into(), norito::json!("council"));
     manifest.insert("version".into(), norito::json!(1));
-    manifest.insert("validators".into(), norito::json!(validators));
+    manifest.insert(
+        "validators".into(),
+        norito::json::native::Value::Array(vec![
+            norito::json::native::Value::Object(alice_binding),
+            norito::json::native::Value::Object(bob_binding),
+        ]),
+    );
     manifest.insert("quorum".into(), norito::json!(1));
     manifest.insert(
         "protected_namespaces".into(),

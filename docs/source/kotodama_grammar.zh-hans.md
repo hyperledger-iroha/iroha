@@ -117,7 +117,7 @@ seiyaku Name {
 语义学
 - `meta { ... }` 字段覆盖已发出的 IVM 标头的编译器默认值：`abi_version`、`vector_length`（0 表示未设置）、`max_cycles`（0 表示编译器默认值）、`features` 切换标头功能位（ZK 跟踪、向量）宣布）。编译器将 `max_cycles: 0` 视为“使用默认值”，并发出配置的非零默认值以满足准入要求。不支持的功能将被忽略并发出警告。当省略 `meta {}` 时，编译器将发出 `abi_version = 1` 并使用其余标头字段的选项默认值。
 - `features: ["zk", "simd"]`（别名：`"vector"`）显式请求相应的标头位。未知的特征字符串现在会产生解析器错误而不是被忽略。
-- `state` 声明持久合约变量。编译器降低对 `STATE_GET/STATE_SET/STATE_DEL` 系统调用的访问，主机将它们暂存在每个事务覆盖中（检查点/恢复回滚、提交时刷新到 WSV）。针对文字状态路径发出访问提示；动态键回退到映射级冲突键。对于显式主机支持的读/写，请使用 `state_get/state_set/state_del` 帮助程序和 `get_or_insert_default` 映射帮助程序；这些通过 Norito TLV 进行路由并保持名称/字段顺序稳定。
+- `state` 声明持久合约变量。编译器降低对 `STATE_GET/STATE_SET/STATE_DEL` 系统调用的访问，主机将它们暂存在每个事务覆盖中（检查点/恢复回滚、提交时刷新到 WSV）。针对文字状态路径发出访问提示；动态键回退到映射级冲突键。对于显式主机支持的读/写，请使用 `state_get/state_set/state_del` 帮助程序和 `map.ensure(...)` 映射帮助程序；这些通过 Norito TLV 进行路由并保持名称/字段顺序稳定。
 - 保留状态标识符；参数中隐藏 `state` 名称或 `let` 绑定被拒绝 (`E_STATE_SHADOWED`)。
 - 状态映射值不是一流的：直接使用状态标识符进行映射操作和迭代。将状态映射绑定或传递给用户定义的函数被拒绝 (`E_STATE_MAP_ALIAS`)。
 - 持久状态映射当前仅支持 `int` 和指针 ABI 密钥类型；其他键类型在编译时被拒绝。
@@ -146,7 +146,7 @@ register_trigger wake {
   call run;
   on time pre_commit;
   repeats 2;
-  authority "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+  authority "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
   metadata { tag: "alpha"; count: 1; enabled: true; }
 }
 ```
@@ -227,8 +227,8 @@ register_trigger wake {
 - `axt_descriptor(string|0xhex) -> AxtDescriptor*`
 - `asset_handle(string|0xhex) -> AssetHandle*`
 - `proof_blob(string|0xhex) -> ProofBlob*`Prelude 宏为这些构造函数提供更短的别名和内联验证：
-- `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`、`asset_id!("rose#wonderland")`
+- `account!("<i105-account-id>")`, `account_id!("<i105-account-id>")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`、`asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` 或结构化文字，例如 `json!{ hello: "world" }`

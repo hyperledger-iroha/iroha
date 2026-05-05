@@ -1,0 +1,297 @@
+{
+  "name": "Kotodama",
+  "scopeName": "source.kotodama",
+  "fileTypes": [
+    "ko"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#attributes"
+    },
+    {
+      "include": "#definitions"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#builtins"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#operators"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.kotodama",
+          "begin": "//",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.kotodama"
+            }
+          },
+          "end": "$"
+        },
+        {
+          "name": "comment.block.kotodama",
+          "begin": "/\\*",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.begin.kotodama"
+            }
+          },
+          "end": "\\*/",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.end.kotodama"
+            }
+          }
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "meta.annotation.kotodama",
+          "begin": "#\\[",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.annotation.begin.kotodama"
+            }
+          },
+          "end": "\\]",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.annotation.end.kotodama"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\b(?:access|read|write)\\b",
+              "name": "keyword.annotation.kotodama"
+            },
+            {
+              "include": "#strings"
+            },
+            {
+              "include": "#operators"
+            }
+          ]
+        }
+      ]
+    },
+    "definitions": {
+      "patterns": [
+        {
+          "match": "\\b(seiyaku|誓約)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.contract.kotodama"
+            },
+            "2": {
+              "name": "entity.name.type.contract.kotodama"
+            }
+          }
+        },
+        {
+          "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.struct.kotodama"
+            },
+            "2": {
+              "name": "entity.name.type.struct.kotodama"
+            }
+          }
+        },
+        {
+          "match": "\\b(?:(kotoage|言挙げ|view)\\s+)?(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "storage.modifier.kotodama"
+            },
+            "2": {
+              "name": "keyword.declaration.function.kotodama"
+            },
+            "3": {
+              "name": "entity.name.function.kotodama"
+            }
+          }
+        },
+        {
+          "match": "\\b(register_trigger|trigger)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.trigger.kotodama"
+            },
+            "2": {
+              "name": "entity.name.function.trigger.kotodama"
+            }
+          }
+        },
+        {
+          "match": "\\b(hajimari|始まり|kaizen|改善)\\b",
+          "name": "keyword.declaration.lifecycle.kotodama"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.raw.bytes.kotodama",
+          "begin": "\\b(?:rb|br)(#{0,16})\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.kotodama"
+            }
+          },
+          "end": "\"\\1",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.kotodama"
+            }
+          }
+        },
+        {
+          "name": "string.quoted.double.raw.kotodama",
+          "begin": "\\br(#{0,16})\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.kotodama"
+            }
+          },
+          "end": "\"\\1",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.kotodama"
+            }
+          }
+        },
+        {
+          "name": "string.quoted.double.bytes.kotodama",
+          "begin": "\\bb\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.kotodama"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.kotodama"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\(?:[nrt0\"\\\\]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f_]+\\})",
+              "name": "constant.character.escape.kotodama"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.kotodama",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.kotodama"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.kotodama"
+            }
+          },
+          "patterns": [
+            {
+              "match": "\\\\(?:[nrt0\"\\\\]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f_]+\\})",
+              "name": "constant.character.escape.kotodama"
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "match": "\\b0[xX][0-9A-Fa-f_]+\\b",
+          "name": "constant.numeric.integer.hexadecimal.kotodama"
+        },
+        {
+          "match": "\\b0[bB][01_]+\\b",
+          "name": "constant.numeric.integer.binary.kotodama"
+        },
+        {
+          "match": "\\b\\d(?:[\\d_]*\\d)?\\.\\d(?:[\\d_]*\\d)?\\b",
+          "name": "constant.numeric.float.decimal.kotodama"
+        },
+        {
+          "match": "\\b\\d(?:[\\d_]*\\d)?\\b",
+          "name": "constant.numeric.integer.decimal.kotodama"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "match": "\\b(?:int|bool|string|bytes|Blob|Json|Name|AccountId|AssetDefinitionId|AssetId|DomainId|NftId|Map|Amount|Balance|fixed_u128)\\b",
+          "name": "storage.type.kotodama"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(?:seiyaku|誓約|hajimari|始まり|kotoage|言挙げ|kaizen|改善|view|state|struct|fn|let|mut|const|return|if|else|while|for|in|break|continue|permission|call|meta|kotoba|register_trigger|trigger|on|time|pre_commit|schedule|execute|data|any|pipeline|transaction|block|merge|witness|repeats|authority|metadata|this)\\b",
+          "name": "keyword.control.kotodama"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "match": "\\b(?:assert|assert_eq|contains|get_or_insert_default|transfer_asset|mint_asset|burn_asset|subscription_bill|execute_instruction|execute_query|create_trigger|register_trigger|unregister_trigger|remove_trigger|authority|account_id|asset_definition|asset_id|domain|domain_id|name|json|nft_id|norito_bytes|blob|isqrt|info|zk_vote_verify_ballot|zk_verify_unshield|build_submit_ballot_inline|build_unshield_inline)\\b!?",
+          "name": "support.function.kotodama"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "match": "\\b(?:true|false)\\b",
+          "name": "constant.language.boolean.kotodama"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "match": "\\+\\+|\\+=|-=|\\*=|/=|%=|==|!=|<=|>=|&&|\\|\\||->|<<=|>>=|<<|>>|[+\\-*/%=&|^~!<>?:]",
+          "name": "keyword.operator.kotodama"
+        },
+        {
+          "match": "[(){}\\[\\],.;]",
+          "name": "punctuation.separator.kotodama"
+        }
+      ]
+    }
+  },
+  "uuid": "5d167a6a-57c4-468a-9b82-564f4aacb42b"
+}

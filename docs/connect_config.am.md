@@ -32,7 +32,7 @@ Iroha I18NT0000002X አማራጭ የWalletConnect-style WebSocket የመጨረ�
 - `CONNECT_DEDUPE_CAP` (ተጠቀም፣ ነባሪ፡ `8192`)
 - `CONNECT_RELAY_ENABLED` (ቦል፣ ነባሪ፡ `true`)
 - `CONNECT_RELAY_STRATEGY` (ሕብረቁምፊ፡ ነባሪ፡ `"broadcast"`)
-- `CONNECT_P2P_TTL_HOPS` (u8፤ ነባሪ፡ `0`)
+- `CONNECT_P2P_TTL_HOPS` (u8፤ ነባሪ፡ `8`)
 
 ማስታወሻዎች፡-
 

@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 アカウント `$ADMIN_ACCOUNT` `$RECEIVER_ACCOUNT` アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント ID アカウント IDやあデフォルトバンドル پہلے ہی デモキー سے اخذ کیے گئے دو アカウント شامل کرتا ہے:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 アカウントの数:
@@ -46,7 +46,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # wonderland کے اندر accounts (ضرورت ہو تو --limit بڑھائیں)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # وہ asset definitions جو پہلے سے موجود ہیں
@@ -61,14 +61,14 @@ Norito でバックアップされた応答 フィルタリング ページネ�
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI が送信したトランザクション ハッシュ (مثلاً `0x5f…`) پرنٹ کرتا ہے۔ステータス クエリ ステータス クエリ ステータス ステータス
 
 ## 3. 単位ミント کریں
 
-資産数量 `(asset definition, account)` جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` 価 `coffee#wonderland` 250 単位ミント:
+資産数量 `(asset definition, account)` جوڑے کے تحت رہتی ہیں۔ `$ADMIN_ACCOUNT` 価 `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` 250 単位ミント:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

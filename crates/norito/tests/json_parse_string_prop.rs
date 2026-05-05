@@ -1,17 +1,26 @@
 #![cfg(feature = "json")]
-//! Property test: `Parser::parse_string` roundtrips strings quoted with Norito helpers.
+//! Deterministic tests for `Parser::parse_string`.
 
 use norito::json::{Parser, write_json_string};
-use proptest::prelude::*;
 
-proptest! {
-    #![proptest_config(ProptestConfig { cases: 32, .. ProptestConfig::default() })]
-    #[test]
-    fn parser_parse_string_matches_serde(ref s in "(?s).{0,64}") {
+#[test]
+fn parser_parse_string_matches_quoted_input() {
+    let cases = [
+        "",
+        "plain",
+        "\"quoted\"",
+        "slash\\slash",
+        "line\nbreak",
+        "tab\tchar",
+        "emoji 😀",
+        "cuneiform 𒀭",
+    ];
+
+    for value in cases {
         let mut quoted = String::new();
-        write_json_string(s.as_str(), &mut quoted);
-        let mut p = Parser::new(&quoted);
-        let got = p.parse_string().expect("parse string");
-        prop_assert_eq!(got, s.as_str());
+        write_json_string(value, &mut quoted);
+        let mut parser = Parser::new(&quoted);
+        let got = parser.parse_string().expect("parse string");
+        assert_eq!(got, value);
     }
 }

@@ -1,0 +1,144 @@
+package org.hyperledger.iroha.android.model.instructions;
+
+import java.util.Objects;
+import org.hyperledger.iroha.android.client.IdentifierReceiptCanonicalEncoder;
+import org.hyperledger.iroha.android.client.IdentifierResolutionReceipt;
+import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.norito.NoritoCodec;
+import org.hyperledger.iroha.norito.NoritoEncoder;
+import org.hyperledger.iroha.norito.NoritoHeader;
+import org.hyperledger.iroha.norito.TypeAdapter;
+
+/**
+ * Encodes {@code ClaimIdentifier} instructions in wire-framed Norito format.
+ *
+ * <p>The Torii identifier endpoints expose canonical {@code payload} plus {@code attestation}
+ * receipts, so the encoder derives the canonical payload bytes and writes the explicit attestation.
+ */
+public final class ClaimIdentifierWirePayloadEncoder {
+
+  public static final String WIRE_NAME = "identity::ClaimIdentifier";
+
+  private static final String SCHEMA_PATH = "iroha_data_model::isi::identifier::ClaimIdentifier";
+
+  private ClaimIdentifierWirePayloadEncoder() {}
+
+  /**
+   * Encodes a signed {@code ClaimIdentifier} instruction as a wire-framed {@link InstructionBox}.
+   */
+  public static InstructionBox encode(
+      final String accountId, final IdentifierResolutionReceipt receipt) {
+    Objects.requireNonNull(accountId, "accountId");
+    Objects.requireNonNull(receipt, "receipt");
+    final String normalizedAccountId = requireNonBlank(accountId, "accountId");
+    final String receiptAccountId = requireNonBlank(receipt.accountId(), "receipt.accountId");
+    if (!normalizedAccountId.equals(receiptAccountId)) {
+      throw new IllegalArgumentException(
+          "ClaimIdentifier accountId must match receipt.accountId");
+    }
+    final byte[] accountPayload =
+        TransferWirePayloadEncoder.encodeAccountIdPayload(normalizedAccountId);
+    final byte[] receiptPayload = IdentifierReceiptCanonicalEncoder.encodePayload(receipt.payload());
+    final byte[] attestationPayload =
+        IdentifierReceiptCanonicalEncoder.encodeAttestation(receipt.attestation());
+    final byte[] wirePayload =
+        NoritoCodec.encode(
+            new ClaimIdentifierPayload(accountPayload, receiptPayload, attestationPayload),
+            SCHEMA_PATH,
+            new ClaimIdentifierPayloadAdapter());
+    return InstructionBox.fromWirePayload(WIRE_NAME, wirePayload);
+  }
+
+  private static final class ClaimIdentifierPayload {
+    private final byte[] accountPayload;
+    private final byte[] receiptPayload;
+    private final byte[] attestationPayload;
+
+    private ClaimIdentifierPayload(
+        final byte[] accountPayload, final byte[] receiptPayload, final byte[] attestationPayload) {
+      this.accountPayload = accountPayload.clone();
+      this.receiptPayload = receiptPayload.clone();
+      this.attestationPayload = attestationPayload.clone();
+    }
+  }
+
+  private static final class ClaimIdentifierPayloadAdapter
+      implements TypeAdapter<ClaimIdentifierPayload> {
+    private static final TypeAdapter<byte[]> PASSTHROUGH_ADAPTER = new PassthroughBytesAdapter();
+    private static final TypeAdapter<ReceiptPayload> RECEIPT_ADAPTER = new ReceiptPayloadAdapter();
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final ClaimIdentifierPayload value) {
+      encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.accountPayload);
+      encodeSizedField(
+          encoder,
+          RECEIPT_ADAPTER,
+          new ReceiptPayload(value.receiptPayload, value.attestationPayload));
+    }
+
+    @Override
+    public ClaimIdentifierPayload decode(
+        final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
+      throw new UnsupportedOperationException("Decoding ClaimIdentifier is not supported");
+    }
+  }
+
+  private static final class ReceiptPayload {
+    private final byte[] payloadBytes;
+    private final byte[] attestationBytes;
+
+    private ReceiptPayload(final byte[] payloadBytes, final byte[] attestationBytes) {
+      this.payloadBytes = payloadBytes.clone();
+      this.attestationBytes = attestationBytes.clone();
+    }
+  }
+
+  private static final class ReceiptPayloadAdapter implements TypeAdapter<ReceiptPayload> {
+    private static final TypeAdapter<byte[]> PASSTHROUGH_ADAPTER = new PassthroughBytesAdapter();
+
+    @Override
+    public void encode(final NoritoEncoder encoder, final ReceiptPayload value) {
+      encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.payloadBytes);
+      encodeSizedField(encoder, PASSTHROUGH_ADAPTER, value.attestationBytes);
+    }
+
+    @Override
+    public ReceiptPayload decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
+      throw new UnsupportedOperationException("Decoding identifier receipts is not supported");
+    }
+  }
+
+  private static final class PassthroughBytesAdapter implements TypeAdapter<byte[]> {
+    @Override
+    public void encode(final NoritoEncoder encoder, final byte[] value) {
+      if (value == null || value.length == 0) {
+        throw new IllegalArgumentException("payload bytes must not be empty");
+      }
+      encoder.writeBytes(value);
+    }
+
+    @Override
+    public byte[] decode(final org.hyperledger.iroha.norito.NoritoDecoder decoder) {
+      throw new UnsupportedOperationException("Decoding passthrough payloads is not supported");
+    }
+  }
+
+  private static <T> void encodeSizedField(
+      final NoritoEncoder encoder, final TypeAdapter<T> adapter, final T value) {
+    final NoritoEncoder child = encoder.childEncoder();
+    adapter.encode(child, value);
+    final byte[] payload = child.toByteArray();
+    final boolean compact = (encoder.flags() & NoritoHeader.COMPACT_LEN) != 0;
+    encoder.writeLength(payload.length, compact);
+    encoder.writeBytes(payload);
+  }
+
+  private static String requireNonBlank(final String value, final String field) {
+    final String trimmed = value == null ? "" : value.trim();
+    if (trimmed.isEmpty()) {
+      throw new IllegalArgumentException(field + " must not be blank");
+    }
+    return trimmed;
+  }
+
+}

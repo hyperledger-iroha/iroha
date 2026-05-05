@@ -10,7 +10,7 @@ public final class OkHttpTransportExecutorFactory {
   private OkHttpTransportExecutorFactory() {}
 
   public static HttpTransportExecutor createDefault() {
-    return create(OkHttpClientProvider.shared());
+    return OkHttpTransportExecutor.shared(OkHttpClientProvider.shared());
   }
 
   public static HttpTransportExecutor create(final OkHttpClient client) {

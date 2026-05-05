@@ -1,6 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #[path = "./common.rs"]
-mod common;
+pub(crate) mod common;
 
 use std::sync::Arc;
 
@@ -8,6 +8,7 @@ use common::*;
 use iroha_core::{
     block::CommittedBlock, prelude::*, state::State, sumeragi::network_topology::Topology,
 };
+use iroha_crypto::Algorithm;
 use iroha_data_model::peer::PeerId;
 use iroha_test_samples::gen_account_in;
 
@@ -30,11 +31,13 @@ impl StateApplyBlocks {
         let assets_per_domain = 100;
         let (domain_ids, account_ids, asset_definition_ids) =
             generate_ids(domains, accounts_per_domain, assets_per_domain);
-        let (peer_public_key, peer_private_key) = KeyPair::random().into_parts();
+        let (peer_public_key, peer_private_key) =
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal).into_parts();
         let peer_id = PeerId::new(peer_public_key);
         let topology = Topology::new(vec![peer_id]);
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let state = build_state(rt, &alice_id, alice_keypair.private_key());
+        let mut state = build_state(rt, &alice_id, alice_keypair.private_key());
+        seed_domain_name_leases(&mut state, &domain_ids, &alice_id);
 
         let nth = 10;
         let instructions = [
@@ -45,7 +48,8 @@ impl StateApplyBlocks {
 
         let blocks = {
             // Create empty state because it will be changed during creation of block
-            let state = build_state(rt, &alice_id, alice_keypair.private_key());
+            let mut state = build_state(rt, &alice_id, alice_keypair.private_key());
+            seed_domain_name_leases(&mut state, &domain_ids, &alice_id);
             instructions
                 .into_iter()
                 .map(|instructions| {

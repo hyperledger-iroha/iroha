@@ -97,7 +97,7 @@ Swift SDK енді арнайы JSON желімінсіз қалқан нұсқ�
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -256,7 +256,7 @@ Swift SDK енді арнайы JSON желімінсіз қалқан нұсқ�
 - Әр шот бойынша кілттерді шығару иерархиясы:
   - `sk_spend` → `nk` (нөлдік кілт), `ivk` (кіріс қарау кілті), `ovk` (шығыс қарау кілті), `fvk`.
 - Шифрланған жазбаның пайдалы жүктемелері ECDH-дан алынған ортақ кілттермен AEAD пайдаланады; қосымша аудиторлық көрініс кілттері әр актив саясатының шығыстарына тіркелуі мүмкін.
-- CLI толықтырулары: `confidential create-keys`, `confidential send`, `confidential export-view-key`, жазбалардың шифрын шешуге арналған аудиторлық құрал және Kotodama желіден тыс конверттерін жасауға/тексеруге арналған `iroha app zk envelope` көмекшісі. Torii `POST /v1/confidential/derive-keyset` арқылы бірдей туынды ағынын көрсетеді, он алтылық және базалық64 пішіндерді қайтарады, осылайша әмияндар негізгі иерархияларды бағдарламалық жолмен ала алады.
+- CLI толықтырулары: `confidential create-keys`, `confidential send`, `confidential export-view-key`, жазбалардың шифрын шешуге арналған аудиторлық құрал және Kotodama желіден тыс конверттерін жасауға/тексеруге арналған `iroha app zk envelope` көмекшісі.
 
 ## Газ, шектеулер және DoS басқару элементтері
 - Газдың анықтау кестесі:

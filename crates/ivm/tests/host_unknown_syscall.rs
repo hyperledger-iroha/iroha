@@ -12,8 +12,8 @@ use ivm::{
 fn default_host_unknown_syscall_returns_unknown() {
     let mut vm = IVM::new(1000);
     let mut host = DefaultHost::new();
-    match host.syscall(0xAB, &mut vm) {
-        Err(VMError::UnknownSyscall(n)) => assert_eq!(n, 0xAB),
+    match host.syscall(0xDF, &mut vm) {
+        Err(VMError::UnknownSyscall(n)) => assert_eq!(n, 0xDF),
         other => panic!("expected UnknownSyscall, got {other:?}"),
     }
 }
@@ -100,7 +100,7 @@ fn default_host_axt_syscalls_handle_valid_sequence() {
     let handle = AssetHandle {
         scope: vec!["transfer".into()],
         subject: HandleSubject {
-            account: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
+            account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
@@ -128,8 +128,8 @@ fn default_host_axt_syscalls_handle_valid_sequence() {
         asset_dsid: dsid,
         op: SpendOp {
             kind: "transfer".into(),
-            from: "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn".into(),
-            to: "6cmzPVPX9kfstQrDUzLeKhz2tFm692aWdFHzkfmj9dSADyNEH6VjYkH".into(),
+            from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
             amount: "100".into(),
         },
     };

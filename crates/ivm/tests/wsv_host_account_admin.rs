@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use iroha_crypto::{Hash, PublicKey};
 use ivm::{
     IVM, Memory, PointerType,
-    mock_wsv::{DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 use norito::to_bytes;
@@ -29,15 +29,26 @@ fn make_domain_tlv(name: &str) -> Vec<u8> {
     make_tlv(PointerType::DomainId, name.as_bytes())
 }
 
-fn make_account_tlv(account: &ScopedAccountId) -> Vec<u8> {
-    let payload = to_bytes(account).expect("encode account into Norito");
-    make_tlv(PointerType::AccountId, &payload)
+fn make_account_tlv(account: &AccountId) -> Vec<u8> {
+    let account = account.to_string();
+    make_tlv(PointerType::AccountId, account.as_bytes())
 }
 
-fn account(domain: &str, public_key: &str) -> ScopedAccountId {
-    let domain: DomainId = domain.parse().unwrap();
+fn make_account_norito_tlv(account: &AccountId) -> Vec<u8> {
+    let payload = to_bytes(account).expect("encode account into Norito");
+    let mut out = Vec::with_capacity(7 + payload.len() + 32);
+    out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload.as_ref());
+    let h: [u8; 32] = Hash::new(&payload).into();
+    out.extend_from_slice(&h);
+    out
+}
+
+fn account(_domain: &str, public_key: &str) -> AccountId {
     let public_key: PublicKey = public_key.parse().unwrap();
-    ScopedAccountId::new(domain, public_key)
+    AccountId::new(public_key)
 }
 
 fn load_and_run(vm: &mut IVM, program: &[u8]) -> Result<(), ivm::VMError> {
@@ -55,11 +66,7 @@ fn add_signatory_syscall_updates_account() {
 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(256);
     vm.set_host(host);
 
@@ -91,11 +98,7 @@ fn remove_signatory_syscall_updates_account() {
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
     assert!(wsv.add_signatory(&alice, &alice, signatory_key.to_string()));
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(256);
     vm.set_host(host);
 
@@ -125,11 +128,7 @@ fn set_account_quorum_syscall_updates_account() {
 
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(256);
     vm.set_host(host);
 
@@ -160,11 +159,7 @@ fn set_account_detail_with_permissions() {
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     wsv.grant_permission(&alice, PermissionToken::RegisterAccount);
 
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(256);
     vm.set_host(host);
 
@@ -175,8 +170,10 @@ fn set_account_detail_with_permissions() {
     let reg_domain = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_DOMAIN as u8]);
     load_and_run(&mut vm, &reg_domain).expect("register domain");
 
-    let acct = make_account_tlv(&bob);
-    vm.memory.preload_input(0, &acct).expect("preload input");
+    let reg_acct = make_account_norito_tlv(&bob);
+    vm.memory
+        .preload_input(0, &reg_acct)
+        .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let reg_account = assemble_syscalls(&[syscalls::SYSCALL_REGISTER_ACCOUNT as u8]);
     load_and_run(&mut vm, &reg_account).expect("register account");
@@ -185,10 +182,8 @@ fn set_account_detail_with_permissions() {
     {
         let host_any = vm.host_mut_any().unwrap();
         let host = host_any.downcast_mut::<WsvHost>().expect("WsvHost");
-        host.wsv.grant_permission(
-            &alice,
-            PermissionToken::SetAccountDetail(ivm::mock_wsv::AccountId::from(&bob)),
-        );
+        host.wsv
+            .grant_permission(&alice, PermissionToken::SetAccountDetail(bob.clone()));
     }
 
     // Set account detail with JSON value (whitespace should be stripped)
@@ -197,6 +192,7 @@ fn set_account_detail_with_permissions() {
         PointerType::Json,
         br#"{ "msg" : "hello" }"#, // intentionally non-minified
     );
+    let acct = make_account_tlv(&bob);
     vm.memory.preload_input(0, &acct).expect("preload input");
     vm.memory
         .preload_input(acct.len() as u64 + 8, &key)

@@ -24,7 +24,7 @@ use iroha_crypto::KeyPair;
 use iroha_data_model::{
     isi::{
         InstructionBox,
-        prelude::{Mint, SetKeyValue, Transfer},
+        prelude::{Mint, Register, SetKeyValue, Transfer},
     },
     metadata::Metadata,
     nexus::{
@@ -41,9 +41,16 @@ use tokio::sync::broadcast;
 
 const TEST_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 
+fn disable_nexus_fee_admission(nexus: &mut Nexus) {
+    nexus.fees.base_fee = Numeric::zero();
+    nexus.fees.per_byte_fee = Numeric::zero();
+    nexus.fees.per_instruction_fee = Numeric::zero();
+    nexus.fees.per_gas_unit_fee = Numeric::zero();
+}
+
 fn build_world(authority: &AccountId, domain_id: &DomainId) -> World {
     let domain = Domain::new(domain_id.clone()).build(authority);
-    let account = Account::new(authority.to_account_id(domain_id.clone())).build(authority);
+    let account = Account::new(authority.clone()).build(authority);
     let asset_definition_id = AssetDefinitionId::new(domain_id.clone(), "xor".parse().unwrap());
     let asset_definition = {
         let __asset_definition_id = asset_definition_id;
@@ -85,7 +92,7 @@ fn build_transaction(
 fn queue_teu_backlog_matches_metering() -> Result<()> {
     let chain_id = ChainId::from(TEST_CHAIN_ID);
     let (account_id, keypair) = gen_account_in("wonderland");
-    let wonderland_domain: DomainId = "wonderland".parse().unwrap();
+    let wonderland_domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let world = build_world(&account_id, &wonderland_domain);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query_store = iroha_core::query::store::LiveQueryStore::start_test();
@@ -166,7 +173,7 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
     }
 
     let lane_label = LaneId::SINGLE.as_u32().to_string();
-    let dataspace_label = DataSpaceId::GLOBAL.as_u64().to_string();
+    let dataspace_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
 
     let backlog = metrics
         .nexus_scheduler_dataspace_teu_backlog
@@ -201,16 +208,14 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     let chain_id = ChainId::from(TEST_CHAIN_ID);
     let (lane0_account, lane0_keypair) = gen_account_in("nexus");
     let (lane1_account, lane1_keypair) = gen_account_in("nexus_alt");
-    let lane0_domain_id: DomainId = "nexus".parse().unwrap();
-    let lane1_domain_id: DomainId = "nexus_alt".parse().unwrap();
+    let lane0_domain_id: DomainId = DomainId::try_new("nexus", "universal").unwrap();
+    let lane1_domain_id: DomainId = DomainId::try_new("nexus_alt", "universal").unwrap();
 
     // Assemble world with both authorities registered.
     let domain0: Domain = Domain::new(lane0_domain_id.clone()).build(&lane0_account);
     let domain1: Domain = Domain::new(lane1_domain_id.clone()).build(&lane1_account);
-    let account0 =
-        Account::new(lane0_account.to_account_id(lane0_domain_id.clone())).build(&lane0_account);
-    let account1 =
-        Account::new(lane1_account.to_account_id(lane1_domain_id.clone())).build(&lane1_account);
+    let account0 = Account::new(lane0_account.clone()).build(&lane0_account);
+    let account1 = Account::new(lane1_account.clone()).build(&lane1_account);
     let world = World::with(
         [domain0, domain1],
         [account0, account1],
@@ -231,7 +236,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     );
     let lane0 = LaneConfig {
         id: LaneId::new(0),
-        dataspace_id: DataSpaceId::GLOBAL,
+        dataspace_id: DataSpaceId::UNIVERSAL,
         alias: "public".to_string(),
         description: Some("Public execution lane".to_string()),
         visibility: LaneVisibility::Public,
@@ -276,7 +281,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
 
     let routing_policy = LaneRoutingPolicy {
         default_lane: LaneId::new(0),
-        default_dataspace: DataSpaceId::GLOBAL,
+        default_dataspace: DataSpaceId::UNIVERSAL,
         rules: vec![LaneRoutingRule {
             lane: LaneId::new(1),
             dataspace: Some(DataSpaceId::new(1)),
@@ -295,6 +300,8 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         routing_policy: routing_policy.clone(),
         ..Nexus::default()
     };
+    let mut nexus = nexus;
+    disable_nexus_fee_admission(&mut nexus);
 
     let queue_limits = QueueLimits::from_nexus(&nexus);
 
@@ -370,7 +377,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
 
     let lane0_label = LaneId::new(0).as_u32().to_string();
     let lane1_label = LaneId::new(1).as_u32().to_string();
-    let dataspace0_label = DataSpaceId::GLOBAL.as_u64().to_string();
+    let dataspace0_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
     let dataspace1_label = DataSpaceId::new(1).as_u64().to_string();
 
     let backlog_lane0 = metrics
@@ -409,7 +416,7 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     }
     assert!(lanes_seen.contains(&LaneId::new(0)));
     assert!(lanes_seen.contains(&LaneId::new(1)));
-    assert!(dataspaces_seen.contains(&DataSpaceId::GLOBAL));
+    assert!(dataspaces_seen.contains(&DataSpaceId::UNIVERSAL));
     assert!(dataspaces_seen.contains(&DataSpaceId::new(1)));
 
     drop(guards);
@@ -440,15 +447,13 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
     let chain_id = ChainId::from(TEST_CHAIN_ID);
     let (fallback_account, fallback_keypair) = gen_account_in("fallback");
     let (routed_account, routed_keypair) = gen_account_in("routed");
-    let fallback_domain_id: DomainId = "fallback".parse().unwrap();
-    let routed_domain_id: DomainId = "routed".parse().unwrap();
+    let fallback_domain_id: DomainId = DomainId::try_new("fallback", "universal").unwrap();
+    let routed_domain_id: DomainId = DomainId::try_new("routed", "universal").unwrap();
 
     let domain_fallback: Domain = Domain::new(fallback_domain_id.clone()).build(&fallback_account);
     let domain_routed: Domain = Domain::new(routed_domain_id.clone()).build(&routed_account);
-    let account_fallback = Account::new(fallback_account.to_account_id(fallback_domain_id.clone()))
-        .build(&fallback_account);
-    let account_routed =
-        Account::new(routed_account.to_account_id(routed_domain_id.clone())).build(&routed_account);
+    let account_fallback = Account::new(fallback_account.clone()).build(&fallback_account);
+    let account_routed = Account::new(routed_account.clone()).build(&routed_account);
     let world = World::with(
         [domain_fallback, domain_routed],
         [account_fallback, account_routed],
@@ -469,7 +474,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
     );
     let lane0 = LaneConfig {
         id: LaneId::new(0),
-        dataspace_id: DataSpaceId::GLOBAL,
+        dataspace_id: DataSpaceId::UNIVERSAL,
         alias: "rule-lane".to_string(),
         description: Some("Routed lane".to_string()),
         visibility: LaneVisibility::Public,
@@ -516,7 +521,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         default_dataspace: DataSpaceId::new(1),
         rules: vec![LaneRoutingRule {
             lane: LaneId::new(0),
-            dataspace: Some(DataSpaceId::GLOBAL),
+            dataspace: Some(DataSpaceId::UNIVERSAL),
             matcher: LaneRoutingMatcher {
                 account: Some(routed_account.to_string()),
                 instruction: None,
@@ -532,6 +537,8 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         routing_policy: routing_policy.clone(),
         ..Nexus::default()
     };
+    let mut nexus = nexus;
+    disable_nexus_fee_admission(&mut nexus);
 
     let queue_limits = QueueLimits::from_nexus(&nexus);
 
@@ -566,11 +573,10 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         "key_routed".parse().unwrap(),
         Json::new("value_routed"),
     ));
-    let fallback_instr = InstructionBox::from(SetKeyValue::account(
+    let fallback_instr = InstructionBox::from(Register::role(Role::new(
+        "scheduler_default_lane_role".parse().unwrap(),
         fallback_account.clone(),
-        "key_fallback".parse().unwrap(),
-        Json::new("value_fallback"),
-    ));
+    )));
 
     let routed_teu = gas::meter_instructions(std::slice::from_ref(&routed_instr));
     let fallback_teu = gas::meter_instructions(std::slice::from_ref(&fallback_instr));
@@ -600,7 +606,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
 
     let lane0_label = LaneId::new(0).as_u32().to_string();
     let lane1_label = LaneId::new(1).as_u32().to_string();
-    let dataspace0_label = DataSpaceId::GLOBAL.as_u64().to_string();
+    let dataspace0_label = DataSpaceId::UNIVERSAL.as_u64().to_string();
     let dataspace1_label = DataSpaceId::new(1).as_u64().to_string();
 
     let backlog_lane0 = metrics
@@ -638,7 +644,7 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         "default dataspace should be used for fallback"
     );
     assert!(
-        dataspaces_seen.contains(&DataSpaceId::GLOBAL),
+        dataspaces_seen.contains(&DataSpaceId::UNIVERSAL),
         "explicit rule should keep its dataspace"
     );
 

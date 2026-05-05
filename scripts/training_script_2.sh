@@ -16,13 +16,27 @@ Options:
   --base-p2p-port <P>   Base P2P port (default: 33337)
   --auto-ports          Auto-advance base ports if the range is already in use
   --profile <NAME>      Cargo profile: release or debug (default: release)
+  --target-dir <DIR>    Set CARGO_TARGET_DIR for builds and binary lookup
+  --fast                Run cargo via scripts/cargo_fast.sh when available
+  --fast-zero-debug     With --fast, set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
+  --fast-no-incremental With --fast, set CARGO_INCREMENTAL=0
   --no-build            Skip cargo build (assumes binaries already exist)
+  --reuse-run-dir       Reuse an existing generated run-N directory instead of regenerating it with kagami
   --force               Remove existing run directories under --out-dir
   --ready-timeout <S>   Seconds to wait for /status (default: 30)
   --height-timeout <S>  Seconds to wait for block height targets (default: 30)
   --stall-threshold <S> Seconds to flag slow block cadence (default: 40)
   -h, --help            Show this help
 EOF
+}
+
+require_option_value() {
+  local flag="$1"
+  local value="${2-}"
+  if [[ -z "$value" ]] || [[ "$value" == --* ]]; then
+    echo "Missing value for ${flag}" >&2
+    exit 2
+  fi
 }
 
 RUNS=1
@@ -33,6 +47,7 @@ BASE_API_PORT=29080
 BASE_P2P_PORT=33337
 PROFILE="release"
 DO_BUILD=true
+REUSE_RUN_DIR=false
 READY_TIMEOUT=30
 HEIGHT_TIMEOUT=30
 FORCE=false
@@ -40,6 +55,11 @@ AUTO_PORTS=false
 STALL_THRESHOLD=40
 PUBLIC_HOST="127.0.0.1"
 BIND_HOST="127.0.0.1"
+TRAINING_ASSET_DEFINITION_ID="7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+TARGET_DIR=""
+USE_CARGO_FAST=false
+FAST_ZERO_DEBUG=false
+FAST_NO_INCREMENTAL=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -75,8 +95,29 @@ while [[ $# -gt 0 ]]; do
       PROFILE="$2"
       shift 2
       ;;
+    --target-dir)
+      require_option_value "--target-dir" "${2-}"
+      TARGET_DIR="$2"
+      shift 2
+      ;;
+    --fast)
+      USE_CARGO_FAST=true
+      shift
+      ;;
+    --fast-zero-debug)
+      FAST_ZERO_DEBUG=true
+      shift
+      ;;
+    --fast-no-incremental)
+      FAST_NO_INCREMENTAL=true
+      shift
+      ;;
     --no-build)
       DO_BUILD=false
+      shift
+      ;;
+    --reuse-run-dir)
+      REUSE_RUN_DIR=true
       shift
       ;;
     --force)
@@ -110,6 +151,21 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+resolve_dir() {
+  local path="$1"
+  local candidate
+  if [[ "${path}" = /* ]]; then
+    candidate="${path}"
+  else
+    candidate="${REPO_ROOT}/${path}"
+  fi
+  mkdir -p "${candidate}"
+  (
+    cd "${candidate}"
+    pwd
+  )
+}
+
 if [[ "$PROFILE" != "release" && "$PROFILE" != "debug" ]]; then
   echo "Invalid --profile: $PROFILE (expected release or debug)" >&2
   exit 2
@@ -122,39 +178,225 @@ for cmd in cargo curl python3 rg; do
   fi
 done
 
+cargo_runner=(cargo)
+if [[ "$USE_CARGO_FAST" == true ]]; then
+  cargo_fast_script="${REPO_ROOT}/scripts/cargo_fast.sh"
+  if [[ ! -x "${cargo_fast_script}" ]]; then
+    echo "scripts/cargo_fast.sh is not available or not executable" >&2
+    exit 2
+  fi
+  cargo_runner=("${cargo_fast_script}")
+  if [[ "$FAST_ZERO_DEBUG" == true ]]; then
+    cargo_runner+=("--zero-debug")
+  fi
+  if [[ "$FAST_NO_INCREMENTAL" == true ]]; then
+    cargo_runner+=("--no-incremental")
+  fi
+  echo "[training-script-2] using scripts/cargo_fast.sh for cargo commands"
+elif [[ "$FAST_ZERO_DEBUG" == true || "$FAST_NO_INCREMENTAL" == true ]]; then
+  echo "--fast-zero-debug and --fast-no-incremental require --fast" >&2
+  exit 2
+fi
+
+if [[ -n "${TARGET_DIR}" ]]; then
+  export CARGO_TARGET_DIR="$(resolve_dir "${TARGET_DIR}")"
+fi
+TARGET_DIR="$(resolve_dir "${CARGO_TARGET_DIR:-target}")"
+export CARGO_TARGET_DIR="${TARGET_DIR}"
+
 if [[ "$DO_BUILD" == true ]]; then
   echo "Building kagami/irohad/iroha ($PROFILE)..."
   if [[ "$PROFILE" == "release" ]]; then
-    cargo build --release --bin kagami --bin irohad --bin iroha
+    (cd "$REPO_ROOT" && "${cargo_runner[@]}" -- build --release --bin kagami --bin irohad --bin iroha)
   else
-    cargo build --bin kagami --bin irohad --bin iroha
+    (cd "$REPO_ROOT" && "${cargo_runner[@]}" -- build --bin kagami --bin irohad --bin iroha)
   fi
 fi
 
-TARGET_DIR="${CARGO_TARGET_DIR:-"$REPO_ROOT/target"}"
-if [[ "$TARGET_DIR" != /* ]]; then
-  TARGET_DIR="$REPO_ROOT/$TARGET_DIR"
+default_kagami_bin="$TARGET_DIR/$PROFILE/kagami"
+if [[ -n "${KAGAMI_BIN:-}" ]]; then
+  if [[ ! -x "$KAGAMI_BIN" ]]; then
+    echo "Missing binary: $KAGAMI_BIN" >&2
+    exit 1
+  fi
+elif [[ -x "$default_kagami_bin" ]]; then
+  KAGAMI_BIN="$default_kagami_bin"
+else
+  KAGAMI_BIN=""
 fi
 
-KAGAMI_BIN="${KAGAMI_BIN:-"$TARGET_DIR/$PROFILE/kagami"}"
 IROHAD_BIN="${IROHAD_BIN:-"$TARGET_DIR/$PROFILE/irohad"}"
 IROHA_BIN="${IROHA_BIN:-"$TARGET_DIR/$PROFILE/iroha"}"
+PEER_STATUS_NAMES=()
+PEER_STATUS_URLS=()
 
-for bin in "$KAGAMI_BIN" "$IROHAD_BIN" "$IROHA_BIN"; do
+for bin in "$IROHAD_BIN" "$IROHA_BIN"; do
   if [[ ! -x "$bin" ]]; then
     echo "Missing binary: $bin" >&2
     exit 1
   fi
 done
 
-status_url() {
-  printf 'http://%s:%s/status' "$BIND_HOST" "$BASE_API_PORT"
+read_toml_section_string() {
+  local section="$1"
+  local key="$2"
+  local path="$3"
+  python3 - "$section" "$key" "$path" <<'PY'
+import re
+import sys
+
+section = sys.argv[1]
+key = sys.argv[2]
+path = sys.argv[3]
+text = open(path, encoding="utf-8").read()
+section_pattern = rf'(?ms)^\[{re.escape(section)}\]\s*(.*?)(?=^\[|\Z)'
+section_match = re.search(section_pattern, text)
+if not section_match:
+    raise SystemExit(1)
+body = section_match.group(1)
+key_pattern = rf'(?m)^\s*{re.escape(key)}\s*=\s*"([^"]*)"'
+key_match = re.search(key_pattern, body)
+if not key_match:
+    raise SystemExit(1)
+print(key_match.group(1))
+PY
+}
+
+load_peer_status_endpoints() {
+  local run_dir="$1"
+  PEER_STATUS_NAMES=()
+  PEER_STATUS_URLS=()
+
+  local cfg
+  for cfg in "$run_dir"/peer*.toml; do
+    [[ -f "$cfg" ]] || continue
+    local peer_name
+    local torii_address
+    peer_name="$(basename "$cfg" .toml)"
+    if ! torii_address="$(read_toml_section_string "torii" "address" "$cfg")"; then
+      echo "[run $run] failed to resolve [torii].address from $cfg" >&2
+      return 1
+    fi
+    torii_address="${torii_address#addr:}"
+    torii_address="${torii_address%%#*}"
+    PEER_STATUS_NAMES+=("$peer_name")
+    PEER_STATUS_URLS+=("http://${torii_address}/status")
+  done
+
+  if ((${#PEER_STATUS_URLS[@]} == 0)); then
+    echo "[run $run] no peer status endpoints discovered under $run_dir" >&2
+    return 1
+  fi
+}
+
+fetch_status_fields() {
+  local url="$1"
+  local payload
+  payload="$(curl -sf "$url" 2>/dev/null || true)"
+  STATUS_PAYLOAD="$payload" python3 - <<'PY'
+import json
+import os
+import sys
+
+raw = os.environ.get("STATUS_PAYLOAD", "").strip()
+if not raw:
+    raise SystemExit(1)
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    raise SystemExit(1)
+
+def as_int(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+print(
+    as_int(data.get("blocks", data.get("height", 0))),
+    as_int(data.get("queue_size", 0)),
+    as_int(data.get("view_changes", 0)),
+    as_int(data.get("commit_time_ms", 0)),
+)
+PY
+}
+
+peer_status_snapshot() {
+  local all_reachable=true
+  local idx
+  for idx in "${!PEER_STATUS_URLS[@]}"; do
+    local name="${PEER_STATUS_NAMES[$idx]}"
+    local url="${PEER_STATUS_URLS[$idx]}"
+    local fields=""
+    if fields="$(fetch_status_fields "$url")"; then
+      local blocks queue_size view_changes commit_time_ms
+      read -r blocks queue_size view_changes commit_time_ms <<<"$fields"
+      printf '%s|%s|%s|%s|%s|%s\n' \
+        "$name" "$url" "$blocks" "$queue_size" "$view_changes" "$commit_time_ms"
+    else
+      printf '%s|%s|UNREACHABLE|UNREACHABLE|UNREACHABLE|UNREACHABLE\n' "$name" "$url"
+      all_reachable=false
+    fi
+  done
+  [[ "$all_reachable" == true ]]
+}
+
+array_contains() {
+  local needle="$1"
+  shift
+  local candidate
+  for candidate in "$@"; do
+    if [[ "$candidate" == "$needle" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+dump_peer_status_snapshot() {
+  local label="$1"
+  local snapshot
+  snapshot="$(peer_status_snapshot || true)"
+  echo "[run $run] ${label}" >&2
+  while IFS='|' read -r name url blocks queue_size view_changes commit_time_ms; do
+    [[ -n "$name" ]] || continue
+    echo "[run $run] ${name} status url=${url} blocks=${blocks} queue_size=${queue_size} view_changes=${view_changes} commit_time_ms=${commit_time_ms}" >&2
+  done <<<"$snapshot"
 }
 
 wait_for_ready() {
   local deadline=$((SECONDS + READY_TIMEOUT))
+  local seen_names=()
   while ((SECONDS < deadline)); do
-    if curl -sf "$(status_url)" >/dev/null 2>&1; then
+    local snapshot
+    snapshot="$(peer_status_snapshot || true)"
+    local min_height=""
+    local max_height=0
+    local all_reachable=true
+    local ready=false
+    while IFS='|' read -r name _url blocks _queue_size _view_changes _commit_time_ms; do
+      [[ -n "$name" ]] || continue
+      if [[ "$blocks" == "UNREACHABLE" ]]; then
+        all_reachable=false
+        continue
+      fi
+      if ! array_contains "$name" "${seen_names[@]-}"; then
+        seen_names+=("$name")
+      fi
+      if [[ -z "$min_height" || "$blocks" -lt "$min_height" ]]; then
+        min_height="$blocks"
+      fi
+      if [[ "$blocks" -gt "$max_height" ]]; then
+        max_height="$blocks"
+      fi
+    done <<<"$snapshot"
+    if [[ "$all_reachable" == true && ${#seen_names[@]} -eq ${#PEER_STATUS_URLS[@]} && -n "$min_height" ]]; then
+      local spread=$((max_height - min_height))
+      if ((spread <= 1)); then
+        ready=true
+      fi
+    fi
+    if [[ "$ready" == true ]]; then
       return 0
     fi
     sleep 1
@@ -163,67 +405,145 @@ wait_for_ready() {
 }
 
 fetch_height() {
-  local payload
-  payload="$(curl -sf "$(status_url)" 2>/dev/null || true)"
-  STATUS_PAYLOAD="$payload" python3 - <<'PY'
-import json
-import os
-
-raw = os.environ.get("STATUS_PAYLOAD", "").strip()
-if not raw:
-    print(0)
-    raise SystemExit(0)
-try:
-    data = json.loads(raw)
-except json.JSONDecodeError:
-    print(0)
-    raise SystemExit(0)
-height = data.get("blocks", data.get("height", 0))
-print(int(height or 0))
-PY
+  local snapshot
+  snapshot="$(peer_status_snapshot || true)"
+  local max_height=0
+  while IFS='|' read -r _name _url blocks _queue_size _view_changes _commit_time_ms; do
+    [[ "$blocks" =~ ^[0-9]+$ ]] || continue
+    if [[ "$blocks" -gt "$max_height" ]]; then
+      max_height="$blocks"
+    fi
+  done <<<"$snapshot"
+  printf '%s\n' "$max_height"
 }
 
 fetch_commit_time_ms() {
-  local payload
-  payload="$(curl -sf "$(status_url)" 2>/dev/null || true)"
-  STATUS_PAYLOAD="$payload" python3 - <<'PY'
-import json
-import os
-
-raw = os.environ.get("STATUS_PAYLOAD", "").strip()
-if not raw:
-    print(0)
-    raise SystemExit(0)
-try:
-    data = json.loads(raw)
-except json.JSONDecodeError:
-    print(0)
-    raise SystemExit(0)
-value = data.get("commit_time_ms", 0)
-try:
-    print(int(value or 0))
-except (TypeError, ValueError):
-    print(0)
-PY
+  local snapshot
+  snapshot="$(peer_status_snapshot || true)"
+  local max_commit_time_ms=0
+  while IFS='|' read -r _name _url _blocks _queue_size _view_changes commit_time_ms; do
+    [[ "$commit_time_ms" =~ ^[0-9]+$ ]] || continue
+    if [[ "$commit_time_ms" -gt "$max_commit_time_ms" ]]; then
+      max_commit_time_ms="$commit_time_ms"
+    fi
+  done <<<"$snapshot"
+  printf '%s\n' "$max_commit_time_ms"
 }
 
 wait_for_height() {
   local target="$1"
   local start=$SECONDS
   local deadline=$((start + HEIGHT_TIMEOUT))
-  local height=0
   while ((SECONDS < deadline)); do
-    height="$(fetch_height)"
-    if [[ ! "$height" =~ ^[0-9]+$ ]]; then
-      height=0
-    fi
-    if [[ "$height" -ge "$target" ]]; then
+    local snapshot
+    snapshot="$(peer_status_snapshot || true)"
+    local min_height=""
+    local max_height=0
+    local all_reachable=true
+    while IFS='|' read -r _name _url blocks _queue_size _view_changes _commit_time_ms; do
+      [[ -n "$blocks" ]] || continue
+      if [[ "$blocks" == "UNREACHABLE" ]]; then
+        all_reachable=false
+        continue
+      fi
+      if [[ -z "$min_height" || "$blocks" -lt "$min_height" ]]; then
+        min_height="$blocks"
+      fi
+      if [[ "$blocks" -gt "$max_height" ]]; then
+        max_height="$blocks"
+      fi
+    done <<<"$snapshot"
+    if [[ "$all_reachable" == true && -n "$min_height" && "$min_height" -ge "$target" && $((max_height - min_height)) -le 1 ]]; then
       echo "$((SECONDS - start))"
       return 0
     fi
     sleep 1
   done
   return 1
+}
+
+wait_for_reuse_stabilization() {
+  local baseline_height="$1"
+  local deadline=$((SECONDS + HEIGHT_TIMEOUT))
+  local zero_queue_since=0
+  local converged_since=0
+  while ((SECONDS < deadline)); do
+    local snapshot
+    snapshot="$(peer_status_snapshot || true)"
+    local all_reachable=true
+    local all_zero_queue=true
+    local min_height=""
+    local max_height=0
+    while IFS='|' read -r _name _url blocks queue_size _view_changes _commit_time_ms; do
+      [[ -n "$blocks" ]] || continue
+      if [[ "$blocks" == "UNREACHABLE" ]]; then
+        all_reachable=false
+        all_zero_queue=false
+        continue
+      fi
+      if [[ -z "$min_height" || "$blocks" -lt "$min_height" ]]; then
+        min_height="$blocks"
+      fi
+      if [[ "$blocks" -gt "$max_height" ]]; then
+        max_height="$blocks"
+      fi
+      if [[ "$queue_size" != "0" ]]; then
+        all_zero_queue=false
+      fi
+    done <<<"$snapshot"
+    if [[ "$all_reachable" == true && "$max_height" -gt "$baseline_height" ]]; then
+      echo "[run $run] reused network advanced from restart baseline ${baseline_height} to ${max_height}" >&2
+      return 0
+    fi
+    if [[ "$all_reachable" == true && -n "$min_height" && "$min_height" -ge "$baseline_height" && "$min_height" -eq "$max_height" ]]; then
+      if ((converged_since == 0)); then
+        converged_since=$SECONDS
+      elif ((SECONDS - converged_since >= 5)); then
+        echo "[run $run] reused network converged at common height ${max_height}" >&2
+        return 0
+      fi
+    else
+      converged_since=0
+    fi
+    if [[ "$all_reachable" == true && "$all_zero_queue" == true ]]; then
+      if ((zero_queue_since == 0)); then
+        zero_queue_since=$SECONDS
+      elif ((SECONDS - zero_queue_since >= 5)); then
+        echo "[run $run] reused network held queue_size=0 across all peers for 5s at height ${max_height}" >&2
+        return 0
+      fi
+    else
+      zero_queue_since=0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+dump_reuse_stall_diagnostics() {
+  local run_dir="$1"
+  local label="$2"
+  dump_peer_status_snapshot "$label"
+  local pidfile
+  for pidfile in "$run_dir"/peer*.pid; do
+    [[ -f "$pidfile" ]] || continue
+    local pid
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    [[ -n "$pid" ]] || continue
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "[run $run] $(basename "$pidfile") pid=${pid} state=alive" >&2
+    else
+      echo "[run $run] $(basename "$pidfile") pid=${pid} state=stale" >&2
+    fi
+  done
+  local log
+  for log in "$run_dir"/peer*.log; do
+    [[ -f "$log" ]] || continue
+    echo "[run $run] $(basename "$log") recent relevant lines:" >&2
+    if ! rg -n "queue_size|view change|view_changes|timeout|stall|panic|error|warn|availability|RBC|consensus" "$log" | tail -n 20 >&2; then
+      tail -n 20 "$log" >&2 || true
+    fi
+  done
 }
 
 retry_cmd() {
@@ -234,6 +554,44 @@ retry_cmd() {
   local attempt=1
   while true; do
     if "$@"; then
+      return 0
+    fi
+    if [[ "$attempt" -ge "$attempts" ]]; then
+      echo "[run $run] ${label} failed after ${attempts} attempts"
+      return 1
+    fi
+    echo "[run $run] ${label} attempt ${attempt}/${attempts} failed; retrying..."
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
+}
+
+already_exists_output() {
+  local output="$1"
+  [[ "$output" == *"Repeated instruction: Repetition of \`Register\`"* ]] || [[ "$output" == *" already exists"* ]]
+}
+
+retry_cmd_allow_existing() {
+  local allow_existing="$1"
+  local label="$2"
+  local attempts="$3"
+  local delay="$4"
+  shift 4
+  local attempt=1
+  local output=""
+  while true; do
+    output=""
+    if output="$("$@" 2>&1)"; then
+      if [[ -n "$output" ]]; then
+        printf '%s\n' "$output"
+      fi
+      return 0
+    fi
+    if [[ -n "$output" ]]; then
+      printf '%s\n' "$output" >&2
+    fi
+    if [[ "$allow_existing" == true ]] && already_exists_output "$output"; then
+      echo "[run $run] ${label} already exists on reused run; continuing" >&2
       return 0
     fi
     if [[ "$attempt" -ge "$attempts" ]]; then
@@ -269,23 +627,89 @@ retry_cmd_output() {
   done
 }
 
-wait_for_multisig_proposal() {
-  local cfg="$1"
-  local account="$2"
-  local hash="$3"
-  local proposal_key="multisig/proposals/${hash}"
-  retry_cmd "multisig proposal ready" 10 1 \
-    "$IROHA_BIN" --config "$cfg" account meta get \
-    --id "$account" \
-    --key "$proposal_key"
-}
-
 wait_for_account() {
   local cfg="$1"
   local account="$2"
   retry_cmd "account ready (${account})" 10 1 \
     "$IROHA_BIN" --config "$cfg" account get \
     --id "$account"
+}
+
+build_multisig_spec_json() {
+  local quorum="$1"
+  local transaction_ttl_ms="$2"
+  shift 2
+  python3 - "$quorum" "$transaction_ttl_ms" "$@" <<'PY'
+import json
+import sys
+
+quorum = int(sys.argv[1])
+transaction_ttl_ms = int(sys.argv[2])
+signatories = {account: 1 for account in sys.argv[3:]}
+print(
+    json.dumps(
+        {
+            "quorum": quorum,
+            "signatories": signatories,
+            "transaction_ttl_ms": transaction_ttl_ms,
+        },
+        sort_keys=True,
+    )
+)
+PY
+}
+
+resolve_multisig_account_by_spec() {
+  local cfg="$1"
+  local expected_spec_json="$2"
+  local accounts_json=""
+  accounts_json="$(retry_list_json "multisig account discovery" 3 1 \
+    "$IROHA_BIN" --config "$cfg" ledger account list all --verbose)" || return 1
+  ACCOUNTS_PAYLOAD="$accounts_json" EXPECTED_SPEC_JSON="$expected_spec_json" python3 - <<'PY'
+import json
+import os
+import sys
+
+accounts = json.loads(os.environ["ACCOUNTS_PAYLOAD"])
+expected = json.loads(os.environ["EXPECTED_SPEC_JSON"])
+matches = []
+for account in accounts:
+    metadata = account.get("metadata") or {}
+    if metadata.get("multisig/spec") == expected:
+        matches.append(account["id"])
+
+if len(matches) == 1:
+    print(matches[0])
+    raise SystemExit(0)
+if len(matches) == 0:
+    raise SystemExit(1)
+print(
+    f"multiple multisig accounts matched the expected spec: {matches}",
+    file=sys.stderr,
+)
+raise SystemExit(2)
+PY
+}
+
+wait_for_multisig_account_by_spec() {
+  local cfg="$1"
+  local expected_spec_json="$2"
+  local attempt=1
+  local output=""
+  while true; do
+    output=""
+    if output="$(resolve_multisig_account_by_spec "$cfg" "$expected_spec_json")"; then
+      printf '%s' "$output"
+      return 0
+    fi
+    if [[ "$attempt" -ge 10 ]]; then
+      echo "[run $run] canonical multisig account discovery failed after 10 attempts" >&2
+      return 1
+    fi
+    echo "[run $run] canonical multisig account discovery attempt ${attempt}/10 failed; retrying..." >&2
+    sleep 1
+    attempt=$((attempt + 1))
+  done
 }
 
 retry_list_json() {
@@ -356,6 +780,19 @@ read_public_key() {
   read_toml_string "public_key" "$1"
 }
 
+public_key_to_i105() {
+  local public_key="$1"
+  ADDRESS_PAYLOAD="$("$IROHA_BIN" --output-format json tools address convert "$public_key" --format json | extract_json_output)" \
+    python3 - <<'PY'
+import json
+import os
+
+payload = os.environ["ADDRESS_PAYLOAD"]
+data = json.loads(payload)
+print(data["i105"]["value"])
+PY
+}
+
 read_domain() {
   read_toml_string "domain" "$1"
 }
@@ -366,12 +803,20 @@ generate_client_configs() {
   local domain="$3"
   local seed_prefix="$4"
   local names_csv="$5"
-  "$KAGAMI_BIN" client-configs \
+  "$KAGAMI_BIN" advanced client-configs \
     --base-config "$base_config" \
     --out-dir "$out_dir" \
     --domain "$domain" \
     --seed-prefix "$seed_prefix" \
     --names "$names_csv"
+}
+
+require_kagami_bin() {
+  if [[ -n "${KAGAMI_BIN}" ]] && [[ -x "${KAGAMI_BIN}" ]]; then
+    return 0
+  fi
+  echo "Missing binary: ${default_kagami_bin}" >&2
+  return 1
 }
 
 stop_localnet() {
@@ -382,7 +827,10 @@ stop_localnet() {
   for pidfile in "$run_dir"/peer*.pid; do
     [[ -f "$pidfile" ]] || continue
     pid="$(cat "$pidfile" 2>/dev/null || true)"
-    [[ -n "$pid" ]] || continue
+    if [[ -z "$pid" ]]; then
+      rm -f "$pidfile"
+      continue
+    fi
     for _ in {1..40}; do
       if kill -0 "$pid" 2>/dev/null; then
         sleep 0.25
@@ -393,6 +841,7 @@ stop_localnet() {
     if kill -0 "$pid" 2>/dev/null; then
       kill -9 "$pid" 2>/dev/null || true
     fi
+    rm -f "$pidfile"
   done
 }
 
@@ -508,12 +957,16 @@ slow_runs=0
 
 for run in $(seq 1 "$RUNS"); do
   run_dir="${OUT_DIR}/run-${run}"
+  reuse_existing_run=false
   echo ""
   echo "[run $run/$RUNS] generating localnet..."
   stop_localnet "$run_dir"
   if [[ -e "$run_dir" ]]; then
     if [[ "$FORCE" == true ]]; then
       rm -rf "$run_dir"
+    elif [[ "$REUSE_RUN_DIR" == true ]]; then
+      reuse_existing_run=true
+      echo "[run $run] reusing generated localnet from $run_dir"
     else
       echo "[run $run] run dir exists: $run_dir (use --force to remove)" >&2
       failures=$((failures + 1))
@@ -522,23 +975,30 @@ for run in $(seq 1 "$RUNS"); do
   fi
   mkdir -p "$OUT_DIR"
 
-  if ! ensure_ports_available; then
-    failures=$((failures + 1))
-    continue
-  fi
+  if [[ "$reuse_existing_run" != true ]]; then
+    if ! ensure_ports_available; then
+      failures=$((failures + 1))
+      continue
+    fi
 
-  if ! "$KAGAMI_BIN" localnet \
-      --build-line "iroha3" \
-      --out-dir "$run_dir" \
-      --peers "$PEERS" \
-      --seed "$SEED" \
-      --base-api-port "$BASE_API_PORT" \
-      --base-p2p-port "$BASE_P2P_PORT" \
-      --bind-host "$BIND_HOST" \
-      --public-host "$PUBLIC_HOST"; then
-    echo "[run $run] kagami localnet failed" >&2
-    failures=$((failures + 1))
-    continue
+    if ! require_kagami_bin; then
+      failures=$((failures + 1))
+      continue
+    fi
+
+    if ! "$KAGAMI_BIN" localnet \
+        --build-line "iroha3" \
+        --out-dir "$run_dir" \
+        --peers "$PEERS" \
+        --seed "$SEED" \
+        --base-api-port "$BASE_API_PORT" \
+        --base-p2p-port "$BASE_P2P_PORT" \
+        --bind-host "$BIND_HOST" \
+        --public-host "$PUBLIC_HOST"; then
+      echo "[run $run] kagami localnet failed" >&2
+      failures=$((failures + 1))
+      continue
+    fi
   fi
 
   echo "[run $run] starting peers..."
@@ -556,13 +1016,35 @@ for run in $(seq 1 "$RUNS"); do
     failures=$((failures + 1))
     continue
   fi
-
-  if ! wait_for_ready; then
-    echo "[run $run] readiness timeout after ${READY_TIMEOUT}s" >&2
+  if ! load_peer_status_endpoints "$run_dir"; then
     stop_localnet "$run_dir"
     cleanup_run_dir=""
     failures=$((failures + 1))
     continue
+  fi
+
+  if ! wait_for_ready; then
+    echo "[run $run] readiness timeout after ${READY_TIMEOUT}s" >&2
+    dump_peer_status_snapshot "peer readiness timeout snapshot"
+    stop_localnet "$run_dir"
+    cleanup_run_dir=""
+    failures=$((failures + 1))
+    continue
+  fi
+
+  if [[ "$reuse_existing_run" == true ]]; then
+    restart_baseline_height="$(fetch_height)"
+    if [[ ! "$restart_baseline_height" =~ ^[0-9]+$ ]]; then
+      restart_baseline_height=0
+    fi
+    if ! wait_for_reuse_stabilization "$restart_baseline_height"; then
+      echo "[run $run] reused-run stabilization timeout after ${HEIGHT_TIMEOUT}s" >&2
+      dump_reuse_stall_diagnostics "$run_dir" "reused-run stabilization timed out"
+      stop_localnet "$run_dir"
+      cleanup_run_dir=""
+      failures=$((failures + 1))
+      continue
+    fi
   fi
 
   echo "[run $run] waiting for block heights..."
@@ -583,30 +1065,48 @@ for run in $(seq 1 "$RUNS"); do
   client_cfg="$run_dir/client.toml"
   domain="$(read_domain "$client_cfg")"
   sender_pub="$(read_public_key "$client_cfg")"
-  sender_account="${sender_pub}@${domain}"
-  asset_def="train${run}#${domain}"
+  sender_account="$(public_key_to_i105 "$sender_pub")"
+  asset_def="$TRAINING_ASSET_DEFINITION_ID"
+  asset_name="train${run}"
 
   clients_dir="$run_dir/clients"
-  rm -rf "$clients_dir"
-  mkdir -p "$clients_dir"
-  client_seed_prefix="${SEED}-clients-${run}"
-  client_names="recipient,sig1,sig2,sig3,multisig"
-  if ! generate_client_configs "$client_cfg" "$clients_dir" "$domain" "$client_seed_prefix" "$client_names"; then
-    echo "[run $run] kagami client-configs failed" >&2
-    stop_localnet "$run_dir"
-    cleanup_run_dir=""
-    failures=$((failures + 1))
-    continue
+  if [[ "$reuse_existing_run" == true ]]; then
+    if [[ ! -f "$clients_dir/sig1.toml" ]] || [[ ! -f "$clients_dir/sig2.toml" ]] || [[ ! -f "$clients_dir/sig3.toml" ]] || [[ ! -f "$clients_dir/multisig.toml" ]]; then
+      echo "[run $run] existing run dir is missing generated client configs under $clients_dir" >&2
+      stop_localnet "$run_dir"
+      cleanup_run_dir=""
+      failures=$((failures + 1))
+      continue
+    fi
+  else
+    rm -rf "$clients_dir"
+    mkdir -p "$clients_dir"
+    client_seed_prefix="${SEED}-clients-${run}"
+    client_names="recipient,sig1,sig2,sig3,multisig"
+    if ! generate_client_configs "$client_cfg" "$clients_dir" "$domain" "$client_seed_prefix" "$client_names"; then
+      echo "[run $run] kagami client-configs failed" >&2
+      stop_localnet "$run_dir"
+      cleanup_run_dir=""
+      failures=$((failures + 1))
+      continue
+    fi
   fi
 
+  height_traffic_start=$SECONDS
   echo "[run $run] asset flow..."
   asset_ok=true
-  if ! retry_cmd "asset definition register" 3 2 \
-      "$IROHA_BIN" --config "$client_cfg" asset definition register --id "$asset_def"; then
+  if ! retry_cmd_allow_existing "$reuse_existing_run" "asset definition register" 3 2 \
+      "$IROHA_BIN" --config "$client_cfg" ledger asset definition register \
+      --id "$asset_def" \
+      --name "$asset_name" \
+      --scale 0; then
     asset_ok=false
   fi
   if ! retry_cmd "asset mint" 3 2 \
-      "$IROHA_BIN" --config "$client_cfg" asset mint --id "${asset_def}#${sender_account}" --quantity 10; then
+      "$IROHA_BIN" --config "$client_cfg" ledger asset mint \
+      --definition "$asset_def" \
+      --account "$sender_account" \
+      --quantity 10; then
     asset_ok=false
   fi
 
@@ -615,16 +1115,17 @@ for run in $(seq 1 "$RUNS"); do
     echo "[run $run] failed to read recipient public key" >&2
     asset_ok=false
   fi
-  recipient_account="${recipient_pub}@${domain}"
-  if ! retry_cmd "recipient account register" 3 2 \
-      "$IROHA_BIN" --config "$client_cfg" account register --id "$recipient_account"; then
+  recipient_account="$(public_key_to_i105 "$recipient_pub")"
+  if ! retry_cmd_allow_existing "$reuse_existing_run" "recipient account register" 3 2 \
+      "$IROHA_BIN" --config "$client_cfg" ledger account register --id "$recipient_account"; then
     asset_ok=false
   elif ! wait_for_account "$client_cfg" "$recipient_account"; then
     asset_ok=false
   fi
   if ! retry_cmd "asset transfer" 3 2 \
-      "$IROHA_BIN" --config "$client_cfg" asset transfer \
-      --id "${asset_def}#${sender_account}" \
+      "$IROHA_BIN" --config "$client_cfg" ledger asset transfer \
+      --definition "$asset_def" \
+      --account "$sender_account" \
       --to "$recipient_account" \
       --quantity 1; then
     asset_ok=false
@@ -652,38 +1153,41 @@ for run in $(seq 1 "$RUNS"); do
     echo "[run $run] failed to read multisig public key" >&2
     multisig_ok=false
   fi
-  sig1_account="${sig1_pub}@${domain}"
-  sig2_account="${sig2_pub}@${domain}"
-  sig3_account="${sig3_pub}@${domain}"
+  sig1_account="$(public_key_to_i105 "$sig1_pub")"
+  sig2_account="$(public_key_to_i105 "$sig2_pub")"
+  sig3_account="$(public_key_to_i105 "$sig3_pub")"
 
   for acct in "$sig1_account" "$sig2_account" "$sig3_account"; do
-    if ! retry_cmd "signatory account register" 3 2 \
-        "$IROHA_BIN" --config "$client_cfg" account register --id "$acct"; then
+    if ! retry_cmd_allow_existing "$reuse_existing_run" "signatory account register" 3 2 \
+        "$IROHA_BIN" --config "$client_cfg" ledger account register --id "$acct"; then
       multisig_ok=false
     elif ! wait_for_account "$client_cfg" "$acct"; then
       multisig_ok=false
     fi
   done
 
-  multisig_account="${multisig_pub}@${domain}"
+  multisig_seed_account="$(public_key_to_i105 "$multisig_pub")"
+  multisig_spec_json="$(build_multisig_spec_json 3 120000 "$sig1_account" "$sig2_account" "$sig3_account")"
 
-  if ! retry_cmd "multisig register" 3 2 \
-      "$IROHA_BIN" --config "$client_cfg" multisig register \
-      --account "$multisig_account" \
+  if ! retry_cmd_allow_existing "$reuse_existing_run" "multisig register" 3 2 \
+      "$IROHA_BIN" --config "$client_cfg" ledger multisig register \
+      --account "$multisig_seed_account" \
       --signatories "$sig1_account" "$sig2_account" "$sig3_account" \
       --weights 1 1 1 \
       --quorum 3 \
       --transaction-ttl "2m"; then
     multisig_ok=false
-  elif ! wait_for_account "$client_cfg" "$multisig_account"; then
+  elif ! multisig_account="$(wait_for_multisig_account_by_spec "$client_cfg" "$multisig_spec_json")"; then
     multisig_ok=false
+  else
+    echo "[run $run] canonical multisig account: $multisig_account"
   fi
 
   propose_output=""
   instructions_hash=""
   if propose_output="$(retry_cmd_output "multisig propose" 3 2 bash -c \
-    "echo '\"congratulations\"' | \"$IROHA_BIN\" --config \"$sig1_cfg\" -o account meta set --id \"$multisig_account\" --key success_marker | \"$IROHA_BIN\" --config \"$sig1_cfg\" multisig propose --account \"$multisig_account\"")"; then
-    instructions_hash="$(printf '%s\n' "$propose_output" | rg -m1 -o '^[0-9a-f]{64}$' || true)"
+    "echo '\"congratulations\"' | \"$IROHA_BIN\" --machine --config \"$sig1_cfg\" -o --output-format json ledger account meta set --id \"$multisig_account\" --key success_marker | \"$IROHA_BIN\" --machine --config \"$sig1_cfg\" --output-format text ledger multisig propose --account \"$multisig_account\"")"; then
+    instructions_hash="$(printf '%s\n' "$propose_output" | sed -n 's/^instructions_hash: //p' | head -n 1)"
     if [[ -z "$instructions_hash" ]]; then
       echo "[run $run] failed to parse multisig instructions hash" >&2
       multisig_ok=false
@@ -692,25 +1196,15 @@ for run in $(seq 1 "$RUNS"); do
     multisig_ok=false
   fi
 
-  proposal_ready=true
   if [[ -n "${instructions_hash:-}" ]]; then
-    if ! wait_for_multisig_proposal "$client_cfg" "$multisig_account" "$instructions_hash"; then
-      proposal_ready=false
-      multisig_ok=false
-    fi
-  else
-    proposal_ready=false
-  fi
-
-  if [[ "$proposal_ready" == true ]]; then
-    if ! retry_cmd "multisig approve (sig2)" 3 2 \
-        "$IROHA_BIN" --config "$sig2_cfg" multisig approve \
+    if ! retry_cmd "multisig approve (sig2)" 10 1 \
+        "$IROHA_BIN" --config "$sig2_cfg" ledger multisig approve \
         --account "$multisig_account" \
         --instructions-hash "$instructions_hash"; then
       multisig_ok=false
     fi
-    if ! retry_cmd "multisig approve (sig3)" 3 2 \
-        "$IROHA_BIN" --config "$sig3_cfg" multisig approve \
+    if ! retry_cmd "multisig approve (sig3)" 10 1 \
+        "$IROHA_BIN" --config "$sig3_cfg" ledger multisig approve \
         --account "$multisig_account" \
         --instructions-hash "$instructions_hash"; then
       multisig_ok=false
@@ -726,6 +1220,31 @@ for run in $(seq 1 "$RUNS"); do
     multisig_ok=false
   fi
 
+  final_height="$(fetch_height)"
+  if [[ ! "$final_height" =~ ^[0-9]+$ ]]; then
+    final_height=0
+  fi
+  if [[ -z "$height2_s" && "$final_height" -ge 2 ]]; then
+    height2_s="$((SECONDS - height_traffic_start))"
+    echo "[run $run] height 2 reached after traffic in ${height2_s}s"
+  fi
+  if [[ -z "$height10_s" && "$final_height" -ge 10 ]]; then
+    height10_s="$((SECONDS - height_traffic_start))"
+    echo "[run $run] height 10 reached after traffic in ${height10_s}s"
+  elif [[ -z "$height10_s" ]]; then
+    if wait_for_height 10 >/dev/null; then
+      height10_s="$((SECONDS - height_traffic_start))"
+      if [[ -z "$height2_s" ]]; then
+        height2_s="$height10_s"
+      fi
+      echo "[run $run] height 10 reached after traffic in ${height10_s}s"
+      final_height="$(fetch_height)"
+      if [[ ! "$final_height" =~ ^[0-9]+$ ]]; then
+        final_height=0
+      fi
+    fi
+  fi
+
   if rg -n "DA availability still missing \\(advisory\\)" "$run_dir"/peer*.log >/dev/null 2>&1; then
     warn_availability=$((warn_availability + 1))
     echo "[run $run] warning: DA availability still missing (advisory) detected"
@@ -733,6 +1252,10 @@ for run in $(seq 1 "$RUNS"); do
   if rg -n "DAG fingerprint mismatch" "$run_dir"/peer*.log >/dev/null 2>&1; then
     warn_dag=$((warn_dag + 1))
     echo "[run $run] warning: DAG fingerprint mismatch detected"
+  fi
+
+  if [[ "$reuse_existing_run" == true && ( "$asset_ok" != true || "$multisig_ok" != true || -z "$height10_s" ) ]]; then
+    dump_reuse_stall_diagnostics "$run_dir" "reused run stalled after submission"
   fi
 
   stop_localnet "$run_dir"
@@ -749,13 +1272,14 @@ for run in $(seq 1 "$RUNS"); do
   if [[ "$commit_time_ms" -gt 0 ]]; then
     commit_note=", last_commit_ms=${commit_time_ms}ms"
   fi
+  final_height_note=", final_height=${final_height}"
 
   if [[ "$asset_ok" == true && "$multisig_ok" == true && "$cadence_ok" == true && -n "$height2_s" && -n "$height10_s" ]]; then
     successes=$((successes + 1))
-    echo "[run $run] ok (height2=${height2_s}s, height10=${height10_s}s${commit_note})"
+    echo "[run $run] ok (height2=${height2_s}s, height10=${height10_s}s${final_height_note}${commit_note})"
   else
     failures=$((failures + 1))
-    echo "[run $run] failed (asset_ok=${asset_ok}, multisig_ok=${multisig_ok}, cadence_ok=${cadence_ok}, height2=${height2_s:-timeout}, height10=${height10_s:-timeout}${commit_note})"
+    echo "[run $run] failed (asset_ok=${asset_ok}, multisig_ok=${multisig_ok}, cadence_ok=${cadence_ok}, height2=${height2_s:-timeout}, height10=${height10_s:-timeout}${final_height_note}${commit_note})"
   fi
 done
 

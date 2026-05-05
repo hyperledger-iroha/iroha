@@ -5,7 +5,7 @@ Pod::Spec.new do |s|
   s.description      = <<-DESC
 A Swift library for interacting with Hyperledger Iroha v2 and Sora Nexus:
 - Torii HTTP(S) client (balances, transactions, ZK attachments, prover reports)
-- Norito envelope encoder and Connect codec with optional bridge-backed signing
+- Norito envelope encoder and Connect codec with required bridge-backed signing
 - Transaction/transfer builders and Ed25519 key management via CryptoKit
 DESC
   s.homepage         = 'https://github.com/hyperledger/iroha/tree/main/IrohaSwift'

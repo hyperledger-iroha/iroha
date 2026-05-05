@@ -6,23 +6,20 @@ use std::collections::HashMap;
 use ivm::{
     AssetDefinitionId, IVM, PermissionToken,
     kotodama::compiler::Compiler as KotodamaCompiler,
-    mock_wsv::{MockWorldStateView, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, WsvHost},
 };
 
-fn make_vm_with_wsv() -> (IVM, ScopedAccountId) {
-    let alice: ScopedAccountId = ScopedAccountId::new(
-        "wonderland".parse().expect("domain id"),
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-            .parse()
-            .expect("public key"),
-    );
+const TEST_ACCOUNT_LITERAL: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+const TEST_ASSET_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+
+fn make_vm_with_wsv() -> (IVM, AccountId) {
+    let alice: AccountId =
+        iroha_data_model::account::AccountId::parse_encoded(TEST_ACCOUNT_LITERAL)
+            .expect("parse test account literal")
+            .into_account_id();
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(1_000_000);
     vm.set_host(host);
     (vm, alice)
@@ -36,7 +33,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
     // 1) Create role `minter` with permission mint_asset:rose#wonder
     let src_create = r#"
         fn main() {
-          create_role(name("minter"), json("{\"perms\":[\"mint_asset:rose#wonder\"]}"));
+          create_role(name("minter"), json("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
         }
     "#;
     let prog = compiler
@@ -61,7 +58,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
     // 2) Grant role to alice and check derived permission
     let src_grant = r#"
         fn main() {
-          grant_role(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), name("minter"));
+          grant_role(authority(), name("minter"));
         }
     "#;
     let prog = compiler
@@ -74,10 +71,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
         let host = host_any
             .downcast_mut::<WsvHost>()
             .expect("downcast WsvHost");
-        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonder".parse().unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset: AssetDefinitionId = TEST_ASSET_LITERAL.parse().unwrap();
         let tok = PermissionToken::MintAsset(asset);
         assert!(
             host.wsv.has_permission(&alice, &tok),
@@ -88,7 +82,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
     // 3) Revoke role and delete; verify permissions removed and role absent
     let src_cleanup = r#"
         fn main() {
-          revoke_role(account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"), name("minter"));
+          revoke_role(authority(), name("minter"));
           delete_role(name("minter"));
         }
     "#;
@@ -102,10 +96,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
         let host = host_any
             .downcast_mut::<WsvHost>()
             .expect("downcast WsvHost");
-        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonder".parse().unwrap(),
-            "rose".parse().unwrap(),
-        );
+        let asset: AssetDefinitionId = TEST_ASSET_LITERAL.parse().unwrap();
         let tok = PermissionToken::MintAsset(asset);
         assert!(
             !host.wsv.has_permission(&alice, &tok),

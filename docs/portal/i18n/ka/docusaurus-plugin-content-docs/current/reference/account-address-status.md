@@ -1,24 +1,17 @@
 ---
 id: account-address-status
-lang: ka
-direction: ltr
-source: docs/portal/docs/reference/account-address-status.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
 title: Account address compliance
 description: Summary of the ADDR-2 fixture workflow and how SDK teams stay in sync.
-translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
 ---
 
-კანონიკური ADDR-2 პაკეტი (`fixtures/account/address_vectors.json`) იჭერს
-I105 (სასურველია), შეკუმშული (`sora`, მეორე საუკეთესო; ნახევარი/სრული სიგანე), მრავალხელმოწერის და ნეგატიური მოწყობილობები.
-ყოველი SDK + Torii ზედაპირი ეყრდნობა ერთსა და იმავე JSON-ს, ასე რომ ჩვენ შეგვიძლია აღმოვაჩინოთ ნებისმიერი კოდეკი
-დრიფტი, სანამ ის წარმოებას მიაღწევს. ეს გვერდი ასახავს შიდა სტატუსის მოკლე ინფორმაციას
-(`docs/source/account_address_status.md` root საცავში) ისე პორტალი
-მკითხველს შეუძლია მიმართოს სამუშაო პროცესს მონო-რეპოს გათხრების გარეშე.
+The canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) captures
+canonical I105, multisignature, and negative fixtures.
+Every SDK + Torii surface relies on the same JSON so we can detect any codec
+drift before it hits production. This page mirrors the internal status brief
+(`docs/source/account_address_status.md` in the root repository) so portal
+readers can reference the workflow without digging through the mono-repo.
 
-## შექმენით ან გადაამოწმეთ პაკეტი
+## Regenerate or verify the bundle
 
 ```bash
 # Refresh the canonical fixture (writes fixtures/account/address_vectors.json)
@@ -28,34 +21,34 @@ cargo xtask address-vectors --out fixtures/account/address_vectors.json
 cargo xtask address-vectors --verify
 ```
 
-დროშები:
+Flags:
 
-- `--stdout` — გამოუშვით JSON stdout ad-hoc შემოწმებისთვის.
-- `--out <path>` — ჩაწერეთ სხვა გზაზე (მაგ. ლოკალური ცვლილებების განსხვავებისას).
-- `--verify` — სამუშაო ასლის შედარება ახლად გენერირებულ შინაარსთან (არ შეიძლება
-  კომბინირებული იყოს `--stdout`-თან).
+- `--stdout` — emit the JSON to stdout for ad-hoc inspection.
+- `--out <path>` — write to a different path (e.g., when diffing changes locally).
+- `--verify` — compare the working copy against freshly generated content (cannot
+  be combined with `--stdout`).
 
-CI სამუშაო პროცესი **Address Vector Drift** მუშაობს `cargo xtask address-vectors --verify`
-ნებისმიერ დროს, როდესაც მოწყობილობა, გენერატორი ან დოკუმენტები იცვლება, რათა დაუყოვნებლივ გააფრთხილონ მიმომხილველები.
+The CI workflow **Address Vector Drift** runs `cargo xtask address-vectors --verify`
+any time the fixture, generator, or docs change to alert reviewers immediately.
 
-## ვინ მოიხმარს მოწყობილობას?
+## Who consumes the fixture?
 
-| ზედაპირი | ვალიდაცია |
-|---------|-----------|
+| Surface | Validation |
+|---------|------------|
 | Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` |
-| Torii (სერვერი) | `crates/iroha_torii/tests/account_address_vectors.rs` |
+| Torii (server) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | JavaScript SDK | `javascript/iroha_js/test/address.test.js` |
 | Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
 | Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-ყოველი აღკაზმულობა ორმხრივი მოგზაურობის კანონიკური ბაიტი + I105 + შეკუმშული (`sora`, მეორე საუკეთესო) კოდირებები და
-ამოწმებს, რომ Norito სტილის შეცდომის კოდები შეესაბამება ინსტრუმენტს უარყოფითი შემთხვევებისთვის.
+Each harness round-trips canonical bytes + i105 encodings and
+checks that Norito-style error codes line up with the fixture for negative cases.
 
-## გჭირდებათ ავტომატიზაცია?
+## Need automation?
 
-გამოშვების ინსტრუმენტს შეუძლია დამხმარეთან ერთად განაახლოს სკრიპტის მოწყობილობები
-`scripts/account_fixture_helper.py`, რომელიც იღებს ან ამოწმებს კანონიკურს
-ნაკრები კოპირების/ჩასმის ნაბიჯების გარეშე:
+Release tooling can script fixture refreshes with the helper
+`scripts/account_fixture_helper.py`, which fetches or verifies the canonical
+bundle without copy/paste steps:
 
 ```bash
 # Download to a custom path (defaults to fixtures/account/address_vectors.json)
@@ -71,20 +64,20 @@ python3 scripts/account_fixture_helper.py check \
   --metrics-label android
 ```
 
-დამხმარე იღებს `--source` გადაფარვას ან `IROHA_ACCOUNT_FIXTURE_URL`-ს
-გარემოს ცვლადი, ასე რომ SDK CI სამუშაოებმა შეიძლება მიუთითონ სასურველი სარკეზე.
-როდესაც `--metrics-out` მიეწოდება დამხმარე წერს
-`account_address_fixture_check_status{target=\"…\"}` კანონიკურთან ერთად
-SHA-256 დაიჯესტი (`account_address_fixture_remote_info`) ასე რომ, Prometheus ტექსტური ფაილი
-კოლექციონერები და Grafana დაფა `account_address_fixture_status` შეუძლიათ დაამტკიცონ
-ყველა ზედაპირი რჩება სინქრონიზებული. გაფრთხილება, როდესაც სამიზნე იტყობინება `0`. ამისთვის
-მრავალზედაპირიანი ავტომატიზაცია გამოიყენეთ შეფუთვა `ci/account_fixture_metrics.sh`
-(მიიღებს განმეორებით `--target label=path[::source]`) ასე რომ მოწვეულ გუნდებს შეუძლიათ გამოაქვეყნონ
-ერთი კონსოლიდირებული `.prom` ფაილი კვანძის ექსპორტიორის ტექსტური ფაილის კოლექციონერისთვის.
+The helper accepts `--source` overrides or the `IROHA_ACCOUNT_FIXTURE_URL`
+environment variable so SDK CI jobs can point at their preferred mirror.
+When `--metrics-out` is supplied the helper writes
+`account_address_fixture_check_status{target=\"…\"}` along with the canonical
+SHA-256 digest (`account_address_fixture_remote_info`) so Prometheus textfile
+collectors and Grafana dashboard `account_address_fixture_status` can prove
+every surface remains in sync. Alert whenever a target reports `0`. For
+multi-surface automation use the wrapper `ci/account_fixture_metrics.sh`
+(accepts repeated `--target label=path[::source]`) so on-call teams can publish
+one consolidated `.prom` file for the node-exporter textfile collector.
 
-## გჭირდებათ სრული მოკლე ინფორმაცია?
+## Need the full brief?
 
-ADDR-2 შესაბამისობის სრული სტატუსი (მფლობელები, მონიტორინგის გეგმა, ღია სამოქმედო ელემენტები)
-ცხოვრობს `docs/source/account_address_status.md`-ში საცავში ერთად
-მისამართის სტრუქტურით RFC (`docs/account_structure.md`). გამოიყენეთ ეს გვერდი, როგორც a
-სწრაფი ოპერატიული შეხსენება; გადადეთ რეპო დოკუმენტებს სიღრმისეული ხელმძღვანელობისთვის.
+The full ADDR-2 compliance status (owners, monitoring plan, open action items)
+lives in `docs/source/account_address_status.md` within the repository along
+with the Address Structure RFC (`docs/account_structure.md`). Use this page as a
+quick operational reminder; defer to the repo docs for in-depth guidance.

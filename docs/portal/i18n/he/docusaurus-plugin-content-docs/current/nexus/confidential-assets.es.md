@@ -87,7 +87,7 @@ descrito abajo para que los wallets se mantengan sincronizados con Rust.
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -227,7 +227,7 @@ Nuevas redes que inician confidencialidad habilitada codifican la politica desea
 - Jerarquia derivacion por account:
   - `sk_spend` -> `nk` (מפתח מבטל), `ivk` (מפתח צפייה נכנס), `ovk` (מפתח צפייה יוצא), `fvk`.
 - מטענים משותפים של AEAD בשימוש במפתחות משותפים של ECDH; הצג מפתחות אודיטורים אופציונליים ומפתחות תצוגות מפורטות של נכסים פוליטיים.
-- Adiciones al CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, Tooling de Auditor para decifrar memos, y el helper `iroha app zk envelope` para producer/inspectionar I01080130X offline. Torii לחשוף את מיסו flujo de derivacion דרך `POST /v1/confidential/derive-keyset`, retornando formas hex y base64 para que ארנקים אבטנגן jerarquias de claves programaticamente.## גז, מגביל את ה-DoS
+- Adiciones al CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, Tooling de Auditor para decifrar memos, y el helper `iroha app zk envelope` para producer/inspectionar I01080130X offline.
 - לוח זמנים לקביעת גז:
   - Halo2 (Plonkish): בסיס `250_000` גז + `2_000` גז עבור קלט ציבורי.
   - `5` בתים חסין גז, mas cargos por nullifier (`300`) y por התחייבות (`500`).

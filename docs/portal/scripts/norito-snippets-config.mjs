@@ -16,7 +16,7 @@ export const SNIPPETS = [
     ledgerWalkthrough: [
       'Compile the contract with `koto_compile --abi 1` as shown in [Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) or via `cargo test -p ivm developer_portal_norito_snippets_compile`.',
       'Smoke-test the bytecode locally with `ivm_run` / `developer_portal_norito_snippets_run` to verify the `info!` log and initial syscall before touching a node.',
-      'Deploy the artifact through `iroha_cli app contracts deploy` and confirm the manifest using the steps in [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli).'
+      'Deploy the artifact through `iroha app contracts deploy` and confirm the manifest using the steps in [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha).'
     ],
     sdkGuides: SDK_GUIDES
   },
@@ -27,9 +27,9 @@ export const SNIPPETS = [
       'Demonstrates permissioned domain creation, asset registration, and deterministic minting.',
     source: 'crates/ivm/docs/examples/13_register_and_mint.ko',
     ledgerWalkthrough: [
-      'Ensure the destination account (e.g., `i105...` for Alice) exists, mirroring the setup phase in each SDK quickstart.',
+      'Ensure the destination account (e.g., `<i105-account-id>` for Alice) exists, mirroring the setup phase in each SDK quickstart.',
       'Invoke the `register_and_mint` entrypoint to create the ROSE asset definition and mint 250 units to Alice in one transaction.',
-      'Verify balances through `client.request(FindAccountAssets)` or `iroha_cli ledger asset list --account i105...` to confirm the mint succeeded.'
+      'Verify balances through `client.request(FindAccountAssets)` or `iroha ledger asset list all --verbose` to confirm the mint succeeded.'
     ],
     sdkGuides: SDK_GUIDES
   },
@@ -40,9 +40,9 @@ export const SNIPPETS = [
       'Demonstrates how a Kotodama entrypoint can call the host `transfer_asset` instruction with inline metadata validation.',
     source: 'crates/ivm/docs/examples/08_call_transfer_asset.ko',
     ledgerWalkthrough: [
-      'Fund the contract authority (for example `i105...` for the contract account) with the asset it will transfer and grant the authority the `CanTransfer` role or equivalent permission.',
-      'Call the `call_transfer_asset` entrypoint to transfer 5 units from the contract account to Bob (`i105...`), mirroring the way on-chain automation can wrap host calls.',
-      'Verify balances via `FindAccountAssets` or `iroha_cli ledger asset list --account i105...` and inspect events to confirm the metadata guard logged the transfer context.'
+      'Fund the contract authority (for example `<i105-account-id>` for the contract account) with the asset it will transfer and grant the authority the `CanTransfer` role or equivalent permission.',
+      'Call the `call_transfer_asset` entrypoint to transfer 5 units from the contract account to Bob (`<i105-account-id>`), mirroring the way on-chain automation can wrap host calls.',
+      'Verify balances via `FindAccountAssets` or `iroha ledger asset list all --verbose` and inspect events to confirm the metadata guard logged the transfer context.'
     ],
     sdkGuides: SDK_GUIDES
   },
@@ -55,7 +55,7 @@ export const SNIPPETS = [
     ledgerWalkthrough: [
       'Pre-fund Alice with the target asset (for example via the “register and mint” snippet or SDK quickstart flows).',
       'Execute the `do_transfer` entrypoint to move 10 units from Alice to Bob, satisfying the `AssetTransferRole` permission.',
-      'Query balances (`FindAccountAssets`, `iroha_cli ledger asset list`) or subscribe to pipeline events to observe the transfer outcome.'
+      'Query balances (`FindAccountAssets`, `iroha ledger asset list all --verbose`) or subscribe to pipeline events to observe the transfer outcome.'
     ],
     sdkGuides: SDK_GUIDES
   },
@@ -66,9 +66,24 @@ export const SNIPPETS = [
       'Walks through an NFT lifecycle end to end: minting to the owner, transferring, tagging metadata, and burning.',
     source: 'crates/ivm/docs/examples/12_nft_flow.ko',
     ledgerWalkthrough: [
-      'Ensure the NFT definition (for example `n0#wonderland`) exists alongside the owner/recipient accounts used in the snippet (`i105...` for Alice, `i105...` for Bob).',
+      'Ensure the NFT definition (for example `n0#wonderland`) exists alongside the owner/recipient accounts used in the snippet (`<i105-account-id>` for Alice, `<i105-account-id>` for Bob).',
       'Invoke the `nft_issue_and_transfer` entrypoint to mint the NFT, transfer it from Alice to Bob, and attach a metadata flag describing the issuance.',
-      'Inspect the NFT ledger state with `iroha_cli ledger nft list --account <id>` or the SDK equivalents to verify the transfer, then confirm the asset is removed once the burn instruction runs.'
+      'Inspect the NFT ledger state with `iroha ledger nft list all --verbose` or the SDK equivalents to verify the transfer, then confirm the asset is removed once the burn instruction runs.'
+    ],
+    sdkGuides: SDK_GUIDES
+  },
+  {
+    slug: 'threshold-escrow',
+    title: 'Threshold escrow',
+    description:
+      'Single-payer escrow that accepts top-ups to an exact target amount, then releases or refunds the funds.',
+    source: 'crates/kotodama_lang/src/samples/threshold_escrow.ko',
+    ledgerWalkthrough: [
+      'Pre-create the escrow account and the numeric asset definition, then fund the payer account that will submit the contract calls. The sample binds that payer automatically with `authority()` during `open_escrow`.',
+      'Call `open_escrow(recipient, escrow_account, asset_definition, target_amount)` once to record the payer, recipient, escrow account, asset definition, exact target, and open/released/refunded flags in durable contract state.',
+      'Call `deposit(amount)` from the same payer until `funded_amount_value == target_amount_value`; deposits must stay positive and any top-up that would overfund the escrow is rejected.',
+      'Call `release_if_ready()` to move the escrowed funds to the recipient once the target is met, or call `refund()` while the escrow is still open to return the funded amount to the payer.',
+      'Inspect balances with `FindAssetById` / `iroha ledger asset list all --verbose` and inspect contract state with `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.'
     ],
     sdkGuides: SDK_GUIDES
   }

@@ -2,12 +2,14 @@
 lang: pt
 direction: ltr
 source: docs/source/torii/app_api_parity_audit.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: fa393263d4ca430093f95c97f082c444ed08c90277a8537515dba04b65e7c6d3
-source_last_modified: "2026-01-30T09:27:17.105195+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: dd88269e21da0aa5db95917c49ae9f6b6d90bbd90d73555fcc5a97ea69539baf
+source_last_modified: "2026-04-04T15:20:18.746028+00:00"
+translation_last_reviewed: 2026-04-05
 ---
+
+> Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
 ## Torii App API Parity Audit (TORII-APP-1)
 
@@ -35,28 +37,33 @@ feature-gated route builders (`add_app_api_routes`, `add_contracts_and_vk_routes
 
 ### Auth & canonical signing
 
-- App-facing GET/POST endpoints accept optional canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`) built from `METHOD\n/path\nsorted_query\nsha256(body)`; Torii wraps them into `QueryRequestWithAuthority` before executor validation so they mirror `/query`.
+- App-facing GET/POST endpoints accept optional canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, `X-Iroha-Nonce`) built from `METHOD\n/path\nsorted_query\nsha256(body)\n<timestamp_ms>\n<nonce>`; Torii validates freshness/replay resistance before wrapping them into `QueryRequestWithAuthority`, so they mirror `/query` without accepting stale or replayed signatures.
 - SDK helpers ship in all primary clients:
-  - JS/TS: `buildCanonicalRequestHeaders({ accountId, method, path, query, body, privateKey })` from `canonicalRequest.js`.
-  - Swift: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:)`.
-  - Android (Kotlin/Java): `CanonicalRequestSigner.signingHeaders(accountId, method, path, query, body, signer)`.
+  - JS/TS: `buildCanonicalRequestHeaders({ accountId, method, path, query, body, privateKey, timestampMs?, nonce? })` from `canonicalRequest.js`.
+  - Swift: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:timestampMs:nonce:)` and `ToriiCanonicalRequest.buildHeaders(...)`.
+  - Android (Kotlin/Java): `CanonicalRequestSigner.buildHeaders(method, uri, body, accountId, privateKey, timestampMs, nonce)`.
 - Example snippets:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
-const headers = buildCanonicalRequestHeaders({ accountId: "i105...", method: "get", path: "/v1/accounts/i105.../assets", query: "limit=5", body: "", privateKey });
-await fetch(`${torii}/v1/accounts/i105.../assets?limit=5`, { headers });
+const headers = buildCanonicalRequestHeaders({ accountId: "<i105-account-id>", method: "get", path: "/v1/accounts/<i105-account-id>/assets", query: "limit=5", body: "", privateKey });
+await fetch(`${torii}/v1/accounts/<i105-account-id>/assets?limit=5`, { headers });
 ```
 ```swift
-let headers = try CanonicalRequest.signingHeaders(accountId: "i105...",
+let headers = try CanonicalRequest.signingHeaders(accountId: "<i105-account-id>",
                                                   method: "get",
-                                                  path: "/v1/accounts/i105.../assets",
+                                                  path: "/v1/accounts/<i105-account-id>/assets",
                                                   query: "limit=5",
                                                   body: Data(),
                                                   signer: signingKey)
 ```
 ```kotlin
-val signer = Ed25519Signer(privateKey, publicKey)
-val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accounts/i105.../assets", "limit=5", ByteArray(0), signer)
+val headers = CanonicalRequestSigner.buildHeaders(
+    "get",
+    URI.create("https://torii.example/v1/accounts/<i105-account-id>/assets?limit=5"),
+    ByteArray(0),
+    "<i105-account-id>",
+    privateKey
+)
 ```
 
 ### Endpoint Inventory
@@ -91,18 +98,24 @@ val headers = CanonicalRequestSigner.signingHeaders("i105...", "get", "/v1/accou
 
 #### Contract lifecycle (`/v1/contracts/*`) — Covered
 - Handlers: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
-  `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
-  `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
   `handle_post_contract_call` (`crates/iroha_torii/src/routing.rs:3534-3607`),
+  `handle_post_contract_call_multisig_propose`,
+  `handle_post_contract_call_multisig_approve`,
+  `handle_post_contract_view`,
   `handle_get_contract_code_bytes` (`crates/iroha_torii/src/routing.rs:3237-3304`).
-- DTOs: `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`
+- DTOs: `DeployContractDto`, `ContractCallDto`, `MultisigContractCallProposeDto`,
+  `MultisigContractCallApproveDto`, `ContractViewDto`
   (`crates/iroha_torii/src/routing.rs:3124-3463`).
 - Router binding: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
-- Tests: router/integration suites `contracts_deploy_integration.rs`, `contracts_activate_integration.rs`,
-  `contracts_instance_activate_integration.rs`, `contracts_call_integration.rs`,
-  `contracts_instances_list_router.rs`.
+- Tests: router/integration suites `contracts_deploy_integration.rs`,
+  `contracts_call_integration.rs`, and related unit coverage for multisig/view handling.
 - Owner: Smart Contract WG with Torii Platform.
-- Notes: Endpoints queue signed transactions and reuse shared telemetry metrics (`handle_transaction_with_metrics`).
+- Notes: Public lifecycle is alias-first. `/v1/contracts/deploy` requires
+  `contract_alias`, returns a fresh immutable `contract_address`, and reusing
+  the alias performs an in-place upgrade. Runtime calls are by-reference
+  `ContractCall` executions that accept exactly one of `contract_address` or
+  `contract_alias`; the older `/v1/contracts/instance*` server-side-signing
+  flow is no longer part of the public lifecycle surface.
 
 #### Verifying key lifecycle (`/v1/zk/vk/*`) — Covered
 - Handlers: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`

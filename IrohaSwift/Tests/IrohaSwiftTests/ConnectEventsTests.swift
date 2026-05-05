@@ -2,7 +2,8 @@ import XCTest
 @testable import IrohaSwift
 
 final class ConnectEventsTests: XCTestCase {
-    private let encodedUsdAssetID = "norito:757364"
+    private let encodedUsdAssetID =
+        "5ywNgSPQ5KyuQh7SwaZmwMW4GTXu"
 
     func testBalanceAssetRejectsFractionalPrecision() {
         let json: [String: Any] = [
@@ -25,7 +26,7 @@ final class ConnectEventsTests: XCTestCase {
             "quantity": "1"
         ]
         let json: [String: Any] = [
-            "account_id": "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn",
+            "account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
             "assets": [asset],
             "last_updated_ms": 1.25
         ]

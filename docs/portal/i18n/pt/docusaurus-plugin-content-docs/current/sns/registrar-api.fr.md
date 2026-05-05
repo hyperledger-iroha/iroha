@@ -108,15 +108,15 @@ Struct ReservedAssignmentRequestV1 {
 
 | Ponto final | Método | Carga útil | Descrição |
 |----------|--------|---------|-------------|
-| `/v1/sns/registrations` | POSTAR | `RegisterNameRequestV1` | Registre ou registre um nome. Resout le tier de prix, valide les preuves de payement/gouvernance, emet des eventes de registre. |
-| `/v1/sns/registrations/{selector}/renew` | POSTAR | `RenewNameRequestV1` | Prolongue o termo. Aplique as janelas de graça/redenção pela política. |
-| `/v1/sns/registrations/{selector}/transfer` | POSTAR | `TransferNameRequestV1` | Transfira a propriedade uma vez que as aprovações de governo conjunto. |
-| `/v1/sns/registrations/{selector}/controllers` | COLOCAR | `UpdateControllersRequestV1` | Substitua o conjunto de controladores; valide os endereços dos signatários da conta. |
-| `/v1/sns/registrations/{selector}/freeze` | POSTAR | `FreezeNameRequestV1` | Congelar guardião/conselho. Exige um guardião de ingressos e uma referência ao dossiê de governo. |
-| `/v1/sns/registrations/{selector}/freeze` | EXCLUIR | `GovernanceHookV1` | Descongelar apres remediação; certifique-se de que a substituição do conselho esteja registrada. |
+| `/v1/sns/names` | POSTAR | `RegisterNameRequestV1` | Registre ou registre um nome. Resout le tier de prix, valide les preuves de payement/gouvernance, emet des eventes de registre. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POSTAR | `RenewNameRequestV1` | Prolongue o termo. Aplique as janelas de graça/redenção pela política. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POSTAR | `TransferNameRequestV1` | Transfira a propriedade uma vez que as aprovações de governo conjunto. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | COLOCAR | `UpdateControllersRequestV1` | Substitua o conjunto de controladores; valide os endereços dos signatários da conta. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POSTAR | `FreezeNameRequestV1` | Congelar guardião/conselho. Exige um guardião de ingressos e uma referência ao dossiê de governo. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | EXCLUIR | `GovernanceHookV1` | Descongelar apres remediação; certifique-se de que a substituição do conselho esteja registrada. |
 | `/v1/sns/reserved/{selector}` | POSTAR | `ReservedAssignmentRequestV1` | Afetação de noms reservas por administrador/conselho. |
 | `/v1/sns/policies/{suffix_id}` | OBTER | -- | Recupere o corrente `SuffixPolicyV1` (armazenável em cache). |
-| `/v1/sns/registrations/{selector}` | OBTER | -- | Retourne le `NameRecordV1` courant + etat effectif (Active, Grace, etc.). |**Codificação do seletor:** o segmento `{selector}` aceita I105, comprimido ou hexadecimal canônico conforme ADDR-5; Torii normaliza via `NameSelectorV1`.
+| `/v1/sns/names/{namespace}/{literal}` | OBTER | -- | Retourne le `NameRecordV1` courant + etat effectif (Active, Grace, etc.). |**Codificação do seletor:** o segmento `{selector}` aceita i105, comprimido ou hexadecimal canônico conforme ADDR-5; Torii normaliza via `NameSelectorV1`.
 
 **Modelos de erros:** todos os endpoints retornam Norito JSON com `code`, `message`, `details`. Os códigos incluem `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -129,7 +129,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -154,7 +154,7 @@ Os auxiliares complementares cobrem renovações, transferências e ações guar
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -162,7 +162,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -177,7 +177,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` contém um registro `GovernanceHookV1` válido (id da proposta, hashes de voto, assinaturas do administrador/responsável). Este comando reflete simplesmente o endpoint `/v1/sns/registrations/{selector}/...` correspondente para que os operadores beta possam repetir exatamente as superfícies Torii que os SDKs chamam.
+`--governance-json` contém um registro `GovernanceHookV1` válido (id da proposta, hashes de voto, assinaturas do administrador/responsável). Este comando reflete simplesmente o endpoint `/v1/sns/names/{namespace}/{literal}/...` correspondente para que os operadores beta possam repetir exatamente as superfícies Torii que os SDKs chamam.
 
 ## 4. Serviço gRPC
 
@@ -222,7 +222,7 @@ Os controles enviados por echec `sns_err_governance_missing`.
 
 1. O cliente interroga `/v1/sns/policies/{suffix_id}` para recuperar o preço, a graça e os níveis disponíveis.
 2. O cliente constrói `RegisterNameRequestV1`:
-   - `selector` deriva do rótulo I105 (preferir) ou compresse (segunda escolha).
+   - `selector` deriva do rótulo i105 (preferir) ou compresse (segunda escolha).
    - `term_years` nos limites da política.
    - `payment` refere-se à transferência do divisor de tesouraria/administrador.
 3. Torii válido:
@@ -247,7 +247,7 @@ As renovações pendentes da graça incluem a solicitação padrão e a detecç�
 
 1. Guardian soumet `FreezeNameRequestV1` com um ticket referente ao ID do incidente.
 2. Torii substitua o registro em `NameStatus::Frozen`, emet `NameFrozen`.
-3. Após a remediação, o conselho emet un override; O operador enviou DELETE `/v1/sns/registrations/{selector}/freeze` com `GovernanceHookV1`.
+3. Após a remediação, o conselho emet un override; O operador enviou DELETE `/v1/sns/names/{namespace}/{literal}/freeze` com `GovernanceHookV1`.
 4. Torii valida a substituição, emet `NameUnfrozen`.
 
 ## 7. Validação e códigos de erro

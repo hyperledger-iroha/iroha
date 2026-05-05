@@ -9,13 +9,12 @@ use std::{
 
 use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
 pub use iroha_data_model::account::AccountId;
-pub use iroha_data_model::prelude::{
-    AssetDefinitionId, DomainId, Mintable, Name, NftId, Peer, ScopedAccountId,
-};
+pub use iroha_data_model::prelude::{AssetDefinitionId, DomainId, Mintable, Name, NftId, Peer};
 use iroha_data_model::{
     isi::{smart_contract_code as scode, transfer::TransferAssetBatch},
     nexus::{AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId},
     proof::{ProofAttachment, VerifyingKeyId},
+    smart_contract::ContractAddress,
 };
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::{Numeric, NumericSpec};
@@ -23,6 +22,7 @@ use norito::{
     decode_from_bytes,
     derive::{Decode, Encode},
     json::{self as njson},
+    literal,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -70,6 +70,27 @@ pub struct DataspaceAxtPolicy {
     pub min_handle_era: u64,
     pub min_sub_nonce: u64,
     pub current_slot: u64,
+}
+
+fn parse_json_numeric_field(field: &njson::Value) -> Result<Numeric, VMError> {
+    match field {
+        njson::Value::String(raw) => raw.parse::<Numeric>().map_err(|_| VMError::DecodeError),
+        njson::Value::Number(njson::native::Number::I64(value)) => Ok(Numeric::from(*value)),
+        njson::Value::Number(njson::native::Number::U64(value)) => Ok(Numeric::from(*value)),
+        _ => Err(VMError::DecodeError),
+    }
+}
+
+fn decode_json_blob_hex_literal(raw: &str) -> Result<Vec<u8>, VMError> {
+    let raw = if raw.starts_with("hash:") {
+        literal::parse("hash", raw).map_err(|_| VMError::DecodeError)?
+    } else {
+        raw.strip_prefix("0x").unwrap_or(raw)
+    };
+    if raw.len() % 2 != 0 {
+        return Err(VMError::DecodeError);
+    }
+    hex::decode(raw).map_err(|_| VMError::DecodeError)
 }
 
 impl DataspaceAxtPolicy {
@@ -248,6 +269,8 @@ pub enum PermissionToken {
     ManageTriggers,
     /// Permission to register and unregister peers.
     ManagePeers,
+    /// Opaque custom permission token used by contract entrypoints and tests.
+    Custom(String),
 }
 
 /// Minimal account representation tracking signatories, quorum, and metadata.
@@ -298,7 +321,7 @@ impl Default for Account {
 ///   `SMARTCONTRACT_EXECUTE_QUERY (0xA1)` and `SMARTCONTRACT_EXECUTE_INSTRUCTION (0xA0)`.
 ///   Supported envelopes include:
 ///   - Queries: `wsv.get_balance`, `wsv.list_triggers`, `wsv.has_permission`,
-///     `wsv.list_domains_for_subject`, `wsv.list_accounts_for_domain`.
+///     `wsv.list_domains_for_account`, `wsv.list_accounts_for_domain`.
 ///   - Admin: `wsv.create_role`, `wsv.grant_role`, `wsv.revoke_role`,
 ///     `wsv.grant_permission`, `wsv.revoke_permission`, `wsv.create_trigger`,
 ///     `wsv.set_trigger_enabled`, `wsv.remove_trigger`.
@@ -328,8 +351,8 @@ pub struct MockWorldStateView {
     contract_manifests: HashSet<CryptoHash>,
     /// Stored contract bytecode keyed by code hash.
     contract_code: HashMap<CryptoHash, Vec<u8>>,
-    /// Active contract instances keyed by (namespace, contract_id).
-    contract_instances: HashMap<(String, String), CryptoHash>,
+    /// Active contract instances keyed by canonical contract address.
+    contract_instances: HashMap<ContractAddress, CryptoHash>,
     /// Logical wall-clock timestamp used for time-gated operations (ms since epoch).
     current_time_ms: u64,
     /// Slot length (ms) used to derive current slot for expiry checks.
@@ -536,12 +559,10 @@ impl MockWorldStateView {
     /// Bind a contract instance in the mock registry.
     pub fn bind_contract_instance(
         &mut self,
-        namespace: impl Into<String>,
-        contract_id: impl Into<String>,
+        contract_address: ContractAddress,
         code_hash: CryptoHash,
     ) {
-        self.contract_instances
-            .insert((namespace.into(), contract_id.into()), code_hash);
+        self.contract_instances.insert(contract_address, code_hash);
     }
 
     // -----------------------------
@@ -586,7 +607,7 @@ impl MockWorldStateView {
     /// Permissions, proof validation, and Merkle verification are intentionally omitted in this mock.
     pub fn shield(
         &mut self,
-        from: &ScopedAccountId,
+        from: &AccountId,
         asset: &AssetDefinitionId,
         amount: Numeric,
         note_commitment: [u8; 32],
@@ -683,7 +704,7 @@ impl MockWorldStateView {
     /// Change output accounting and full proof semantics remain unimplemented in this mock.
     pub fn unshield(
         &mut self,
-        to: &ScopedAccountId,
+        to: &AccountId,
         asset: &AssetDefinitionId,
         public_amount: Numeric,
         inputs: &[[u8; 32]],
@@ -859,15 +880,13 @@ impl MockWorldStateView {
         true
     }
 
-    fn account_subject(account: &ScopedAccountId) -> AccountId {
+    fn account_subject(account: &AccountId) -> AccountId {
         account.subject_id()
     }
 
-    fn account_is_linked(&self, account: &ScopedAccountId) -> bool {
+    fn account_is_linked(&self, account: &AccountId) -> bool {
         let subject = Self::account_subject(account);
-        self.domain_accounts
-            .get(account.domain())
-            .is_some_and(|subjects| subjects.contains(&subject))
+        self.accounts.contains_key(&subject) || self.subject_has_any_domain(&subject)
     }
 
     fn subject_has_any_domain(&self, subject: &AccountId) -> bool {
@@ -876,16 +895,17 @@ impl MockWorldStateView {
             .any(|subjects| subjects.contains(subject))
     }
 
-    /// List all domains currently linked to the supplied account subject.
+    /// List all domains currently associated with the supplied account.
     ///
     /// The returned list is sorted for deterministic test assertions.
     #[must_use]
-    pub fn linked_domains_for_subject(&self, subject: &AccountId) -> Vec<DomainId> {
+    pub fn domains_for_account(&self, account: &AccountId) -> Vec<DomainId> {
+        let subject = Self::account_subject(account);
         let mut domains: Vec<DomainId> = self
             .domain_accounts
             .iter()
             .filter_map(|(domain, subjects)| {
-                if subjects.contains(subject) {
+                if subjects.contains(&subject) {
                     Some(domain.clone())
                 } else {
                     None
@@ -960,25 +980,15 @@ impl MockWorldStateView {
         true
     }
 
-    fn canonical_account_id_for_subject(&self, subject: &AccountId) -> Option<ScopedAccountId> {
-        let domain = self
-            .domain_accounts
-            .iter()
-            .filter(|(_, subjects)| subjects.contains(subject))
-            .map(|(domain, _)| domain.clone())
-            .min()?;
-        Some(subject.to_account_id(domain))
+    fn canonical_account_id_for_subject(&self, subject: &AccountId) -> Option<AccountId> {
+        (self.accounts.contains_key(subject) || self.subject_has_any_domain(subject))
+            .then(|| subject.clone())
     }
 
     /// Test helper: register an account without permission checks or domain validation.
     /// Intended for unit tests that need to seed the mock quickly.
-    pub fn add_account_unchecked(&mut self, id: ScopedAccountId) {
+    pub fn add_account_unchecked(&mut self, id: AccountId) {
         let subject = Self::account_subject(&id);
-        self.domains.entry(id.domain().clone()).or_default();
-        self.domain_accounts
-            .entry(id.domain().clone())
-            .or_default()
-            .insert(subject.clone());
         self.accounts.entry(subject).or_default();
     }
 
@@ -990,7 +1000,7 @@ impl MockWorldStateView {
     }
 
     /// Grant a permission token to `account`.
-    pub fn grant_permission(&mut self, account: &ScopedAccountId, token: PermissionToken) {
+    pub fn grant_permission(&mut self, account: &AccountId, token: PermissionToken) {
         self.permissions
             .entry(Self::account_subject(account))
             .or_default()
@@ -998,7 +1008,7 @@ impl MockWorldStateView {
     }
 
     /// Revoke a permission token from `account`.
-    pub fn revoke_permission(&mut self, account: &ScopedAccountId, token: &PermissionToken) {
+    pub fn revoke_permission(&mut self, account: &AccountId, token: &PermissionToken) {
         if let Some(set) = self.permissions.get_mut(&Self::account_subject(account)) {
             set.remove(token);
         }
@@ -1007,8 +1017,8 @@ impl MockWorldStateView {
     /// Add a signatory to `account`. Caller must be the account owner or hold `AddSignatory`.
     pub fn add_signatory(
         &mut self,
-        caller: &ScopedAccountId,
-        account: &ScopedAccountId,
+        caller: &AccountId,
+        account: &AccountId,
         public_key: String,
     ) -> bool {
         let caller_subject = Self::account_subject(caller);
@@ -1031,8 +1041,8 @@ impl MockWorldStateView {
     /// Remove a signatory from `account`. Caller must be owner or hold `RemoveSignatory`.
     pub fn remove_signatory(
         &mut self,
-        caller: &ScopedAccountId,
-        account: &ScopedAccountId,
+        caller: &AccountId,
+        account: &AccountId,
         public_key: &str,
     ) -> bool {
         let caller_subject = Self::account_subject(caller);
@@ -1055,8 +1065,8 @@ impl MockWorldStateView {
     /// Update quorum for `account`. Caller must be owner or hold `SetAccountQuorum`.
     pub fn set_account_quorum(
         &mut self,
-        caller: &ScopedAccountId,
-        account: &ScopedAccountId,
+        caller: &AccountId,
+        account: &AccountId,
         quorum: u32,
     ) -> bool {
         if quorum == 0 {
@@ -1083,8 +1093,8 @@ impl MockWorldStateView {
     /// Store account detail (metadata) under `key`. Caller must be owner or hold `SetAccountDetail`.
     pub fn set_account_detail(
         &mut self,
-        caller: &ScopedAccountId,
-        account: &ScopedAccountId,
+        caller: &AccountId,
+        account: &AccountId,
         key: &str,
         value: Vec<u8>,
     ) -> bool {
@@ -1110,7 +1120,7 @@ impl MockWorldStateView {
     }
 
     /// Read back account quorum.
-    pub fn account_quorum(&self, account: &ScopedAccountId) -> Option<u32> {
+    pub fn account_quorum(&self, account: &AccountId) -> Option<u32> {
         if !self.account_is_linked(account) {
             return None;
         }
@@ -1120,7 +1130,7 @@ impl MockWorldStateView {
     }
 
     /// Read back account signatories.
-    pub fn account_signatories(&self, account: &ScopedAccountId) -> Option<Vec<String>> {
+    pub fn account_signatories(&self, account: &AccountId) -> Option<Vec<String>> {
         if !self.account_is_linked(account) {
             return None;
         }
@@ -1130,7 +1140,7 @@ impl MockWorldStateView {
     }
 
     /// Read back an account detail entry.
-    pub fn account_detail_value(&self, account: &ScopedAccountId, key: &str) -> Option<Vec<u8>> {
+    pub fn account_detail_value(&self, account: &AccountId, key: &str) -> Option<Vec<u8>> {
         if !self.account_is_linked(account) {
             return None;
         }
@@ -1139,9 +1149,9 @@ impl MockWorldStateView {
             .and_then(|a| a.detail.get(key).cloned())
     }
 
-    pub fn has_permission(&self, account: &ScopedAccountId, token: &PermissionToken) -> bool {
+    pub fn has_permission(&self, account: &AccountId, token: &PermissionToken) -> bool {
         let subject = Self::account_subject(account);
-        if !self.subject_has_any_domain(&subject) {
+        if !self.account_is_linked(account) {
             return false;
         }
         // Direct permission
@@ -1167,7 +1177,7 @@ impl MockWorldStateView {
     }
 
     /// Initialize with a list of balances.
-    pub fn with_balances(entries: &[((ScopedAccountId, AssetDefinitionId), Numeric)]) -> Self {
+    pub fn with_balances(entries: &[((AccountId, AssetDefinitionId), Numeric)]) -> Self {
         let mut wsv = Self::new();
         for ((account, asset), amount) in entries.iter().cloned() {
             assert!(
@@ -1175,12 +1185,7 @@ impl MockWorldStateView {
                 "mock WSV balances must be unsigned scale=0"
             );
             let subject = Self::account_subject(&account);
-            wsv.domains.entry(account.domain().clone()).or_default();
             wsv.domains.entry(asset.domain().clone()).or_default();
-            wsv.domain_accounts
-                .entry(account.domain().clone())
-                .or_default()
-                .insert(subject.clone());
             wsv.accounts.entry(subject.clone()).or_default();
             wsv.asset_definitions
                 .entry(asset.clone())
@@ -1229,14 +1234,11 @@ impl MockWorldStateView {
     }
 
     /// Grant a role to an account if the role exists.
-    pub fn grant_role(&mut self, account: &ScopedAccountId, role: &str) -> bool {
+    pub fn grant_role(&mut self, account: &AccountId, role: &str) -> bool {
         if !self.roles.contains_key(role) {
             return false;
         }
         let subject = Self::account_subject(account);
-        if !self.subject_has_any_domain(&subject) {
-            return false;
-        }
         self.role_assignments
             .entry(subject)
             .or_default()
@@ -1244,7 +1246,7 @@ impl MockWorldStateView {
     }
 
     /// Revoke a role from an account.
-    pub fn revoke_role(&mut self, account: &ScopedAccountId, role: &str) -> bool {
+    pub fn revoke_role(&mut self, account: &AccountId, role: &str) -> bool {
         let subject = Self::account_subject(account);
         if let Some(set) = self.role_assignments.get_mut(&subject) {
             set.remove(role)
@@ -1254,7 +1256,7 @@ impl MockWorldStateView {
     }
 
     /// Register a new domain. Caller must hold `RegisterDomain`.
-    pub fn register_domain(&mut self, caller: &ScopedAccountId, id: DomainId) -> bool {
+    pub fn register_domain(&mut self, caller: &AccountId, id: DomainId) -> bool {
         if !self.has_permission(caller, &PermissionToken::RegisterDomain) {
             return false;
         }
@@ -1268,7 +1270,10 @@ impl MockWorldStateView {
             .domain_accounts
             .get(id)
             .is_some_and(|subjects| !subjects.is_empty());
-        let has_assets = self.asset_definitions.keys().any(|ad| ad.domain() == id);
+        let has_assets = self
+            .asset_definitions
+            .keys()
+            .any(|ad| ad.try_domain() == Some(id));
         let has_nfts = self.nfts.keys().any(|nft_id| nft_id.domain() == id);
         if has_accounts || has_assets || has_nfts {
             return false;
@@ -1278,42 +1283,67 @@ impl MockWorldStateView {
     }
 
     /// Register a new account. Returns `true` if it didn't exist before and the domain exists.
-    pub fn register_account(&mut self, caller: &ScopedAccountId, id: ScopedAccountId) -> bool {
-        if !self.domains.contains_key(id.domain()) {
-            return false;
-        }
+    pub fn register_account(&mut self, caller: &AccountId, id: AccountId) -> bool {
         if !self.has_permission(caller, &PermissionToken::RegisterAccount) {
             return false;
         }
         let subject = Self::account_subject(&id);
-        self.link_subject_to_domain(subject, id.domain().clone())
+        self.accounts.insert(subject, Account::default()).is_none()
     }
 
     /// Attempt to unregister an account from the selected domain.
     ///
     /// If the account subject is linked to multiple domains, only the current
     /// domain link is removed. When the final domain link is removed, subject
-    /// state remains detached (account metadata/permissions/roles are preserved).
+    /// authority state remains detached so permissions and role assignments can
+    /// be reattached by a later re-registration of the same subject.
     ///
     /// Unlinking the final domain while non-zero balances or NFT ownership
     /// remain is rejected to avoid leaving owned resources without a canonical
-    /// scoped account link in this mock world-state model.
-    pub fn unregister_account(&mut self, id: &ScopedAccountId) -> bool {
+    /// account registration in this mock world-state model.
+    pub fn unregister_account(&mut self, id: &AccountId) -> bool {
         let subject = Self::account_subject(id);
-        self.unlink_subject_from_domain(&subject, id.domain())
+        self.unregister_account_subject(&subject)
+    }
+
+    /// Attempt to unregister an account subject across all linked domains.
+    ///
+    /// This models the canonical `Unregister::account(AccountId)` surface while
+    /// keeping the mock's simplified subject/domain index intact.
+    pub fn unregister_account_subject(&mut self, subject: &AccountId) -> bool {
+        if !self.accounts.contains_key(subject) {
+            return false;
+        }
+        let has_bal = self
+            .balances
+            .iter()
+            .any(|((acc, _), amount)| acc == subject && !amount.is_zero());
+        let has_nfts = self.nfts.values().any(|rec| rec.owner == *subject);
+        if has_bal || has_nfts {
+            return false;
+        }
+        for subjects in self.domain_accounts.values_mut() {
+            subjects.remove(subject);
+        }
+        self.domain_accounts
+            .retain(|_, subjects| !subjects.is_empty());
+        self.accounts.remove(subject);
+        true
     }
 
     /// Register a new asset definition with given mintability.
+    ///
+    /// The mock matches the core host and accepts canonical opaque asset
+    /// definition identifiers without requiring a first-class domain row for
+    /// `id.domain()`.
+    ///
     /// Returns `true` if the definition was added.
     pub fn register_asset_definition(
         &mut self,
-        caller: &ScopedAccountId,
+        caller: &AccountId,
         id: AssetDefinitionId,
         mintable: Mintable,
     ) -> bool {
-        if !self.domains.contains_key(id.domain()) {
-            return false;
-        }
         if !self.has_permission(caller, &PermissionToken::RegisterAssetDefinition) {
             return false;
         }
@@ -1335,7 +1365,7 @@ impl MockWorldStateView {
     }
 
     /// Get the balance of `account_id` for `asset_id`.
-    pub fn balance(&self, account_id: ScopedAccountId, asset_id: AssetDefinitionId) -> Numeric {
+    pub fn balance(&self, account_id: AccountId, asset_id: AssetDefinitionId) -> Numeric {
         if !self.account_is_linked(&account_id) {
             return Numeric::zero();
         }
@@ -1354,8 +1384,8 @@ impl MockWorldStateView {
     /// view it. Returns `None` if the caller lacks permission.
     pub fn balance_checked(
         &self,
-        caller: &ScopedAccountId,
-        account_id: &ScopedAccountId,
+        caller: &AccountId,
+        account_id: &AccountId,
         asset_id: &AssetDefinitionId,
     ) -> Option<Numeric> {
         if Self::account_subject(caller) == Self::account_subject(account_id)
@@ -1374,11 +1404,23 @@ impl MockWorldStateView {
     /// Returns `true` on success or `false` if `from` lacks funds.
     pub fn transfer(
         &mut self,
-        caller: &ScopedAccountId,
-        from: ScopedAccountId,
-        to: ScopedAccountId,
+        caller: &AccountId,
+        from: AccountId,
+        to: AccountId,
         asset_id: AssetDefinitionId,
         amount: Numeric,
+    ) -> bool {
+        self.transfer_with_permission_bypass(caller, from, to, asset_id, amount, false)
+    }
+
+    pub fn transfer_with_permission_bypass(
+        &mut self,
+        caller: &AccountId,
+        from: AccountId,
+        to: AccountId,
+        asset_id: AssetDefinitionId,
+        amount: Numeric,
+        bypass_transfer_permission: bool,
     ) -> bool {
         if !self.account_is_linked(&from) || !self.account_is_linked(&to) {
             return false;
@@ -1386,7 +1428,9 @@ impl MockWorldStateView {
         if !Self::is_unsigned_scale0(&amount) {
             return false;
         }
-        if Self::account_subject(caller) != Self::account_subject(&from) {
+        if Self::account_subject(caller) != Self::account_subject(&from)
+            && !bypass_transfer_permission
+        {
             let token = PermissionToken::TransferAsset(asset_id.clone());
             if !self.has_permission(caller, &token) {
                 return false;
@@ -1444,8 +1488,8 @@ impl MockWorldStateView {
     /// Mint `amount` of `asset_id` into `account_id`.
     pub fn mint(
         &mut self,
-        caller: &ScopedAccountId,
-        account_id: ScopedAccountId,
+        caller: &AccountId,
+        account_id: AccountId,
         asset_id: AssetDefinitionId,
         amount: Numeric,
     ) -> bool {
@@ -1488,8 +1532,8 @@ impl MockWorldStateView {
     /// balance was sufficient and the burn succeeded.
     pub fn burn(
         &mut self,
-        caller: &ScopedAccountId,
-        account_id: ScopedAccountId,
+        caller: &AccountId,
+        account_id: AccountId,
         asset_id: AssetDefinitionId,
         amount: Numeric,
     ) -> bool {
@@ -1538,12 +1582,7 @@ impl MockWorldStateView {
     }
 
     /// Create an NFT with `owner` and `issuer` if it does not already exist.
-    pub fn create_nft(
-        &mut self,
-        owner: ScopedAccountId,
-        issuer: ScopedAccountId,
-        id: NftId,
-    ) -> bool {
+    pub fn create_nft(&mut self, owner: AccountId, issuer: AccountId, id: NftId) -> bool {
         if !self.account_is_linked(&owner) || !self.account_is_linked(&issuer) {
             return false;
         }
@@ -1564,9 +1603,9 @@ impl MockWorldStateView {
     /// Transfer an NFT from `from` to `to`. Caller must be the owner or issuer.
     pub fn transfer_nft(
         &mut self,
-        caller: &ScopedAccountId,
-        from: ScopedAccountId,
-        to: ScopedAccountId,
+        caller: &AccountId,
+        from: AccountId,
+        to: AccountId,
         id: &NftId,
     ) -> bool {
         if !self.account_is_linked(&from) || !self.account_is_linked(&to) {
@@ -1589,7 +1628,7 @@ impl MockWorldStateView {
     }
 
     /// Set data for an NFT. Caller must be owner or issuer.
-    pub fn set_nft_data(&mut self, caller: &ScopedAccountId, id: &NftId, json: Vec<u8>) -> bool {
+    pub fn set_nft_data(&mut self, caller: &AccountId, id: &NftId, json: Vec<u8>) -> bool {
         let caller_subject = Self::account_subject(caller);
         let Some(rec) = self.nfts.get_mut(id) else {
             return false;
@@ -1602,7 +1641,7 @@ impl MockWorldStateView {
     }
 
     /// Burn (remove) an NFT. Caller must be owner or issuer.
-    pub fn burn_nft(&mut self, caller: &ScopedAccountId, id: &NftId) -> bool {
+    pub fn burn_nft(&mut self, caller: &AccountId, id: &NftId) -> bool {
         let caller_subject = Self::account_subject(caller);
         if let Some(rec) = self.nfts.get(id) {
             if rec.owner != caller_subject && rec.issuer != caller_subject {
@@ -1615,7 +1654,7 @@ impl MockWorldStateView {
     }
 
     /// Return the current owner of an NFT if it exists.
-    pub fn nft_owner(&self, id: &NftId) -> Option<ScopedAccountId> {
+    pub fn nft_owner(&self, id: &NftId) -> Option<AccountId> {
         let subject = self.nfts.get(id).map(|rec| &rec.owner)?;
         self.canonical_account_id_for_subject(subject)
     }
@@ -1851,9 +1890,9 @@ mod tests {
 }
 
 #[cfg(test)]
-fn test_account_id(signatory: &str, domain: &str) -> ScopedAccountId {
-    ScopedAccountId::new(
-        domain.parse().expect("test domain id must parse"),
+fn test_account_id(signatory: &str, domain: &str) -> AccountId {
+    let _domain = DomainId::try_new(domain, "universal").expect("test domain id must parse");
+    AccountId::new(
         signatory
             .parse()
             .expect("test public key literal must parse"),
@@ -1887,9 +1926,10 @@ pub enum ZkEvent {
 /// Host environment exposing WSV operations via syscalls and enforcing permissions.
 pub struct WsvHost {
     pub wsv: MockWorldStateView,
-    pub caller: ScopedAccountId,
-    account_map: HashMap<u64, ScopedAccountId>,
+    pub caller: AccountId,
+    account_map: HashMap<u64, AccountId>,
     asset_map: HashMap<u64, AssetDefinitionId>,
+    public_inputs: BTreeMap<Name, Vec<u8>>,
     // ZK verify gating and configuration
     zk_verified_transfer: bool,
     zk_verified_unshield: bool,
@@ -1900,8 +1940,8 @@ pub struct WsvHost {
     axt_policy: Arc<dyn AxtPolicy>,
     axt_policy_overridden: bool,
     sm_enabled: bool,
-    fastpq_batch_entries:
-        Option<Vec<(ScopedAccountId, ScopedAccountId, AssetDefinitionId, Numeric)>>,
+    allow_contract_runtime_asset_transfer_bypass: bool,
+    fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Numeric)>>,
     actual_access: crate::host::AccessLog,
     state_overlay: HashMap<String, Option<Vec<u8>>>,
     tx_active: bool,
@@ -1913,9 +1953,10 @@ pub struct WsvHost {
 struct WsvHostSnapshot {
     wsv: MockWorldStateView,
     state_snapshot: DurableStateSnapshot,
-    caller: ScopedAccountId,
-    account_map: HashMap<u64, ScopedAccountId>,
+    caller: AccountId,
+    account_map: HashMap<u64, AccountId>,
     asset_map: HashMap<u64, AssetDefinitionId>,
+    public_inputs: BTreeMap<Name, Vec<u8>>,
     zk_verified_transfer: bool,
     zk_verified_unshield: bool,
     zk_verified_ballot: VecDeque<[u8; 32]>,
@@ -1925,8 +1966,8 @@ struct WsvHostSnapshot {
     axt_policy: Arc<dyn AxtPolicy>,
     axt_policy_overridden: bool,
     sm_enabled: bool,
-    fastpq_batch_entries:
-        Option<Vec<(ScopedAccountId, ScopedAccountId, AssetDefinitionId, Numeric)>>,
+    allow_contract_runtime_asset_transfer_bypass: bool,
+    fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Numeric)>>,
     actual_access: crate::host::AccessLog,
     state_overlay: HashMap<String, Option<Vec<u8>>>,
     tx_active: bool,
@@ -1934,29 +1975,20 @@ struct WsvHostSnapshot {
 }
 
 impl WsvHost {
-    fn default_domain_id() -> DomainId {
-        iroha_data_model::account::address::default_domain_name()
-            .parse()
-            .expect("default domain name must parse as DomainId")
-    }
-
-    fn materialize_subject_account(
-        wsv: &mut MockWorldStateView,
-        subject: &AccountId,
-    ) -> ScopedAccountId {
+    fn materialize_subject_account(wsv: &mut MockWorldStateView, subject: &AccountId) -> AccountId {
         if let Some(existing) = wsv.canonical_account_id_for_subject(subject) {
             return existing;
         }
 
-        let account_id = subject.to_account_id(Self::default_domain_id());
+        let account_id = subject.clone();
         wsv.add_account_unchecked(account_id.clone());
         account_id
     }
 
-    fn new_scoped(
+    fn new_host(
         wsv: MockWorldStateView,
-        caller: ScopedAccountId,
-        account_map: HashMap<u64, ScopedAccountId>,
+        caller: AccountId,
+        account_map: HashMap<u64, AccountId>,
         asset_map: HashMap<u64, AssetDefinitionId>,
     ) -> Self {
         let policy = Self::build_wsv_axt_policy(&wsv);
@@ -1965,6 +1997,7 @@ impl WsvHost {
             caller,
             account_map,
             asset_map,
+            public_inputs: BTreeMap::new(),
             zk_verified_transfer: false,
             zk_verified_unshield: false,
             zk_verified_ballot: VecDeque::new(),
@@ -1974,6 +2007,7 @@ impl WsvHost {
             axt_policy: policy,
             axt_policy_overridden: false,
             sm_enabled: false,
+            allow_contract_runtime_asset_transfer_bypass: false,
             fastpq_batch_entries: None,
             actual_access: crate::host::AccessLog::default(),
             state_overlay: HashMap::new(),
@@ -1982,11 +2016,7 @@ impl WsvHost {
         }
     }
 
-    /// Construct a host from a domainless caller/account index map.
-    ///
-    /// Subjects already linked in the world keep their canonical domain linkage.
-    /// Subjects without any domain linkage are materialized under the configured
-    /// default domain and linked into the world.
+    /// Construct a host from a canonical caller/account index map.
     pub fn new_with_subject_map(
         mut wsv: MockWorldStateView,
         caller: AccountId,
@@ -1994,14 +2024,14 @@ impl WsvHost {
         asset_map: HashMap<u64, AssetDefinitionId>,
     ) -> Self {
         let caller_account = Self::materialize_subject_account(&mut wsv, &caller);
-        let scoped_map = account_map
+        let account_map = account_map
             .into_iter()
             .map(|(idx, subject)| (idx, Self::materialize_subject_account(&mut wsv, &subject)))
             .collect();
-        Self::new_scoped(wsv, caller_account, scoped_map, asset_map)
+        Self::new_host(wsv, caller_account, account_map, asset_map)
     }
 
-    /// Construct a host from a single domainless caller with no account index map.
+    /// Construct a host from a single canonical caller with no account index map.
     pub fn new_with_subject(
         wsv: MockWorldStateView,
         caller: AccountId,
@@ -2010,18 +2040,26 @@ impl WsvHost {
         Self::new_with_subject_map(wsv, caller, HashMap::new(), asset_map)
     }
 
-    /// Return the current caller as a domainless account subject.
+    /// Return the current canonical caller identity.
     #[must_use]
     pub fn caller_subject(&self) -> AccountId {
-        AccountId::from(&self.caller)
+        self.caller.clone()
     }
 
-    /// Switch the caller using a domainless account subject.
-    ///
-    /// If the subject has no existing domain linkage in the world, it is
-    /// materialized under the configured default domain first.
+    /// Switch the caller using a canonical account identity.
     pub fn set_caller_subject(&mut self, caller: AccountId) {
         self.caller = Self::materialize_subject_account(&mut self.wsv, &caller);
+    }
+
+    /// Provide public inputs retrievable via `SYSCALL_GET_PUBLIC_INPUT`.
+    pub fn with_public_inputs(mut self, inputs: BTreeMap<Name, Vec<u8>>) -> Self {
+        self.public_inputs = inputs;
+        self
+    }
+
+    /// Replace the public input map used by `SYSCALL_GET_PUBLIC_INPUT`.
+    pub fn set_public_inputs(&mut self, inputs: BTreeMap<Name, Vec<u8>>) {
+        self.public_inputs = inputs;
     }
 
     fn build_wsv_axt_policy(wsv: &MockWorldStateView) -> Arc<SpaceDirectoryAxtPolicy> {
@@ -2055,6 +2093,7 @@ impl WsvHost {
             caller: self.caller.clone(),
             account_map: self.account_map.clone(),
             asset_map: self.asset_map.clone(),
+            public_inputs: self.public_inputs.clone(),
             zk_verified_transfer: self.zk_verified_transfer,
             zk_verified_unshield: self.zk_verified_unshield,
             zk_verified_ballot: self.zk_verified_ballot.clone(),
@@ -2064,6 +2103,8 @@ impl WsvHost {
             axt_policy: Arc::clone(&self.axt_policy),
             axt_policy_overridden: self.axt_policy_overridden,
             sm_enabled: self.sm_enabled,
+            allow_contract_runtime_asset_transfer_bypass: self
+                .allow_contract_runtime_asset_transfer_bypass,
             fastpq_batch_entries: self.fastpq_batch_entries.clone(),
             actual_access: self.actual_access.clone(),
             state_overlay: self.state_overlay.clone(),
@@ -2080,6 +2121,7 @@ impl WsvHost {
         self.caller = snapshot.caller.clone();
         self.account_map = snapshot.account_map.clone();
         self.asset_map = snapshot.asset_map.clone();
+        self.public_inputs = snapshot.public_inputs.clone();
         self.zk_verified_transfer = snapshot.zk_verified_transfer;
         self.zk_verified_unshield = snapshot.zk_verified_unshield;
         self.zk_verified_ballot = snapshot.zk_verified_ballot.clone();
@@ -2089,6 +2131,8 @@ impl WsvHost {
         self.axt_policy = Arc::clone(&snapshot.axt_policy);
         self.axt_policy_overridden = snapshot.axt_policy_overridden;
         self.sm_enabled = snapshot.sm_enabled;
+        self.allow_contract_runtime_asset_transfer_bypass =
+            snapshot.allow_contract_runtime_asset_transfer_bypass;
         self.fastpq_batch_entries = snapshot.fastpq_batch_entries.clone();
         self.actual_access = snapshot.actual_access.clone();
         self.state_overlay = snapshot.state_overlay.clone();
@@ -2220,6 +2264,16 @@ impl WsvHost {
         self.sm_enabled = enabled;
     }
 
+    /// Opt-in test-host bypass that mirrors executor-scoped contract transfer authorization.
+    pub fn set_allow_contract_runtime_asset_transfer_bypass(&mut self, enabled: bool) {
+        self.allow_contract_runtime_asset_transfer_bypass = enabled;
+    }
+
+    #[must_use]
+    pub fn contract_runtime_asset_transfer_bypass_enabled(&self) -> bool {
+        self.allow_contract_runtime_asset_transfer_bypass
+    }
+
     fn load_state_value(vm: &mut IVM, stored: &[u8]) -> Result<(), VMError> {
         let mut env = stored.to_vec();
         if let Ok(inner) = pointer_abi::validate_tlv_bytes(&env) {
@@ -2236,7 +2290,7 @@ impl WsvHost {
             out.extend_from_slice(&h);
             env = out;
         }
-        let p = vm.alloc_input_tlv(&env)?;
+        let p = vm.alloc_host_tlv(&env)?;
         vm.set_register(10, p);
         Ok(())
     }
@@ -2256,16 +2310,30 @@ impl WsvHost {
         self.zk_verified_tally
     }
 
-    fn account(&self, idx: u64) -> Option<ScopedAccountId> {
+    fn account(&self, idx: u64) -> Option<AccountId> {
         self.account_map.get(&idx).cloned()
+    }
+
+    fn indexed_account_subject(&self, idx: u64) -> Option<AccountId> {
+        self.account(idx).map(|id| id.subject_id())
     }
 
     fn asset(&self, idx: u64) -> Option<AssetDefinitionId> {
         self.asset_map.get(&idx).cloned()
     }
 
-    fn decode_account_payload(&self, payload: &[u8]) -> Result<ScopedAccountId, VMError> {
-        decode_from_bytes::<ScopedAccountId>(payload).map_err(|_| VMError::DecodeError)
+    fn decode_account_payload(&self, payload: &[u8]) -> Result<AccountId, VMError> {
+        if let Ok(id) = decode_from_bytes::<AccountId>(payload) {
+            return Ok(id);
+        }
+        let subject = decode_from_bytes::<AccountId>(payload).map_err(|_| VMError::DecodeError)?;
+        self.wsv
+            .canonical_account_id_for_subject(&subject)
+            .ok_or(VMError::DecodeError)
+    }
+
+    fn decode_account_subject_payload(&self, payload: &[u8]) -> Result<AccountId, VMError> {
+        decode_from_bytes::<AccountId>(payload).map_err(|_| VMError::DecodeError)
     }
 
     fn decode_asset_payload(&self, payload: &[u8]) -> Result<AssetDefinitionId, VMError> {
@@ -2292,9 +2360,9 @@ impl WsvHost {
         Ok(None)
     }
 
-    /// Decode a ScopedAccountId from a register which may contain either an index
+    /// Decode a AccountId from a register which may contain either an index
     /// into `account_map` (older tests) or a pointer to a TLV in INPUT.
-    fn decode_account_reg(&self, vm: &IVM, reg: usize) -> Result<ScopedAccountId, VMError> {
+    fn decode_account_reg(&self, vm: &IVM, reg: usize) -> Result<AccountId, VMError> {
         let v = vm.register(reg);
         if crate::dev_env::debug_wsv_enabled() {
             eprintln!("[wsv.decode_account_reg] reg=r{reg} ptr=0x{v:08x}");
@@ -2315,6 +2383,41 @@ impl WsvHost {
             return Err(VMError::NoritoInvalid);
         }
         self.decode_account_payload(tlv.payload)
+    }
+
+    /// Decode a canonical AccountId from a register which may contain either an
+    /// index into `account_map` (older tests) or a pointer to a TLV in INPUT.
+    ///
+    /// Unlike `decode_account_reg`, this rejects AccountId payloads in
+    /// the TLV body so the mock matches the current core host ABI surface for
+    /// account-targeting syscalls.
+    fn decode_account_subject_reg(&self, vm: &IVM, reg: usize) -> Result<AccountId, VMError> {
+        let v = vm.register(reg);
+        if crate::dev_env::debug_wsv_enabled() {
+            eprintln!("[wsv.decode_account_subject_reg] reg=r{reg} ptr=0x{v:08x}");
+        }
+        if let Some(subject) = self.indexed_account_subject(v) {
+            return Ok(subject);
+        }
+        let tlv = vm.memory.validate_tlv(v)?;
+        if crate::dev_env::debug_wsv_enabled() {
+            eprintln!(
+                "[wsv.decode_account_subject_reg] tlv type={:?} len={}",
+                tlv.type_id,
+                tlv.payload.len()
+            );
+        }
+        if tlv.type_id != PointerType::AccountId {
+            return Err(VMError::NoritoInvalid);
+        }
+        self.decode_account_subject_payload(tlv.payload)
+    }
+
+    fn decode_canonical_account_reg(&self, vm: &IVM, reg: usize) -> Result<AccountId, VMError> {
+        let subject = self.decode_account_subject_reg(vm, reg)?;
+        self.wsv
+            .canonical_account_id_for_subject(&subject)
+            .ok_or(VMError::DecodeError)
     }
 
     /// Decode an AssetDefinitionId from a register which may contain either an
@@ -2444,12 +2547,13 @@ impl WsvHost {
             return Err(VMError::DecodeError);
         }
         for (from, to, asset, amount) in entries {
-            if !self.wsv.transfer(
+            if !self.wsv.transfer_with_permission_bypass(
                 &self.caller,
                 from.clone(),
                 to.clone(),
                 asset.clone(),
                 amount,
+                self.allow_contract_runtime_asset_transfer_bypass,
             ) {
                 return Err(VMError::PermissionDenied);
             }
@@ -2474,12 +2578,13 @@ impl WsvHost {
         for entry in batch.entries() {
             let from = Self::materialize_subject_account(&mut self.wsv, entry.from());
             let to = Self::materialize_subject_account(&mut self.wsv, entry.to());
-            if !self.wsv.transfer(
+            if !self.wsv.transfer_with_permission_bypass(
                 &self.caller,
                 from,
                 to,
                 entry.asset_definition().clone(),
                 entry.amount().clone(),
+                self.allow_contract_runtime_asset_transfer_bypass,
             ) {
                 return Err(VMError::PermissionDenied);
             }
@@ -2809,7 +2914,7 @@ impl WsvHost {
         out.extend_from_slice(payload);
         let h: [u8; iroha_crypto::Hash::LENGTH] = iroha_crypto::Hash::new(payload).into();
         out.extend_from_slice(&h);
-        vm.alloc_input_tlv(&out)
+        vm.alloc_host_tlv(&out)
     }
 
     fn decode_name_payload(&self, payload: &[u8]) -> Result<Name, VMError> {
@@ -2850,47 +2955,53 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
         return Ok(PermissionToken::RegisterAssetDefinition);
     }
     if let Some(rest) = s.strip_prefix("read_assets:") {
-        let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::ReadAccountAssets(id.subject_id()));
+        let id = parse_account_subject_literal(rest)?;
+        return Ok(PermissionToken::ReadAccountAssets(id));
     }
     if let Some(rest) = s.strip_prefix("add_signatory:") {
-        let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::AddSignatory(id.subject_id()));
+        let id = parse_account_subject_literal(rest)?;
+        return Ok(PermissionToken::AddSignatory(id));
     }
     if let Some(rest) = s.strip_prefix("remove_signatory:") {
-        let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::RemoveSignatory(id.subject_id()));
+        let id = parse_account_subject_literal(rest)?;
+        return Ok(PermissionToken::RemoveSignatory(id));
     }
     if let Some(rest) = s.strip_prefix("set_account_quorum:") {
-        let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::SetAccountQuorum(id.subject_id()));
+        let id = parse_account_subject_literal(rest)?;
+        return Ok(PermissionToken::SetAccountQuorum(id));
     }
     if let Some(rest) = s.strip_prefix("set_account_detail:") {
-        let id = parse_account_id_literal(rest)?;
-        return Ok(PermissionToken::SetAccountDetail(id.subject_id()));
+        let id = parse_account_subject_literal(rest)?;
+        return Ok(PermissionToken::SetAccountDetail(id));
     }
     if let Some(rest) = s.strip_prefix("register_zk_asset:") {
-        let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let id =
+            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::RegisterZkAsset(id));
     }
     if let Some(rest) = s.strip_prefix("shield:") {
-        let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let id =
+            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::Shield(id));
     }
     if let Some(rest) = s.strip_prefix("unshield:") {
-        let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let id =
+            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::Unshield(id));
     }
     if let Some(rest) = s.strip_prefix("mint_asset:") {
-        let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let id =
+            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::MintAsset(id));
     }
     if let Some(rest) = s.strip_prefix("burn_asset:") {
-        let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let id =
+            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::BurnAsset(id));
     }
     if let Some(rest) = s.strip_prefix("transfer_asset:") {
-        let id: AssetDefinitionId = rest.parse().map_err(|_| VMError::NoritoInvalid)?;
+        let id =
+            AssetDefinitionId::parse_address_literal(rest).map_err(|_| VMError::NoritoInvalid)?;
         return Ok(PermissionToken::TransferAsset(id));
     }
     if s == "manage_roles" {
@@ -2905,8 +3016,14 @@ fn parse_permission_name(s: &str) -> Result<PermissionToken, VMError> {
     if s == "manage_peers" {
         return Ok(PermissionToken::ManagePeers);
     }
-    Err(VMError::NoritoInvalid)
+    if s.is_empty() {
+        return Err(VMError::NoritoInvalid);
+    }
+    Ok(PermissionToken::Custom(s.to_string()))
 }
+
+const PUBLIC_INPUT_GAS_BASE: u64 = 16;
+const PUBLIC_INPUT_GAS_PER_BYTE: u64 = 1;
 
 /// Parse a JSON payload and return either the raw string value or selected field contents.
 fn parse_json_value_any(bytes: &[u8]) -> Result<njson::Value, VMError> {
@@ -2956,8 +3073,20 @@ fn parse_json_string_array_any(bytes: &[u8], keys: &[&str]) -> Result<Vec<String
     Ok(out)
 }
 
-fn parse_account_id_literal(raw: &str) -> Result<ScopedAccountId, VMError> {
-    ScopedAccountId::parse_encoded(raw).map_err(|_| VMError::NoritoInvalid)
+fn parse_account_id_literal(raw: &str) -> Result<AccountId, VMError> {
+    AccountId::parse_encoded(raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|_| VMError::NoritoInvalid)
+}
+
+fn parse_account_subject_literal(raw: &str) -> Result<AccountId, VMError> {
+    AccountId::parse_encoded(raw)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .or_else(|_| {
+            raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
+                .map(|address| address.subject_id())
+        })
+        .map_err(|_| VMError::NoritoInvalid)
 }
 
 /// Parse a peer identifier from a JSON payload that may be either a raw string or an
@@ -2978,12 +3107,12 @@ fn parse_permission_value(value: &njson::Value) -> Result<PermissionToken, VMErr
             .ok_or(VMError::NoritoInvalid)?;
         target.parse().map_err(|_| VMError::NoritoInvalid)
     }
-    fn parse_account_target(map: &njson::Map) -> Result<ScopedAccountId, VMError> {
+    fn parse_account_target(map: &njson::Map) -> Result<AccountId, VMError> {
         let target = map
             .get("target")
             .and_then(njson::Value::as_str)
             .ok_or(VMError::NoritoInvalid)?;
-        parse_account_id_literal(target)
+        parse_account_subject_literal(target)
     }
 
     if let Some(name) = value.as_str() {
@@ -3006,23 +3135,23 @@ fn parse_permission_value(value: &njson::Value) -> Result<PermissionToken, VMErr
         }
         "read_assets" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::ReadAccountAssets(account.subject_id()))
+            Ok(PermissionToken::ReadAccountAssets(account))
         }
         "add_signatory" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::AddSignatory(account.subject_id()))
+            Ok(PermissionToken::AddSignatory(account))
         }
         "remove_signatory" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::RemoveSignatory(account.subject_id()))
+            Ok(PermissionToken::RemoveSignatory(account))
         }
         "set_account_quorum" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::SetAccountQuorum(account.subject_id()))
+            Ok(PermissionToken::SetAccountQuorum(account))
         }
         "set_account_detail" => {
             let account = parse_account_target(map)?;
-            Ok(PermissionToken::SetAccountDetail(account.subject_id()))
+            Ok(PermissionToken::SetAccountDetail(account))
         }
         "shield" => {
             let id: AssetDefinitionId = parse_target(map)?;
@@ -3048,6 +3177,16 @@ fn parse_permission_value(value: &njson::Value) -> Result<PermissionToken, VMErr
         "manage_permissions" => Ok(PermissionToken::ManagePermissions),
         "manage_triggers" => Ok(PermissionToken::ManageTriggers),
         "manage_peers" => Ok(PermissionToken::ManagePeers),
+        "custom" => {
+            let name = map
+                .get("name")
+                .and_then(njson::Value::as_str)
+                .ok_or(VMError::NoritoInvalid)?;
+            if name.is_empty() {
+                return Err(VMError::NoritoInvalid);
+            }
+            Ok(PermissionToken::Custom(name.to_string()))
+        }
         _ => Err(VMError::NoritoInvalid),
     }
 }
@@ -3179,6 +3318,37 @@ impl IVMHost for WsvHost {
                 }
                 Ok(0)
             }
+            crate::syscalls::SYSCALL_GET_PUBLIC_INPUT => {
+                let ptr = vm.register(10);
+                let tlv = vm.memory.validate_tlv(ptr)?;
+                if tlv.type_id != PointerType::Name {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                let name: Name =
+                    decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
+                let Some(bytes) = self.public_inputs.get(&name) else {
+                    return Err(VMError::PermissionDenied);
+                };
+                let tlv = pointer_abi::validate_tlv_bytes(bytes)?;
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                let dst = vm.alloc_input_tlv(bytes)?;
+                vm.set_register(10, dst);
+                let len = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+                Ok(PUBLIC_INPUT_GAS_BASE
+                    .saturating_add(PUBLIC_INPUT_GAS_PER_BYTE.saturating_mul(len)))
+            }
             crate::syscalls::SYSCALL_DECODE_INT => {
                 // r10 = &NoritoBytes (Norito-framed i64) -> r10 = parsed i64
                 let addr = vm.register(10);
@@ -3256,7 +3426,8 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_TO_INT => {
+            crate::syscalls::SYSCALL_NUMERIC_TO_INT
+            | crate::syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
                     return Err(VMError::NoritoInvalid);
@@ -3271,7 +3442,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, (value as i64) as u64);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_ADD => {
+            crate::syscalls::SYSCALL_NUMERIC_ADD | crate::syscalls::SYSCALL_NUMERIC_ADD_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs.checked_add(rhs).ok_or(VMError::AssertionFailed)?;
@@ -3280,7 +3451,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_SUB => {
+            crate::syscalls::SYSCALL_NUMERIC_SUB | crate::syscalls::SYSCALL_NUMERIC_SUB_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs.checked_sub(rhs).ok_or(VMError::AssertionFailed)?;
@@ -3292,7 +3463,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_MUL => {
+            crate::syscalls::SYSCALL_NUMERIC_MUL | crate::syscalls::SYSCALL_NUMERIC_MUL_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs
@@ -3303,7 +3474,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_DIV => {
+            crate::syscalls::SYSCALL_NUMERIC_DIV | crate::syscalls::SYSCALL_NUMERIC_DIV_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs
@@ -3314,7 +3485,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_REM => {
+            crate::syscalls::SYSCALL_NUMERIC_REM | crate::syscalls::SYSCALL_NUMERIC_REM_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs
@@ -3325,7 +3496,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_NEG => {
+            crate::syscalls::SYSCALL_NUMERIC_NEG | crate::syscalls::SYSCALL_NUMERIC_NEG_DIRECT => {
                 let val = self.decode_numeric_ptr(vm, vm.register(10))?;
                 if !val.is_zero() {
                     return Err(VMError::AssertionFailed);
@@ -3340,11 +3511,17 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_NUMERIC_LT
             | crate::syscalls::SYSCALL_NUMERIC_LE
             | crate::syscalls::SYSCALL_NUMERIC_GT
-            | crate::syscalls::SYSCALL_NUMERIC_GE => {
+            | crate::syscalls::SYSCALL_NUMERIC_GE
+            | crate::syscalls::SYSCALL_NUMERIC_EQ_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_NE_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_LT_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_LE_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_GT_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_GE_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let cmp = lhs.cmp(&rhs);
-                let result = match number {
+                let result = match crate::syscalls::canonical_helper_syscall(number) {
                     crate::syscalls::SYSCALL_NUMERIC_EQ => cmp == core::cmp::Ordering::Equal,
                     crate::syscalls::SYSCALL_NUMERIC_NE => cmp != core::cmp::Ordering::Equal,
                     crate::syscalls::SYSCALL_NUMERIC_LT => cmp == core::cmp::Ordering::Less,
@@ -3425,6 +3602,91 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
+            crate::syscalls::SYSCALL_JSON_OBJECT => {
+                let out_json = Json::from(njson::Value::Object(njson::Map::new()));
+                let body = norito::to_bytes(&out_json).map_err(|_| VMError::NoritoInvalid)?;
+                let mut out = Vec::with_capacity(7 + body.len() + 32);
+                out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = CryptoHash::new(&body).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_JSON_SET_I64
+            | crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
+            | crate::syscalls::SYSCALL_JSON_SET_I64_DIRECT
+            | crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT => {
+                let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
+                let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
+                if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, json_tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: json_tlv.type_id as u16,
+                    });
+                }
+                if !pointer_abi::is_type_allowed_for_policy(policy, key_tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: key_tlv.type_id as u16,
+                    });
+                }
+
+                let json: Json =
+                    decode_from_bytes(json_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let value: njson::Value = json
+                    .try_into_any_norito()
+                    .map_err(|_| VMError::DecodeError)?;
+                let mut obj = match value {
+                    njson::Value::Object(map) => map,
+                    _ => return Err(VMError::DecodeError),
+                };
+                let key_name: Name =
+                    decode_from_bytes(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
+
+                let field = match crate::syscalls::canonical_helper_syscall(number) {
+                    crate::syscalls::SYSCALL_JSON_SET_I64 => {
+                        njson::Value::from(vm.register(12) as i64)
+                    }
+                    crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID => {
+                        let value_tlv = vm.memory.validate_tlv(vm.register(12))?;
+                        if value_tlv.type_id != PointerType::AccountId {
+                            return Err(VMError::NoritoInvalid);
+                        }
+                        if !pointer_abi::is_type_allowed_for_policy(policy, value_tlv.type_id) {
+                            return Err(VMError::AbiTypeNotAllowed {
+                                abi: vm.abi_version(),
+                                type_id: value_tlv.type_id as u16,
+                            });
+                        }
+                        let account: AccountId = decode_from_bytes(value_tlv.payload)
+                            .map_err(|_| VMError::DecodeError)?;
+                        njson::Value::from(account.to_string())
+                    }
+                    _ => return Err(VMError::UnknownSyscall(number)),
+                };
+
+                obj.insert(key_name.to_string(), field);
+                let out_json = Json::from(njson::Value::Object(obj));
+                let body = norito::to_bytes(&out_json).map_err(|_| VMError::NoritoInvalid)?;
+                let mut out = Vec::with_capacity(7 + body.len() + 32);
+                out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = CryptoHash::new(&body).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
             crate::syscalls::SYSCALL_TLV_LEN => {
                 let addr = vm.register(10);
                 if addr == 0 {
@@ -3447,7 +3709,17 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_JSON_GET_NAME
             | crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
             | crate::syscalls::SYSCALL_JSON_GET_NFT_ID
-            | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX => {
+            | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX
+            | crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
+            | crate::syscalls::SYSCALL_JSON_GET_NUMERIC
+            | crate::syscalls::SYSCALL_JSON_GET_I64_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_JSON_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_NAME_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_NUMERIC_DIRECT => {
                 let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
@@ -3477,7 +3749,7 @@ impl IVMHost for WsvHost {
                     decode_from_bytes(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let field = obj.get(key_name.as_ref()).ok_or(VMError::DecodeError)?;
 
-                match number {
+                match crate::syscalls::canonical_helper_syscall(number) {
                     crate::syscalls::SYSCALL_JSON_GET_I64 => {
                         let n = match field {
                             njson::Value::Number(njson::native::Number::I64(v)) => *v,
@@ -3522,7 +3794,12 @@ impl IVMHost for WsvHost {
                     }
                     crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => {
                         let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        let acct = ScopedAccountId::parse_encoded(raw)
+                        let acct = iroha_data_model::account::AccountId::parse_encoded(raw)
+                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                            .or_else(|_| {
+                                raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
+                                    .map(|address| address.subject_id())
+                            })
                             .map_err(|_| VMError::DecodeError)?;
                         let body = norito::to_bytes(&acct).map_err(|_| VMError::NoritoInvalid)?;
                         let mut out = Vec::with_capacity(7 + body.len() + 32);
@@ -3553,17 +3830,46 @@ impl IVMHost for WsvHost {
                     }
                     crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX => {
                         let raw = field.as_str().ok_or(VMError::DecodeError)?;
-                        let raw = raw.strip_prefix("0x").unwrap_or(raw);
-                        if raw.len() % 2 != 0 {
-                            return Err(VMError::DecodeError);
-                        }
-                        let bytes = hex::decode(raw).map_err(|_| VMError::DecodeError)?;
+                        let bytes = decode_json_blob_hex_literal(raw)?;
                         let mut out = Vec::with_capacity(7 + bytes.len() + 32);
                         out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
                         out.push(1);
                         out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
                         out.extend_from_slice(&bytes);
                         let h: [u8; 32] = CryptoHash::new(&bytes).into();
+                        out.extend_from_slice(&h);
+                        let p = vm.alloc_input_tlv(&out)?;
+                        vm.set_register(10, p);
+                        Ok(0)
+                    }
+                    crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID => {
+                        let raw = field.as_str().ok_or(VMError::DecodeError)?;
+                        let asset = AssetDefinitionId::parse_address_literal(raw)
+                            .map_err(|_| VMError::DecodeError)?;
+                        let body = norito::to_bytes(&asset).map_err(|_| VMError::NoritoInvalid)?;
+                        let mut out = Vec::with_capacity(7 + body.len() + 32);
+                        out.extend_from_slice(
+                            &(PointerType::AssetDefinitionId as u16).to_be_bytes(),
+                        );
+                        out.push(1);
+                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&body);
+                        let h: [u8; 32] = CryptoHash::new(&body).into();
+                        out.extend_from_slice(&h);
+                        let p = vm.alloc_input_tlv(&out)?;
+                        vm.set_register(10, p);
+                        Ok(0)
+                    }
+                    crate::syscalls::SYSCALL_JSON_GET_NUMERIC => {
+                        let numeric = parse_json_numeric_field(field)?;
+                        let body =
+                            norito::to_bytes(&numeric).map_err(|_| VMError::NoritoInvalid)?;
+                        let mut out = Vec::with_capacity(7 + body.len() + 32);
+                        out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
+                        out.push(1);
+                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&body);
+                        let h: [u8; 32] = CryptoHash::new(&body).into();
                         out.extend_from_slice(&h);
                         let p = vm.alloc_input_tlv(&out)?;
                         vm.set_register(10, p);
@@ -3712,7 +4018,8 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, if eq { 1 } else { 0 });
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_SCHEMA_ENCODE => {
+            crate::syscalls::SYSCALL_SCHEMA_ENCODE
+            | crate::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT => {
                 let s_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let v_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if s_tlv.type_id != PointerType::Name || v_tlv.type_id != PointerType::Json {
@@ -3817,7 +4124,8 @@ impl IVMHost for WsvHost {
                     }
                 }
             }
-            crate::syscalls::SYSCALL_SCHEMA_DECODE => {
+            crate::syscalls::SYSCALL_SCHEMA_DECODE
+            | crate::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT => {
                 let s_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let b_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if s_tlv.type_id != PointerType::Name || b_tlv.type_id != PointerType::NoritoBytes {
@@ -3930,7 +4238,7 @@ impl IVMHost for WsvHost {
                     }
                 }
             }
-            crate::syscalls::SYSCALL_SCHEMA_INFO => {
+            crate::syscalls::SYSCALL_SCHEMA_INFO | crate::syscalls::SYSCALL_SCHEMA_INFO_DIRECT => {
                 let tlv = vm.memory.validate_tlv(vm.register(10))?;
                 if tlv.type_id != PointerType::Name {
                     return Err(VMError::NoritoInvalid);
@@ -3970,7 +4278,8 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO => {
+            crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
+            | crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT => {
                 let base_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 if base_tlv.type_id != PointerType::Name {
                     return Err(VMError::NoritoInvalid);
@@ -4081,7 +4390,7 @@ impl IVMHost for WsvHost {
             crate::syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_QUERY => {
                 // r10 = &Json envelope:
                 // {"type":"wsv.get_balance"|"wsv.list_triggers"|"wsv.has_permission"|
-                //          "wsv.list_domains_for_subject"|"wsv.list_accounts_for_domain",
+                //          "wsv.list_domains_for_account"|"wsv.list_accounts_for_domain",
                 //  "payload": {...}}
                 let ptr = vm.register(10);
                 let tlv = vm.memory.validate_tlv(ptr)?;
@@ -4189,17 +4498,16 @@ impl IVMHost for WsvHost {
                         vm.set_register(10, p);
                         Ok(0)
                     }
-                    // List domains linked to a subject identified by account literal:
+                    // List domains linked to an account identified by account literal:
                     // {account_id} -> {domains:[...]}
-                    "wsv.list_domains_for_subject" => {
+                    "wsv.list_domains_for_account" => {
                         let acc = parse_account_id_literal(
                             payload
                                 .get("account_id")
                                 .and_then(|v| v.as_str())
                                 .ok_or(VMError::NoritoInvalid)?,
                         )?;
-                        let subject = MockWorldStateView::account_subject(&acc);
-                        let domains = self.wsv.linked_domains_for_subject(&subject);
+                        let domains = self.wsv.domains_for_account(&acc);
                         let mut map = njson::Map::new();
                         map.insert(
                             "domains".to_owned(),
@@ -4217,21 +4525,17 @@ impl IVMHost for WsvHost {
                     // List account literals for all subjects linked to a domain:
                     // {domain_id} -> {domain_id, account_ids:[...]}
                     "wsv.list_accounts_for_domain" => {
-                        let domain: DomainId = payload
+                        let domain_literal = payload
                             .get("domain_id")
                             .and_then(|v| v.as_str())
-                            .ok_or(VMError::NoritoInvalid)?
-                            .parse()
+                            .ok_or(VMError::NoritoInvalid)?;
+                        let domain = DomainId::parse_fully_qualified(domain_literal)
                             .map_err(|_| VMError::NoritoInvalid)?;
                         let account_ids = self
                             .wsv
                             .linked_subjects_for_domain(&domain)
                             .into_iter()
-                            .map(|subject| {
-                                njson::Value::from(
-                                    subject.to_account_id(domain.clone()).to_string(),
-                                )
-                            })
+                            .map(|subject| njson::Value::from(subject.to_string()))
                             .collect::<Vec<_>>();
                         let mut map = njson::Map::new();
                         map.insert(
@@ -4486,6 +4790,7 @@ impl IVMHost for WsvHost {
                                             asset_s.parse().map_err(|_| VMError::NoritoInvalid)?;
                                         if MockWorldStateView::account_subject(&self.caller)
                                             != MockWorldStateView::account_subject(&from)
+                                            && !self.allow_contract_runtime_asset_transfer_bypass
                                         {
                                             let token =
                                                 PermissionToken::TransferAsset(asset.clone());
@@ -4493,12 +4798,13 @@ impl IVMHost for WsvHost {
                                                 return Err(VMError::PermissionDenied);
                                             }
                                         }
-                                        let ok = self.wsv.transfer(
+                                        let ok = self.wsv.transfer_with_permission_bypass(
                                             &self.caller,
                                             from,
                                             to,
                                             asset,
                                             amount,
+                                            self.allow_contract_runtime_asset_transfer_bypass,
                                         );
                                         return if ok {
                                             Ok(0)
@@ -4593,8 +4899,8 @@ impl IVMHost for WsvHost {
                                             .get("domain_id")
                                             .and_then(|v| v.as_str())
                                             .ok_or(VMError::NoritoInvalid)?;
-                                        let domain: DomainId =
-                                            domain_s.parse().map_err(|_| VMError::NoritoInvalid)?;
+                                        let domain = DomainId::parse_fully_qualified(domain_s)
+                                            .map_err(|_| VMError::NoritoInvalid)?;
                                         let ok = self.wsv.register_domain(&self.caller, domain);
                                         if ok {
                                             return Ok(0);
@@ -5169,13 +5475,12 @@ impl IVMHost for WsvHost {
                 }
                 let req: scode::DeactivateContractInstance =
                     norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-                let namespace = req.namespace().trim();
-                let contract_id = req.contract_id().trim();
-                if namespace.is_empty() || contract_id.is_empty() {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let key = (namespace.to_owned(), contract_id.to_owned());
-                if self.wsv.contract_instances.remove(&key).is_some() {
+                if self
+                    .wsv
+                    .contract_instances
+                    .remove(req.contract_address())
+                    .is_some()
+                {
                     Ok(0)
                 } else {
                     Err(VMError::PermissionDenied)
@@ -5217,7 +5522,7 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_REGISTER_ACCOUNT => {
-                // r10=&ScopedAccountId TLV; domain must exist and caller must have RegisterAccount
+                // r10=&AccountId TLV; domain must exist and caller must have RegisterAccount
                 let id = self.decode_account_reg(vm, 10)?;
                 if self.wsv.register_account(&self.caller, id) {
                     Ok(0)
@@ -5226,8 +5531,8 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_ADD_SIGNATORY => {
-                // r10 = &ScopedAccountId; r11 = &Json PublicKey
-                let account = self.decode_account_reg(vm, 10)?;
+                // r10 = &AccountId; r11 = &Json PublicKey
+                let account = self.decode_canonical_account_reg(vm, 10)?;
                 let tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if tlv.type_id != PointerType::Json {
                     return Err(VMError::NoritoInvalid);
@@ -5246,8 +5551,8 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_REMOVE_SIGNATORY => {
-                // r10 = &ScopedAccountId; r11 = &Json PublicKey
-                let account = self.decode_account_reg(vm, 10)?;
+                // r10 = &AccountId; r11 = &Json PublicKey
+                let account = self.decode_canonical_account_reg(vm, 10)?;
                 let tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if tlv.type_id != PointerType::Json {
                     return Err(VMError::NoritoInvalid);
@@ -5264,8 +5569,8 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_SET_ACCOUNT_QUORUM => {
-                // r10 = &ScopedAccountId; r11 = quorum
-                let account = self.decode_account_reg(vm, 10)?;
+                // r10 = &AccountId; r11 = quorum
+                let account = self.decode_canonical_account_reg(vm, 10)?;
                 let quorum_raw = vm.register(11);
                 let quorum_u16 = u16::try_from(quorum_raw).map_err(|_| VMError::DecodeError)?;
                 let quorum = NonZeroU16::new(quorum_u16).ok_or(VMError::DecodeError)?;
@@ -5279,7 +5584,7 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_SET_ACCOUNT_DETAIL => {
-                let account = self.decode_account_reg(vm, 10)?;
+                let account = self.decode_canonical_account_reg(vm, 10)?;
                 let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if key_tlv.type_id != PointerType::Name {
                     return Err(VMError::NoritoInvalid);
@@ -5304,13 +5609,13 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_REGISTER_ASSET => {
-                // r10 = &AssetDefinitionId, or &Name (asset name) scoped to caller domain.
+                // r10 = &AssetDefinitionId. Bare names no longer inherit any account-domain
+                // context now that account identity is canonical and domainless.
                 let id = match vm.memory.validate_tlv(vm.register(10)) {
                     Ok(tlv) => match tlv.type_id {
                         PointerType::AssetDefinitionId => self.decode_asset_payload(tlv.payload)?,
                         PointerType::Name | PointerType::Blob => {
-                            let name = self.decode_name_payload(tlv.payload)?;
-                            AssetDefinitionId::new(self.caller.domain().clone(), name)
+                            return Err(VMError::DecodeError);
                         }
                         _ => return Err(VMError::NoritoInvalid),
                     },
@@ -5331,9 +5636,29 @@ impl IVMHost for WsvHost {
                     Err(VMError::PermissionDenied)
                 }
             }
+            syscalls::SYSCALL_DEBUG_PRINT => {
+                let value = vm.register(10);
+                if cfg!(any(test, debug_assertions)) {
+                    eprintln!("[IVM] debug_print r10={value}");
+                }
+                Ok(0)
+            }
+            syscalls::SYSCALL_EXIT => {
+                let status = vm.register(10);
+                vm.request_exit();
+                vm.set_register(10, status);
+                Ok(0)
+            }
+            syscalls::SYSCALL_ABORT => {
+                vm.set_register(10, 0);
+                vm.request_abort();
+                Ok(0)
+            }
             syscalls::SYSCALL_GET_AUTHORITY => {
-                // Write a TLV with the caller ScopedAccountId into INPUT using the bump allocator and return its pointer in x10.
-                let payload = norito::to_bytes(&self.caller).map_err(|_| VMError::NoritoInvalid)?;
+                // Return the domainless account subject so raw equality checks inside
+                // contracts match account_id(...) literals and stored AccountId state.
+                let authority = self.caller.clone();
+                let payload = norito::to_bytes(&authority).map_err(|_| VMError::NoritoInvalid)?;
                 let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
                 tlv.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
                 tlv.push(1);
@@ -5345,13 +5670,27 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, ptr);
                 Ok(0)
             }
+            syscalls::SYSCALL_CURRENT_TIME_MS => {
+                vm.set_register(10, self.wsv.current_time_ms());
+                Ok(0)
+            }
             syscalls::SYSCALL_GRANT_PERMISSION => {
-                // r10=&ScopedAccountId (subject), r11=permission as Name or Json
-                let subject = self.decode_account_reg(vm, 10)?;
+                // r10=&AccountId (subject), r11=permission as Name or Json
+                let subject = self.decode_account_subject_reg(vm, 10)?;
                 // Decode permission token from TLV in r11
                 let token = {
                     let v = vm.register(11);
+                    if crate::dev_env::debug_wsv_enabled() {
+                        eprintln!("[wsv.grant_permission] reg=r11 ptr=0x{v:08x}");
+                    }
                     let tlv = vm.memory.validate_tlv(v)?;
+                    if crate::dev_env::debug_wsv_enabled() {
+                        eprintln!(
+                            "[wsv.grant_permission] tlv type={:?} len={}",
+                            tlv.type_id,
+                            tlv.payload.len()
+                        );
+                    }
                     match tlv.type_id {
                         PointerType::Name => parse_permission_name_any(tlv.payload)?,
                         PointerType::Json => parse_permission_json_any(tlv.payload)?,
@@ -5362,7 +5701,7 @@ impl IVMHost for WsvHost {
                 Ok(0)
             }
             syscalls::SYSCALL_REVOKE_PERMISSION => {
-                let subject = self.decode_account_reg(vm, 10)?;
+                let subject = self.decode_account_subject_reg(vm, 10)?;
                 let token = {
                     let v = vm.register(11);
                     let tlv = vm.memory.validate_tlv(v)?;
@@ -5409,8 +5748,8 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_GRANT_ROLE => {
-                // r10 = &ScopedAccountId, r11=&Name
-                let subj = self.decode_account_reg(vm, 10)?;
+                // r10 = &AccountId, r11=&Name
+                let subj = self.decode_account_subject_reg(vm, 10)?;
                 let rname = self.decode_name_reg(vm, 11)?.to_string();
                 if self.wsv.grant_role(&subj, &rname) {
                     Ok(0)
@@ -5419,7 +5758,7 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_REVOKE_ROLE => {
-                let subj = self.decode_account_reg(vm, 10)?;
+                let subj = self.decode_account_subject_reg(vm, 10)?;
                 let rname = self.decode_name_reg(vm, 11)?.to_string();
                 if self.wsv.revoke_role(&subj, &rname) {
                     Ok(0)
@@ -5431,22 +5770,27 @@ impl IVMHost for WsvHost {
                 if self.fastpq_batch_entries.is_some() {
                     self.push_fastpq_batch_entry(vm)
                 } else {
-                    let from_id = self.decode_account_reg(vm, 10)?;
-                    let to_id = self.decode_account_reg(vm, 11)?;
+                    let from_id = self.decode_canonical_account_reg(vm, 10)?;
+                    let to_id = self.decode_canonical_account_reg(vm, 11)?;
                     let asset_id = self.decode_asset_reg(vm, 12)?;
                     let amount = self.decode_numeric_reg(vm, 13)?;
                     if MockWorldStateView::account_subject(&from_id)
                         != MockWorldStateView::account_subject(&self.caller)
+                        && !self.allow_contract_runtime_asset_transfer_bypass
                     {
                         let token = PermissionToken::TransferAsset(asset_id.clone());
                         if !self.wsv.has_permission(&self.caller, &token) {
                             return Err(VMError::PermissionDenied);
                         }
                     }
-                    if self
-                        .wsv
-                        .transfer(&self.caller, from_id, to_id, asset_id, amount)
-                    {
+                    if self.wsv.transfer_with_permission_bypass(
+                        &self.caller,
+                        from_id,
+                        to_id,
+                        asset_id,
+                        amount,
+                        self.allow_contract_runtime_asset_transfer_bypass,
+                    ) {
                         Ok(0)
                     } else {
                         Err(VMError::PermissionDenied)
@@ -5457,7 +5801,7 @@ impl IVMHost for WsvHost {
             syscalls::SYSCALL_TRANSFER_V1_BATCH_END => self.finish_fastpq_batch(),
             syscalls::SYSCALL_TRANSFER_V1_BATCH_APPLY => self.apply_fastpq_batch_tlv(vm),
             syscalls::SYSCALL_MINT_ASSET => {
-                let account_id = self.decode_account_reg(vm, 10)?;
+                let account_id = self.decode_canonical_account_reg(vm, 10)?;
                 let asset_id = self.decode_asset_reg(vm, 11)?;
                 let amount = self.decode_numeric_reg(vm, 12)?;
                 let token = PermissionToken::MintAsset(asset_id.clone());
@@ -5471,7 +5815,7 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_BURN_ASSET => {
-                let account_id = self.decode_account_reg(vm, 10)?;
+                let account_id = self.decode_canonical_account_reg(vm, 10)?;
                 let asset_id = self.decode_asset_reg(vm, 11)?;
                 let amount = self.decode_numeric_reg(vm, 12)?;
                 if MockWorldStateView::account_subject(&account_id)
@@ -5496,8 +5840,8 @@ impl IVMHost for WsvHost {
                 Ok(0)
             }
             syscalls::SYSCALL_UNREGISTER_ACCOUNT => {
-                let account_id = self.decode_account_reg(vm, 10)?;
-                if !self.wsv.unregister_account(&account_id) {
+                let subject = self.decode_account_subject_reg(vm, 10)?;
+                if !self.wsv.unregister_account_subject(&subject) {
                     return Err(VMError::PermissionDenied);
                 }
                 Ok(0)
@@ -5510,14 +5854,14 @@ impl IVMHost for WsvHost {
                 Ok(0)
             }
             syscalls::SYSCALL_TRANSFER_DOMAIN => {
-                // r10=&DomainId, r11=&ScopedAccountId(to). This mock host validates TLVs
+                // r10=&DomainId, r11=&AccountId(to). This mock host validates TLVs
                 // and returns success; ownership is not tracked in MockWorldStateView.
                 let _dom = self.decode_domain_reg(vm, 10)?;
-                let _to = self.decode_account_reg(vm, 11)?;
+                let _to = self.decode_account_subject_reg(vm, 11)?;
                 Ok(0)
             }
             syscalls::SYSCALL_GET_ACCOUNT_BALANCE => {
-                let account_id = self.decode_account_reg(vm, 10)?;
+                let account_id = self.decode_canonical_account_reg(vm, 10)?;
                 let asset_id = self.decode_asset_reg(vm, 11)?;
                 if MockWorldStateView::account_subject(&account_id)
                     != MockWorldStateView::account_subject(&self.caller)
@@ -5543,7 +5887,7 @@ impl IVMHost for WsvHost {
             }
             syscalls::SYSCALL_NFT_MINT_ASSET => {
                 let nft = self.decode_nft_reg(vm, 10)?;
-                let owner = self.decode_account_reg(vm, 11)?;
+                let owner = self.decode_canonical_account_reg(vm, 11)?;
                 if self.wsv.create_nft(owner, self.caller.clone(), nft) {
                     Ok(0)
                 } else {
@@ -5551,9 +5895,9 @@ impl IVMHost for WsvHost {
                 }
             }
             syscalls::SYSCALL_NFT_TRANSFER_ASSET => {
-                let from = self.decode_account_reg(vm, 10)?;
+                let from = self.decode_canonical_account_reg(vm, 10)?;
                 let nft = self.decode_nft_reg(vm, 11)?;
-                let to = self.decode_account_reg(vm, 12)?;
+                let to = self.decode_canonical_account_reg(vm, 12)?;
                 if self.wsv.transfer_nft(&self.caller, from, to, &nft) {
                     Ok(0)
                 } else {
@@ -5664,10 +6008,10 @@ mod tests_permission_json {
     use super::*;
     use iroha_data_model::domain::DomainId;
 
-    fn account(domain: &str, controller: &str) -> ScopedAccountId {
-        let domain_id: DomainId = domain.parse().expect("test domain id");
+    fn account(domain: &str, controller: &str) -> AccountId {
+        let _domain_id = DomainId::try_new(domain, "universal").expect("test domain id");
         let public_key: PublicKey = controller.parse().expect("test public key");
-        ScopedAccountId::new(domain_id, public_key)
+        AccountId::new(public_key)
     }
 
     #[test]
@@ -5681,7 +6025,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::ReadAccountAssets(id) if id == AccountId::from(&alice)
+            PermissionToken::ReadAccountAssets(id) if id == alice
         ));
     }
 
@@ -5697,7 +6041,7 @@ mod tests_permission_json {
     #[test]
     fn parse_register_zk_asset_ok() {
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "land".parse().unwrap(),
+            DomainId::try_new("land", "universal").unwrap(),
             "gold".parse().unwrap(),
         );
         let s = format!("{{\"type\":\"register_zk_asset\",\"target\":\"{ad}\"}}");
@@ -5708,7 +6052,7 @@ mod tests_permission_json {
     #[test]
     fn parse_shield_ok() {
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "land".parse().unwrap(),
+            DomainId::try_new("land", "universal").unwrap(),
             "silver".parse().unwrap(),
         );
         let s = format!("{{\"type\":\"shield\",\"target\":\"{ad}\"}}");
@@ -5719,7 +6063,7 @@ mod tests_permission_json {
     #[test]
     fn parse_unshield_ok() {
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "land".parse().unwrap(),
+            DomainId::try_new("land", "universal").unwrap(),
             "bronze".parse().unwrap(),
         );
         let s = format!("{{\"type\":\"unshield\",\"target\":\"{ad}\"}}");
@@ -5738,7 +6082,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::AddSignatory(id) if id == AccountId::from(&bob)
+            PermissionToken::AddSignatory(id) if id == bob
         ));
     }
 
@@ -5753,7 +6097,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::RemoveSignatory(id) if id == AccountId::from(&bob)
+            PermissionToken::RemoveSignatory(id) if id == bob
         ));
     }
 
@@ -5768,7 +6112,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::SetAccountQuorum(id) if id == AccountId::from(&bob)
+            PermissionToken::SetAccountQuorum(id) if id == bob
         ));
     }
 
@@ -5783,7 +6127,7 @@ mod tests_permission_json {
         let tok = parse_permission_json(&s).expect("parse ok");
         assert!(matches!(
             tok,
-            PermissionToken::SetAccountDetail(id) if id == AccountId::from(&bob)
+            PermissionToken::SetAccountDetail(id) if id == bob
         ));
     }
 
@@ -5795,6 +6139,16 @@ mod tests_permission_json {
         let wrapped =
             parse_permission_json("{\"type\":\"manage_roles\"}").expect("parse wrapped object");
         assert!(matches!(wrapped, PermissionToken::ManageRoles));
+    }
+
+    #[test]
+    fn parse_custom_permission_variants_ok() {
+        let direct = parse_permission_json("\"BenefitAdmin\"").expect("parse direct custom");
+        assert!(matches!(direct, PermissionToken::Custom(name) if name == "BenefitAdmin"));
+
+        let wrapped = parse_permission_json("{\"type\":\"custom\",\"name\":\"BenefitSpend\"}")
+            .expect("parse wrapped custom");
+        assert!(matches!(wrapped, PermissionToken::Custom(name) if name == "BenefitSpend"));
     }
 }
 
@@ -6029,12 +6383,12 @@ mod tests_governance_elections {
     }
 
     #[test]
-    fn wsv_host_new_with_subject_materializes_default_domain_membership() {
+    fn wsv_host_new_with_subject_registers_canonical_caller() {
         let caller = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "wonderland",
         );
-        let caller_subject = AccountId::from(&caller);
+        let caller_subject = caller.clone();
 
         let host = WsvHost::new_with_subject(
             MockWorldStateView::new(),
@@ -6042,26 +6396,22 @@ mod tests_governance_elections {
             HashMap::new(),
         );
 
-        let default_domain: DomainId = iroha_data_model::account::address::default_domain_name()
-            .parse()
-            .expect("default domain id must parse");
-        assert_eq!(host.caller.domain(), &default_domain);
-        assert_eq!(AccountId::from(&host.caller), caller_subject);
+        assert_eq!(host.caller, caller_subject);
         assert!(host.wsv.account_signatories(&host.caller).is_some());
     }
 
     #[test]
-    fn wsv_host_new_with_subject_map_materializes_index_subjects() {
+    fn wsv_host_new_with_subject_map_registers_index_subjects() {
         let caller = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "wonderland",
         );
         let mapped = test_account_id(
-            "ed012021F5A4D9D9476A9C9B4F7A7E377B2F756D3A6B7CD57E9C535C84D0D4D716D404",
+            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
             "finance",
         );
-        let caller_subject = AccountId::from(&caller);
-        let mapped_subject = AccountId::from(&mapped);
+        let caller_subject = caller.clone();
+        let mapped_subject = mapped.clone();
         let mut account_map = HashMap::new();
         account_map.insert(7_u64, mapped_subject.clone());
 
@@ -6073,9 +6423,9 @@ mod tests_governance_elections {
         );
 
         let materialized = host.account_map.get(&7).expect("mapped account id");
-        assert_eq!(AccountId::from(materialized), mapped_subject);
+        assert_eq!(materialized, &mapped_subject);
         assert!(host.wsv.account_signatories(materialized).is_some());
-        assert_eq!(AccountId::from(&host.caller), caller_subject);
+        assert_eq!(host.caller, caller_subject);
     }
 
     #[test]
@@ -6088,8 +6438,8 @@ mod tests_governance_elections {
             "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
             "finance",
         );
-        let alice_subject = AccountId::from(&alice);
-        let bob_subject = AccountId::from(&bob);
+        let alice_subject = alice.clone();
+        let bob_subject = bob.clone();
         let mut host =
             WsvHost::new_with_subject(MockWorldStateView::new(), alice_subject, HashMap::new());
 
@@ -6103,11 +6453,11 @@ mod tests_governance_elections {
     fn finalize_binds_to_verified_envelope_hash() {
         let mut wsv = MockWorldStateView::new();
         assert!(wsv.create_election("e-bind".to_string(), 2, [0u8; 32], 0, u64::MAX));
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let mut host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         host.__test_set_verified_tally([0xAB; 32]);
 
         let fin = iroha_data_model::isi::zk::FinalizeElection {
@@ -6138,11 +6488,11 @@ mod tests_governance_elections {
     fn finalize_rejects_mismatched_envelope_hash() {
         let mut wsv = MockWorldStateView::new();
         assert!(wsv.create_election("e-mismatch".to_string(), 2, [0u8; 32], 0, u64::MAX));
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let mut host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let mut host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         host.__test_set_verified_tally([0xFE; 32]);
 
         let mut tally_proof = iroha_data_model::proof::ProofAttachment::new_inline(
@@ -6174,11 +6524,11 @@ mod tests_governance_elections {
         // Host + VM with one election
         let mut wsv = MockWorldStateView::new();
         assert!(wsv.create_election("e1".to_string(), 2, [0u8; 32], 0, u64::MAX));
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         let mut vm = IVM::new(0);
         vm.set_host(host);
 
@@ -6245,11 +6595,11 @@ mod tests_governance_elections {
         let mut wsv = MockWorldStateView::new();
         assert!(wsv.create_election("gov1".to_string(), 2, [0u8; 32], 0, u64::MAX));
         wsv.set_current_time_ms(100);
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         let mut vm = IVM::new(0);
         vm.set_host(host);
 
@@ -6320,11 +6670,11 @@ mod tests_governance_elections {
     fn malformed_verify_tally_keeps_latch_off_and_finalize_rejected() {
         let mut wsv = MockWorldStateView::new();
         assert!(wsv.create_election("e2".to_string(), 3, [0u8; 32], 0, u64::MAX));
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let host = WsvHost::new_with_subject(wsv, AccountId::from(&caller), HashMap::new());
+        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
         let mut vm = IVM::new(0);
         vm.set_host(host);
 
@@ -6388,19 +6738,19 @@ mod tests_zk_asset_bindings {
 
     #[test]
     fn register_without_vk_allows_shield() {
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let domain: DomainId = "domain".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
+            DomainId::try_new("domain", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let mut wsv = MockWorldStateView::new();
+        wsv.add_account_unchecked(caller.clone());
         wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
         assert!(wsv.register_domain(&caller, domain.clone()));
-        wsv.add_account_unchecked(caller.clone());
         wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
         assert!(wsv.register_asset_definition(&caller, asset.clone(), Mintable::Infinitely));
         wsv.grant_permission(&caller, PermissionToken::RegisterZkAsset(asset.clone()));
@@ -6425,6 +6775,63 @@ mod tests_zk_asset_bindings {
         );
         assert!(wsv.shield(&caller, &asset, Numeric::from(3_u64), [7u8; 32]));
     }
+
+    #[test]
+    fn register_asset_definition_does_not_require_domain_row_for_opaque_id() {
+        let caller: AccountId = test_account_id(
+            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+            "domain",
+        );
+        let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonder", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let opaque = norito::decode_from_bytes::<AssetDefinitionId>(
+            &norito::to_bytes(&asset).expect("encode asset definition"),
+        )
+        .expect("decode opaque canonical asset definition");
+
+        let mut wsv = MockWorldStateView::new();
+        wsv.add_account_unchecked(caller.clone());
+        wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+
+        assert!(
+            wsv.register_asset_definition(&caller, opaque.clone(), Mintable::Infinitely),
+            "opaque asset definition ids should register without a matching domain row"
+        );
+        assert!(
+            wsv.asset_definitions.contains_key(&opaque),
+            "registered opaque asset definition should be stored"
+        );
+    }
+
+    #[test]
+    fn unregister_domain_ignores_opaque_asset_definition_ids() {
+        let caller: AccountId = test_account_id(
+            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
+            "domain",
+        );
+        let domain: DomainId = DomainId::try_new("wonder", "universal").unwrap();
+        let projected = iroha_data_model::asset::AssetDefinitionId::new(
+            domain.clone(),
+            "rose".parse().unwrap(),
+        );
+        let opaque = norito::decode_from_bytes::<AssetDefinitionId>(
+            &norito::to_bytes(&projected).expect("encode asset definition"),
+        )
+        .expect("decode opaque canonical asset definition");
+
+        let mut wsv = MockWorldStateView::new();
+        wsv.add_account_unchecked(caller.clone());
+        wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
+        wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
+        assert!(wsv.register_domain(&caller, domain.clone()));
+        assert!(wsv.register_asset_definition(&caller, opaque, Mintable::Infinitely));
+        assert!(
+            wsv.unregister_domain(&domain),
+            "opaque asset definitions must not pin a domain because they have no domain projection"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -6435,17 +6842,14 @@ mod tests_nft_decode {
 
     #[test]
     fn decode_nft_payload_accepts_norito_encoded_bytes() {
-        let nft_id: NftId = "n0$wonderland".parse().unwrap();
+        let nft_id: NftId = "n0$wonderland.universal".parse().unwrap();
         let payload = norito::to_bytes(&nft_id).expect("encode nft id");
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
 
         let decoded = host.decode_nft_payload(&payload).expect("decode ok");
         assert_eq!(decoded, nft_id);
@@ -6484,15 +6888,12 @@ mod tests_null_decode {
 
     #[test]
     fn decode_syscalls_accept_null_pointers() {
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
@@ -6513,20 +6914,133 @@ mod tests_null_decode {
     }
 
     #[test]
-    fn input_publish_tlv_rejects_oversized_envelope() {
-        let caller: ScopedAccountId = test_account_id(
+    fn current_time_syscall_returns_host_time() {
+        let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
+        let mut host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
+        host.set_current_time_ms(1_717_171_717_000);
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        call_syscall(&mut vm, syscalls::SYSCALL_CURRENT_TIME_MS).expect("syscall ok");
+        assert_eq!(vm.register(10), 1_717_171_717_000);
+    }
+
+    #[test]
+    fn add_signatory_syscall_accepts_account_id_payloads() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let mut wsv = MockWorldStateView::new();
+        wsv.add_account_unchecked(caller.clone());
+        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        let opaque_payload = norito::to_bytes(&caller).expect("encode account id");
+        let account_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::AccountId, &opaque_payload))
+            .expect("alloc account tlv");
+        let signatory = Json::from_str_norito(
+            "\"ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774\"",
         )
-        .with_zk_halo2_config(crate::host::ZkHalo2Config {
-            max_envelope_bytes: 64,
-            ..Default::default()
-        });
+        .expect("json signatory");
+        let signatory_bytes = norito::to_bytes(&signatory).expect("encode signatory json");
+        let signatory_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Json, &signatory_bytes))
+            .expect("alloc signatory tlv");
+
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, signatory_ptr);
+        call_syscall(&mut vm, syscalls::SYSCALL_ADD_SIGNATORY).expect("account payload accepted");
+    }
+
+    #[test]
+    fn add_signatory_syscall_rejects_malformed_account_payloads() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let mut wsv = MockWorldStateView::new();
+        wsv.add_account_unchecked(caller.clone());
+        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        let account_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::AccountId, b"not-an-account-id"))
+            .expect("alloc account tlv");
+        let signatory = Json::from_str_norito(
+            "\"ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774\"",
+        )
+        .expect("json signatory");
+        let signatory_bytes = norito::to_bytes(&signatory).expect("encode signatory json");
+        let signatory_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Json, &signatory_bytes))
+            .expect("alloc signatory tlv");
+
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, signatory_ptr);
+        let err = call_syscall(&mut vm, syscalls::SYSCALL_ADD_SIGNATORY)
+            .expect_err("malformed account payload should be rejected");
+        assert!(matches!(err, VMError::DecodeError));
+    }
+
+    #[test]
+    fn get_account_balance_syscall_accepts_account_id_payloads() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
+            "rose".parse().expect("asset name"),
+        );
+        let wsv = MockWorldStateView::with_balances(&[(
+            (caller.clone(), asset.clone()),
+            Numeric::from(41_u64),
+        )]);
+        let host = WsvHost::new_with_subject(wsv, caller.clone(), HashMap::new());
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        let account_bytes = norito::to_bytes(&caller).expect("encode account subject");
+        let account_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::AccountId, &account_bytes))
+            .expect("alloc account tlv");
+        let asset_bytes = norito::to_bytes(&asset).expect("encode asset definition id");
+        let asset_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::AssetDefinitionId, &asset_bytes))
+            .expect("alloc asset tlv");
+
+        vm.set_register(10, account_ptr);
+        vm.set_register(11, asset_ptr);
+        call_syscall(&mut vm, syscalls::SYSCALL_GET_ACCOUNT_BALANCE).expect("balance syscall");
+        let out = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("balance tlv");
+        assert_eq!(out.type_id, PointerType::NoritoBytes);
+        let decoded: Numeric = norito::decode_from_bytes(out.payload).expect("decode numeric");
+        assert_eq!(decoded, Numeric::from(41_u64));
+    }
+
+    #[test]
+    fn input_publish_tlv_rejects_oversized_envelope() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
+        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
+                .with_zk_halo2_config(crate::host::ZkHalo2Config {
+                    max_envelope_bytes: 64,
+                    ..Default::default()
+                });
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
@@ -6542,19 +7056,16 @@ mod tests_null_decode {
 
     #[test]
     fn execute_instruction_rejects_oversized_json_envelope() {
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        )
-        .with_zk_halo2_config(crate::host::ZkHalo2Config {
-            max_envelope_bytes: 96,
-            ..Default::default()
-        });
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
+                .with_zk_halo2_config(crate::host::ZkHalo2Config {
+                    max_envelope_bytes: 96,
+                    ..Default::default()
+                });
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
@@ -6586,16 +7097,13 @@ mod tests_null_decode {
 
     #[test]
     fn decode_int_accepts_norito_i64() {
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
         let payload = norito::to_bytes(&29_i64).expect("encode i64");
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
         let ptr = vm
@@ -6608,7 +7116,7 @@ mod tests_null_decode {
 
     #[test]
     fn decode_int_rejects_non_norito_i64_payloads() {
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
@@ -6623,7 +7131,7 @@ mod tests_null_decode {
         for (label, payload) in cases {
             let host = WsvHost::new_with_subject(
                 MockWorldStateView::new(),
-                AccountId::from(&caller.clone()),
+                caller.clone(),
                 HashMap::new(),
             );
             let mut vm = IVM::new(u64::MAX);
@@ -6643,21 +7151,18 @@ mod tests_null_decode {
 
     #[test]
     fn name_decode_rejects_non_norito_payload() {
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
-        let bad = b"not-norito-encoded-name";
+        let bad = [0xff, 0xfe, 0xfd];
         let ptr = vm
-            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, bad))
+            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &bad))
             .expect("alloc tlv");
         vm.set_register(10, ptr);
 
@@ -6668,15 +7173,12 @@ mod tests_null_decode {
 
     #[test]
     fn json_decode_accepts_blob() {
-        let caller: ScopedAccountId = test_account_id(
+        let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
-        );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 
@@ -6693,16 +7195,42 @@ mod tests_null_decode {
     }
 
     #[test]
-    fn schema_decode_rejects_blob() {
-        let caller: ScopedAccountId = test_account_id(
+    fn get_public_input_reads_named_fixture_value() {
+        let caller: AccountId = test_account_id(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
             "wonderland",
         );
-        let host = WsvHost::new_with_subject(
-            MockWorldStateView::new(),
-            AccountId::from(&caller),
-            HashMap::new(),
+        let input_name: Name = "trigger_event_json".parse().expect("public input name");
+        let input_value = make_tlv(PointerType::Json, br#"{"kind":"manual"}"#);
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new())
+                .with_public_inputs(BTreeMap::from([(input_name.clone(), input_value.clone())]));
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(host);
+
+        let name_bytes = norito::to_bytes(&input_name).expect("encode name");
+        let name_ptr = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Name, &name_bytes))
+            .expect("alloc name tlv");
+        vm.set_register(10, name_ptr);
+        call_syscall(&mut vm, syscalls::SYSCALL_GET_PUBLIC_INPUT).expect("get public input");
+
+        let out = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("validate output tlv");
+        assert_eq!(out.type_id, PointerType::Json);
+        assert_eq!(out.payload, br#"{"kind":"manual"}"#);
+    }
+
+    #[test]
+    fn schema_decode_rejects_blob() {
+        let caller: AccountId = test_account_id(
+            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "wonderland",
         );
+        let host =
+            WsvHost::new_with_subject(MockWorldStateView::new(), caller.clone(), HashMap::new());
         let mut vm = IVM::new(u64::MAX);
         vm.set_host(host);
 

@@ -16,25 +16,51 @@ macro_rules! norito_json {
 }
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     convert::{TryFrom, TryInto},
-    fmt, fs,
+    fmt, fs, mem,
     num::{NonZeroU32, NonZeroU64},
     panic::{AssertUnwindSafe, catch_unwind},
     path::PathBuf,
     ptr,
     str::FromStr,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use blake3::hash as blake3_hash;
+use halo2_proofs::{
+    halo2curves::{
+        ff::PrimeField as _,
+        pasta::{EqAffine as Halo2Curve, Fp as Halo2Scalar},
+    },
+    plonk::{create_proof, keygen_pk, keygen_vk},
+    poly::commitment::ParamsProver,
+    poly::ipa::{
+        commitment::{IPACommitmentScheme, ParamsIPA},
+        multiopen::ProverIPA,
+    },
+    transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer},
+};
 use iroha::da::{
     DaProofConfig as IrohaDaProofConfig,
     generate_da_proof_summary as iroha_generate_da_proof_summary,
 };
+use iroha_core::soracloud_runtime::{
+    HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS, HF_GENERATED_AGENT_LEASE_TICKS,
+    build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
+};
+use iroha_core::zk::{
+    confidential_v2::{
+        self, ConfidentialTransferInputV2, ConfidentialTransferOutputV2,
+        ConfidentialUnshieldInputV2, ConfidentialUnshieldOutputV3,
+    },
+    hash_vk as hash_verifying_key_box,
+    test_utils::halo2_fixture_envelope,
+};
 use iroha_crypto::{
-    Algorithm, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature, derive_keyset_from_slice,
+    Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PrivateKey, PublicKey, Signature,
+    derive_keyset_from_slice,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
 #[cfg(test)]
@@ -43,9 +69,10 @@ use iroha_data_model::{
     ChainId,
     account::{
         Account, AccountId, NewAccount,
-        address::{AccountAddress, AccountAddressError},
+        address::{AccountAddress, AccountAddressError, ChainDiscriminantGuard},
     },
     asset::{
+        AssetDefinitionAlias,
         definition::{AssetDefinition, NewAssetDefinition},
         id::{AssetDefinitionId, AssetId},
     },
@@ -58,14 +85,20 @@ use iroha_data_model::{
     domain::{Domain, DomainId, NewDomain},
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
-        Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, Instruction as InstructionTrait,
-        InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox, RecordKaigiUsage, Register,
-        RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop, ReportKaigiRelayHealth,
-        SetKaigiRelayManifest, Transfer, TransferBox, Unregister, UnregisterBox,
+        Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger, Grant, GrantBox,
+        Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
+        RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
+        RemoveKeyValue, ReportKaigiRelayHealth, SetAssetDefinitionAlias, SetKaigiRelayManifest,
+        SetKeyValue, Transfer, TransferBox, Unregister, UnregisterBox,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
             VotingMode,
+        },
+        ministry::SubmitAgendaProposal,
+        rwa::{
+            ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
+            RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
         },
         smart_contract_code::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
@@ -82,18 +115,31 @@ use iroha_data_model::{
         KaigiRelayRegistration, NewKaigi,
     },
     metadata::Metadata,
+    ministry::AgendaProposalV1,
+    name::Name,
     nexus::{
-        AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, LaneId, LaneRelayEnvelope,
-        TouchManifest, compute_descriptor_binding, compute_settlement_hash, validate_descriptor,
+        AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, LaneId,
+        LaneRelayEnvelope, TouchManifest, compute_descriptor_binding, compute_settlement_hash,
+        validate_descriptor,
     },
     nft::{NewNft, Nft, NftId},
     oracle::KeyedHash,
     peer::{Peer, PeerId},
+    permission::Permission,
     role::{NewRole, Role, RoleId},
-    smart_contract::manifest::ContractManifest,
+    rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
+    smart_contract::manifest::{ContractManifest, ManifestProvenance},
+    soracloud::{
+        SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
+        encode_bundle_with_materials_provenance_payload,
+        encode_hf_shared_lease_join_provenance_payload,
+    },
+    sorafs::pin_registry::StorageClass,
     transaction::{
-        Executable, TransactionSubmissionReceipt,
-        signed::{SignedTransaction, TransactionBuilder},
+        Executable, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
+        PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
+        TransactionSubmissionReceipt,
+        signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
     },
     trigger::{
         Trigger, TriggerId,
@@ -101,8 +147,17 @@ use iroha_data_model::{
     },
 };
 use iroha_primitives::{
+    json::Json,
     numeric::Numeric,
-    soradns::{GatewayHostBindings, derive_gateway_hosts},
+    soradns::{
+        GatewayHostBindings, GatewayHostProfile, derive_gateway_hosts,
+        derive_gateway_hosts_with_profile,
+    },
+};
+use kaigi_zk::{
+    KAIGI_ROSTER_BACKEND, KAIGI_ROSTER_CIRCUIT_K, KaigiRosterJoinCircuit, compute_commitment,
+    compute_commitment_bytes, compute_nullifier, compute_nullifier_bytes, empty_roster_root_hash,
+    roster_root_limbs,
 };
 use napi::{
     ValueType,
@@ -113,10 +168,10 @@ use napi::{
 };
 use napi_derive::napi;
 use norito::{
-    codec::{Decode, DecodeAll, Encode},
+    codec::{DecodeAll, Encode},
     core::{self, DecodeFromSlice},
     decode_from_bytes,
-    json::{self, Map, Value},
+    json::{self, JsonDeserialize, Map, Value},
 };
 use rand_core_06::OsRng;
 use sorafs_car::{
@@ -157,6 +212,8 @@ use tokio::runtime::Runtime;
 const SM2_PRIVATE_KEY_LENGTH: usize = 32;
 const SM2_PUBLIC_KEY_LENGTH: usize = 65;
 const SM2_SIGNATURE_LENGTH: usize = Sm2Signature::LENGTH;
+const KAIGI_ROSTER_PUBLIC_INPUTS_DESC: &[u8] = br#"{"schema":"kaigi_roster_current","inputs":["commitment","nullifier","roster_root_limb0","roster_root_limb1","roster_root_limb2","roster_root_limb3"]}"#;
+const ZK1_ENVELOPE_PREFIX: &[u8] = b"ZK1\0";
 
 const SORAFS_ALIAS_POSITIVE_TTL_SECS: u64 = 10 * 60;
 const SORAFS_ALIAS_REFRESH_WINDOW_SECS: u64 = 2 * 60;
@@ -167,6 +224,20 @@ const SORAFS_ALIAS_ROTATION_MAX_AGE_SECS: u64 = 6 * 60 * 60;
 const SORAFS_ALIAS_SUCCESSOR_GRACE_SECS: u64 = 5 * 60;
 const SORAFS_ALIAS_GOVERNANCE_GRACE_SECS: u64 = 0;
 const JS_MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+const SUPPORTED_CRYPTO_ALGORITHMS: &[Algorithm] = &[
+    Algorithm::Ed25519,
+    Algorithm::Secp256k1,
+    Algorithm::BlsNormal,
+    Algorithm::BlsSmall,
+    Algorithm::MlDsa,
+    Algorithm::Gost3410_2012_256ParamSetA,
+    Algorithm::Gost3410_2012_256ParamSetB,
+    Algorithm::Gost3410_2012_256ParamSetC,
+    Algorithm::Gost3410_2012_512ParamSetA,
+    Algorithm::Gost3410_2012_512ParamSetB,
+    Algorithm::Sm2,
+];
 
 fn ensure_packed_struct_disabled() {
     static INIT: std::sync::Once = std::sync::Once::new();
@@ -199,6 +270,19 @@ pub struct JsConfidentialKeyset {
     pub ovk: Buffer,
     /// Full view key (fvk).
     pub fvk: Buffer,
+}
+
+/// Proof artefacts required for a privacy-mode Kaigi join.
+#[napi(object)]
+pub struct JsKaigiRosterJoinProof {
+    /// Commitment digest bound into the Kaigi roster.
+    pub commitment: Buffer,
+    /// Join nullifier digest used for replay protection.
+    pub nullifier: Buffer,
+    /// Roster root that the proof binds to.
+    pub roster_root: Buffer,
+    /// Norito-encoded `OpenVerifyEnvelope` payload.
+    pub proof: Buffer,
 }
 
 /// Canonical SM2 fixture describing deterministic signing outputs.
@@ -288,10 +372,6 @@ pub struct JsAccountAddressRender {
     pub canonical_hex: String,
     /// I105 encoding generated with the supplied network prefix.
     pub i105: String,
-    /// I105-default half-width sentinel encoding (`sora…`).
-    pub i105_default: String,
-    /// I105-default full-width sentinel encoding (イロハ glyphs).
-    pub i105_default_fullwidth: String,
 }
 
 /// Deterministic gateway host bindings exposed to JavaScript callers.
@@ -414,6 +494,24 @@ pub fn soradns_derive_gateway_hosts(fqdn: String) -> napi::Result<JsGatewayHosts
     let bindings = derive_gateway_hosts(&fqdn).map_err(|err| {
         napi::Error::from_reason(format!("failed to derive deterministic hosts: {err}"))
     })?;
+    js_gateway_hosts_from_bindings(&bindings)
+}
+
+/// Derive deterministic `SoraDNS` gateway hosts using a custom pretty suffix.
+#[napi]
+#[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
+pub fn soradns_derive_gateway_hosts_with_pretty_suffix(
+    fqdn: String,
+    pretty_suffix: String,
+) -> napi::Result<JsGatewayHosts> {
+    let bindings =
+        derive_gateway_hosts_with_profile(&fqdn, GatewayHostProfile::new(&pretty_suffix)).map_err(
+            |err| napi::Error::from_reason(format!("failed to derive deterministic hosts: {err}")),
+        )?;
+    js_gateway_hosts_from_bindings(&bindings)
+}
+
+fn js_gateway_hosts_from_bindings(bindings: &GatewayHostBindings) -> napi::Result<JsGatewayHosts> {
     let host_patterns = bindings
         .host_patterns()
         .into_iter()
@@ -466,36 +564,58 @@ pub fn account_address_render(
     let i105 = address
         .to_i105_for_discriminant(network_prefix)
         .map_err(account_address_err)?;
-    let i105_default = address.to_i105().map_err(account_address_err)?;
-    let i105_default_fullwidth = address.to_i105_fullwidth().map_err(account_address_err)?;
     Ok(JsAccountAddressRender {
         canonical_hex,
         i105,
-        i105_default,
-        i105_default_fullwidth,
     })
 }
 
 fn parse_account_id(input: &str, label: &str) -> napi::Result<AccountId> {
-    AccountId::parse_encoded(input)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|err| {
-            napi::Error::new(napi::Status::InvalidArg, format!("invalid {label}: {err}"))
-        })
+    let raw = input.trim();
+    let parsed = match i105_discriminant_hint(raw) {
+        Some(discriminant) => AccountAddress::parse_encoded(raw, Some(discriminant))
+            .and_then(|address| address.to_account_id())
+            .map_err(|err| err.to_string()),
+        None => AccountId::parse_encoded(raw)
+            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|err| err.to_string()),
+    };
+    parsed.map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid {label}: {err}"))
+    })
 }
 
-/// Build a canonical encoded `AssetId` literal (`norito:<hex>`) from definition/account parts.
+fn i105_discriminant_hint(input: &str) -> Option<u16> {
+    let raw = input.trim();
+    if raw.starts_with("sora") {
+        return Some(753);
+    }
+    if raw.starts_with("test") {
+        return Some(369);
+    }
+    if raw.starts_with("dev") {
+        return Some(0);
+    }
+    raw.strip_prefix('n')?.parse::<u16>().ok()
+}
+
+fn scoped_chain_discriminant_for_literal(input: &str) -> Option<ChainDiscriminantGuard> {
+    i105_discriminant_hint(input).map(ChainDiscriminantGuard::enter)
+}
+
+/// Build a canonical public `AssetId` literal from definition/account parts.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` inputs at the boundary
 pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi::Result<String> {
-    let definition: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
-        napi::Error::new(
-            napi::Status::InvalidArg,
-            format!("invalid asset definition id: {err}"),
-        )
-    })?;
+    let definition =
+        AssetDefinitionId::parse_address_literal(&asset_definition_id).map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid asset definition id: {err}"),
+            )
+        })?;
     let account = parse_account_id(&account_id, "account id")?;
-    Ok(AssetId::new(definition, account).canonical_encoded())
+    Ok(AssetId::new(definition, account).canonical_literal())
 }
 
 #[napi(js_name = "blake3Hash")]
@@ -504,6 +624,191 @@ pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi:
 pub fn blake3_hash_bytes(payload: Uint8Array) -> napi::Result<Buffer> {
     let digest = blake3_hash(payload.as_ref());
     Ok(Buffer::from(digest.as_bytes().to_vec()))
+}
+
+fn derive_kaigi_scalar_u64(seed: &[u8], label: &[u8]) -> u64 {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"iroha-js:kaigi:roster-join:v1");
+    hasher.update(label);
+    hasher.update(seed);
+    let digest = hasher.finalize();
+    let mut scalar = [0u8; 8];
+    scalar.copy_from_slice(&digest.as_bytes()[..8]);
+    let value = u64::from_le_bytes(scalar);
+    if value == 0 { 1 } else { value }
+}
+
+fn parse_kaigi_roster_root_hex(value: Option<String>) -> napi::Result<Hash> {
+    let Some(raw) = value.map(|entry| entry.trim().to_owned()) else {
+        return Ok(empty_roster_root_hash());
+    };
+    if raw.is_empty() {
+        return Ok(empty_roster_root_hash());
+    }
+    let trimmed = raw.strip_prefix("0x").unwrap_or(raw.as_str());
+    let decoded = hex::decode(trimmed).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("rosterRootHex must be valid hex: {err}"),
+        )
+    })?;
+    if decoded.len() != Hash::LENGTH {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "rosterRootHex must be {} bytes, got {}",
+                Hash::LENGTH,
+                decoded.len()
+            ),
+        ));
+    }
+    let mut bytes = [0u8; Hash::LENGTH];
+    bytes.copy_from_slice(decoded.as_slice());
+    Ok(Hash::prehashed(bytes))
+}
+
+fn usize_to_u32_len(len: usize, context: &str) -> u32 {
+    u32::try_from(len).unwrap_or_else(|_| panic!("{context} length exceeds u32::MAX"))
+}
+
+fn zk1_append_tlv(buf: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) {
+    buf.extend_from_slice(&tag);
+    buf.extend_from_slice(&usize_to_u32_len(payload.len(), "zk1 tlv payload").to_le_bytes());
+    buf.extend_from_slice(payload);
+}
+
+fn zk1_append_proof(buf: &mut Vec<u8>, proof: &[u8]) {
+    zk1_append_tlv(buf, *b"PROF", proof);
+}
+
+fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
+    if columns.is_empty() {
+        return;
+    }
+    let rows = columns[0].len();
+    if columns.iter().any(|column| column.len() != rows) {
+        return;
+    }
+
+    let mut payload = Vec::with_capacity(8 + rows * columns.len() * mem::size_of::<Halo2Scalar>());
+    payload
+        .extend_from_slice(&usize_to_u32_len(columns.len(), "zk1 instance columns").to_le_bytes());
+    payload.extend_from_slice(&usize_to_u32_len(rows, "zk1 instance rows").to_le_bytes());
+    for row in 0..rows {
+        for column in columns {
+            payload.extend_from_slice(column[row].to_repr().as_ref());
+        }
+    }
+    zk1_append_tlv(buf, *b"I10P", payload.as_slice());
+}
+
+fn build_kaigi_roster_join_proof_bytes(
+    seed: &[u8],
+    roster_root: &Hash,
+) -> napi::Result<JsKaigiRosterJoinProof> {
+    let account_idx = derive_kaigi_scalar_u64(seed, b"account");
+    let domain_salt = derive_kaigi_scalar_u64(seed, b"domain");
+    let nullifier_seed = derive_kaigi_scalar_u64(seed, b"nullifier");
+
+    let account_scalar = Halo2Scalar::from(account_idx);
+    let domain_scalar = Halo2Scalar::from(domain_salt);
+    let nullifier_scalar = Halo2Scalar::from(nullifier_seed);
+    let root_scalars = roster_root_limbs(roster_root);
+
+    let params: ParamsIPA<Halo2Curve> = ParamsIPA::new(KAIGI_ROSTER_CIRCUIT_K);
+    let verifying_key = keygen_vk(&params, &KaigiRosterJoinCircuit::default()).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to generate Kaigi roster verifying key: {err}"),
+        )
+    })?;
+
+    let circuit = KaigiRosterJoinCircuit::new(
+        account_scalar,
+        domain_scalar,
+        nullifier_scalar,
+        root_scalars,
+    );
+    let proving_key = keygen_pk(&params, verifying_key.clone(), &circuit).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to generate Kaigi roster proving key: {err}"),
+        )
+    })?;
+
+    let commitment_scalar = compute_commitment(account_scalar, domain_scalar);
+    let nullifier_scalar_public = compute_nullifier(account_scalar, nullifier_scalar);
+    let mut instance_columns = vec![vec![commitment_scalar], vec![nullifier_scalar_public]];
+    instance_columns.extend(root_scalars.iter().map(|scalar| vec![*scalar]));
+    let instance_refs: Vec<&[Halo2Scalar]> = instance_columns.iter().map(Vec::as_slice).collect();
+    let proof_instances = vec![instance_refs.as_slice()];
+
+    let mut transcript = Blake2bWrite::<_, Halo2Curve, Challenge255<Halo2Curve>>::init(Vec::new());
+    create_proof::<
+        IPACommitmentScheme<Halo2Curve>,
+        ProverIPA<'_, Halo2Curve>,
+        Challenge255<Halo2Curve>,
+        _,
+        _,
+        _,
+    >(
+        &params,
+        &proving_key,
+        &[circuit],
+        &proof_instances,
+        OsRng,
+        &mut transcript,
+    )
+    .map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to create Kaigi roster proof: {err}"),
+        )
+    })?;
+    let proof_payload = transcript.finalize();
+
+    let mut zk1 = ZK1_ENVELOPE_PREFIX.to_vec();
+    zk1_append_proof(&mut zk1, proof_payload.as_slice());
+    zk1_append_instances_cols(&mut zk1, instance_refs.as_slice());
+
+    let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
+        backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
+        circuit_id: KAIGI_ROSTER_BACKEND.to_string(),
+        vk_hash: [0u8; 32],
+        public_inputs: KAIGI_ROSTER_PUBLIC_INPUTS_DESC.to_vec(),
+        proof_bytes: zk1,
+        aux: Vec::new(),
+    };
+    let encoded = norito::to_bytes(&envelope).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to encode Kaigi roster proof envelope: {err}"),
+        )
+    })?;
+
+    Ok(JsKaigiRosterJoinProof {
+        commitment: Buffer::from(compute_commitment_bytes(account_idx, domain_salt).to_vec()),
+        nullifier: Buffer::from(compute_nullifier_bytes(account_idx, nullifier_seed).to_vec()),
+        roster_root: Buffer::from(<[u8; 32]>::from(*roster_root).to_vec()),
+        proof: Buffer::from(encoded),
+    })
+}
+
+/// Build a Halo2/IPA Kaigi roster-join proof for `ZkRosterV1` joins.
+#[napi(js_name = "buildKaigiRosterJoinProof")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_kaigi_roster_join_proof(
+    seed: Uint8Array,
+    roster_root_hex: Option<String>,
+) -> napi::Result<JsKaigiRosterJoinProof> {
+    if seed.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "seed must be non-empty",
+        ));
+    }
+    let roster_root = parse_kaigi_roster_root_hex(roster_root_hex)?;
+    build_kaigi_roster_join_proof_bytes(seed.as_ref(), &roster_root)
 }
 
 /// Generate an Ed25519 key pair using `iroha_crypto`.
@@ -529,6 +834,170 @@ pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
     })
 }
 
+fn algorithm_alias_key(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn parse_crypto_algorithm(value: Option<&str>) -> napi::Result<Algorithm> {
+    let value = value.unwrap_or("ed25519").trim();
+    let key = algorithm_alias_key(value);
+    let algorithm = match key.as_str() {
+        "ed25519" | "ed" | "eddsa" => Algorithm::Ed25519,
+        "secp256k1" | "secp" | "secpk1" => Algorithm::Secp256k1,
+        "mldsa" | "mldsa65" | "mldsa44" | "mldsa87" => Algorithm::MlDsa,
+        "blsnormal" | "bls12381g1" => Algorithm::BlsNormal,
+        "blssmall" | "bls12381g2" => Algorithm::BlsSmall,
+        "gost256a" | "gost34102012256paramseta" => Algorithm::Gost3410_2012_256ParamSetA,
+        "gost256b" | "gost34102012256paramsetb" => Algorithm::Gost3410_2012_256ParamSetB,
+        "gost256c" | "gost34102012256paramsetc" => Algorithm::Gost3410_2012_256ParamSetC,
+        "gost512a" | "gost34102012512paramseta" => Algorithm::Gost3410_2012_512ParamSetA,
+        "gost512b" | "gost34102012512paramsetb" => Algorithm::Gost3410_2012_512ParamSetB,
+        "sm2" => Algorithm::Sm2,
+        _ => {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("unsupported crypto algorithm: {value}"),
+            ));
+        }
+    };
+    Ok(algorithm)
+}
+
+fn js_keypair_from_keypair(keypair: KeyPair) -> JsKeyPair {
+    let algorithm = keypair.algorithm();
+    let (_, public_bytes) = keypair.public_key().to_bytes();
+    let (_, private_bytes) = keypair.private_key().to_bytes();
+    JsKeyPair {
+        algorithm: algorithm.as_static_str().to_owned(),
+        public_key: Buffer::from(public_bytes.to_vec()),
+        private_key: Buffer::from(private_bytes),
+        distid: None,
+    }
+}
+
+/// Return canonical algorithm labels available through the JavaScript native binding.
+#[napi(js_name = "supportedCryptoAlgorithms")]
+pub fn supported_crypto_algorithms_js() -> Vec<String> {
+    SUPPORTED_CRYPTO_ALGORITHMS
+        .iter()
+        .map(|algorithm| algorithm.as_static_str().to_owned())
+        .collect()
+}
+
+/// Normalize a user-facing algorithm label to the canonical Rust `iroha_crypto` label.
+#[napi(js_name = "normalizeCryptoAlgorithm")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn normalize_crypto_algorithm_js(algorithm: Option<String>) -> napi::Result<String> {
+    Ok(parse_crypto_algorithm(algorithm.as_deref())?
+        .as_static_str()
+        .to_owned())
+}
+
+/// Generate or deterministically derive a key pair for any supported Iroha signing algorithm.
+#[napi(js_name = "cryptoKeypair")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_keypair(
+    algorithm: Option<String>,
+    seed: Option<Uint8Array>,
+) -> napi::Result<JsKeyPair> {
+    let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
+    let keypair = seed.map_or_else(
+        || KeyPair::random_with_algorithm(algorithm),
+        |seed| KeyPair::from_seed(seed.to_vec(), algorithm),
+    );
+    Ok(js_keypair_from_keypair(keypair))
+}
+
+/// Reconstruct a key pair from private-key bytes for any supported Iroha signing algorithm.
+#[napi(js_name = "cryptoKeypairFromPrivate")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_keypair_from_private(
+    algorithm: String,
+    private_key: Uint8Array,
+) -> napi::Result<JsKeyPair> {
+    let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
+    let private_key =
+        PrivateKey::from_bytes(algorithm, private_key.as_ref()).map_err(norito_to_napi)?;
+    let keypair = KeyPair::from_private_key(private_key).map_err(norito_to_napi)?;
+    Ok(js_keypair_from_keypair(keypair))
+}
+
+/// Derive public-key bytes from private-key bytes for any supported Iroha signing algorithm.
+#[napi(js_name = "cryptoPublicKeyFromPrivate")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_public_key_from_private(
+    algorithm: String,
+    private_key: Uint8Array,
+) -> napi::Result<Buffer> {
+    let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
+    let private_key =
+        PrivateKey::from_bytes(algorithm, private_key.as_ref()).map_err(norito_to_napi)?;
+    let public_key = PublicKey::from(private_key);
+    let (_, public_bytes) = public_key.to_bytes();
+    Ok(Buffer::from(public_bytes.to_vec()))
+}
+
+/// Sign a message with private-key bytes for any supported Iroha signing algorithm.
+#[napi(js_name = "cryptoSign")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_sign(
+    algorithm: String,
+    private_key: Uint8Array,
+    message: Uint8Array,
+) -> napi::Result<Buffer> {
+    let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
+    let private_key =
+        PrivateKey::from_bytes(algorithm, private_key.as_ref()).map_err(norito_to_napi)?;
+    let signature = Signature::new(&private_key, message.as_ref());
+    Ok(Buffer::from(signature.payload().to_vec()))
+}
+
+/// Verify a signature against public-key bytes for any supported Iroha signing algorithm.
+#[napi(js_name = "cryptoVerify")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_verify(
+    algorithm: String,
+    public_key: Uint8Array,
+    message: Uint8Array,
+    signature: Uint8Array,
+) -> napi::Result<bool> {
+    let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
+    let public_key =
+        PublicKey::from_bytes(algorithm, public_key.as_ref()).map_err(norito_to_napi)?;
+    let signature = Signature::from_bytes(signature.as_ref());
+    Ok(signature.verify(&public_key, message.as_ref()).is_ok())
+}
+
+/// Encode public-key bytes as an Iroha multihash literal.
+#[napi(js_name = "cryptoPublicKeyMultihash")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_public_key_multihash(
+    algorithm: String,
+    public_key: Uint8Array,
+) -> napi::Result<String> {
+    let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
+    PublicKey::from_bytes(algorithm, public_key.as_ref())
+        .map(|public_key| public_key.to_string())
+        .map_err(norito_to_napi)
+}
+
+/// Encode private-key bytes as an exposed Iroha multihash literal.
+#[napi(js_name = "cryptoPrivateKeyMultihash")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn crypto_private_key_multihash(
+    algorithm: String,
+    private_key: Uint8Array,
+) -> napi::Result<String> {
+    let algorithm = parse_crypto_algorithm(Some(&algorithm))?;
+    let private_key =
+        PrivateKey::from_bytes(algorithm, private_key.as_ref()).map_err(norito_to_napi)?;
+    Ok(ExposedPrivateKey(private_key).to_string())
+}
+
 /// Derive an Ed25519 public key from a private key seed or keypair payload.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs typed arrays require owned values at the boundary
@@ -538,6 +1007,266 @@ pub fn ed25519_public_key_from_private(private_key: Uint8Array) -> napi::Result<
     let keypair = KeyPair::from_private_key(secret).map_err(norito_to_napi)?;
     let (_, public_bytes) = keypair.public_key().to_bytes();
     Ok(Buffer::from(public_bytes.to_vec()))
+}
+
+fn parse_soracloud_storage_class(value: &str) -> napi::Result<StorageClass> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "hot" => Ok(StorageClass::Hot),
+        "warm" => Ok(StorageClass::Warm),
+        "cold" => Ok(StorageClass::Cold),
+        _ => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "storage_class must be hot, warm, or cold",
+        )),
+    }
+}
+
+fn parse_positive_u64_literal(value: &str, label: &str) -> napi::Result<u64> {
+    let parsed = value.trim().parse::<u64>().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{label} must be a positive integer: {err}"),
+        )
+    })?;
+    if parsed == 0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{label} must be greater than zero"),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_positive_u128_literal(value: &str, label: &str) -> napi::Result<u128> {
+    let parsed = value.trim().parse::<u128>().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{label} must be a positive integer: {err}"),
+        )
+    })?;
+    if parsed == 0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{label} must be greater than zero"),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_ed25519_keypair_hex(private_key_hex: &str) -> napi::Result<KeyPair> {
+    let private_key_bytes = hex::decode(private_key_hex.trim()).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("private_key_hex must be hex-encoded Ed25519 key material: {err}"),
+        )
+    })?;
+    let private_key =
+        PrivateKey::from_bytes(Algorithm::Ed25519, &private_key_bytes).map_err(norito_to_napi)?;
+    KeyPair::from_private_key(private_key).map_err(norito_to_napi)
+}
+
+fn sign_soracloud_payload(keypair: &KeyPair, payload: &[u8]) -> ManifestProvenance {
+    ManifestProvenance {
+        signer: keypair.public_key().clone(),
+        signature: Signature::new(keypair.private_key(), payload),
+    }
+}
+
+fn soracloud_source_hash(repo_id: &str, resolved_revision: &str) -> napi::Result<Hash> {
+    let payload = norito::to_bytes(&(repo_id, resolved_revision)).map_err(norito_to_napi)?;
+    Ok(Hash::new(payload))
+}
+
+/// Build the fully signed request body accepted by `/v1/soracloud/hf/deploy`.
+#[allow(clippy::too_many_arguments)]
+#[napi]
+pub fn soracloud_build_hf_deploy_request_json(
+    repo_id: String,
+    revision: Option<String>,
+    model_name: String,
+    service_name: String,
+    apartment_name: Option<String>,
+    storage_class: String,
+    lease_term_ms: String,
+    lease_asset_definition_id: String,
+    base_fee_nanos: String,
+    private_key_hex: String,
+) -> napi::Result<String> {
+    let repo_id = repo_id.trim().to_owned();
+    let revision = revision
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let resolved_revision = revision.clone().unwrap_or_else(|| "main".to_owned());
+    let model_name = model_name.trim().to_owned();
+    let service_name = service_name
+        .trim()
+        .parse::<Name>()
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid service_name: {err}"),
+            )
+        })?
+        .to_string();
+    let apartment_name = apartment_name
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .parse::<Name>()
+                .map(|name| name.to_string())
+                .map_err(|err| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("invalid apartment_name: {err}"),
+                    )
+                })
+        })
+        .transpose()?;
+    if repo_id.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "repo_id must not be empty",
+        ));
+    }
+    if model_name.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "model_name must not be empty",
+        ));
+    }
+
+    let storage_class = parse_soracloud_storage_class(&storage_class)?;
+    let lease_term_ms = parse_positive_u64_literal(&lease_term_ms, "lease_term_ms")?;
+    let base_fee_nanos = parse_positive_u128_literal(&base_fee_nanos, "base_fee_nanos")?;
+    let lease_asset_definition_id = lease_asset_definition_id
+        .trim()
+        .parse::<AssetDefinitionId>()
+        .map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid lease_asset_definition_id: {err}"),
+            )
+        })?;
+    let keypair = parse_ed25519_keypair_hex(&private_key_hex)?;
+
+    let deploy_payload = encode_hf_shared_lease_join_provenance_payload(
+        &repo_id,
+        &resolved_revision,
+        &model_name,
+        &service_name,
+        apartment_name.as_deref(),
+        storage_class,
+        lease_term_ms,
+        &lease_asset_definition_id,
+        base_fee_nanos,
+    )
+    .map_err(norito_to_napi)?;
+    let provenance = sign_soracloud_payload(&keypair, &deploy_payload);
+
+    let service_name_typed = service_name.parse::<Name>().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid service_name: {err}"),
+        )
+    })?;
+    let source_id = soracloud_source_hash(&repo_id, &resolved_revision)?;
+    let generated_bundle = build_soracloud_hf_generated_service_bundle(
+        service_name_typed,
+        &source_id.to_string(),
+        &repo_id,
+        &resolved_revision,
+        &model_name,
+    );
+    let configs: BTreeMap<String, Json> = BTreeMap::new();
+    let secrets: BTreeMap<String, SecretEnvelopeV1> = BTreeMap::new();
+    let service_provenance_payload =
+        encode_bundle_with_materials_provenance_payload(&generated_bundle, &configs, &secrets)
+            .map_err(norito_to_napi)?;
+    let generated_service_provenance =
+        sign_soracloud_payload(&keypair, &service_provenance_payload);
+
+    let generated_apartment_provenance = apartment_name
+        .as_deref()
+        .map(|apartment_name| {
+            let apartment_name = apartment_name.parse::<Name>().map_err(|err| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!("invalid apartment_name: {err}"),
+                )
+            })?;
+            let manifest =
+                build_soracloud_hf_generated_agent_manifest(apartment_name, &generated_bundle);
+            let payload = encode_agent_deploy_provenance_payload(
+                manifest,
+                HF_GENERATED_AGENT_LEASE_TICKS,
+                Some(HF_GENERATED_AGENT_AUTONOMY_BUDGET_UNITS),
+            )
+            .map_err(norito_to_napi)?;
+            Ok::<ManifestProvenance, napi::Error>(sign_soracloud_payload(&keypair, &payload))
+        })
+        .transpose()?;
+
+    let mut payload = Map::new();
+    payload.insert(
+        "repo_id".to_owned(),
+        json::to_value(&repo_id).map_err(norito_to_napi)?,
+    );
+    if let Some(revision) = &revision {
+        payload.insert(
+            "revision".to_owned(),
+            json::to_value(revision).map_err(norito_to_napi)?,
+        );
+    }
+    payload.insert(
+        "model_name".to_owned(),
+        json::to_value(&model_name).map_err(norito_to_napi)?,
+    );
+    payload.insert(
+        "service_name".to_owned(),
+        json::to_value(&service_name).map_err(norito_to_napi)?,
+    );
+    if let Some(apartment_name) = &apartment_name {
+        payload.insert(
+            "apartment_name".to_owned(),
+            json::to_value(apartment_name).map_err(norito_to_napi)?,
+        );
+    }
+    payload.insert(
+        "storage_class".to_owned(),
+        json::to_value(&storage_class).map_err(norito_to_napi)?,
+    );
+    payload.insert(
+        "lease_term_ms".to_owned(),
+        json::to_value(&lease_term_ms).map_err(norito_to_napi)?,
+    );
+    payload.insert(
+        "lease_asset_definition_id".to_owned(),
+        json::to_value(&lease_asset_definition_id).map_err(norito_to_napi)?,
+    );
+    payload.insert(
+        "base_fee_nanos".to_owned(),
+        json::to_value(&base_fee_nanos).map_err(norito_to_napi)?,
+    );
+
+    let mut root = Map::new();
+    root.insert("payload".to_owned(), Value::Object(payload));
+    root.insert(
+        "provenance".to_owned(),
+        json::to_value(&provenance).map_err(norito_to_napi)?,
+    );
+    root.insert(
+        "generated_service_provenance".to_owned(),
+        json::to_value(&generated_service_provenance).map_err(norito_to_napi)?,
+    );
+    if let Some(generated_apartment_provenance) = &generated_apartment_provenance {
+        root.insert(
+            "generated_apartment_provenance".to_owned(),
+            json::to_value(generated_apartment_provenance).map_err(norito_to_napi)?,
+        );
+    }
+
+    json::to_json(&Value::Object(root)).map_err(norito_to_napi)
 }
 
 /// Return the default SM2 distinguishing identifier used when none is provided.
@@ -918,6 +1647,17 @@ pub fn axt_build_descriptor(
     })
 }
 
+/// Compute an AXT binding from canonical Norito descriptor bytes.
+#[napi]
+pub fn axt_compute_binding(descriptor_bytes: Buffer) -> napi::Result<Buffer> {
+    ensure_packed_struct_disabled();
+    let descriptor: AxtDescriptor = decode_from_bytes(descriptor_bytes.as_ref())
+        .map_err(|err| norito_to_napi(format!("{err}")))?;
+    validate_descriptor(&descriptor).map_err(|err| norito_to_napi(format!("{err}")))?;
+    let binding_bytes = compute_descriptor_binding(&descriptor).map_err(norito_to_napi)?;
+    Ok(Buffer::from(binding_bytes.to_vec()))
+}
+
 #[allow(unsafe_code)]
 fn decode_instruction_aligned(bytes: &[u8]) -> Result<InstructionBox, core::Error> {
     if let Ok(instruction) = decode_from_bytes::<InstructionBox>(bytes) {
@@ -949,6 +1689,337 @@ pub fn derive_confidential_keyset(spend_key: Uint8Array) -> napi::Result<JsConfi
         ivk: Buffer::from(keyset.incoming_view_key().to_vec()),
         ovk: Buffer::from(keyset.outgoing_view_key().to_vec()),
         fvk: Buffer::from(keyset.full_view_key().to_vec()),
+    })
+}
+
+/// Derive the confidential v2 owner tag from a 32-byte spend key.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn derive_confidential_owner_tag_v2(
+    spend_key: Uint8Array,
+    diversifier_hex: Option<String>,
+) -> napi::Result<Buffer> {
+    let spend_key = spend_key.as_ref();
+    if spend_key.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential spend key must be 32 bytes",
+        ));
+    }
+    let diversifier =
+        parse_optional_confidential_diversifier_hex("diversifier_hex", diversifier_hex.as_deref())?;
+    Ok(Buffer::from(
+        confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(spend_key, diversifier)
+            .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?
+            .to_vec(),
+    ))
+}
+
+/// Derive a canonical confidential v2 note diversifier from seed material.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn derive_confidential_diversifier_v2(seed: Uint8Array) -> napi::Result<Buffer> {
+    let seed = seed.as_ref();
+    if seed.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential diversifier seed must not be empty",
+        ));
+    }
+    Ok(Buffer::from(
+        confidential_v2::derive_confidential_diversifier_v2(seed).to_vec(),
+    ))
+}
+
+/// Derive a diversified confidential v2 receive address from a spend key and seed.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn derive_confidential_receive_address_v2(
+    spend_key: Uint8Array,
+    diversifier_seed: Uint8Array,
+) -> napi::Result<JsConfidentialReceiveAddressV2> {
+    let spend_key = spend_key.as_ref();
+    if spend_key.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential spend key must be 32 bytes",
+        ));
+    }
+    let seed = diversifier_seed.as_ref();
+    if seed.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential diversifier seed must not be empty",
+        ));
+    }
+    let diversifier = confidential_v2::derive_confidential_diversifier_v2(seed);
+    let owner_tag =
+        confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(spend_key, diversifier)
+            .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    Ok(JsConfidentialReceiveAddressV2 {
+        owner_tag_hex: hex::encode(owner_tag),
+        diversifier_hex: hex::encode(diversifier),
+    })
+}
+
+/// Derive a confidential v2 note commitment from note material.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn derive_confidential_note_v2(
+    asset_definition_id: String,
+    amount: String,
+    rho_hex: String,
+    owner_tag_hex: String,
+) -> napi::Result<Buffer> {
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    let amount = parse_confidential_amount_u128("amount", &amount)?;
+    let rho = parse_fixed_32_hex("rho_hex", &rho_hex)?;
+    let owner_tag = parse_fixed_32_hex("owner_tag_hex", &owner_tag_hex)?;
+    let commitment = confidential_v2::derive_confidential_note_v2(
+        &asset_definition_id.to_string(),
+        amount,
+        rho,
+        owner_tag,
+    )
+    .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    Ok(Buffer::from(commitment.to_vec()))
+}
+
+/// Derive a confidential v2 nullifier from spend key material.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn derive_confidential_nullifier_v2(
+    chain_id: String,
+    asset_definition_id: String,
+    spend_key: Uint8Array,
+    rho_hex: String,
+) -> napi::Result<Buffer> {
+    let spend_key = spend_key.as_ref();
+    if spend_key.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential spend key must be 32 bytes",
+        ));
+    }
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    let rho = parse_fixed_32_hex("rho_hex", &rho_hex)?;
+    Ok(Buffer::from(
+        confidential_v2::derive_confidential_nullifier_v2(
+            chain_id.trim(),
+            &asset_definition_id.to_string(),
+            spend_key,
+            rho,
+        )
+        .to_vec(),
+    ))
+}
+
+/// Build a confidential transfer v2 proof envelope.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_confidential_transfer_proof_v2(
+    chain_id: String,
+    asset_definition_id: String,
+    spend_key: Uint8Array,
+    tree_commitments_hex: Vec<String>,
+    inputs: Vec<JsConfidentialTransferInputV2>,
+    outputs: Vec<JsConfidentialTransferOutputV2>,
+    root_hint_hex: String,
+    vk_backend: String,
+    vk_circuit_id: String,
+    vk_bytes: Uint8Array,
+) -> napi::Result<JsConfidentialTransferProofEnvelopeV2> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    let spend_key = spend_key.as_ref();
+    if spend_key.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential spend key must be 32 bytes",
+        ));
+    }
+    let tree_commitments = parse_confidential_tree_commitments(tree_commitments_hex)?;
+    let inputs = parse_confidential_transfer_inputs_v2(inputs)?;
+    let outputs = parse_confidential_transfer_outputs_v2(outputs)?;
+    let root_hint = parse_fixed_32_hex("root_hint_hex", &root_hint_hex)?;
+    let vk_box = iroha_data_model::proof::VerifyingKeyBox::new(
+        vk_backend.trim().to_owned(),
+        vk_bytes.to_vec(),
+    );
+    let proof = confidential_v2::build_confidential_transfer_proof_v2(
+        &chain_id,
+        &asset_definition_id.to_string(),
+        spend_key,
+        &tree_commitments,
+        &inputs,
+        &outputs,
+        root_hint,
+        vk_circuit_id.trim(),
+        &vk_box,
+    )
+    .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    Ok(JsConfidentialTransferProofEnvelopeV2 {
+        nullifiers: proof
+            .nullifiers
+            .into_iter()
+            .map(|entry| Buffer::from(entry.to_vec()))
+            .collect(),
+        output_commitments: proof
+            .output_commitments
+            .into_iter()
+            .map(|entry| Buffer::from(entry.to_vec()))
+            .collect(),
+        root: Buffer::from(proof.root.to_vec()),
+        proof: Buffer::from(proof.proof.bytes),
+    })
+}
+
+/// Build a confidential unshield v2 proof envelope.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_confidential_unshield_proof_v2(
+    chain_id: String,
+    asset_definition_id: String,
+    spend_key: Uint8Array,
+    tree_commitments_hex: Vec<String>,
+    inputs: Vec<JsConfidentialTransferInputV2>,
+    public_amount: String,
+    root_hint_hex: String,
+    vk_backend: String,
+    vk_circuit_id: String,
+    vk_bytes: Uint8Array,
+) -> napi::Result<JsConfidentialUnshieldProofEnvelopeV2> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    let spend_key = spend_key.as_ref();
+    if spend_key.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential spend key must be 32 bytes",
+        ));
+    }
+    let tree_commitments = parse_confidential_tree_commitments(tree_commitments_hex)?;
+    let inputs = parse_confidential_unshield_inputs_v2(inputs)?;
+    let public_amount = parse_confidential_amount_u128("public_amount", &public_amount)?;
+    let root_hint = parse_fixed_32_hex("root_hint_hex", &root_hint_hex)?;
+    let vk_box = iroha_data_model::proof::VerifyingKeyBox::new(
+        vk_backend.trim().to_owned(),
+        vk_bytes.to_vec(),
+    );
+    let proof = confidential_v2::build_confidential_unshield_proof_v2(
+        &chain_id,
+        &asset_definition_id.to_string(),
+        spend_key,
+        &tree_commitments,
+        &inputs,
+        public_amount,
+        root_hint,
+        vk_circuit_id.trim(),
+        &vk_box,
+    )
+    .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    Ok(JsConfidentialUnshieldProofEnvelopeV2 {
+        nullifiers: proof
+            .nullifiers
+            .into_iter()
+            .map(|entry| Buffer::from(entry.to_vec()))
+            .collect(),
+        root: Buffer::from(proof.root.to_vec()),
+        proof: Buffer::from(proof.proof.bytes),
+    })
+}
+
+/// Build a confidential unshield v3 proof envelope with optional private change.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_confidential_unshield_proof_v3(
+    chain_id: String,
+    asset_definition_id: String,
+    spend_key: Uint8Array,
+    tree_commitments_hex: Vec<String>,
+    inputs: Vec<JsConfidentialTransferInputV2>,
+    outputs: Vec<JsConfidentialUnshieldOutputV3>,
+    public_amount: String,
+    root_hint_hex: String,
+    vk_backend: String,
+    vk_circuit_id: String,
+    vk_bytes: Uint8Array,
+) -> napi::Result<JsConfidentialUnshieldProofEnvelopeV3> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    let spend_key = spend_key.as_ref();
+    if spend_key.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "confidential spend key must be 32 bytes",
+        ));
+    }
+    let tree_commitments = parse_confidential_tree_commitments(tree_commitments_hex)?;
+    let inputs = parse_confidential_unshield_inputs_v2(inputs)?;
+    let outputs = parse_confidential_unshield_outputs_v3(outputs)?;
+    let public_amount = parse_confidential_amount_u128("public_amount", &public_amount)?;
+    let root_hint = parse_fixed_32_hex("root_hint_hex", &root_hint_hex)?;
+    let vk_box = iroha_data_model::proof::VerifyingKeyBox::new(
+        vk_backend.trim().to_owned(),
+        vk_bytes.to_vec(),
+    );
+    let proof = confidential_v2::build_confidential_unshield_proof_v3(
+        &chain_id,
+        &asset_definition_id.to_string(),
+        spend_key,
+        &tree_commitments,
+        &inputs,
+        &outputs,
+        public_amount,
+        root_hint,
+        vk_circuit_id.trim(),
+        &vk_box,
+    )
+    .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
+    Ok(JsConfidentialUnshieldProofEnvelopeV3 {
+        nullifiers: proof
+            .nullifiers
+            .into_iter()
+            .map(|entry| Buffer::from(entry.to_vec()))
+            .collect(),
+        output_commitments: proof
+            .output_commitments
+            .into_iter()
+            .map(|entry| Buffer::from(entry.to_vec()))
+            .collect(),
+        root: Buffer::from(proof.root.to_vec()),
+        proof: Buffer::from(proof.proof.bytes),
     })
 }
 
@@ -4675,6 +5746,130 @@ fn parse_account_id_value(value: json::Value, context: &str) -> napi::Result<Acc
     parse_account_id(&literal, context)
 }
 
+fn parse_rwa_id_value(value: json::Value, context: &str) -> napi::Result<RwaId> {
+    let literal = parse_string_value(value, context)?;
+    literal.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid RWA id `{literal}`: {err}"),
+        )
+    })
+}
+
+fn account_id_to_canonical_i105(account_id: &AccountId) -> napi::Result<String> {
+    account_id.canonical_i105().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("failed to encode account id as canonical I105: {err}"),
+        )
+    })
+}
+
+fn parse_rwa_parent_refs_value(
+    value: json::Value,
+    context: &str,
+) -> napi::Result<Vec<RwaParentRef>> {
+    let json::Value::Array(entries) = value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be an array"),
+        ));
+    };
+    let mut parents = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.into_iter().enumerate() {
+        let entry_context = format!("{context}[{index}]");
+        let json::Value::Object(mut fields) = entry else {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("{entry_context} must be an object"),
+            ));
+        };
+        let rwa = parse_rwa_id_value(
+            required_value(&mut fields, "rwa", &entry_context)?,
+            &format!("{entry_context}.rwa"),
+        )?;
+        let quantity: Numeric =
+            json::from_value(required_value(&mut fields, "quantity", &entry_context)?)
+                .map_err(norito_to_napi)?;
+        parents.push(RwaParentRef::new(rwa, quantity));
+    }
+    Ok(parents)
+}
+
+fn rwa_parent_refs_to_json(parents: &[RwaParentRef]) -> json::Value {
+    json::Value::Array(
+        parents
+            .iter()
+            .map(|parent| {
+                norito_json!({
+                    "rwa": parent.rwa().to_string(),
+                    "quantity": parent.quantity(),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn rwa_status_to_json(status: Option<&Name>) -> json::Value {
+    status.map_or(json::Value::Null, |status| {
+        json::Value::String(status.to_string())
+    })
+}
+
+fn rwa_control_policy_to_json(policy: &RwaControlPolicy) -> napi::Result<json::Value> {
+    let controller_accounts = policy
+        .controller_accounts()
+        .iter()
+        .map(account_id_to_canonical_i105)
+        .collect::<napi::Result<Vec<_>>>()?;
+    let mut payload = json::Map::new();
+    payload.insert(
+        "controller_accounts".to_owned(),
+        json::to_value(&controller_accounts).map_err(norito_to_napi)?,
+    );
+    payload.insert(
+        "controller_roles".to_owned(),
+        json::to_value(
+            &policy
+                .controller_roles()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        )
+        .map_err(norito_to_napi)?,
+    );
+    payload.insert(
+        "freeze_enabled".to_owned(),
+        json::Value::Bool(*policy.freeze_enabled()),
+    );
+    payload.insert(
+        "hold_enabled".to_owned(),
+        json::Value::Bool(*policy.hold_enabled()),
+    );
+    payload.insert(
+        "force_transfer_enabled".to_owned(),
+        json::Value::Bool(*policy.force_transfer_enabled()),
+    );
+    payload.insert(
+        "redeem_enabled".to_owned(),
+        json::Value::Bool(*policy.redeem_enabled()),
+    );
+    Ok(json::Value::Object(payload))
+}
+
+fn new_rwa_to_json(rwa: &NewRwa) -> napi::Result<json::Value> {
+    Ok(norito_json!({
+        "domain": rwa.domain(),
+        "quantity": rwa.quantity(),
+        "spec": rwa.spec(),
+        "primary_reference": rwa.primary_reference(),
+        "status": rwa_status_to_json(rwa.status().as_ref()),
+        "metadata": rwa.metadata(),
+        "parents": rwa_parent_refs_to_json(rwa.parents()),
+        "controls": rwa_control_policy_to_json(rwa.controls())?,
+    }))
+}
+
 fn normalize_zk_ballot_public_inputs_json(raw: &str, context: &str) -> napi::Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -4757,7 +5952,7 @@ fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> nap
     let owner = value.as_str().ok_or_else(|| {
         napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context}.owner must be a canonical account id"),
+            format!("{context}.owner must be a canonical I105 account id"),
         )
     })?;
     let canonical = AccountId::parse_encoded(owner)
@@ -4766,13 +5961,13 @@ fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> nap
         .map_err(|_| {
             napi::Error::new(
                 napi::Status::InvalidArg,
-                format!("{context}.owner must be a canonical account id"),
+                format!("{context}.owner must be a canonical I105 account id"),
             )
         })?;
     if canonical != owner {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context}.owner must use canonical account id form"),
+            format!("{context}.owner must use canonical I105 account id form"),
         ));
     }
     Ok(())
@@ -5200,6 +6395,19 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "unsupported Burn instruction variant; expected keys: Asset or TriggerRepetitions",
                 ));
             }
+            if let Some(json::Value::Object(mut execute_fields)) = map.remove("ExecuteTrigger") {
+                let trigger: TriggerId = json::from_value(required_value(
+                    &mut execute_fields,
+                    "trigger",
+                    "ExecuteTrigger",
+                )?)
+                .map_err(norito_to_napi)?;
+                let args = execute_fields
+                    .remove("args")
+                    .map(Json::from)
+                    .unwrap_or_default();
+                return Ok(InstructionBox::from(ExecuteTrigger { trigger, args }));
+            }
             if let Some(json::Value::Object(mut transfer_map)) = map.remove("Transfer") {
                 if let Some(json::Value::Object(mut asset_fields)) = transfer_map.remove("Asset") {
                     let source_value = asset_fields.remove("source").ok_or_else(|| {
@@ -5322,6 +6530,324 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "unsupported Transfer instruction variant; expected keys: Asset, Domain, AssetDefinition, or Nft",
                 ));
             }
+            if let Some(json::Value::Object(mut grant_map)) = map.remove("Grant") {
+                if let Some(json::Value::Object(mut fields)) = grant_map.remove("Permission") {
+                    let object_value = required_value(&mut fields, "object", "Grant.Permission")?;
+                    let destination = parse_account_id_value(
+                        required_value(&mut fields, "destination", "Grant.Permission")?,
+                        "Grant.Permission.destination",
+                    )?;
+                    if !fields.is_empty() {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "Grant.Permission contains unsupported fields: {}",
+                                fields.keys().cloned().collect::<Vec<_>>().join(",")
+                            ),
+                        ));
+                    }
+                    let mut permission_fields = match object_value {
+                        json::Value::Object(map) => map,
+                        other => {
+                            return Err(napi::Error::new(
+                                napi::Status::InvalidArg,
+                                format!(
+                                    "Grant.Permission.object must be an object (found {other:?})"
+                                ),
+                            ));
+                        }
+                    };
+                    permission_fields
+                        .entry("payload".to_owned())
+                        .or_insert(json::Value::Null);
+                    let permission: Permission =
+                        json::from_value(json::Value::Object(permission_fields))
+                            .map_err(norito_to_napi)?;
+                    let grant = Grant::account_permission(permission, destination);
+                    return Ok(InstructionBox::from(GrantBox::Permission(grant)));
+                }
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "unsupported Grant instruction variant; expected key: Permission",
+                ));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("SetAssetDefinitionAlias") {
+                let asset_definition_id: AssetDefinitionId = parse_string_value(
+                    required_value(
+                        &mut fields,
+                        "asset_definition_id",
+                        "SetAssetDefinitionAlias",
+                    )?,
+                    "SetAssetDefinitionAlias.asset_definition_id",
+                )?
+                .parse()
+                .map_err(|err| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "invalid SetAssetDefinitionAlias.asset_definition_id literal: {err}"
+                        ),
+                    )
+                })?;
+                let alias = parse_optional_string_value(
+                    fields.remove("alias"),
+                    "SetAssetDefinitionAlias.alias",
+                )?
+                .map(|literal| {
+                    literal.parse::<AssetDefinitionAlias>().map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("invalid SetAssetDefinitionAlias.alias literal: {err}"),
+                        )
+                    })
+                })
+                .transpose()?;
+                let lease_expiry_ms = match fields.remove("lease_expiry_ms") {
+                    None | Some(json::Value::Null) => None,
+                    Some(value) => Some(parse_u64_value(
+                        value,
+                        "SetAssetDefinitionAlias.lease_expiry_ms",
+                    )?),
+                };
+                if !fields.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "SetAssetDefinitionAlias contains unsupported fields: {}",
+                            fields.keys().cloned().collect::<Vec<_>>().join(",")
+                        ),
+                    ));
+                }
+                let instruction = match alias {
+                    Some(alias) => {
+                        SetAssetDefinitionAlias::bind(asset_definition_id, alias, lease_expiry_ms)
+                    }
+                    None => SetAssetDefinitionAlias::clear(asset_definition_id),
+                };
+                return Ok(InstructionBox::from(instruction));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("RegisterRwa") {
+                let rwa_value = required_value(&mut fields, "rwa", "RegisterRwa")?;
+                let json::Value::Object(mut fields) = rwa_value else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "RegisterRwa.rwa must be an object",
+                    ));
+                };
+                let domain: DomainId =
+                    json::from_value(required_value(&mut fields, "domain", "RegisterRwa.rwa")?)
+                        .map_err(norito_to_napi)?;
+                let quantity: Numeric =
+                    json::from_value(required_value(&mut fields, "quantity", "RegisterRwa.rwa")?)
+                        .map_err(norito_to_napi)?;
+                let spec =
+                    json::from_value(required_value(&mut fields, "spec", "RegisterRwa.rwa")?)
+                        .map_err(norito_to_napi)?;
+                let primary_reference = parse_string_value(
+                    required_value(&mut fields, "primary_reference", "RegisterRwa.rwa")?,
+                    "RegisterRwa.rwa.primary_reference",
+                )?;
+                let status: Option<Name> =
+                    fields
+                        .remove("status")
+                        .map_or(Ok(None), |value| match value {
+                            json::Value::Null => Ok(None),
+                            other => json::from_value(other).map_err(norito_to_napi),
+                        })?;
+                let metadata = fields
+                    .remove("metadata")
+                    .map_or(Ok(Metadata::default()), |value| {
+                        json::from_value(value).map_err(norito_to_napi)
+                    })?;
+                let parents = fields.remove("parents").map_or(Ok(Vec::new()), |value| {
+                    parse_rwa_parent_refs_value(value, "RegisterRwa.rwa.parents")
+                })?;
+                let controls = fields
+                    .remove("controls")
+                    .map_or(Ok(RwaControlPolicy::default()), |value| {
+                        json::from_value(value).map_err(norito_to_napi)
+                    })?;
+                let register = RegisterRwa {
+                    rwa: NewRwa::new(
+                        domain,
+                        quantity,
+                        spec,
+                        primary_reference,
+                        status,
+                        metadata,
+                        parents,
+                        controls,
+                    ),
+                };
+                return Ok(InstructionBox::from(RwaInstructionBox::from(register)));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("TransferRwa") {
+                let source = parse_account_id_value(
+                    required_value(&mut fields, "source", "TransferRwa")?,
+                    "TransferRwa.source",
+                )?;
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "TransferRwa")?,
+                    "TransferRwa.rwa",
+                )?;
+                let quantity: Numeric =
+                    json::from_value(required_value(&mut fields, "quantity", "TransferRwa")?)
+                        .map_err(norito_to_napi)?;
+                let destination = parse_account_id_value(
+                    required_value(&mut fields, "destination", "TransferRwa")?,
+                    "TransferRwa.destination",
+                )?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(TransferRwa {
+                    source,
+                    rwa,
+                    quantity,
+                    destination,
+                })));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("MergeRwas") {
+                let parents = parse_rwa_parent_refs_value(
+                    required_value(&mut fields, "parents", "MergeRwas")?,
+                    "MergeRwas.parents",
+                )?;
+                let primary_reference = parse_string_value(
+                    required_value(&mut fields, "primary_reference", "MergeRwas")?,
+                    "MergeRwas.primary_reference",
+                )?;
+                let status: Option<Name> =
+                    fields
+                        .remove("status")
+                        .map_or(Ok(None), |value| match value {
+                            json::Value::Null => Ok(None),
+                            other => json::from_value(other).map_err(norito_to_napi),
+                        })?;
+                let metadata = fields
+                    .remove("metadata")
+                    .map_or(Ok(Metadata::default()), |value| {
+                        json::from_value(value).map_err(norito_to_napi)
+                    })?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(MergeRwas {
+                    parents,
+                    primary_reference,
+                    status,
+                    metadata,
+                })));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("RedeemRwa") {
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "RedeemRwa")?,
+                    "RedeemRwa.rwa",
+                )?;
+                let quantity: Numeric =
+                    json::from_value(required_value(&mut fields, "quantity", "RedeemRwa")?)
+                        .map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(RedeemRwa {
+                    rwa,
+                    quantity,
+                })));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("FreezeRwa") {
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "FreezeRwa")?,
+                    "FreezeRwa.rwa",
+                )?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(FreezeRwa {
+                    rwa,
+                })));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("UnfreezeRwa") {
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "UnfreezeRwa")?,
+                    "UnfreezeRwa.rwa",
+                )?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(UnfreezeRwa {
+                    rwa,
+                })));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("HoldRwa") {
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "HoldRwa")?,
+                    "HoldRwa.rwa",
+                )?;
+                let quantity: Numeric =
+                    json::from_value(required_value(&mut fields, "quantity", "HoldRwa")?)
+                        .map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(HoldRwa {
+                    rwa,
+                    quantity,
+                })));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("ReleaseRwa") {
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "ReleaseRwa")?,
+                    "ReleaseRwa.rwa",
+                )?;
+                let quantity: Numeric =
+                    json::from_value(required_value(&mut fields, "quantity", "ReleaseRwa")?)
+                        .map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(ReleaseRwa {
+                    rwa,
+                    quantity,
+                })));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("ForceTransferRwa") {
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "ForceTransferRwa")?,
+                    "ForceTransferRwa.rwa",
+                )?;
+                let quantity: Numeric =
+                    json::from_value(required_value(&mut fields, "quantity", "ForceTransferRwa")?)
+                        .map_err(norito_to_napi)?;
+                let destination = parse_account_id_value(
+                    required_value(&mut fields, "destination", "ForceTransferRwa")?,
+                    "ForceTransferRwa.destination",
+                )?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(
+                    ForceTransferRwa {
+                        rwa,
+                        quantity,
+                        destination,
+                    },
+                )));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("SetRwaControls") {
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "SetRwaControls")?,
+                    "SetRwaControls.rwa",
+                )?;
+                let controls: RwaControlPolicy =
+                    json::from_value(required_value(&mut fields, "controls", "SetRwaControls")?)
+                        .map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(
+                    SetRwaControls { rwa, controls },
+                )));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("SetRwaKeyValue") {
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "SetRwaKeyValue")?,
+                    "SetRwaKeyValue.rwa",
+                )?;
+                let key: Name =
+                    json::from_value(required_value(&mut fields, "key", "SetRwaKeyValue")?)
+                        .map_err(norito_to_napi)?;
+                let value: Json =
+                    json::from_value(required_value(&mut fields, "value", "SetRwaKeyValue")?)
+                        .map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(
+                    SetKeyValue::rwa(rwa, key, value),
+                )));
+            }
+            if let Some(json::Value::Object(mut fields)) = map.remove("RemoveRwaKeyValue") {
+                let rwa = parse_rwa_id_value(
+                    required_value(&mut fields, "rwa", "RemoveRwaKeyValue")?,
+                    "RemoveRwaKeyValue.rwa",
+                )?;
+                let key: Name =
+                    json::from_value(required_value(&mut fields, "key", "RemoveRwaKeyValue")?)
+                        .map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(RwaInstructionBox::from(
+                    RemoveKeyValue::rwa(rwa, key),
+                )));
+            }
             if let Some(json::Value::Object(mut kaigi_map)) = map.remove("Kaigi") {
                 if let Some(json::Value::Object(mut create_fields)) =
                     kaigi_map.remove("CreateKaigi")
@@ -5335,7 +6861,25 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                             format!("CreateKaigi.call parse error: {err}"),
                         )
                     })?;
-                    let instruction = CreateKaigi { call };
+                    let commitment = parse_optional_commitment(
+                        create_fields.remove("commitment"),
+                        "CreateKaigi",
+                    )?;
+                    let nullifier =
+                        parse_optional_nullifier(create_fields.remove("nullifier"), "CreateKaigi")?;
+                    let roster_root = parse_optional_hash(
+                        create_fields.remove("roster_root"),
+                        "CreateKaigi.roster_root",
+                    )?;
+                    let proof =
+                        parse_optional_base64(create_fields.remove("proof"), "CreateKaigi.proof")?;
+                    let instruction = CreateKaigi {
+                        call,
+                        commitment,
+                        nullifier,
+                        roster_root,
+                        proof,
+                    };
                     return Ok(Box::new(instruction).into_instruction_box());
                 }
                 if let Some(json::Value::Object(mut join_fields)) = kaigi_map.remove("JoinKaigi") {
@@ -5420,13 +6964,27 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     })?;
                     let call_id: KaigiId =
                         json::from_value(call_id_value).map_err(norito_to_napi)?;
-                    let ended_at = end_fields
-                        .remove("ended_at_ms")
-                        .map(|value| json::from_value(value).map_err(norito_to_napi))
-                        .transpose()?;
+                    let ended_at = match end_fields.remove("ended_at_ms") {
+                        None | Some(json::Value::Null) => None,
+                        Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
+                    };
+                    let commitment =
+                        parse_optional_commitment(end_fields.remove("commitment"), "EndKaigi")?;
+                    let nullifier =
+                        parse_optional_nullifier(end_fields.remove("nullifier"), "EndKaigi")?;
+                    let roster_root = parse_optional_hash(
+                        end_fields.remove("roster_root"),
+                        "EndKaigi.roster_root",
+                    )?;
+                    let proof =
+                        parse_optional_base64(end_fields.remove("proof"), "EndKaigi.proof")?;
                     let end = EndKaigi {
                         call_id,
                         ended_at_ms: ended_at,
+                        commitment,
+                        nullifier,
+                        roster_root,
+                        proof,
                     };
                     return Ok(Box::new(end).into_instruction_box());
                 }
@@ -5564,14 +7122,20 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             }
 
             if let Some(json::Value::Object(mut fields)) = map.remove("ProposeDeployContract") {
-                let namespace = parse_string_value(
-                    required_value(&mut fields, "namespace", "ProposeDeployContract")?,
-                    "ProposeDeployContract.namespace",
-                )?;
-                let contract_id = parse_string_value(
-                    required_value(&mut fields, "contract_id", "ProposeDeployContract")?,
-                    "ProposeDeployContract.contract_id",
-                )?;
+                let contract_address: iroha_data_model::smart_contract::ContractAddress =
+                    parse_string_value(
+                        required_value(&mut fields, "contract_address", "ProposeDeployContract")?,
+                        "ProposeDeployContract.contract_address",
+                    )?
+                    .parse()
+                    .map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "invalid ProposeDeployContract.contract_address literal: {err}"
+                            ),
+                        )
+                    })?;
                 let code_hash_hex = parse_string_value(
                     required_value(&mut fields, "code_hash_hex", "ProposeDeployContract")?,
                     "ProposeDeployContract.code_hash_hex",
@@ -5584,19 +7148,18 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "abi_version", "ProposeDeployContract")?,
                     "ProposeDeployContract.abi_version",
                 )?;
-                let window = fields
-                    .remove("window")
-                    .map(|value| json::from_value(value).map_err(norito_to_napi))
-                    .transpose()?;
+                let window = match fields.remove("window") {
+                    None | Some(json::Value::Null) => None,
+                    Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
+                };
                 let mode =
                     parse_optional_voting_mode(fields.remove("mode"), "ProposeDeployContract")?;
-                let manifest_provenance = fields
-                    .remove("manifest_provenance")
-                    .map(|value| json::from_value(value).map_err(norito_to_napi))
-                    .transpose()?;
+                let manifest_provenance = match fields.remove("manifest_provenance") {
+                    None | Some(json::Value::Null) => None,
+                    Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
+                };
                 let instruction = ProposeDeployContract {
-                    namespace,
-                    contract_id,
+                    contract_address,
                     code_hash_hex,
                     abi_hash_hex,
                     abi_version,
@@ -5725,6 +7288,17 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 return Ok(Box::new(persist).into_instruction_box());
             }
 
+            if let Some(json::Value::Object(mut fields)) = map.remove("SubmitAgendaProposal") {
+                let proposal: AgendaProposalV1 = json::from_value(required_value(
+                    &mut fields,
+                    "proposal",
+                    "SubmitAgendaProposal",
+                )?)
+                .map_err(norito_to_napi)?;
+                let instruction = SubmitAgendaProposal { proposal };
+                return Ok(Box::new(instruction).into_instruction_box());
+            }
+
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterSmartContractCode") {
                 let manifest_value =
                     required_value(&mut fields, "manifest", "RegisterSmartContractCode")?;
@@ -5760,21 +7334,30 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             }
 
             if let Some(json::Value::Object(mut fields)) = map.remove("ActivateContractInstance") {
-                let namespace = parse_string_value(
-                    required_value(&mut fields, "namespace", "ActivateContractInstance")?,
-                    "ActivateContractInstance.namespace",
-                )?;
-                let contract_id = parse_string_value(
-                    required_value(&mut fields, "contract_id", "ActivateContractInstance")?,
-                    "ActivateContractInstance.contract_id",
-                )?;
+                let contract_address: iroha_data_model::smart_contract::ContractAddress =
+                    parse_string_value(
+                        required_value(
+                            &mut fields,
+                            "contract_address",
+                            "ActivateContractInstance",
+                        )?,
+                        "ActivateContractInstance.contract_address",
+                    )?
+                    .parse()
+                    .map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "invalid ActivateContractInstance.contract_address literal: {err}"
+                            ),
+                        )
+                    })?;
                 let code_hash_value =
                     required_value(&mut fields, "code_hash", "ActivateContractInstance")?;
                 let code_hash =
                     parse_hash_value(code_hash_value, "ActivateContractInstance.code_hash")?;
                 let instruction = ActivateContractInstance {
-                    namespace,
-                    contract_id,
+                    contract_address,
                     code_hash,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -5782,21 +7365,30 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
 
             if let Some(json::Value::Object(mut fields)) = map.remove("DeactivateContractInstance")
             {
-                let namespace = parse_string_value(
-                    required_value(&mut fields, "namespace", "DeactivateContractInstance")?,
-                    "DeactivateContractInstance.namespace",
-                )?;
-                let contract_id = parse_string_value(
-                    required_value(&mut fields, "contract_id", "DeactivateContractInstance")?,
-                    "DeactivateContractInstance.contract_id",
-                )?;
+                let contract_address: iroha_data_model::smart_contract::ContractAddress =
+                    parse_string_value(
+                        required_value(
+                            &mut fields,
+                            "contract_address",
+                            "DeactivateContractInstance",
+                        )?,
+                        "DeactivateContractInstance.contract_address",
+                    )?
+                    .parse()
+                    .map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "invalid DeactivateContractInstance.contract_address literal: {err}"
+                            ),
+                        )
+                    })?;
                 let reason = parse_optional_string_value(
                     fields.remove("reason"),
                     "DeactivateContractInstance.reason",
                 )?;
                 let instruction = DeactivateContractInstance {
-                    namespace,
-                    contract_id,
+                    contract_address,
                     reason,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -5931,6 +7523,23 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 };
                 let mut payload = json::Map::new();
                 payload.insert("Approve".to_owned(), json::Value::Object(approve_fields));
+                return Ok(InstructionBox::from(CustomInstruction::new(
+                    json::Value::Object(payload),
+                )));
+            }
+
+            if let Some(cancel_value) = remove_case_insensitive(&mut map, "MultisigCancel") {
+                let cancel_fields = match cancel_value {
+                    json::Value::Object(map) => map,
+                    other => {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!("MultisigCancel payload must be an object (found {other:?})"),
+                        ));
+                    }
+                };
+                let mut payload = json::Map::new();
+                payload.insert("Cancel".to_owned(), json::Value::Object(cancel_fields));
                 return Ok(InstructionBox::from(CustomInstruction::new(
                     json::Value::Object(payload),
                 )));
@@ -6111,7 +7720,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         if let MintBox::Asset(mint) = mint_box {
             let mut asset_fields = json::Map::new();
             let object = json::to_value(mint.object()).map_err(norito_to_napi)?;
-            let destination = json::Value::String(mint.destination().canonical_encoded());
+            let destination = json::Value::String(mint.destination().canonical_literal());
             asset_fields.insert("object".to_owned(), object);
             asset_fields.insert("destination".to_owned(), destination);
             mint_map.insert("Asset".to_owned(), json::Value::Object(asset_fields));
@@ -6138,7 +7747,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         let mut transfer_map = json::Map::new();
         if let TransferBox::Asset(transfer) = transfer_box {
             let mut asset_fields = json::Map::new();
-            let source = json::Value::String(transfer.source().canonical_encoded());
+            let source = json::Value::String(transfer.source().canonical_literal());
             let quantity = json::to_value(transfer.object()).map_err(norito_to_napi)?;
             let destination = json::to_value(transfer.destination()).map_err(norito_to_napi)?;
             asset_fields.insert("source".to_owned(), source);
@@ -6191,7 +7800,7 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         if let BurnBox::Asset(burn) = burn_box {
             let mut asset_fields = json::Map::new();
             let object = json::to_value(burn.object()).map_err(norito_to_napi)?;
-            let destination = json::Value::String(burn.destination().canonical_encoded());
+            let destination = json::Value::String(burn.destination().canonical_literal());
             asset_fields.insert("object".to_owned(), object);
             asset_fields.insert("destination".to_owned(), destination);
             burn_map.insert("Asset".to_owned(), json::Value::Object(asset_fields));
@@ -6214,6 +7823,175 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         }
     }
 
+    if let Some(grant_box) = instruction_ref.as_any().downcast_ref::<GrantBox>() {
+        if let GrantBox::Permission(grant) = grant_box {
+            let mut fields = json::Map::new();
+            fields.insert(
+                "object".to_owned(),
+                json::to_value(grant.object()).map_err(norito_to_napi)?,
+            );
+            fields.insert(
+                "destination".to_owned(),
+                json::to_value(grant.destination()).map_err(norito_to_napi)?,
+            );
+            let mut grant_map = json::Map::new();
+            grant_map.insert("Permission".to_owned(), json::Value::Object(fields));
+            let mut outer = json::Map::new();
+            outer.insert("Grant".to_owned(), json::Value::Object(grant_map));
+            return Ok(json::Value::Object(outer));
+        }
+    }
+
+    if let Some(alias) = instruction_ref
+        .as_any()
+        .downcast_ref::<SetAssetDefinitionAlias>()
+    {
+        let mut fields = json::Map::new();
+        fields.insert(
+            "asset_definition_id".to_owned(),
+            json::Value::String(alias.asset_definition_id().to_string()),
+        );
+        fields.insert(
+            "alias".to_owned(),
+            alias.alias().as_ref().map_or(json::Value::Null, |value| {
+                json::Value::String(value.to_string())
+            }),
+        );
+        fields.insert(
+            "lease_expiry_ms".to_owned(),
+            alias
+                .lease_expiry_ms()
+                .as_ref()
+                .map_or(json::Value::Null, |value| {
+                    json::Value::Number(json::Number::from(*value))
+                }),
+        );
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SetAssetDefinitionAlias".to_owned(),
+            json::Value::Object(fields),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(execute_trigger) = instruction_ref.as_any().downcast_ref::<ExecuteTrigger>() {
+        let mut payload = json::Map::new();
+        payload.insert(
+            "trigger".to_owned(),
+            json::to_value(execute_trigger.trigger()).map_err(norito_to_napi)?,
+        );
+        let args = json::parse_value(execute_trigger.args().get()).map_err(|error| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("ExecuteTrigger.args is not valid JSON: {error}"),
+            )
+        })?;
+        payload.insert("args".to_owned(), args);
+        let mut outer = json::Map::new();
+        outer.insert("ExecuteTrigger".to_owned(), json::Value::Object(payload));
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(rwa_box) = instruction_ref.as_any().downcast_ref::<RwaInstructionBox>() {
+        let (label, payload) = match rwa_box {
+            RwaInstructionBox::Register(register) => (
+                "RegisterRwa",
+                norito_json!({ "rwa": new_rwa_to_json(register.rwa())? }),
+            ),
+            RwaInstructionBox::Transfer(transfer) => (
+                "TransferRwa",
+                norito_json!({
+                    "source": account_id_to_canonical_i105(transfer.source())?,
+                    "rwa": transfer.rwa().to_string(),
+                    "quantity": transfer.quantity(),
+                    "destination": account_id_to_canonical_i105(transfer.destination())?,
+                }),
+            ),
+            RwaInstructionBox::Merge(merge) => {
+                let mut payload = json::Map::new();
+                payload.insert(
+                    "parents".to_owned(),
+                    rwa_parent_refs_to_json(merge.parents()),
+                );
+                payload.insert(
+                    "primary_reference".to_owned(),
+                    json::Value::String(merge.primary_reference().clone()),
+                );
+                payload.insert(
+                    "status".to_owned(),
+                    rwa_status_to_json(merge.status().as_ref()),
+                );
+                payload.insert(
+                    "metadata".to_owned(),
+                    json::to_value(merge.metadata()).map_err(norito_to_napi)?,
+                );
+                ("MergeRwas", json::Value::Object(payload))
+            }
+            RwaInstructionBox::Redeem(redeem) => (
+                "RedeemRwa",
+                norito_json!({
+                    "rwa": redeem.rwa().to_string(),
+                    "quantity": redeem.quantity(),
+                }),
+            ),
+            RwaInstructionBox::Freeze(freeze) => (
+                "FreezeRwa",
+                norito_json!({ "rwa": freeze.rwa().to_string() }),
+            ),
+            RwaInstructionBox::Unfreeze(unfreeze) => (
+                "UnfreezeRwa",
+                norito_json!({ "rwa": unfreeze.rwa().to_string() }),
+            ),
+            RwaInstructionBox::Hold(hold) => (
+                "HoldRwa",
+                norito_json!({
+                    "rwa": hold.rwa().to_string(),
+                    "quantity": hold.quantity(),
+                }),
+            ),
+            RwaInstructionBox::Release(release) => (
+                "ReleaseRwa",
+                norito_json!({
+                    "rwa": release.rwa().to_string(),
+                    "quantity": release.quantity(),
+                }),
+            ),
+            RwaInstructionBox::ForceTransfer(force_transfer) => (
+                "ForceTransferRwa",
+                norito_json!({
+                    "rwa": force_transfer.rwa().to_string(),
+                    "quantity": force_transfer.quantity(),
+                    "destination": account_id_to_canonical_i105(force_transfer.destination())?,
+                }),
+            ),
+            RwaInstructionBox::SetControls(set_controls) => (
+                "SetRwaControls",
+                norito_json!({
+                    "rwa": set_controls.rwa().to_string(),
+                    "controls": rwa_control_policy_to_json(set_controls.controls())?,
+                }),
+            ),
+            RwaInstructionBox::SetKeyValue(set) => (
+                "SetRwaKeyValue",
+                norito_json!({
+                    "rwa": set.object().to_string(),
+                    "key": set.key().clone(),
+                    "value": json::to_value(set.value()).map_err(norito_to_napi)?,
+                }),
+            ),
+            RwaInstructionBox::RemoveKeyValue(remove) => (
+                "RemoveRwaKeyValue",
+                norito_json!({
+                    "rwa": remove.object().to_string(),
+                    "key": remove.key().clone(),
+                }),
+            ),
+        };
+        let mut outer = json::Map::new();
+        outer.insert(label.to_owned(), payload);
+        return Ok(json::Value::Object(outer));
+    }
+
     if let Some(custom_instruction) = instruction_ref.as_any().downcast_ref::<CustomInstruction>() {
         let payload_json =
             json::parse_value(custom_instruction.payload.get()).map_err(|error| {
@@ -6225,18 +8003,153 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         return Ok(custom_json_value(payload_json));
     }
 
+    if let Some(register) = instruction_ref.as_any().downcast_ref::<RegisterRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "RegisterRwa".to_owned(),
+            norito_json!({ "rwa": new_rwa_to_json(register.rwa())? }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(transfer) = instruction_ref.as_any().downcast_ref::<TransferRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "TransferRwa".to_owned(),
+            norito_json!({
+                "source": account_id_to_canonical_i105(transfer.source())?,
+                "rwa": transfer.rwa().to_string(),
+                "quantity": transfer.quantity(),
+                "destination": account_id_to_canonical_i105(transfer.destination())?,
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(merge) = instruction_ref.as_any().downcast_ref::<MergeRwas>() {
+        let mut payload = json::Map::new();
+        payload.insert(
+            "parents".to_owned(),
+            rwa_parent_refs_to_json(merge.parents()),
+        );
+        payload.insert(
+            "primary_reference".to_owned(),
+            json::Value::String(merge.primary_reference().clone()),
+        );
+        payload.insert(
+            "status".to_owned(),
+            rwa_status_to_json(merge.status().as_ref()),
+        );
+        payload.insert(
+            "metadata".to_owned(),
+            json::to_value(merge.metadata()).map_err(norito_to_napi)?,
+        );
+        let mut outer = json::Map::new();
+        outer.insert("MergeRwas".to_owned(), json::Value::Object(payload));
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(redeem) = instruction_ref.as_any().downcast_ref::<RedeemRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "RedeemRwa".to_owned(),
+            norito_json!({
+                "rwa": redeem.rwa().to_string(),
+                "quantity": redeem.quantity(),
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(freeze) = instruction_ref.as_any().downcast_ref::<FreezeRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "FreezeRwa".to_owned(),
+            norito_json!({ "rwa": freeze.rwa().to_string() }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(unfreeze) = instruction_ref.as_any().downcast_ref::<UnfreezeRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "UnfreezeRwa".to_owned(),
+            norito_json!({ "rwa": unfreeze.rwa().to_string() }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(hold) = instruction_ref.as_any().downcast_ref::<HoldRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "HoldRwa".to_owned(),
+            norito_json!({
+                "rwa": hold.rwa().to_string(),
+                "quantity": hold.quantity(),
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(release) = instruction_ref.as_any().downcast_ref::<ReleaseRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "ReleaseRwa".to_owned(),
+            norito_json!({
+                "rwa": release.rwa().to_string(),
+                "quantity": release.quantity(),
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(force_transfer) = instruction_ref.as_any().downcast_ref::<ForceTransferRwa>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "ForceTransferRwa".to_owned(),
+            norito_json!({
+                "rwa": force_transfer.rwa().to_string(),
+                "quantity": force_transfer.quantity(),
+                "destination": account_id_to_canonical_i105(force_transfer.destination())?,
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(set_controls) = instruction_ref.as_any().downcast_ref::<SetRwaControls>() {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SetRwaControls".to_owned(),
+            norito_json!({
+                "rwa": set_controls.rwa().to_string(),
+                "controls": rwa_control_policy_to_json(set_controls.controls())?,
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
+    if let Some(submit) = instruction_ref
+        .as_any()
+        .downcast_ref::<SubmitAgendaProposal>()
+    {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SubmitAgendaProposal".to_owned(),
+            norito_json!({
+                "proposal": submit.proposal,
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
     if let Some(propose) = instruction_ref
         .as_any()
         .downcast_ref::<ProposeDeployContract>()
     {
         let mut inner = json::Map::new();
         inner.insert(
-            "namespace".to_owned(),
-            json::Value::String(propose.namespace.clone()),
-        );
-        inner.insert(
-            "contract_id".to_owned(),
-            json::Value::String(propose.contract_id.clone()),
+            "contract_address".to_owned(),
+            json::Value::String(propose.contract_address.to_string()),
         );
         inner.insert(
             "code_hash_hex".to_owned(),
@@ -6525,12 +8438,8 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
     {
         let mut inner = json::Map::new();
         inner.insert(
-            "namespace".to_owned(),
-            json::Value::String(activate.namespace.clone()),
-        );
-        inner.insert(
-            "contract_id".to_owned(),
-            json::Value::String(activate.contract_id.clone()),
+            "contract_address".to_owned(),
+            json::Value::String(activate.contract_address.to_string()),
         );
         inner.insert(
             "code_hash".to_owned(),
@@ -6550,12 +8459,8 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
     {
         let mut inner = json::Map::new();
         inner.insert(
-            "namespace".to_owned(),
-            json::Value::String(deactivate.namespace.clone()),
-        );
-        inner.insert(
-            "contract_id".to_owned(),
-            json::Value::String(deactivate.contract_id.clone()),
+            "contract_address".to_owned(),
+            json::Value::String(deactivate.contract_address.to_string()),
         );
         if let Some(reason) = &deactivate.reason {
             inner.insert("reason".to_owned(), json::Value::String(reason.clone()));
@@ -6619,6 +8524,22 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         payload.insert(
             "call".to_owned(),
             json::to_value(create.call()).map_err(norito_to_napi)?,
+        );
+        payload.insert(
+            "commitment".to_owned(),
+            optional_commitment_to_json(create.commitment().as_ref()),
+        );
+        payload.insert(
+            "nullifier".to_owned(),
+            optional_nullifier_to_json(create.nullifier().as_ref()),
+        );
+        payload.insert(
+            "roster_root".to_owned(),
+            optional_hash_to_json(create.roster_root().as_ref()),
+        );
+        payload.insert(
+            "proof".to_owned(),
+            optional_proof_to_json(create.proof().as_ref()),
         );
         return Ok(kaigi_json_value(
             "CreateKaigi",
@@ -6690,6 +8611,22 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         payload.insert(
             "ended_at_ms".to_owned(),
             json::to_value(end.ended_at_ms()).map_err(norito_to_napi)?,
+        );
+        payload.insert(
+            "commitment".to_owned(),
+            optional_commitment_to_json(end.commitment().as_ref()),
+        );
+        payload.insert(
+            "nullifier".to_owned(),
+            optional_nullifier_to_json(end.nullifier().as_ref()),
+        );
+        payload.insert(
+            "roster_root".to_owned(),
+            optional_hash_to_json(end.roster_root().as_ref()),
+        );
+        payload.insert(
+            "proof".to_owned(),
+            optional_proof_to_json(end.proof().as_ref()),
         );
         return Ok(kaigi_json_value("EndKaigi", json::Value::Object(payload)));
     }
@@ -6817,9 +8754,86 @@ fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
     json::Value::Object(outer)
 }
 
+fn try_decode_signed_transaction_adaptive_with_flags(
+    payload: &[u8],
+    flags: u8,
+) -> Result<SignedTransaction, String> {
+    let attempt = catch_unwind(AssertUnwindSafe(|| {
+        let _guard = core::DecodeFlagsGuard::enter_with_hint(flags, flags);
+        norito::codec::decode_adaptive::<SignedTransaction>(payload)
+    }));
+    match attempt {
+        Ok(Ok(tx)) => Ok(tx),
+        Ok(Err(err)) => Err(err.to_string()),
+        Err(_) => Err("panic".to_owned()),
+    }
+}
+
+fn try_decode_signed_transaction_versioned(bytes: &[u8]) -> Result<SignedTransaction, String> {
+    let Some((&version, payload)) = bytes.split_first() else {
+        return Err("empty payload".to_owned());
+    };
+    if version != 1 {
+        return Err(format!("unsupported version byte {version}"));
+    }
+    let (decoded, used) =
+        SignedTransaction::decode_from_slice(payload).map_err(|err| err.to_string())?;
+    if used != payload.len() {
+        return Err(format!("trailing bytes ({used} of {} used)", payload.len()));
+    }
+    Ok(decoded)
+}
+
 fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
-    let mut cursor = bytes;
-    SignedTransaction::decode(&mut cursor).map_err(norito_to_napi)
+    let mut attempts = Vec::new();
+
+    match try_decode_signed_transaction_versioned(bytes) {
+        Ok(decoded) => return Ok(decoded),
+        Err(err) => attempts.push(format!("versioned: {err}")),
+    }
+
+    match SignedTransaction::decode_from_slice(bytes) {
+        Ok((decoded, used)) if used == bytes.len() => return Ok(decoded),
+        Ok((_, used)) => attempts.push(format!(
+            "bare adaptive: trailing bytes ({used} of {} used)",
+            bytes.len()
+        )),
+        Err(err) => attempts.push(format!("bare adaptive: {err}")),
+    }
+
+    match norito::decode_from_bytes::<SignedTransaction>(bytes) {
+        Ok(decoded) => return Ok(decoded),
+        Err(err) => attempts.push(format!("framed norito: {err}")),
+    }
+
+    if let Ok(view) = core::from_bytes_view(bytes) {
+        let payload = view.as_bytes();
+        let packed = core::header_flags::PACKED_STRUCT;
+        for (label, flags) in [
+            ("framed payload flags", view.flags() | view.flags_hint()),
+            ("framed payload no flags", 0),
+            ("framed payload packed-struct", packed),
+        ] {
+            match try_decode_signed_transaction_adaptive_with_flags(payload, flags) {
+                Ok(decoded) => return Ok(decoded),
+                Err(err) => attempts.push(format!("{label}: {err}")),
+            }
+        }
+    }
+
+    match try_decode_signed_transaction_adaptive_with_flags(bytes, 0) {
+        Ok(decoded) => Ok(decoded),
+        Err(err) => {
+            attempts.push(format!("headerless adaptive fallback: {err}"));
+            Err(napi::Error::new(
+                napi::Status::GenericFailure,
+                format!(
+                    "failed to decode signed transaction; attempts: {}",
+                    attempts.join("; ")
+                ),
+            ))
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
@@ -6958,6 +8972,476 @@ pub struct JsSignedTransaction {
     pub hash: Buffer,
 }
 
+/// Result of building an authority-free private Kaigi transaction entrypoint.
+#[napi(object)]
+pub struct JsPrivateKaigiTransactionEntrypoint {
+    /// Norito-encoded transaction entrypoint bytes.
+    pub transaction_entrypoint: Buffer,
+    /// Canonical pipeline hash used by Torii status polling.
+    pub hash: Buffer,
+    /// Action hash bound into the fee-spend proof.
+    pub action_hash: Buffer,
+}
+
+/// Result of building a private Kaigi confidential XOR fee-spend envelope.
+#[napi(object)]
+pub struct JsPrivateKaigiFeeSpendEnvelope {
+    /// Asset definition that the confidential fee spend targets.
+    pub asset_definition_id: String,
+    /// Recent shielded Merkle root bound into the spend.
+    pub anchor_root: Buffer,
+    /// Consumed nullifiers for the fee spend.
+    pub nullifiers: Vec<Buffer>,
+    /// Output commitments created by the fee spend.
+    pub output_commitments: Vec<Buffer>,
+    /// Encrypted payloads attached to the output commitments.
+    pub encrypted_change_payloads: Vec<Buffer>,
+    /// Norito-encoded `OpenVerifyEnvelope` payload.
+    pub proof: Buffer,
+}
+
+/// Input note material for confidential transfer/unshield proof construction.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsConfidentialTransferInputV2 {
+    /// Whole-number base-unit amount carried by the note.
+    pub amount: String,
+    /// Note rho rendered as 32-byte hexadecimal.
+    pub rho_hex: String,
+    /// Note diversifier rendered as 32-byte hexadecimal; omitted legacy notes use the default tag.
+    pub diversifier_hex: Option<String>,
+    /// Current note leaf index inside the confidential tree.
+    pub leaf_index: u32,
+}
+
+/// Output note material for confidential transfer proof construction.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsConfidentialTransferOutputV2 {
+    /// Whole-number base-unit amount carried by the note.
+    pub amount: String,
+    /// Fresh note rho rendered as 32-byte hexadecimal.
+    pub rho_hex: String,
+    /// Recipient owner tag rendered as 32-byte hexadecimal.
+    pub owner_tag_hex: String,
+}
+
+/// Output note material for confidential unshield v3 change-note construction.
+#[napi(object)]
+#[derive(Clone)]
+pub struct JsConfidentialUnshieldOutputV3 {
+    /// Whole-number base-unit amount carried by the note.
+    pub amount: String,
+    /// Fresh note rho rendered as 32-byte hexadecimal.
+    pub rho_hex: String,
+}
+
+/// Diversified confidential v2 payment address material.
+#[napi(object)]
+pub struct JsConfidentialReceiveAddressV2 {
+    /// Recipient owner tag rendered as 32-byte hexadecimal.
+    pub owner_tag_hex: String,
+    /// Note diversifier rendered as 32-byte hexadecimal.
+    pub diversifier_hex: String,
+}
+
+/// Result of building a confidential transfer v2 proof envelope.
+#[napi(object)]
+pub struct JsConfidentialTransferProofEnvelopeV2 {
+    /// Nullifiers consumed by the proof.
+    pub nullifiers: Vec<Buffer>,
+    /// Output commitments created by the proof.
+    pub output_commitments: Vec<Buffer>,
+    /// Merkle root bound into the proof.
+    pub root: Buffer,
+    /// Norito-encoded `OpenVerifyEnvelope` payload.
+    pub proof: Buffer,
+}
+
+/// Result of building a confidential unshield v2 proof envelope.
+#[napi(object)]
+pub struct JsConfidentialUnshieldProofEnvelopeV2 {
+    /// Nullifiers consumed by the proof.
+    pub nullifiers: Vec<Buffer>,
+    /// Merkle root bound into the proof.
+    pub root: Buffer,
+    /// Norito-encoded `OpenVerifyEnvelope` payload.
+    pub proof: Buffer,
+}
+
+/// Result of building a confidential unshield v3 proof envelope.
+#[napi(object)]
+pub struct JsConfidentialUnshieldProofEnvelopeV3 {
+    /// Nullifiers consumed by the proof.
+    pub nullifiers: Vec<Buffer>,
+    /// Output commitments created by the proof.
+    pub output_commitments: Vec<Buffer>,
+    /// Merkle root bound into the proof.
+    pub root: Buffer,
+    /// Norito-encoded `OpenVerifyEnvelope` payload.
+    pub proof: Buffer,
+}
+
+fn parse_private_kaigi_json<T>(context: &str, payload: &str) -> napi::Result<T>
+where
+    T: JsonDeserialize,
+{
+    json::from_json(payload).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} json: {err}"),
+        )
+    })
+}
+
+fn parse_kaigi_id_literal(value: &str, context: &str) -> napi::Result<KaigiId> {
+    let trimmed = value.trim();
+    let Some((domain, call_name)) = trimmed.split_once(':') else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be in `domain.dataspace:callName` format"),
+        ));
+    };
+    let domain_id = DomainId::parse_fully_qualified(domain).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} domain id: {err}"),
+        )
+    })?;
+    let call_name = Name::from_str(call_name).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} call name: {err}"),
+        )
+    })?;
+    Ok(KaigiId::new(domain_id, call_name))
+}
+
+fn normalize_private_kaigi_creation_time_ms(creation_time_ms: Option<i64>) -> napi::Result<u64> {
+    creation_time_ms.map_or_else(
+        || {
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+                .map_err(norito_to_napi)
+        },
+        |ms| {
+            u64::try_from(ms).map_err(|_| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "creation_time_ms must be non-negative",
+                )
+            })
+        },
+    )
+}
+
+fn validate_private_kaigi_fee_fixture(
+    vk_backend: &str,
+    vk_circuit_id: &str,
+    vk_bytes: &[u8],
+) -> napi::Result<Vec<u8>> {
+    if vk_backend != "halo2/ipa" {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "unsupported private Kaigi fee transfer verifier backend `{vk_backend}`; expected halo2/ipa"
+            ),
+        ));
+    }
+    if vk_bytes.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "vk_bytes must be present for private Kaigi fee spend construction",
+        ));
+    }
+
+    let network_vk =
+        iroha_data_model::proof::VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes.to_vec());
+    let fixture = halo2_fixture_envelope(
+        vk_circuit_id.to_owned(),
+        hash_verifying_key_box(&network_vk),
+    );
+    let fixture_vk_bytes = fixture.vk_bytes.ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("unsupported private Kaigi fee verifier circuit `{vk_circuit_id}`"),
+        )
+    })?;
+    if fixture_vk_bytes != vk_bytes {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "private Kaigi fee verifier `{vk_backend}::{vk_circuit_id}` does not match the built-in fixture circuit"
+            ),
+        ));
+    }
+    Ok(fixture.proof_bytes)
+}
+
+fn build_private_kaigi_fee_change_payload(
+    asset_definition_id: &str,
+    action_hash_hex: &str,
+    fee_amount: &str,
+) -> Vec<u8> {
+    json::to_string(&norito_json!({
+        "schema": "iroha.private_kaigi.change.v1",
+        "asset_definition_id": asset_definition_id,
+        "action_hash_hex": action_hash_hex,
+        "fee_amount": fee_amount,
+        "change_amount": "0",
+    }))
+    .expect("private Kaigi change payload JSON serialization")
+    .into_bytes()
+}
+
+fn normalize_private_kaigi_fee_amount(fee_amount: &str) -> napi::Result<String> {
+    let fee_amount = fee_amount.trim().to_owned();
+    if fee_amount.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "fee_amount must be non-empty",
+        ));
+    }
+    let _parsed_fee_amount = Numeric::from_str(&fee_amount).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid fee_amount numeric literal: {err}"),
+        )
+    })?;
+    Ok(fee_amount)
+}
+
+fn normalize_private_kaigi_nonce(nonce: Option<u32>) -> napi::Result<Option<NonZeroU32>> {
+    nonce
+        .map(|value| {
+            NonZeroU32::new(value).ok_or_else(|| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "nonce must be non-zero (fits in u32)",
+                )
+            })
+        })
+        .transpose()
+}
+
+fn parse_fixed_32_hex(context: &str, value: &str) -> napi::Result<[u8; 32]> {
+    let normalized = value.trim();
+    let normalized = normalized.strip_prefix("0x").unwrap_or(normalized);
+    let decoded = hex::decode(normalized).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be valid hex: {err}"),
+        )
+    })?;
+    if decoded.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be exactly 32 bytes"),
+        ));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&decoded);
+    Ok(out)
+}
+
+fn parse_confidential_amount_u128(context: &str, value: &str) -> napi::Result<u128> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must be a non-empty whole number"),
+        ));
+    }
+    normalized.parse::<u128>().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid {context} whole-number amount: {err}"),
+        )
+    })
+}
+
+fn parse_confidential_tree_commitments(
+    commitments_hex: Vec<String>,
+) -> napi::Result<Vec<[u8; 32]>> {
+    commitments_hex
+        .into_iter()
+        .enumerate()
+        .map(|(index, value)| parse_fixed_32_hex(&format!("tree_commitments_hex[{index}]"), &value))
+        .collect()
+}
+
+fn parse_optional_confidential_diversifier_hex(
+    context: &str,
+    value: Option<&str>,
+) -> napi::Result<[u8; 32]> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => parse_fixed_32_hex(context, value),
+        None => Ok(confidential_v2::default_confidential_diversifier_v2()),
+    }
+}
+
+fn parse_confidential_transfer_inputs_v2(
+    inputs: Vec<JsConfidentialTransferInputV2>,
+) -> napi::Result<Vec<ConfidentialTransferInputV2>> {
+    inputs
+        .into_iter()
+        .enumerate()
+        .map(|(index, input)| {
+            Ok(ConfidentialTransferInputV2 {
+                amount: parse_confidential_amount_u128(
+                    &format!("inputs[{index}].amount"),
+                    &input.amount,
+                )?,
+                rho: parse_fixed_32_hex(&format!("inputs[{index}].rho_hex"), &input.rho_hex)?,
+                diversifier: parse_optional_confidential_diversifier_hex(
+                    &format!("inputs[{index}].diversifier_hex"),
+                    input.diversifier_hex.as_deref(),
+                )?,
+                leaf_index: usize::try_from(input.leaf_index).map_err(|_| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("inputs[{index}].leaf_index is out of range"),
+                    )
+                })?,
+            })
+        })
+        .collect()
+}
+
+fn parse_confidential_unshield_inputs_v2(
+    inputs: Vec<JsConfidentialTransferInputV2>,
+) -> napi::Result<Vec<ConfidentialUnshieldInputV2>> {
+    inputs
+        .into_iter()
+        .enumerate()
+        .map(|(index, input)| {
+            Ok(ConfidentialUnshieldInputV2 {
+                amount: parse_confidential_amount_u128(
+                    &format!("inputs[{index}].amount"),
+                    &input.amount,
+                )?,
+                rho: parse_fixed_32_hex(&format!("inputs[{index}].rho_hex"), &input.rho_hex)?,
+                diversifier: parse_optional_confidential_diversifier_hex(
+                    &format!("inputs[{index}].diversifier_hex"),
+                    input.diversifier_hex.as_deref(),
+                )?,
+                leaf_index: usize::try_from(input.leaf_index).map_err(|_| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("inputs[{index}].leaf_index is out of range"),
+                    )
+                })?,
+            })
+        })
+        .collect()
+}
+
+fn parse_confidential_transfer_outputs_v2(
+    outputs: Vec<JsConfidentialTransferOutputV2>,
+) -> napi::Result<Vec<ConfidentialTransferOutputV2>> {
+    outputs
+        .into_iter()
+        .enumerate()
+        .map(|(index, output)| {
+            Ok(ConfidentialTransferOutputV2 {
+                amount: parse_confidential_amount_u128(
+                    &format!("outputs[{index}].amount"),
+                    &output.amount,
+                )?,
+                rho: parse_fixed_32_hex(&format!("outputs[{index}].rho_hex"), &output.rho_hex)?,
+                owner_tag: parse_fixed_32_hex(
+                    &format!("outputs[{index}].owner_tag_hex"),
+                    &output.owner_tag_hex,
+                )?,
+            })
+        })
+        .collect()
+}
+
+fn parse_confidential_unshield_outputs_v3(
+    outputs: Vec<JsConfidentialUnshieldOutputV3>,
+) -> napi::Result<Vec<ConfidentialUnshieldOutputV3>> {
+    outputs
+        .into_iter()
+        .enumerate()
+        .map(|(index, output)| {
+            Ok(ConfidentialUnshieldOutputV3 {
+                amount: parse_confidential_amount_u128(
+                    &format!("outputs[{index}].amount"),
+                    &output.amount,
+                )?,
+                rho: parse_fixed_32_hex(&format!("outputs[{index}].rho_hex"), &output.rho_hex)?,
+            })
+        })
+        .collect()
+}
+
+fn private_kaigi_fee_aux_json(
+    action_hash_hex: &str,
+    chain_id: &str,
+    asset_definition_id: &str,
+    fee_amount: &str,
+) -> Vec<u8> {
+    json::to_string(&norito_json!({
+        "schema": "iroha.private_kaigi.fee.v1",
+        "action_hash_hex": action_hash_hex,
+        "chain_id": chain_id,
+        "asset_definition_id": asset_definition_id,
+        "fee_amount": fee_amount,
+    }))
+    .expect("private Kaigi fee aux JSON serialization")
+    .into_bytes()
+}
+
+fn build_private_kaigi_fee_digest(label: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(label);
+    for part in parts {
+        hasher.update(&u64::try_from(part.len()).unwrap_or(u64::MAX).to_le_bytes());
+        hasher.update(part);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn build_private_kaigi_entrypoint_result(
+    tx: PrivateKaigiTransaction,
+) -> JsPrivateKaigiTransactionEntrypoint {
+    let action_hash = tx.action_hash();
+    let hash = tx.hash();
+    let entrypoint = TransactionEntrypoint::PrivateKaigi(tx);
+    let entrypoint_bytes = Encode::encode(&entrypoint);
+    JsPrivateKaigiTransactionEntrypoint {
+        transaction_entrypoint: Buffer::from(entrypoint_bytes),
+        hash: Buffer::from(hash.as_ref().to_vec()),
+        action_hash: Buffer::from(action_hash.as_ref().to_vec()),
+    }
+}
+
+fn encode_private_kaigi_fee_proof(
+    proof_bytes: &[u8],
+    action_hash_hex: &str,
+    chain_id: &str,
+    asset_definition_id: &str,
+    fee_amount: &str,
+) -> napi::Result<Vec<u8>> {
+    let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+        norito::decode_from_bytes(proof_bytes).map_err(|err| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                format!("failed to decode private Kaigi fee proof fixture: {err}"),
+            )
+        })?;
+    envelope.aux =
+        private_kaigi_fee_aux_json(action_hash_hex, chain_id, asset_definition_id, fee_amount);
+    norito::to_bytes(&envelope).map_err(|err| {
+        napi::Error::new(
+            napi::Status::GenericFailure,
+            format!("failed to encode private Kaigi fee proof envelope: {err}"),
+        )
+    })
+}
+
 /// Build and sign a single-instruction `RegisterDomain` transaction.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
@@ -6975,7 +9459,7 @@ pub fn build_register_domain_transaction(
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
     let authority = parse_account_id(&authority, "authority account id")?;
-    let domain_id: DomainId = domain_id.parse().map_err(|err| {
+    let domain_id = DomainId::parse_fully_qualified(&domain_id).map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("invalid domain id: {err}"),
@@ -7039,6 +9523,7 @@ pub fn build_transaction(
     let chain_id: ChainId = chain_id.parse().map_err(|err| {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "authority account id")?;
 
     build_transaction_from_instructions_json(
@@ -7051,6 +9536,195 @@ pub fn build_transaction(
         nonce,
         secret.as_ref(),
     )
+}
+
+/// Build a private Kaigi create transaction entrypoint.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_private_create_kaigi_transaction(
+    chain_id: String,
+    call_json: String,
+    artifacts_json: String,
+    fee_spend_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsPrivateKaigiTransactionEntrypoint> {
+    let chain: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let call: PrivateKaigiTemplate = parse_private_kaigi_json("private create call", &call_json)?;
+    let artifacts: PrivateKaigiArtifacts =
+        parse_private_kaigi_json("private Kaigi artifacts", &artifacts_json)?;
+    let fee_spend: PrivateKaigiFeeSpend =
+        parse_private_kaigi_json("private Kaigi fee spend", &fee_spend_json)?;
+    let metadata = parse_metadata_payload("private Kaigi", metadata_json)?;
+    let tx = PrivateKaigiTransaction {
+        chain,
+        creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
+        nonce: normalize_private_kaigi_nonce(nonce)?,
+        metadata,
+        action: PrivateKaigiAction::Create(PrivateCreateKaigi { call }),
+        artifacts,
+        fee_spend,
+    };
+    Ok(build_private_kaigi_entrypoint_result(tx))
+}
+
+/// Build a deterministic confidential XOR fee-spend envelope for private Kaigi.
+///
+/// This helper only supports transfer verifying keys whose circuit id matches one of the
+/// built-in Halo2 fixture circuits. The caller must pass the active `vk_transfer` record bytes
+/// advertised by the network so the helper can verify the local fixture matches the network VK.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_private_kaigi_fee_spend(
+    chain_id: String,
+    asset_definition_id: String,
+    action_hash: Uint8Array,
+    anchor_root_hex: String,
+    fee_amount: String,
+    vk_backend: String,
+    vk_circuit_id: String,
+    vk_bytes: Uint8Array,
+) -> napi::Result<JsPrivateKaigiFeeSpendEnvelope> {
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid asset definition id: {err}"),
+        )
+    })?;
+    if action_hash.len() != 32 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "action_hash must be exactly 32 bytes",
+        ));
+    }
+    let anchor_root = parse_fixed_32_hex("anchor_root_hex", &anchor_root_hex)?;
+    let fee_amount = normalize_private_kaigi_fee_amount(&fee_amount)?;
+    let vk_backend = vk_backend.trim();
+    let vk_circuit_id = vk_circuit_id.trim();
+    let proof_bytes =
+        validate_private_kaigi_fee_fixture(vk_backend, vk_circuit_id, vk_bytes.as_ref())?;
+    let asset_definition_string = asset_definition_id.to_string();
+    let action_hash_hex = hex::encode(action_hash.as_ref());
+    let nullifier = build_private_kaigi_fee_digest(
+        b"iroha.private_kaigi.fee.nullifier.v1",
+        &[
+            action_hash.as_ref(),
+            chain_id.as_bytes(),
+            asset_definition_string.as_bytes(),
+        ],
+    );
+    let output_commitment = build_private_kaigi_fee_digest(
+        b"iroha.private_kaigi.fee.output.v1",
+        &[
+            action_hash.as_ref(),
+            fee_amount.as_bytes(),
+            anchor_root.as_slice(),
+        ],
+    );
+    let encrypted_change_payload = build_private_kaigi_fee_change_payload(
+        &asset_definition_string,
+        &action_hash_hex,
+        &fee_amount,
+    );
+    let encoded = encode_private_kaigi_fee_proof(
+        &proof_bytes,
+        &action_hash_hex,
+        chain_id.trim(),
+        &asset_definition_string,
+        &fee_amount,
+    )?;
+
+    Ok(JsPrivateKaigiFeeSpendEnvelope {
+        asset_definition_id: asset_definition_id.to_string(),
+        anchor_root: Buffer::from(anchor_root.to_vec()),
+        nullifiers: vec![Buffer::from(nullifier.to_vec())],
+        output_commitments: vec![Buffer::from(output_commitment.to_vec())],
+        encrypted_change_payloads: vec![Buffer::from(encrypted_change_payload)],
+        proof: Buffer::from(encoded),
+    })
+}
+
+/// Build a private Kaigi join transaction entrypoint.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn build_private_join_kaigi_transaction(
+    chain_id: String,
+    call_id: String,
+    artifacts_json: String,
+    fee_spend_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsPrivateKaigiTransactionEntrypoint> {
+    let chain: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let call_id = parse_kaigi_id_literal(&call_id, "call_id")?;
+    let artifacts: PrivateKaigiArtifacts =
+        parse_private_kaigi_json("private Kaigi artifacts", &artifacts_json)?;
+    let fee_spend: PrivateKaigiFeeSpend =
+        parse_private_kaigi_json("private Kaigi fee spend", &fee_spend_json)?;
+    let metadata = parse_metadata_payload("private Kaigi", metadata_json)?;
+    let tx = PrivateKaigiTransaction {
+        chain,
+        creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
+        nonce: normalize_private_kaigi_nonce(nonce)?,
+        metadata,
+        action: PrivateKaigiAction::Join(PrivateJoinKaigi { call_id }),
+        artifacts,
+        fee_spend,
+    };
+    Ok(build_private_kaigi_entrypoint_result(tx))
+}
+
+/// Build a private Kaigi end transaction entrypoint.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_private_end_kaigi_transaction(
+    chain_id: String,
+    call_id: String,
+    ended_at_ms: Option<i64>,
+    artifacts_json: String,
+    fee_spend_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsPrivateKaigiTransactionEntrypoint> {
+    let chain: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let call_id = parse_kaigi_id_literal(&call_id, "call_id")?;
+    let ended_at_ms = ended_at_ms
+        .map(|value| {
+            u64::try_from(value).map_err(|_| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "ended_at_ms must be non-negative when provided",
+                )
+            })
+        })
+        .transpose()?;
+    let artifacts: PrivateKaigiArtifacts =
+        parse_private_kaigi_json("private Kaigi artifacts", &artifacts_json)?;
+    let fee_spend: PrivateKaigiFeeSpend =
+        parse_private_kaigi_json("private Kaigi fee spend", &fee_spend_json)?;
+    let metadata = parse_metadata_payload("private Kaigi", metadata_json)?;
+    let tx = PrivateKaigiTransaction {
+        chain,
+        creation_time_ms: normalize_private_kaigi_creation_time_ms(creation_time_ms)?,
+        nonce: normalize_private_kaigi_nonce(nonce)?,
+        metadata,
+        action: PrivateKaigiAction::End(PrivateEndKaigi {
+            call_id,
+            ended_at_ms,
+        }),
+        artifacts,
+        fee_spend,
+    };
+    Ok(build_private_kaigi_entrypoint_result(tx))
 }
 
 /// Build a Norito-encoded trigger action that executes on a time schedule.
@@ -7094,6 +9768,7 @@ pub fn build_time_trigger_action(
         None
     };
 
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "trigger authority")?;
     let instructions = parse_instruction_payloads(instructions_json)?;
     let executable = Executable::from(instructions);
@@ -7133,6 +9808,7 @@ pub fn build_precommit_trigger_action(
     repeats: Option<u32>,
     metadata_json: Option<String>,
 ) -> napi::Result<String> {
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "trigger authority")?;
     let instructions = parse_instruction_payloads(instructions_json)?;
     let executable = Executable::from(instructions);
@@ -7162,7 +9838,7 @@ pub fn build_precommit_trigger_action(
 mod tests {
     use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
 
-    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         HasMetadata,
@@ -7195,11 +9871,19 @@ mod tests {
             KaigiRelayHop, KaigiRelayManifest, KaigiRelayRegistration, KaigiRoomPolicy, NewKaigi,
         },
         metadata::Metadata,
+        ministry::{
+            AgendaEvidenceAttachment, AgendaEvidenceKind, AgendaProposalAction,
+            AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget, AgendaProposalV1,
+        },
         name::Name,
         nexus::LaneId,
         nft::NftId,
         peer::{Peer, PeerId},
-        smart_contract::manifest::{AccessSetHints, ContractManifest},
+        rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
+        smart_contract::manifest::{
+            AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
+            EntrypointParamDescriptor, KotobaTranslation, KotobaTranslationEntry,
+        },
         transaction::{
             Executable, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
         },
@@ -7244,6 +9928,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn build_kaigi_roster_join_proof_emits_envelope() {
+        let proof = build_kaigi_roster_join_proof_bytes(&[0x42; 32], &empty_roster_root_hash())
+            .expect("build proof");
+
+        assert_eq!(proof.commitment.len(), Hash::LENGTH);
+        assert_eq!(proof.nullifier.len(), Hash::LENGTH);
+        assert_eq!(proof.roster_root.len(), Hash::LENGTH);
+        assert!(!proof.proof.is_empty());
+
+        let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
+            norito::decode_from_bytes(proof.proof.as_ref()).expect("decode envelope");
+        assert_eq!(envelope.circuit_id, KAIGI_ROSTER_BACKEND);
+        assert_eq!(envelope.public_inputs, KAIGI_ROSTER_PUBLIC_INPUTS_DESC);
+    }
+
     fn sample_hash(byte: u8) -> [u8; Hash::LENGTH] {
         let mut buf = [byte; Hash::LENGTH];
         buf[buf.len() - 1] |= 1;
@@ -7269,14 +9969,57 @@ mod tests {
 
     fn noncanonical_owner_literal(domain: &str) -> String {
         let account = sample_account(domain);
-        let domain_id: DomainId = domain.parse().expect("valid domain id");
-        account.to_account_id(domain_id).to_string()
+        format!("{}@{domain}", account_json_literal(&account))
+    }
+
+    fn sample_rwa_id(domain: &str, byte: u8) -> RwaId {
+        RwaId::generated(
+            DomainId::try_new(domain, "universal").expect("valid domain id"),
+            Hash::prehashed(sample_hash(byte)),
+        )
     }
 
     fn sample_kaigi_id(domain: &str, call_name: &str) -> KaigiId {
-        let domain_id: DomainId = domain.parse().expect("valid domain id");
+        let domain_id = DomainId::try_new(domain, "universal").expect("valid domain id");
         let call = Name::from_str(call_name).expect("valid kaigi name");
         KaigiId::new(domain_id, call)
+    }
+
+    fn sample_agenda_proposal() -> AgendaProposalV1 {
+        AgendaProposalV1 {
+            version: 1,
+            proposal_id: "AC-2026-001".to_owned(),
+            submitted_at_unix_ms: 1_770_000_000_000,
+            language: "en".to_owned(),
+            action: AgendaProposalAction::AddToDenylist,
+            summary: AgendaProposalSummary {
+                title: "Blacklist proposal for bafy-test".to_owned(),
+                motivation: "Evidence review requested for the published CID.".to_owned(),
+                expected_impact:
+                    "Participating gateways would restrict delivery while the case is reviewed."
+                        .to_owned(),
+            },
+            tags: vec!["spam".to_owned()],
+            targets: vec![AgendaProposalTarget {
+                label: "bafy-test".to_owned(),
+                hash_family: "sorafs-root-cid".to_owned(),
+                hash_hex: "11".repeat(32),
+                reason: "spam moderation report".to_owned(),
+            }],
+            evidence: vec![AgendaEvidenceAttachment {
+                kind: AgendaEvidenceKind::Url,
+                uri: "https://example.invalid/case/1".to_owned(),
+                digest_blake3_hex: Some("22".repeat(32)),
+                description: Some("Captured gateway evidence".to_owned()),
+            }],
+            submitter: AgendaProposalSubmitter {
+                name: "Explorer Moderator".to_owned(),
+                contact: "moderation@example.invalid".to_owned(),
+                organization: Some("Sora Ops".to_owned()),
+                pgp_fingerprint: None,
+            },
+            duplicates: vec!["AC-2025-014".to_owned()],
+        }
     }
 
     fn sample_taikai_cache_options() -> JsTaikaiCacheConfig {
@@ -7622,8 +10365,10 @@ mod tests {
     #[test]
     fn mint_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let mint_box: MintBox =
@@ -7662,8 +10407,10 @@ mod tests {
     #[test]
     fn burn_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let burn_box: BurnBox =
@@ -7751,6 +10498,34 @@ mod tests {
                 .and_then(|value| value.get("Propose"))
                 .is_some(),
             "MultisigPropose alias must map to Custom.payload.Propose"
+        );
+
+        let mut cancel_fields = json::Map::new();
+        cancel_fields.insert(
+            "account".to_owned(),
+            json::Value::String(account_literal.clone()),
+        );
+        cancel_fields.insert(
+            "instructions_hash".to_owned(),
+            json::Value::String(hash_literal(0xBB)),
+        );
+        let mut cancel_outer = json::Map::new();
+        cancel_outer.insert(
+            "MultisigCancel".to_owned(),
+            json::Value::Object(cancel_fields),
+        );
+        let cancel_instruction = value_to_instruction(json::Value::Object(cancel_outer))
+            .expect("parse MultisigCancel alias");
+        let cancel_rendered =
+            instruction_to_json_value(&cancel_instruction).expect("render MultisigCancel alias");
+        assert!(
+            cancel_rendered
+                .get("Custom")
+                .and_then(|value| value.get("payload"))
+                .and_then(|value| value.get("Cancel"))
+                .and_then(|value| value.get("instructions_hash"))
+                .is_some(),
+            "MultisigCancel alias must map to Custom.payload.Cancel"
         );
 
         let mut approve_fields = json::Map::new();
@@ -8439,8 +11214,10 @@ mod tests {
     fn transfer_asset_instruction_json_roundtrip() {
         let source_account = sample_account("wonderland");
         let destination = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, source_account.clone());
 
         let transfer_box: TransferBox = Transfer::asset_numeric(
@@ -8464,10 +11241,125 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // End-to-end JSON roundtrip coverage is easier to read as one consolidated case table.
+    fn rwa_instruction_json_roundtrip() {
+        disable_packed_struct_once();
+        let source_account = sample_account("wonderland");
+        let destination = sample_account("wonderland");
+        let rwa_id = sample_rwa_id("commodities", 0x31);
+        let parent = RwaParentRef::new(
+            sample_rwa_id("commodities", 0x32),
+            Numeric::from_str("1.25").expect("valid numeric"),
+        );
+        let controls = RwaControlPolicy {
+            controller_accounts: vec![source_account.clone()],
+            controller_roles: Vec::new(),
+            freeze_enabled: true,
+            hold_enabled: true,
+            force_transfer_enabled: true,
+            redeem_enabled: false,
+        };
+        let new_rwa = NewRwa::new(
+            DomainId::try_new("commodities", "universal").expect("valid domain id"),
+            Numeric::from_str("10.5").expect("valid numeric"),
+            iroha_primitives::numeric::NumericSpec::fractional(1),
+            "vault-cert-001".to_owned(),
+            Some(Name::from_str("Active").expect("valid status")),
+            Metadata::default(),
+            vec![parent.clone()],
+            controls.clone(),
+        );
+        let cases = vec![
+            norito_json!({
+                "RegisterRwa": norito_json!({
+                    "rwa": new_rwa_to_json(&new_rwa).expect("render new rwa"),
+                })
+            }),
+            norito_json!({
+                "TransferRwa": norito_json!({
+                    "source": source_account.canonical_i105().expect("canonical I105 source"),
+                    "rwa": rwa_id.to_string(),
+                    "quantity": Numeric::from_str("2.5").expect("valid numeric"),
+                    "destination": destination
+                        .canonical_i105()
+                        .expect("canonical I105 destination"),
+                })
+            }),
+            norito_json!({
+                "MergeRwas": norito_json!({
+                    "parents": rwa_parent_refs_to_json(std::slice::from_ref(&parent)),
+                    "primary_reference": "blend-001".to_owned(),
+                    "status": Value::Null,
+                    "metadata": Metadata::default(),
+                })
+            }),
+            norito_json!({
+                "RedeemRwa": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "quantity": Numeric::from_str("1").expect("valid numeric"),
+                })
+            }),
+            norito_json!({ "FreezeRwa": norito_json!({ "rwa": rwa_id.to_string() }) }),
+            norito_json!({ "UnfreezeRwa": norito_json!({ "rwa": rwa_id.to_string() }) }),
+            norito_json!({
+                "HoldRwa": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "quantity": Numeric::from_str("0.5").expect("valid numeric"),
+                })
+            }),
+            norito_json!({
+                "ReleaseRwa": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "quantity": Numeric::from_str("0.25").expect("valid numeric"),
+                })
+            }),
+            norito_json!({
+                "ForceTransferRwa": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "quantity": Numeric::from_str("1.5").expect("valid numeric"),
+                    "destination": destination
+                        .canonical_i105()
+                        .expect("canonical I105 destination"),
+                })
+            }),
+            norito_json!({
+                "SetRwaControls": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "controls": controls.clone(),
+                })
+            }),
+            norito_json!({
+                "SetRwaKeyValue": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "key": Name::from_str("grade").expect("valid key"),
+                    "value": norito_json!({
+                        "origin": "AE",
+                        "score": Numeric::from_str("9").expect("valid numeric"),
+                    }),
+                })
+            }),
+            norito_json!({
+                "RemoveRwaKeyValue": norito_json!({
+                    "rwa": rwa_id.to_string(),
+                    "key": Name::from_str("grade").expect("valid key"),
+                })
+            }),
+        ];
+
+        for json_value in cases {
+            let instruction =
+                value_to_instruction(json_value.clone()).expect("deserialize RWA instruction");
+            let rendered =
+                instruction_to_json_value(&instruction).expect("serialize RWA instruction");
+            assert_eq!(rendered, json_value);
+        }
+    }
+
+    #[test]
     fn kaigi_join_instruction_json_roundtrip() {
         disable_packed_struct_once();
         let mut call_id = json::Map::new();
-        call_id.insert("domain_id".into(), Value::String("wonderland".into()));
+        call_id.insert("domain_id".into(), Value::String("wonderland.sora".into()));
         call_id.insert("call_name".into(), Value::String("weekly-sync".into()));
 
         let mut commitment = json::Map::new();
@@ -8528,7 +11420,8 @@ mod tests {
     fn transfer_domain_instruction_json_roundtrip() {
         let source_account = sample_account("wonderland");
         let destination = sample_account("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("valid domain id");
 
         let transfer_box: TransferBox = Transfer::domain(
             source_account.clone(),
@@ -8663,7 +11556,22 @@ mod tests {
             room_policy: KaigiRoomPolicy::Authenticated,
             relay_manifest: Some(manifest),
         };
-        let instruction: InstructionBox = Box::new(CreateKaigi { call }).into_instruction_box();
+        let commitment = KaigiParticipantCommitment {
+            commitment: Hash::new(b"commitment::host"),
+            alias_tag: Some("host".to_owned()),
+        };
+        let nullifier = KaigiParticipantNullifier {
+            digest: Hash::new(b"nullifier::host"),
+            issued_at_ms: 7,
+        };
+        let instruction: InstructionBox = Box::new(CreateKaigi {
+            call,
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
+            roster_root: Some(Hash::new(b"roster-root")),
+            proof: Some(vec![0xFA, 0xCE]),
+        })
+        .into_instruction_box();
 
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize Kaigi instruction");
@@ -8722,7 +11630,7 @@ mod tests {
             "Kaigi": {
                 "JoinKaigi": {
                     "call_id": {
-                        "domain_id": "wonderland",
+                        "domain_id": "wonderland.sora",
                         "call_name": "weekly-sync"
                     },
                     "participant": "__PARTICIPANT__",
@@ -8805,9 +11713,21 @@ mod tests {
     #[test]
     fn end_kaigi_instruction_json_roundtrip() {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
+        let commitment = KaigiParticipantCommitment {
+            commitment: Hash::new(b"commitment::host"),
+            alias_tag: Some("host".to_owned()),
+        };
+        let nullifier = KaigiParticipantNullifier {
+            digest: Hash::new(b"nullifier::end"),
+            issued_at_ms: 99,
+        };
         let end = EndKaigi {
             call_id: call_id.clone(),
             ended_at_ms: Some(1_700_222_000_000),
+            commitment: Some(commitment),
+            nullifier: Some(nullifier),
+            roster_root: Some(Hash::new(b"roster-root")),
+            proof: Some(vec![0xDE, 0xAD, 0xBE, 0xEF]),
         };
         let instruction: InstructionBox = Box::new(end).into_instruction_box();
 
@@ -8931,8 +11851,9 @@ mod tests {
     #[test]
     fn governance_propose_deploy_contract_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(ProposeDeployContract {
-            namespace: "apps".to_owned(),
-            contract_id: "ledger".to_owned(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
             code_hash_hex: "aa".repeat(32),
             abi_hash_hex: "bb".repeat(32),
             abi_version: "1".to_owned(),
@@ -9328,7 +12249,39 @@ mod tests {
     }
 
     #[test]
+    fn governance_submit_agenda_proposal_instruction_json_roundtrip() {
+        let instruction: InstructionBox = Box::new(SubmitAgendaProposal {
+            proposal: sample_agenda_proposal(),
+        })
+        .into_instruction_box();
+
+        let json_value = instruction_to_json_value(&instruction)
+            .expect("serialize SubmitAgendaProposal instruction");
+        assert!(
+            json_value
+                .as_object()
+                .and_then(|map| map.get("SubmitAgendaProposal"))
+                .is_some()
+        );
+
+        let reconstructed =
+            value_to_instruction(json_value.clone()).expect("deserialize SubmitAgendaProposal");
+        assert_eq!(reconstructed, instruction);
+
+        let proposal_id = json_value
+            .as_object()
+            .unwrap()
+            .get("SubmitAgendaProposal")
+            .and_then(|value| value.get("proposal"))
+            .and_then(|value| value.get("proposal_id"))
+            .and_then(|value| value.as_str())
+            .expect("proposal id present");
+        assert_eq!(proposal_id, "AC-2026-001");
+    }
+
+    #[test]
     fn smart_contract_code_instruction_json_roundtrip() {
+        let signing_key = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
         let manifest = ContractManifest {
             code_hash: Some(Hash::prehashed(sample_hash(0xAA))),
             abi_hash: Some(Hash::prehashed(sample_hash(0xBB))),
@@ -9338,10 +12291,31 @@ mod tests {
                 read_keys: vec!["account:alice".to_owned()],
                 write_keys: vec!["contract:foo".to_owned()],
             }),
-            entrypoints: None,
-            kotoba: None,
+            entrypoints: Some(vec![EntrypointDescriptor {
+                name: "upgrade_ledger".to_owned(),
+                kind: EntryPointKind::Kaizen,
+                params: vec![EntrypointParamDescriptor {
+                    name: "reason".to_owned(),
+                    type_name: "String".to_owned(),
+                }],
+                return_type: Some("bool".to_owned()),
+                permission: Some("can_upgrade".to_owned()),
+                read_keys: vec!["contract:ledger".to_owned()],
+                write_keys: vec!["contract:ledger".to_owned()],
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+            }]),
+            kotoba: Some(vec![KotobaTranslationEntry {
+                msg_id: "contract.title".to_owned(),
+                translations: vec![KotobaTranslation {
+                    lang: "en".to_owned(),
+                    text: "Ledger Contract".to_owned(),
+                }],
+            }]),
             provenance: None,
-        };
+        }
+        .signed(&signing_key);
         let instruction: InstructionBox = Box::new(RegisterSmartContractCode {
             manifest: manifest.clone(),
         })
@@ -9359,6 +12333,63 @@ mod tests {
         let reconstructed = value_to_instruction(json_value.clone())
             .expect("deserialize RegisterSmartContractCode");
         assert_eq!(reconstructed, instruction);
+    }
+
+    #[test]
+    fn decode_signed_transaction_accepts_supported_norito_rpc_fixture_subset() {
+        let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/norito_rpc/transaction_fixtures.manifest.json");
+        let manifest_bytes = fs::read(&manifest_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest_path.display()));
+        let manifest: Value = json::from_slice(&manifest_bytes)
+            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", manifest_path.display()));
+        let names = [
+            "ivm_transfer",
+            "grant_revoke_role_permission",
+            "set_parameter_next_mode",
+            "executor_upgrade_demo",
+            "register_peer_with_pop_demo",
+            "register_nft_demo",
+            "trigger_repetitions_demo",
+        ];
+
+        for name in names {
+            let fixture = manifest
+                .get("fixtures")
+                .and_then(Value::as_array)
+                .and_then(|fixtures| {
+                    fixtures
+                        .iter()
+                        .find(|fixture| fixture.get("name").and_then(Value::as_str) == Some(name))
+                })
+                .unwrap_or_else(|| panic!("fixture {name} missing from norito fixture manifest"));
+            let signed_base64 = fixture
+                .get("signed_base64")
+                .and_then(Value::as_str)
+                .expect("fixture signed_base64");
+            let signed_bytes = BASE64
+                .decode(signed_base64)
+                .unwrap_or_else(|err| panic!("failed to decode {name} signed payload: {err}"));
+            decode_signed_transaction(&signed_bytes)
+                .unwrap_or_else(|err| panic!("failed to decode fixture {name}: {err}"));
+        }
+    }
+
+    #[test]
+    fn decode_signed_transaction_accepts_versioned_bytes() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let mut builder = TransactionBuilder::new(chain_id, authority);
+        builder.set_creation_time(Duration::from_millis(1));
+        let signed = builder.sign(keypair.private_key());
+        let mut versioned = vec![1];
+        versioned.extend(norito::codec::encode_adaptive(&signed));
+
+        let decoded = decode_signed_transaction(&versioned)
+            .expect("versioned signed transaction must decode");
+
+        assert_eq!(decoded, signed);
     }
 
     #[test]
@@ -9393,9 +12424,16 @@ mod tests {
 
     #[test]
     fn activate_contract_instance_instruction_json_roundtrip() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            1,
+            iroha_data_model::nexus::DataSpaceId::new(0),
+        )
+        .expect("contract address");
         let instruction: InstructionBox = Box::new(ActivateContractInstance {
-            namespace: "apps".to_owned(),
-            contract_id: "ledger".to_owned(),
+            contract_address,
             code_hash: Hash::prehashed(sample_hash(0x44)),
         })
         .into_instruction_box();
@@ -9425,7 +12463,7 @@ mod tests {
                 "CreateKaigi": norito_json!({
                     "call": norito_json!({
                         "id": norito_json!({
-                            "domain_id": "wonderland",
+                            "domain_id": "wonderland.sora",
                             "call_name": "weekly-sync"
                         }),
                         "host": host,
@@ -9505,8 +12543,10 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, authority.clone());
 
         let instruction_box: InstructionBox = Mint::asset_numeric(
@@ -9547,6 +12587,91 @@ mod tests {
             tx.hash().as_ref(),
             "hash must match signed transaction hash"
         );
+    }
+
+    #[test]
+    fn parse_account_id_accepts_taira_i105_literals() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("account address")
+            .to_i105_for_discriminant(369)
+            .expect("taira i105");
+
+        let parsed = parse_account_id(&authority_i105, "authority account id")
+            .expect("parse Taira I105 account id");
+
+        assert_eq!(parsed, authority);
+    }
+
+    #[test]
+    fn build_transaction_accepts_taira_i105_shield_fields() {
+        disable_packed_struct_once();
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("account address")
+            .to_i105_for_discriminant(369)
+            .expect("taira i105");
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "rose".parse().expect("name"),
+        );
+        let instruction = Shield::new(
+            asset_definition,
+            authority.clone(),
+            7,
+            [0x11; 32],
+            iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
+                [0x22; 32],
+                [0x33; 24],
+                b"ciphertext".to_vec(),
+            ),
+        );
+        let instruction_box: InstructionBox = instruction.into();
+        let mut instruction_json =
+            instruction_to_json_value(&instruction_box).expect("instruction json");
+        instruction_json
+            .get_mut("zk")
+            .and_then(json::Value::as_object_mut)
+            .and_then(|zk| zk.get_mut("Shield"))
+            .and_then(json::Value::as_object_mut)
+            .expect("shield payload")
+            .insert(
+                "from".to_owned(),
+                json::Value::String(authority_i105.clone()),
+            );
+        let instruction_json =
+            json::to_json(&instruction_json).expect("serialized instruction json");
+        let (_, secret_bytes) = keypair.private_key().to_bytes();
+
+        let result = build_transaction(
+            chain_id.to_string(),
+            authority_i105,
+            vec![instruction_json],
+            None,
+            None,
+            None,
+            None,
+            Uint8Array::from(secret_bytes.to_vec()),
+        )
+        .expect("transaction built");
+
+        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        assert_eq!(tx.authority(), &authority);
+        match tx.instructions() {
+            Executable::Instructions(batch) => {
+                assert_eq!(batch.len(), 1);
+                let first = batch.iter().next().expect("shield instruction");
+                let shield = first
+                    .as_any()
+                    .downcast_ref::<Shield>()
+                    .expect("shield instruction");
+                assert_eq!(shield.from, authority);
+            }
+            other => panic!("expected instruction batch, got {other:?}"),
+        }
     }
 
     #[test]

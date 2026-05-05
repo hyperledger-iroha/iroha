@@ -83,8 +83,8 @@ fn name_decode_rejects_invalid_name_utf8_valid() {
 fn name_decode_rejects_reserved_chars() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
-    // Valid UTF-8 but invalid Name (reserved delimiter)
-    let bad = norito::to_bytes(&"not-a-norito-name").expect("encode string");
+    // Valid UTF-8 but invalid Name (reserved delimiter `@`)
+    let bad = norito::to_bytes(&"alice@banka").expect("encode string");
     let p_nb = vm
         .alloc_input_tlv(&tlv(PointerType::NoritoBytes, &bad))
         .unwrap();

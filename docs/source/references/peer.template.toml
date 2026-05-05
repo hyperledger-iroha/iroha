@@ -12,7 +12,7 @@
 # chain =
 # public_key =
 # private_key =
-# default_account_domain_label = "default"  # Used only for AccountAddress selector encoding/compression; AccountId parsing stays domainless.
+# default_account_domain_label = "default.universal"  # Used only for AccountAddress selector encoding/compression; AccountId parsing stays domainless.
 # chain_discriminant = 0x02F1              # I105 prefix / chain discriminant; override for dev/test networks.
 
 telemetry_enabled = true
@@ -53,7 +53,7 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 # transaction_gossip_restricted_target_cap = null  # restricted-lane fanout cap (null = full commit topology)
 # transaction_gossip_public_target_reshuffle_ms = 1_000     # public target reshuffle cadence (clamped to >= 100ms)
 # transaction_gossip_restricted_target_reshuffle_ms = 1_000 # restricted target reshuffle cadence (clamped to >= 100ms)
-# idle_timeout_ms = 60_000  # clamped to >= 100ms
+# idle_timeout_ms = 300_000  # clamped to >= 100ms
 # connect_startup_delay_ms = 0 # delay outbound dials after startup (0 disables)
 # trust_decay_half_life_ms = 300_000 # halve negative trust scores every 5 minutes
 # trust_penalty_bad_gossip = 5       # penalty applied per invalid trust gossip
@@ -221,17 +221,17 @@ telemetry_profile = "operator"  # {disabled, operator, extended, developer, full
 
 [torii]
 # address =
-# max_content_len = 16_000_000
-# receipt_public_key = "ed0120..."  # optional; defaults to an ephemeral Ed25519 signer when unset
+# max_content_len = 64_000_000
+# receipt_public_key = "secp256k1..."  # optional; defaults to an ephemeral Secp256k1 signer when unset
 # receipt_private_key = "802620..." # optional; must be set alongside receipt_public_key
-# query_idle_time_ms = 30_000
+# query_idle_time_ms = 10_000
 # query_store_capacity = 128
 # query_store_capacity_per_user = 128
 # ws_message_timeout_ms = 10_000
 
 [torii.peer_geo]
 # enabled = false
-# endpoint = "http://ip-api.com/json" # Optional ip-api compatible endpoint for peer geo lookups.
+# endpoint = "https://geo.example/api" # Required HTTPS ip-api compatible endpoint when peer geo lookups are enabled.
 
 [torii.operator_auth]
 # enabled = false

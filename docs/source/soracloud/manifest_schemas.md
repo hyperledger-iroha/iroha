@@ -21,13 +21,21 @@ deployment on Iroha 3:
 
 The Rust definitions live in `crates/iroha_data_model/src/soracloud.rs`.
 
+Uploaded-model private-runtime records are intentionally a separate layer from
+these SCR deployment manifests. They should extend the Soracloud model plane
+and reuse `SecretEnvelopeV1` / `CiphertextStateRecordV1` for encrypted bytes
+and ciphertext-native state, rather than being encoded as new service/container
+manifests. See `uploaded_private_models.md`.
+
 ## Scope
 
 These manifests are designed for the `IVM` + custom Sora Container Runtime
 (SCR) direction (no WASM, no Docker dependency in runtime admission).
 
 - `SoraContainerManifestV1` captures executable bundle identity, runtime type,
-  capability policy, resources, and lifecycle probe settings.
+  capability policy, resources, lifecycle probe settings, and explicit
+  required-config exports into the runtime environment or mounted revision
+  tree.
 - `SoraServiceManifestV1` captures deployment intent: service identity,
   referenced container manifest hash/version, routing, rollout policy, and
   state bindings.
@@ -70,6 +78,11 @@ These manifests are designed for the `IVM` + custom Sora Container Runtime
 - `CiphertextStateRecordV1` captures ciphertext-native state entries that
   combine public metadata (content type, policy tags, commitment, payload size)
   with a `SecretEnvelopeV1`.
+- User-uploaded private model bundles should build on these ciphertext-native
+  records:
+  encrypted weight/config/processor chunks live in state, while model registry,
+  weight lineage, compile profiles, inference sessions, and checkpoints remain
+  first-class Soracloud records.
 
 ## Versioning
 
@@ -98,6 +111,14 @@ Validation rejects unsupported versions with
 - Container manifest:
   - `bundle_path` and `entrypoint` must be non-empty.
   - `healthcheck_path` (if set) must start with `/`.
+  - `config_exports` may reference only configs declared in
+    `required_config_names`.
+  - config-export env targets must use canonical environment-variable names
+    (`[A-Za-z_][A-Za-z0-9_]*`).
+  - config-export file targets must stay relative, use `/` separators, and
+    must not contain empty, `.` or `..` segments.
+  - config exports must not target the same env var or relative file path more
+    than once.
 - Service manifest:
   - `service_version` must be non-empty.
   - `container.expected_schema_version` must match container schema v1.

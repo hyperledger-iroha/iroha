@@ -30,8 +30,8 @@ ID de compte que vous comptez utiliser. Le bundle par défaut inclut déjà deux
 issue des clés de démo :
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Confirmez les valeurs en listant les premiers comptes :
@@ -48,7 +48,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dans wonderland (remplacez --limit par un nombre plus eleve si besoin)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions qui existent deja
@@ -65,7 +65,7 @@ Créez un nouvel actif infiniment mintable appele `coffee` dans le domaine
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 La CLI affiche le hash de transaction soumis (par exemple, `0x5f...`). Conservez-le
@@ -74,7 +74,7 @@ pour consulter le statut plus tard.
 ## 3. Minter des unités sur le compte opérateur
 
 Les quantités d'actifs vivent sous la paire `(asset definition, account)`. Mintez 250
-unit de `coffee#wonderland` dans `$ADMIN_ACCOUNT` :
+unit de `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` dans `$ADMIN_ACCOUNT` :
 
 ```sh
 iroha --config defaults/client.toml asset mint \

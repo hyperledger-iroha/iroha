@@ -4,36 +4,34 @@ use std::collections::HashMap;
 
 use ivm::{
     IVM, KotodamaCompiler,
-    mock_wsv::{DomainId, MockWorldStateView, PermissionToken, ScopedAccountId, WsvHost},
+    mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
 };
 
 #[test]
 fn kotodama_unregister_domain() {
     // Program unregisters a domain using a constructor
     let src = r#"
-        fn main() { unregister_domain(domain("wonderland")); }
+        fn main() { unregister_domain(domain("wonderland.universal")); }
     "#;
     unsafe { std::env::set_var("IVM_COMPILER_DEBUG", "1") };
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile kotodama");
     // Prepare WSV with the domain present and caller permitted to register domains
     let mut wsv = MockWorldStateView::new();
-    // Use a caller in a different domain to allow unregistering `wonderland` (no accounts in that domain)
-    let alice: ScopedAccountId = ScopedAccountId::new(
-        "admin".parse().expect("domain id"),
+    // Use a caller in a different domain to allow unregistering `wonderland.universal`
+    // (no accounts in that domain).
+    let _admin_domain: DomainId =
+        iroha_data_model::DomainId::try_new("admin", "universal").expect("domain id");
+    let alice: AccountId = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
     );
-    let dom: DomainId = "wonderland".parse().unwrap();
+    let dom: DomainId = iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&alice, dom));
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(100_000);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");
@@ -46,25 +44,22 @@ fn kotodama_transfer_domain() {
     // Program transfers a domain from `authority()` to bob
     let src = r#"
         fn main() {
-          transfer_domain(authority(), domain("wonderland"), account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn"));
+          transfer_domain(authority(), domain("wonderland.universal"), account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
         }
     "#;
     unsafe { std::env::set_var("IVM_COMPILER_DEBUG", "1") };
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile kotodama");
     let mut wsv = MockWorldStateView::new();
-    let alice: ScopedAccountId = ScopedAccountId::new(
-        "wonderland".parse().expect("domain id"),
+    let _wonderland_domain: DomainId =
+        iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
+    let alice: AccountId = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
     );
     wsv.add_account_unchecked(alice.clone());
-    let host = WsvHost::new_with_subject(
-        wsv,
-        ivm::mock_wsv::AccountId::from(&alice.clone()),
-        HashMap::new(),
-    );
+    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
     let mut vm = IVM::new(100_000);
     vm.set_host(host);
     vm.load_program(&prog).expect("load");

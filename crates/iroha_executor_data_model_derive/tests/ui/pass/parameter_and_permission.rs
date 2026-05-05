@@ -32,7 +32,7 @@ struct CanEditDomainMetadata {
 fn main() {
     let param = CustomLimit::default();
     let perm = CanEditDomainMetadata {
-        domain: "wonderland".parse().unwrap(),
+        domain: DomainId::try_new("wonderland", "universal").unwrap(),
     };
 
     let _custom_param_id =

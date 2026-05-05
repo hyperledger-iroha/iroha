@@ -103,17 +103,17 @@ Struct ReservedAssignmentRequestV1 {
 
 ## 3. Points de terminaison REST| Point de terminaison | Méthode | Charge utile | Description |
 |----------|--------|---------|---------------|
-| `/v1/sns/registrations` | POSTER | `RegisterNameRequestV1` | Registrar ou reouvrir un nom. Résoudre le niveau de prix, valider les preuves de paiement/gouvernance, émettre des événements de registre. |
-| `/v1/sns/registrations/{selector}/renew` | POSTER | `RenewNameRequestV1` | Estende o termo. Application Janelas de Grace/Redemption Da Politica. |
-| `/v1/sns/registrations/{selector}/transfer` | POSTER | `TransferNameRequestV1` | Transférer la propriété lorsque la gouvernance est approuvée pour les anexadas. |
-| `/v1/sns/registrations/{selector}/controllers` | METTRE | `UpdateControllersRequestV1` | Remplacer le groupe de contrôleurs ; valida enderecos de conta assinados. |
-| `/v1/sns/registrations/{selector}/freeze` | POSTER | `FreezeNameRequestV1` | Gel du tuteur/conseil. Demander un gardien de ticket et une référence au dossier de gouvernance. |
-| `/v1/sns/registrations/{selector}/freeze` | SUPPRIMER | `GovernanceHookV1` | Dégelez l'apos remediacao ; garantie dérogation do conseil registrado. |
+| `/v1/sns/names` | POSTER | `RegisterNameRequestV1` | Registrar ou reouvrir un nom. Résoudre le niveau de prix, valider les preuves de paiement/gouvernance, émettre des événements de registre. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POSTER | `RenewNameRequestV1` | Estende o termo. Application Janelas de Grace/Redemption Da Politica. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POSTER | `TransferNameRequestV1` | Transférer la propriété lorsque la gouvernance est approuvée pour les anexadas. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | METTRE | `UpdateControllersRequestV1` | Remplacer le groupe de contrôleurs ; valida enderecos de conta assinados. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POSTER | `FreezeNameRequestV1` | Gel du tuteur/conseil. Demander un gardien de ticket et une référence au dossier de gouvernance. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | SUPPRIMER | `GovernanceHookV1` | Dégelez l'apos remediacao ; garantie dérogation do conseil registrado. |
 | `/v1/sns/reserved/{selector}` | POSTER | `ReservedAssignmentRequestV1` | Attribution de noms réservés à l'intendant/conseil. |
 | `/v1/sns/policies/{suffix_id}` | OBTENIR | -- | Busca `SuffixPolicyV1` actuel (cacheavel). |
-| `/v1/sns/registrations/{selector}` | OBTENIR | -- | Retorna `NameRecordV1` actuel + estado efetivo (Active, Grace, etc.). |
+| `/v1/sns/names/{namespace}/{literal}` | OBTENIR | -- | Retorna `NameRecordV1` actuel + estado efetivo (Active, Grace, etc.). |
 
-**Codification du sélecteur :** le segment `{selector}` correspond à I105, compressé ou hexadécimal canonique conforme à ADDR-5 ; Torii normalise via `NameSelectorV1`.**Modèle d'erreur :** tous les points de terminaison renvoient le nom Norito JSON avec `code`, `message`, `details`. Les codes incluent `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+**Codification du sélecteur :** le segment `{selector}` correspond à i105, compressé ou hexadécimal canonique conforme à ADDR-5 ; Torii normalise via `NameSelectorV1`.**Modèle d'erreur :** tous les points de terminaison renvoient le nom Norito JSON avec `code`, `message`, `details`. Les codes incluent `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
 ### 3.1 Helpers CLI (requis du manuel du registraire N0)
 
@@ -124,7 +124,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -149,7 +149,7 @@ Helpers adicionais cobrem renovacoes, transferencias e acoes de tuteur:
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -157,7 +157,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -172,7 +172,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` doit vérifier un enregistrement `GovernanceHookV1` valide (identifiant de proposition, hachages de vote, intendant/tuteur d'Assinaturas). Cette commande consiste simplement à sélectionner le point de terminaison `/v1/sns/registrations/{selector}/...` correspondant aux opérateurs de version bêta qui utilisent exactement la superficie Torii que les SDK remplacent.## 4. Servico gRPC
+`--governance-json` doit vérifier un enregistrement `GovernanceHookV1` valide (identifiant de proposition, hachages de vote, intendant/tuteur d'Assinaturas). Cette commande consiste simplement à sélectionner le point de terminaison `/v1/sns/names/{namespace}/{literal}/...` correspondant aux opérateurs de version bêta qui utilisent exactement la superficie Torii que les SDK remplacent.## 4. Servico gRPC
 
 ```text
 service Registrar {
@@ -215,7 +215,7 @@ Falhas renvoie le nom `sns_err_governance_missing`.
 
 ### 6.1 Registre Padrao1. Le client consulte `/v1/sns/policies/{suffix_id}` pour obtenir des prix, grâce et niveaux disponibles.
 2. Le client monte `RegisterNameRequestV1` :
-   - `selector` dérivé du label I105 (préféré) ou compressé (segunda melhor opcao).
+   - `selector` dérivé du label i105 (préféré) ou compressé (segunda melhor opcao).
    - `term_years` dans les limites de la politique.
    - `payment` référence au transfert du répartiteur tesouraria/steward.
 3. Torii valide :
@@ -240,7 +240,7 @@ Les rénovations pendant la grâce incluent les exigences requises, mais la dét
 
 1. Guardian envoie le ticket `FreezeNameRequestV1` en référence à l'identifiant de l'incident.
 2. Torii déplacez l'enregistrement pour `NameStatus::Frozen`, émettez `NameFrozen`.
-3. Après correction, le conseil émet une dérogation ; L'opérateur envoie DELETE `/v1/sns/registrations/{selector}/freeze` avec `GovernanceHookV1`.
+3. Après correction, le conseil émet une dérogation ; L'opérateur envoie DELETE `/v1/sns/names/{namespace}/{literal}/freeze` avec `GovernanceHookV1`.
 4. Torii valide le remplacement, émet `NameUnfrozen`.## 7. Validation et codes d'erreur
 
 | Codigo | Description | HTTP |

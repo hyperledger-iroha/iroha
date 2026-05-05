@@ -22,7 +22,6 @@ public final class GradleAndroidHarnessTests {
         "org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnectorTests",
         "org.hyperledger.iroha.android.client.transport.OkHttpTransportExecutorTests",
         "org.hyperledger.iroha.android.telemetry.OkHttpTelemetryIntegrationTests",
-        "org.hyperledger.iroha.android.offline.HttpSafetyDetectOkHttpTests",
       };
 
   private final String className;

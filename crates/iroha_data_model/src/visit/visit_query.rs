@@ -39,18 +39,34 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
     singular_query_visitors! {
         visit_find_executor_data_model(FindExecutorDataModel),
         visit_find_parameters(FindParameters),
-        visit_find_domains_by_account_id(FindDomainsByAccountId),
-        visit_find_account_ids_by_domain_id(FindAccountIdsByDomainId),
+        visit_find_account_by_id(FindAccountById),
+        visit_find_account_by_alias(FindAccountByAlias),
+        visit_find_aliases_by_account_id(FindAliasesByAccountId),
+        visit_find_account_recovery_policy_by_alias(FindAccountRecoveryPolicyByAlias),
+        visit_find_account_recovery_request_by_alias(FindAccountRecoveryRequestByAlias),
         visit_find_proof_record_by_id(FindProofRecordById),
         visit_find_contract_manifest_by_code_hash(FindContractManifestByCodeHash),
         visit_find_abi_version(FindAbiVersion),
         visit_find_asset_by_id(FindAssetById),
+        visit_find_asset_definition_by_id(FindAssetDefinitionById),
+        visit_find_trigger_by_id(FindTriggerById),
         visit_find_twitter_binding_by_hash(FindTwitterBindingByHash),
+        visit_find_domain_endorsements(FindDomainEndorsements),
+        visit_find_domain_endorsement_policy(FindDomainEndorsementPolicy),
+        visit_find_domain_committee(FindDomainCommittee),
         visit_find_da_pin_intent_by_ticket(FindDaPinIntentByTicket),
         visit_find_da_pin_intent_by_manifest(FindDaPinIntentByManifest),
         visit_find_da_pin_intent_by_alias(FindDaPinIntentByAlias),
         visit_find_da_pin_intent_by_lane_epoch_sequence(FindDaPinIntentByLaneEpochSequence),
+        visit_find_lane_relay_envelope_by_ref(FindLaneRelayEnvelopeByRef),
         visit_find_sorafs_provider_owner(FindSorafsProviderOwner),
+        visit_find_dataspace_name_owner_by_id(FindDataspaceNameOwnerById),
+        visit_find_musubi_release_by_ref(FindMusubiReleaseByRef),
+        visit_find_musubi_package_versions(FindMusubiPackageVersions),
+        visit_find_musubi_package_releases(FindMusubiPackageReleases),
+        visit_search_musubi_packages(SearchMusubiPackages),
+        visit_find_musubi_short_alias_by_name(FindMusubiShortAliasByName),
+        visit_find_domain_by_id(FindDomainById),
     }
 }
 
@@ -112,9 +128,14 @@ macro_rules! query_visitors {
             // Singular Query visitors
             visit_find_executor_data_model(&FindExecutorDataModel),
             visit_find_parameters(&FindParameters),
-            visit_find_domains_by_account_id(&$crate::query::account::FindDomainsByAccountId),
-            visit_find_account_ids_by_domain_id(
-                &$crate::query::domain::FindAccountIdsByDomainId
+            visit_find_account_by_id(&$crate::query::account::FindAccountById),
+            visit_find_account_by_alias(&$crate::query::account::FindAccountByAlias),
+            visit_find_aliases_by_account_id(&$crate::query::account::FindAliasesByAccountId),
+            visit_find_account_recovery_policy_by_alias(
+                &$crate::query::account::FindAccountRecoveryPolicyByAlias
+            ),
+            visit_find_account_recovery_request_by_alias(
+                &$crate::query::account::FindAccountRecoveryRequestByAlias
             ),
             visit_find_proof_record_by_id(&$crate::query::proof::FindProofRecordById),
             visit_find_contract_manifest_by_code_hash(
@@ -122,8 +143,21 @@ macro_rules! query_visitors {
             ),
             visit_find_abi_version(&$crate::query::runtime::prelude::FindAbiVersion),
             visit_find_asset_by_id(&$crate::query::asset::prelude::FindAssetById),
+            visit_find_asset_definition_by_id(
+                &$crate::query::asset::prelude::FindAssetDefinitionById
+            ),
+            visit_find_trigger_by_id(&$crate::query::trigger::prelude::FindTriggerById),
             visit_find_twitter_binding_by_hash(
                 &$crate::query::oracle::prelude::FindTwitterBindingByHash
+            ),
+            visit_find_domain_endorsements(
+                &$crate::query::endorsement::prelude::FindDomainEndorsements
+            ),
+            visit_find_domain_endorsement_policy(
+                &$crate::query::endorsement::prelude::FindDomainEndorsementPolicy
+            ),
+            visit_find_domain_committee(
+                &$crate::query::endorsement::prelude::FindDomainCommittee
             ),
             visit_find_da_pin_intent_by_ticket(
                 &$crate::query::da::prelude::FindDaPinIntentByTicket
@@ -137,9 +171,31 @@ macro_rules! query_visitors {
             visit_find_da_pin_intent_by_lane_epoch_sequence(
                 &$crate::query::da::prelude::FindDaPinIntentByLaneEpochSequence
             ),
+            visit_find_lane_relay_envelope_by_ref(
+                &$crate::query::nexus::prelude::FindLaneRelayEnvelopeByRef
+            ),
             visit_find_sorafs_provider_owner(
                 &$crate::query::sorafs::prelude::FindSorafsProviderOwner
             ),
+            visit_find_dataspace_name_owner_by_id(
+                &$crate::query::sns::prelude::FindDataspaceNameOwnerById
+            ),
+            visit_find_musubi_release_by_ref(
+                &$crate::query::musubi::prelude::FindMusubiReleaseByRef
+            ),
+            visit_find_musubi_package_versions(
+                &$crate::query::musubi::prelude::FindMusubiPackageVersions
+            ),
+            visit_find_musubi_package_releases(
+                &$crate::query::musubi::prelude::FindMusubiPackageReleases
+            ),
+            visit_search_musubi_packages(
+                &$crate::query::musubi::prelude::SearchMusubiPackages
+            ),
+            visit_find_musubi_short_alias_by_name(
+                &$crate::query::musubi::prelude::FindMusubiShortAliasByName
+            ),
+            visit_find_domain_by_id(&$crate::query::domain::FindDomainById),
 
             // Iterable Query visitors
             visit_find_domains(&$crate::query::ErasedIterQuery<$crate::domain::Domain>),
@@ -203,18 +259,33 @@ mod tests {
         match query {
             SingularQueryBox::FindExecutorDataModel(_) => {}
             SingularQueryBox::FindParameters(_) => {}
-            SingularQueryBox::FindDomainsByAccountId(_) => {}
-            SingularQueryBox::FindAccountIdsByDomainId(_) => {}
+            SingularQueryBox::FindAccountById(_) => {}
+            SingularQueryBox::FindAccountByAlias(_) => {}
+            SingularQueryBox::FindAliasesByAccountId(_) => {}
+            SingularQueryBox::FindAccountRecoveryPolicyByAlias(_) => {}
+            SingularQueryBox::FindAccountRecoveryRequestByAlias(_) => {}
             SingularQueryBox::FindProofRecordById(_) => {}
             SingularQueryBox::FindContractManifestByCodeHash(_) => {}
             SingularQueryBox::FindAbiVersion(_) => {}
             SingularQueryBox::FindAssetById(_) => {}
+            SingularQueryBox::FindAssetDefinitionById(_) => {}
+            SingularQueryBox::FindAssetEscrowById(_) => {}
+            SingularQueryBox::FindAnonymousAssetEscrowById(_) => {}
+            SingularQueryBox::FindTriggerById(_) => {}
             SingularQueryBox::FindTwitterBindingByHash(_) => {}
             SingularQueryBox::FindDaPinIntentByTicket(_) => {}
             SingularQueryBox::FindDaPinIntentByManifest(_) => {}
             SingularQueryBox::FindDaPinIntentByAlias(_) => {}
             SingularQueryBox::FindDaPinIntentByLaneEpochSequence(_) => {}
+            SingularQueryBox::FindLaneRelayEnvelopeByRef(_) => {}
             SingularQueryBox::FindSorafsProviderOwner(_) => {}
+            SingularQueryBox::FindDataspaceNameOwnerById(_) => {}
+            SingularQueryBox::FindMusubiReleaseByRef(_) => {}
+            SingularQueryBox::FindMusubiPackageVersions(_) => {}
+            SingularQueryBox::FindMusubiPackageReleases(_) => {}
+            SingularQueryBox::SearchMusubiPackages(_) => {}
+            SingularQueryBox::FindMusubiShortAliasByName(_) => {}
+            SingularQueryBox::FindDomainById(_) => {}
             SingularQueryBox::FindDomainEndorsements(_) => {}
             SingularQueryBox::FindDomainEndorsementPolicy(_) => {}
             SingularQueryBox::FindDomainCommittee(_) => {}
@@ -242,7 +313,7 @@ mod tests {
 
     impl Visit for NoopVisitor {}
 
-    const ALICE_ACCOUNT_ID_STR: &str = "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw";
+    const ALICE_ACCOUNT_ID_STR: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 
     #[test]
     fn visit_find_parameters_dispatches() {
@@ -293,20 +364,30 @@ mod tests {
             .expect("valid account id");
         let asset_definition: crate::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let asset_id = AssetId::new(asset_definition, account_id.clone());
-        let domain_id: crate::domain::DomainId = "wonderland".parse().expect("valid domain");
-
         let queries = vec![
             SingularQueryBox::FindExecutorDataModel(FindExecutorDataModel),
             SingularQueryBox::FindParameters(FindParameters),
-            SingularQueryBox::FindDomainsByAccountId(
-                crate::query::account::prelude::FindDomainsByAccountId::new(account_id.clone()),
+            SingularQueryBox::FindAccountById(
+                crate::query::account::prelude::FindAccountById::new(account_id.clone()),
             ),
-            SingularQueryBox::FindAccountIdsByDomainId(
-                crate::query::domain::prelude::FindAccountIdsByDomainId::new(domain_id),
+            SingularQueryBox::FindAccountByAlias(
+                crate::query::account::prelude::FindAccountByAlias::new(
+                    crate::account::AccountAlias::domainless(
+                        "alice".parse().expect("alias label"),
+                        crate::nexus::DataSpaceId::UNIVERSAL,
+                    ),
+                ),
+            ),
+            SingularQueryBox::FindAliasesByAccountId(
+                crate::query::account::prelude::FindAliasesByAccountId::new(
+                    account_id.clone(),
+                    Some("centralbank".to_owned()),
+                    Some("banka".to_owned()),
+                ),
             ),
             SingularQueryBox::FindProofRecordById(
                 crate::query::proof::prelude::FindProofRecordById { id: proof_id },
@@ -318,7 +399,20 @@ mod tests {
             ),
             SingularQueryBox::FindAbiVersion(crate::query::runtime::prelude::FindAbiVersion),
             SingularQueryBox::FindAssetById(crate::query::asset::prelude::FindAssetById::new(
-                asset_id,
+                asset_id.clone(),
+            )),
+            SingularQueryBox::FindAssetDefinitionById(
+                crate::query::asset::prelude::FindAssetDefinitionById::new(
+                    asset_id.definition().clone(),
+                ),
+            ),
+            SingularQueryBox::FindTriggerById(
+                crate::query::trigger::prelude::FindTriggerById::new(
+                    "demo_trigger".parse().expect("valid trigger id"),
+                ),
+            ),
+            SingularQueryBox::FindDomainById(crate::query::domain::prelude::FindDomainById::new(
+                DomainId::try_new("wonderland", "universal").expect("valid domain id"),
             )),
         ];
 

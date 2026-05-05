@@ -7,11 +7,11 @@ edition = "2024"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = []
+default = ["c-abi"]
+c-abi = []
 
 [dependencies]
 zstd = { workspace = true }
-zstd-sys = { version = "2.0.16", features = ["experimental"] }
 
 [build-dependencies]
 cc = "1.2.45"

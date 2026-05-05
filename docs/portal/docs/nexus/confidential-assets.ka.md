@@ -97,7 +97,7 @@ Swift SDK-ებს ახლა შეუძლიათ გამოუშვ�
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -256,7 +256,7 @@ Swift SDK-ებს ახლა შეუძლიათ გამოუშვ�
 - თითო ანგარიშის გასაღების დერივაციის იერარქია:
   - `sk_spend` → `nk` (გაბათილებელი გასაღები), `ivk` (შემავალი სანახავი გასაღები), `ovk` (გამავალი ნახვის გასაღები), `fvk`.
 - დაშიფრული ნოტების დატვირთვა იყენებს AEAD-ს ECDH-დან მიღებული საერთო გასაღებებით; აუდიტორის არჩევის არჩევითი კლავიშები შეიძლება დაერთოს აქტივების პოლიტიკის შედეგებს.
-- CLI დამატებები: `confidential create-keys`, `confidential send`, `confidential export-view-key`, აუდიტორის ხელსაწყოები შენიშვნების გაშიფვრისთვის და `iroha app zk envelope` დამხმარე Kotodama offline-ის წარმოებისთვის/შემოწმებისთვის. Torii ავლენს იმავე დერივაციულ ნაკადს `POST /v1/confidential/derive-keyset`-ის მეშვეობით, აბრუნებს ორივე თექვსმეტი და base64 ფორმებს, რათა საფულეებმა შეძლონ გასაღების იერარქიების პროგრამულად მიღება.
+- CLI დამატებები: `confidential create-keys`, `confidential send`, `confidential export-view-key`, აუდიტორის ხელსაწყოები შენიშვნების გაშიფვრისთვის და `iroha app zk envelope` დამხმარე Kotodama offline-ის წარმოებისთვის/შემოწმებისთვის.
 
 ## გაზი, ლიმიტები და DoS კონტროლი
 - გაზის განმსაზღვრელი გრაფიკი:

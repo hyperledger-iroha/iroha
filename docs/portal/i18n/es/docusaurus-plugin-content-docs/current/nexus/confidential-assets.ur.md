@@ -75,7 +75,7 @@ Respuesta de ejemplo:
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -188,7 +188,7 @@ Libros de contabilidad confidenciales کو nota frescura ثابت کرنے او�
 - Jerarquía de derivación de claves por cuenta:
   - `sk_spend` → `nk` (clave anuladora), `ivk` (clave de visualización entrante), `ovk` (clave de visualización saliente), `fvk`.
 - Cargas útiles de notas cifradas AEAD استعمال کرتے ہیں جو ECDH-derived Shared Keys سے بنے ہوتے ہیں؛ opcional auditor ver claves política de activos کے مطابق salidas کے ساتھ adjuntar کئے جا سکتے ہیں۔
-- Adiciones de CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, descifrado de notas, herramientas de auditor, ayudante `iroha app zk envelope` y sobres de notas Norito fuera de línea. producir/inspeccionar کرتا ہے۔ Torii `POST /v1/confidential/derive-keyset` کے ذریعے وہی flujo de derivación فراہم کرتا ہے اور hex/base64 دونوں formas y اپس دیتا ہے تاکہ billeteras mediante programación clave las jerarquías recuperan کر سکیں۔## Controles de gas, límites y DoS
+- Adiciones de CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, descifrado de notas, herramientas de auditor, ayudante `iroha app zk envelope` y sobres de notas Norito fuera de línea. producir/inspeccionar کرتا ہے۔
 - Horario de gas determinista:
   - Halo2 (Plonkish): gas base `250_000` + gas `2_000` por entrada pública.
   - Gas `5` por byte de prueba, más cargos por anulador (`300`) y por compromiso (`500`).

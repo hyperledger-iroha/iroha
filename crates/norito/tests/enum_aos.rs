@@ -48,6 +48,18 @@ enum AoSU8ArrayEnum {
     Bytes([u8; 12]),
 }
 
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq)]
+enum NamedArrayEnum {
+    Raw { prefix: i32, bytes: [u8; 32] },
+}
+
+#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq)]
+struct NestedNamedArray {
+    first: String,
+    value: NamedArrayEnum,
+    last: String,
+}
+
 #[test]
 fn aos_enum_roundtrip_unit() {
     let v = AoSEnum::Unit;
@@ -102,5 +114,20 @@ fn aos_enum_roundtrip_u8_array_unpacked() {
     let bytes = to_bytes(&v).unwrap();
     let arch = from_bytes::<AoSU8ArrayEnum>(&bytes).unwrap();
     let back = <AoSU8ArrayEnum as NoritoDeserialize>::deserialize(arch);
+    assert_eq!(v, back);
+}
+
+#[test]
+fn aos_nested_named_variant_with_u8_array_roundtrips() {
+    let v = NestedNamedArray {
+        first: "before".to_owned(),
+        value: NamedArrayEnum::Raw {
+            prefix: -1,
+            bytes: [0xAB; 32],
+        },
+        last: "after".to_owned(),
+    };
+    let bytes = to_bytes(&v).unwrap();
+    let back: NestedNamedArray = norito::decode_from_bytes(&bytes).unwrap();
     assert_eq!(v, back);
 }

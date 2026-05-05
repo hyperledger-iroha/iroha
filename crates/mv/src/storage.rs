@@ -38,7 +38,7 @@ impl<K: Key, V: Value> Storage<K, V> {
         // Clear revert
         revert.get_mut().clear();
 
-        Block { revert, blocks }
+        Block::new(revert, blocks, false)
     }
 
     /// Insert a value directly into the latest committed state.
@@ -64,7 +64,7 @@ impl<K: Key, V: Value> Storage<K, V> {
             }
         }
 
-        Block { revert, blocks }
+        Block::new(revert, blocks, true)
     }
 }
 
@@ -200,15 +200,30 @@ mod block {
     pub struct Block<'store, K: Key, V: Value> {
         pub(crate) revert: EbrCellWriteTxn<'store, BTreeMap<K, Option<V>>>,
         pub(crate) blocks: BptreeMapWriteTxn<'store, K, V>,
+        pub(super) dirty: bool,
     }
 
     impl<'store, K: Key, V: Value> Block<'store, K, V> {
+        pub(super) fn new(
+            revert: EbrCellWriteTxn<'store, BTreeMap<K, Option<V>>>,
+            blocks: BptreeMapWriteTxn<'store, K, V>,
+            dirty: bool,
+        ) -> Self {
+            Self {
+                revert,
+                blocks,
+                dirty,
+            }
+        }
+
         /// Create transaction for the block
         pub fn transaction<'block>(&'block mut self) -> Transaction<'block, 'store, K, V>
         where
             'store: 'block,
         {
             Transaction {
+                applied: false,
+                dirty_before: self.dirty,
                 block: self,
                 revert: BTreeMap::new(),
             }
@@ -216,9 +231,16 @@ mod block {
 
         /// Apply aggregated changes to the storage
         pub fn commit(self) {
+            let Self {
+                revert,
+                blocks,
+                dirty,
+            } = self;
             // Commit fields in the inverse order
-            self.blocks.commit();
-            self.revert.commit();
+            if dirty {
+                blocks.commit();
+            }
+            revert.commit();
         }
 
         /// Read-only access to the block revert map (keys touched in this block).
@@ -228,8 +250,11 @@ mod block {
 
         /// Get mutable access to the value stored in
         pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+            let dirty = &mut self.dirty;
+            let revert = &mut self.revert;
             self.blocks.get_mut(key).inspect(|value| {
-                self.revert
+                *dirty = true;
+                revert
                     .entry(key.clone())
                     .or_insert_with(|| Some((*value).clone()));
             })
@@ -239,6 +264,7 @@ mod block {
         pub fn insert(&mut self, key: K, value: V) -> Option<V> {
             let prev_value = self.blocks.insert(key.clone(), value);
             self.revert.entry(key).or_insert_with(|| prev_value.clone());
+            self.dirty = true;
             prev_value
         }
 
@@ -246,6 +272,9 @@ mod block {
         pub fn remove(&mut self, key: K) -> Option<V> {
             let prev_value = self.blocks.remove(&key);
             self.revert.entry(key).or_insert_with(|| prev_value.clone());
+            if prev_value.is_some() {
+                self.dirty = true;
+            }
             prev_value
         }
     }
@@ -282,6 +311,8 @@ mod block {
 
     /// Part of block's aggregated changes which applied or aborted at the same time
     pub struct Transaction<'block, 'store, K: Key, V: Value> {
+        pub(crate) applied: bool,
+        pub(crate) dirty_before: bool,
         pub(crate) revert: BTreeMap<K, Option<V>>,
         pub(crate) block: &'block mut Block<'store, K, V>,
     }
@@ -297,11 +328,13 @@ mod block {
             for (key, value) in core::mem::take(&mut self.revert) {
                 self.block.revert.entry(key).or_insert(value);
             }
+            self.applied = true;
         }
 
         /// Get mutable access to the value stored in
         pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
             self.block.blocks.get_mut(key).inspect(|value| {
+                self.block.dirty = true;
                 self.revert
                     .entry(key.clone())
                     .or_insert_with(|| Some((*value).clone()));
@@ -312,6 +345,7 @@ mod block {
         pub fn insert(&mut self, key: K, value: V) -> Option<V> {
             let prev_value = self.block.blocks.insert(key.clone(), value);
             self.revert.entry(key).or_insert_with(|| prev_value.clone());
+            self.block.dirty = true;
             prev_value
         }
 
@@ -319,6 +353,9 @@ mod block {
         pub fn remove(&mut self, key: K) -> Option<V> {
             let prev_value = self.block.blocks.remove(&key);
             self.revert.entry(key).or_insert_with(|| prev_value.clone());
+            if prev_value.is_some() {
+                self.block.dirty = true;
+            }
             prev_value
         }
     }
@@ -351,6 +388,9 @@ mod block {
 
     impl<'block, 'store: 'block, K: Key, V: Value> Drop for Transaction<'block, 'store, K, V> {
         fn drop(&mut self) {
+            if self.applied {
+                return;
+            }
             // revert changes made so far by current transaction
             // if transaction was applied set would be empty
             for (key, value) in core::mem::take(&mut self.revert) {
@@ -359,6 +399,7 @@ mod block {
                     Some(value) => self.block.blocks.insert(key, value),
                 };
             }
+            self.block.dirty = self.dirty_before;
         }
     }
 }
@@ -671,6 +712,114 @@ mod tests {
         assert_eq!(view1.get(&0), Some(&1));
         // Revert is visible in the view created after revert was applied
         assert_eq!(view2.get(&0), Some(&0));
+    }
+
+    #[test]
+    fn noop_commit_clears_revert_history() {
+        let storage = Storage::<u64, u64>::new();
+
+        {
+            let mut block = storage.block();
+            block.insert(0, 1);
+            block.commit();
+        }
+
+        {
+            let block = storage.block();
+            block.commit();
+        }
+
+        {
+            let block = storage.block_and_revert();
+            block.commit();
+        }
+
+        let view = storage.view();
+        assert_eq!(view.get(&0), Some(&1));
+    }
+
+    #[test]
+    fn aborted_transaction_dirty_commit_keeps_state_unchanged() {
+        let storage = Storage::<u64, u64>::new();
+
+        {
+            let mut block = storage.block();
+            {
+                let mut transaction = block.transaction();
+                transaction.insert(0, 1);
+            }
+            assert!(!block.dirty);
+            block.commit();
+        }
+
+        let view = storage.view();
+        assert_eq!(view.get(&0), None);
+    }
+
+    #[test]
+    fn aborted_transaction_preserves_existing_dirty_state() {
+        let storage = Storage::<u64, u64>::new();
+
+        {
+            let mut block = storage.block();
+            block.insert(0, 1);
+            {
+                let mut transaction = block.transaction();
+                transaction.insert(1, 2);
+            }
+            assert!(block.dirty);
+            block.commit();
+        }
+
+        let view = storage.view();
+        assert_eq!(view.get(&0), Some(&1));
+        assert_eq!(view.get(&1), None);
+    }
+
+    #[test]
+    fn remove_missing_key_is_noop_commit() {
+        let storage = Storage::<u64, u64>::new();
+
+        {
+            let mut block = storage.block();
+            block.insert(0, 1);
+            block.commit();
+        }
+
+        {
+            let mut block = storage.block();
+            assert_eq!(block.remove(1), None);
+            assert!(!block.dirty);
+            block.commit();
+        }
+
+        {
+            let block = storage.block_and_revert();
+            block.commit();
+        }
+
+        let view = storage.view();
+        assert_eq!(view.get(&0), Some(&1));
+        assert_eq!(view.get(&1), None);
+    }
+
+    #[test]
+    fn transaction_remove_missing_key_keeps_block_clean() {
+        let storage = Storage::<u64, u64>::new();
+
+        {
+            let mut block = storage.block();
+            {
+                let mut transaction = block.transaction();
+                assert_eq!(transaction.remove(0), None);
+                transaction.apply();
+            }
+            assert!(!block.dirty);
+            block.commit();
+        }
+
+        let view = storage.view();
+        assert_eq!(view.get(&0), None);
     }
 
     #[test]

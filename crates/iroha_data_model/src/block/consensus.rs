@@ -24,7 +24,7 @@ use crate::{
 };
 
 /// Wire protocol version for consensus messages defined here.
-pub const PROTO_VERSION: u32 = 1;
+pub const PROTO_VERSION: u32 = 2;
 
 /// Mode tag for classic permissioned Sumeragi used in handshakes and hashing domains.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v1";
@@ -733,7 +733,7 @@ pub struct SumeragiLaneGovernance {
 
 /// DA availability reason reported by `/v1/sumeragi/status`.
 #[allow(missing_copy_implementations)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -757,7 +757,7 @@ pub enum SumeragiDaGateReason {
 
 /// Which DA availability condition was satisfied most recently.
 #[allow(missing_copy_implementations)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -772,7 +772,7 @@ pub enum SumeragiDaGateSatisfaction {
 }
 
 /// Snapshot of DA availability tracking counters for `/v1/sumeragi/status`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -1141,6 +1141,9 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Total view changes triggered after stake-quorum timeouts (`NPoS` only).
     #[norito(default)]
     pub stake_quorum_timeout_total: u64,
+    /// Total view changes triggered after roster-unavailability recovery.
+    #[norito(default)]
+    pub roster_unavailable_total: u64,
     /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
     #[norito(default)]
     pub da_gate_total: u64,
@@ -1172,6 +1175,9 @@ pub struct SumeragiViewChangeCauseStatus {
     /// Milliseconds since UNIX epoch when a stake-quorum-timeout cause was last recorded.
     #[norito(default)]
     pub last_stake_quorum_timeout_timestamp_ms: u64,
+    /// Milliseconds since UNIX epoch when a roster-unavailable cause was last recorded.
+    #[norito(default)]
+    pub last_roster_unavailable_timestamp_ms: u64,
     /// Milliseconds since UNIX epoch when a DA-gate cause was last recorded.
     #[norito(default)]
     pub last_da_gate_timestamp_ms: u64,
@@ -1414,6 +1420,12 @@ pub struct SumeragiConsensusCapsStatus {
     pub da_enabled: bool,
     /// Maximum RBC chunk size in bytes.
     pub rbc_chunk_max_bytes: u64,
+    /// RBC payload encoding.
+    pub rbc_encoding: RbcEncoding,
+    /// RS16 data shards per stripe (`0` when plain chunking is active).
+    pub rbc_rs16_data_shards: u16,
+    /// RS16 parity shards per stripe (`0` when plain chunking is active).
+    pub rbc_rs16_parity_shards: u16,
     /// RBC session TTL in milliseconds.
     pub rbc_session_ttl_ms: u64,
     /// Hard cap on persisted RBC sessions.
@@ -1599,6 +1611,87 @@ pub struct SumeragiCommitInflightStatus {
     pub resume_queue_depths: SumeragiWorkerQueueDepths,
 }
 
+/// Commit-pipeline timing snapshot exposed by `/v1/sumeragi/status`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiCommitPipelineStatus {
+    /// End-to-end time spent in the most recent commit-pipeline run.
+    #[norito(default)]
+    pub last_total_ms: u64,
+    /// Time spent validating/finalizing candidate blocks before gating.
+    #[norito(default)]
+    pub last_validation_ms: u64,
+    /// Time spent rebuilding cached QCs from votes.
+    #[norito(default)]
+    pub last_qc_rebuild_ms: u64,
+    /// Time spent in validation/availability gate checks.
+    #[norito(default)]
+    pub last_gate_ms: u64,
+    /// Time spent finalizing pending blocks into the commit worker.
+    #[norito(default)]
+    pub last_finalize_ms: u64,
+    /// Time spent draining finished commit results.
+    #[norito(default)]
+    pub last_drain_results_ms: u64,
+    /// Sum of QC verification subtotals across drained commit results.
+    #[norito(default)]
+    pub last_drain_qc_verify_ms: u64,
+    /// Sum of persistence subtotals across drained commit results.
+    #[norito(default)]
+    pub last_drain_persist_ms: u64,
+    /// Sum of Kura store subtotals across drained commit results.
+    #[norito(default)]
+    pub last_drain_kura_store_ms: u64,
+    /// Sum of state-apply subtotals across drained commit results.
+    #[norito(default)]
+    pub last_drain_state_apply_ms: u64,
+    /// Sum of state-commit subtotals across drained commit results.
+    #[norito(default)]
+    pub last_drain_state_commit_ms: u64,
+    /// EMA of end-to-end commit-pipeline time.
+    #[norito(default)]
+    pub ema_total_ms: u64,
+    /// EMA of validation time.
+    #[norito(default)]
+    pub ema_validation_ms: u64,
+    /// EMA of gate time.
+    #[norito(default)]
+    pub ema_gate_ms: u64,
+    /// EMA of finalize time.
+    #[norito(default)]
+    pub ema_finalize_ms: u64,
+}
+
+/// DELIVER-to-next-proposal gap snapshot exposed by `/v1/sumeragi/status`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiRoundGapStatus {
+    /// Most recent elapsed time from first accepted DELIVER to local state commit.
+    #[norito(default)]
+    pub last_deliver_to_state_commit_ms: u64,
+    /// Most recent elapsed time from local state commit to pacemaker unblock.
+    #[norito(default)]
+    pub last_state_commit_to_next_propose_ms: u64,
+    /// Most recent elapsed time from first accepted DELIVER to pacemaker unblock.
+    #[norito(default)]
+    pub last_deliver_to_next_propose_ms: u64,
+    /// EMA of DELIVER-to-state-commit.
+    #[norito(default)]
+    pub ema_deliver_to_state_commit_ms: u64,
+    /// EMA of state-commit-to-next-propose.
+    #[norito(default)]
+    pub ema_state_commit_to_next_propose_ms: u64,
+    /// EMA of DELIVER-to-next-propose.
+    #[norito(default)]
+    pub ema_deliver_to_next_propose_ms: u64,
+}
+
 /// Latest commit-quorum signature tally exposed by `/v1/sumeragi/status`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(
@@ -1696,6 +1789,36 @@ pub struct SumeragiNposTimeoutsStatus {
     /// Witness collection timeout (ms).
     #[norito(default)]
     pub witness_ms: u64,
+}
+
+/// Observational `NPoS` repair fanout stake-coverage snapshot.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SumeragiNposRepairCoverageStatus {
+    /// Last height for which a repair fanout selection was recorded.
+    #[norito(default)]
+    pub last_repair_height: u64,
+    /// Last view for which a repair fanout selection was recorded.
+    #[norito(default)]
+    pub last_repair_view: u64,
+    /// Operator-facing reason label for the latest repair selection.
+    #[norito(default)]
+    pub reason: String,
+    /// Number of peers selected for the latest repair fanout.
+    #[norito(default)]
+    pub selected_repair_peer_count: u64,
+    /// Required stake quorum threshold in basis points.
+    #[norito(default)]
+    pub required_stake_quorum_bps: u16,
+    /// Selected repair fanout stake coverage in basis points.
+    #[norito(default)]
+    pub selected_stake_coverage_bps: u16,
+    /// Whether the latest selected fanout reached the stake quorum threshold.
+    #[norito(default)]
+    pub reached_stake_quorum_coverage: bool,
 }
 
 /// Compact Norito payload returned by Torii for `/v1/sumeragi/status`.
@@ -1859,6 +1982,42 @@ pub struct SumeragiStatusWire {
     /// Missing-block fetch counters after QC-first arrivals.
     #[norito(default)]
     pub missing_block_fetch: SumeragiMissingBlockFetchStatus,
+    /// Total QCs deferred because payload was missing locally.
+    #[norito(default)]
+    pub qc_deferred_missing_payload_total: u64,
+    /// Total deferred QCs resolved after payload arrival.
+    #[norito(default)]
+    pub qc_deferred_resolved_total: u64,
+    /// Total deferred QCs expired after bounded retries.
+    #[norito(default)]
+    pub qc_deferred_expired_total: u64,
+    /// Bounded missing-QC reacquire attempts before rotating views.
+    #[norito(default)]
+    pub consensus_missing_qc_reacquire_attempt_total: u64,
+    /// Missing-QC reacquire attempts that triggered recovery before rotation.
+    #[norito(default)]
+    pub consensus_missing_qc_reacquire_success_total: u64,
+    /// Missing-QC reacquire windows exhausted before controlled rotation.
+    #[norito(default)]
+    pub consensus_missing_qc_reacquire_exhausted_total: u64,
+    /// Forced leader self-proposal attempts under missing-QC liveness watchdog.
+    #[norito(default)]
+    pub consensus_forced_proposal_attempt_total: u64,
+    /// Forced leader self-proposal attempts that assembled a proposal.
+    #[norito(default)]
+    pub consensus_forced_proposal_success_total: u64,
+    /// Range-pull escalations requested by dependency recovery.
+    #[norito(default)]
+    pub blocksync_range_pull_escalation_total: u64,
+    /// Range-pull recoveries that succeeded.
+    #[norito(default)]
+    pub blocksync_range_pull_success_total: u64,
+    /// Range-pull recoveries that expired without progress.
+    #[norito(default)]
+    pub blocksync_range_pull_failure_total: u64,
+    /// Range-pull recovery tiers exhausted before broader recovery.
+    #[norito(default)]
+    pub blocksync_range_pull_candidate_exhausted_total: u64,
     /// Committed-edge conflicts reclassified as obsolete/non-actionable dependencies.
     #[norito(default)]
     pub committed_edge_conflict_obsolete_total: u64,
@@ -1956,6 +2115,16 @@ pub struct SumeragiStatusWire {
     /// Commit inflight diagnostics snapshot.
     #[norito(default)]
     pub commit_inflight: SumeragiCommitInflightStatus,
+    /// Commit-pipeline budget snapshot.
+    #[norito(default)]
+    pub commit_pipeline: SumeragiCommitPipelineStatus,
+    /// DELIVER-to-next-proposal gap snapshot.
+    #[norito(default)]
+    pub round_gap: SumeragiRoundGapStatus,
+    /// Observational `NPoS` repair fanout coverage, present only when locally recorded.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub npos_repair_coverage: Option<SumeragiNposRepairCoverageStatus>,
 }
 
 /// Entry describing a QC snapshot used by `/v1/sumeragi/qc`.
@@ -2063,6 +2232,31 @@ pub struct Reconfig {
     pub activation_height: Height,
 }
 
+/// RBC payload encoding used for chunk distribution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(tag = "encoding", content = "state", rename_all = "snake_case")]
+pub enum RbcEncoding {
+    /// Raw payload chunking without parity shards.
+    #[default]
+    Plain,
+    /// RS16 stripe encoding with parity shards.
+    Rs16,
+}
+
+impl RbcEncoding {
+    /// Stable operator-facing label for the encoding.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Rs16 => "rs16",
+        }
+    }
+}
+
 /// RBC init message for payload distribution scaffolding.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct RbcInit {
@@ -2080,6 +2274,16 @@ pub struct RbcInit {
     pub roster_hash: Hash,
     /// Total chunk count for the payload.
     pub total_chunks: u32,
+    /// Payload chunk encoding.
+    pub encoding: RbcEncoding,
+    /// Configured shard/chunk size in bytes.
+    pub chunk_size_bytes: u32,
+    /// Canonical payload size before any RS16 padding.
+    pub payload_size_bytes: u64,
+    /// Data shards per RS16 stripe (`0` for plain chunking).
+    pub data_shards: u16,
+    /// Parity shards per RS16 stripe (`0` for plain chunking).
+    pub parity_shards: u16,
     /// SHA-256 digests for each chunk (indexed by chunk position).
     pub chunk_digests: Vec<[u8; 32]>,
     /// Payload hash commitment (optional, when leader is also proposer).
@@ -2107,6 +2311,30 @@ pub struct RbcChunk {
     pub idx: u32,
     /// Chunk bytes.
     pub bytes: Vec<u8>,
+}
+
+/// Request the RBC INIT scaffold for a specific `(block_hash, height, view)` session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct RbcInitRequest {
+    /// Subject block hash.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Height.
+    pub height: Height,
+    /// View.
+    pub view: View,
+}
+
+/// Request missing RBC payload chunks for a specific `(block_hash, height, view)` session.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct RbcChunkRequest {
+    /// Subject block hash.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Height.
+    pub height: Height,
+    /// View.
+    pub view: View,
+    /// Missing encoded chunk indices requested from the peer.
+    pub missing_indices: Vec<u32>,
 }
 
 /// RBC READY signal.
@@ -2382,6 +2610,11 @@ mod tests {
             roster,
             roster_hash,
             total_chunks: 3,
+            encoding: RbcEncoding::Plain,
+            chunk_size_bytes: 128,
+            payload_size_bytes: 257,
+            data_shards: 0,
+            parity_shards: 0,
             chunk_digests,
             payload_hash: Hash::new(b"payload_hash"),
             chunk_root,
@@ -2398,6 +2631,23 @@ mod tests {
             epoch: 1,
             idx: 1,
             bytes: vec![1, 2, 3, 4],
+        }
+    }
+
+    fn sample_rbc_init_request() -> RbcInitRequest {
+        RbcInitRequest {
+            block_hash: dummy_hash(),
+            height: 6,
+            view: 3,
+        }
+    }
+
+    fn sample_rbc_chunk_request() -> RbcChunkRequest {
+        RbcChunkRequest {
+            block_hash: dummy_hash(),
+            height: 6,
+            view: 3,
+            missing_indices: vec![0, 2, 5],
         }
     }
 
@@ -2493,6 +2743,21 @@ mod tests {
         let bytes = w.encode();
         let dec = ExecWitness::decode(&mut &bytes[..]).expect("decode witness");
         assert_eq!(w, dec);
+    }
+
+    #[test]
+    fn rbc_repair_requests_roundtrip_codec() {
+        let init_request = sample_rbc_init_request();
+        let init_bytes = init_request.encode();
+        let init_decoded =
+            RbcInitRequest::decode(&mut &init_bytes[..]).expect("decode RBC init request");
+        assert_eq!(init_request, init_decoded);
+
+        let chunk_request = sample_rbc_chunk_request();
+        let chunk_bytes = chunk_request.encode();
+        let chunk_decoded =
+            RbcChunkRequest::decode(&mut &chunk_bytes[..]).expect("decode RBC chunk request");
+        assert_eq!(chunk_request, chunk_decoded);
     }
 
     #[test]

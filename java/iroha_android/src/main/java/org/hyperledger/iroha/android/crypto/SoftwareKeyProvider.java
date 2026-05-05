@@ -29,13 +29,12 @@ import org.hyperledger.iroha.android.crypto.export.KeyPassphraseProvider;
  * software-backed accounts can be restored across sessions and devices.
  */
 public final class SoftwareKeyProvider implements KeyProvider {
+  private static final int ML_DSA_SEED_LENGTH_BYTES = 32;
 
   /** Controls which JCA provider is used for Ed25519 key generation. */
   public enum ProviderPolicy {
-    /** Use the default JCA provider order, falling back to BouncyCastle when needed. */
+    /** Use the default JCA provider order. */
     DEFAULT,
-    /** Prefer BouncyCastle when available to keep keys exportable. */
-    BOUNCY_CASTLE_PREFERRED,
     /** Require BouncyCastle; fail if the provider is unavailable. */
     BOUNCY_CASTLE_REQUIRED
   }
@@ -45,26 +44,50 @@ public final class SoftwareKeyProvider implements KeyProvider {
   private final ProviderPolicy providerPolicy;
   private final KeyExportStore exportStore;
   private final KeyPassphraseProvider passphraseProvider;
+  private final SigningAlgorithm signingAlgorithm;
 
   public SoftwareKeyProvider() {
-    this(ProviderPolicy.DEFAULT, null, null);
+    this(ProviderPolicy.DEFAULT, null, null, SigningAlgorithm.ED25519);
   }
 
   public SoftwareKeyProvider(final ProviderPolicy providerPolicy) {
-    this(providerPolicy, null, null);
+    this(providerPolicy, null, null, SigningAlgorithm.ED25519);
   }
 
-  public SoftwareKeyProvider(final KeyExportStore exportStore, final KeyPassphraseProvider passphraseProvider) {
-    this(ProviderPolicy.BOUNCY_CASTLE_PREFERRED, exportStore, passphraseProvider);
+  public SoftwareKeyProvider(final SigningAlgorithm signingAlgorithm) {
+    this(ProviderPolicy.DEFAULT, null, null, signingAlgorithm);
+  }
+
+  public SoftwareKeyProvider(
+      final KeyExportStore exportStore,
+      final KeyPassphraseProvider passphraseProvider) {
+    this(exportStore, passphraseProvider, SigningAlgorithm.ED25519);
   }
 
   public SoftwareKeyProvider(
       final ProviderPolicy providerPolicy,
       final KeyExportStore exportStore,
       final KeyPassphraseProvider passphraseProvider) {
+    this(providerPolicy, exportStore, passphraseProvider, SigningAlgorithm.ED25519);
+  }
+
+  public SoftwareKeyProvider(
+      final KeyExportStore exportStore,
+      final KeyPassphraseProvider passphraseProvider,
+      final SigningAlgorithm signingAlgorithm) {
+    this(ProviderPolicy.BOUNCY_CASTLE_REQUIRED, exportStore, passphraseProvider, signingAlgorithm);
+  }
+
+  public SoftwareKeyProvider(
+      final ProviderPolicy providerPolicy,
+      final KeyExportStore exportStore,
+      final KeyPassphraseProvider passphraseProvider,
+      final SigningAlgorithm signingAlgorithm) {
     this.providerPolicy = providerPolicy == null ? ProviderPolicy.DEFAULT : providerPolicy;
     this.exportStore = exportStore;
     this.passphraseProvider = passphraseProvider;
+    this.signingAlgorithm =
+        signingAlgorithm == null ? SigningAlgorithm.ED25519 : signingAlgorithm;
     if (this.exportStore != null && this.passphraseProvider == null) {
       throw new IllegalArgumentException("passphraseProvider is required when exportStore is set");
     }
@@ -126,6 +149,7 @@ public final class SoftwareKeyProvider implements KeyProvider {
       throws KeyManagementException, KeyExportException {
     final KeyPair keyPair =
         load(alias).orElseThrow(() -> new KeyManagementException("Unknown alias: " + alias));
+    ensureExpectedSigningAlgorithm(keyPair);
     return DeterministicKeyExporter.exportKeyPair(keyPair.getPrivate(), keyPair.getPublic(), alias, passphrase);
   }
 
@@ -134,10 +158,18 @@ public final class SoftwareKeyProvider implements KeyProvider {
    * alias.
    */
   public KeyPair importDeterministic(final KeyExportBundle bundle, final char[] passphrase)
-      throws KeyExportException {
+      throws KeyExportException, KeyManagementException {
+    if (bundle.signingAlgorithm() != signingAlgorithm) {
+      throw new KeyExportException(
+          "Key export algorithm "
+              + bundle.signingAlgorithm().providerName()
+              + " does not match provider "
+              + signingAlgorithm.providerName());
+    }
     final DeterministicKeyExporter.KeyPairData data =
         DeterministicKeyExporter.importKeyPair(bundle, passphrase);
     final KeyPair keyPair = new KeyPair(data.publicKey(), data.privateKey());
+    ensureExpectedSigningAlgorithm(keyPair);
     aliasCache.put(bundle.alias(), keyPair);
     if (exportStore != null) {
       exportStore.store(bundle.alias(), bundle.encodeBase64());
@@ -146,21 +178,33 @@ public final class SoftwareKeyProvider implements KeyProvider {
   }
 
   private KeyPair generateKeyPair() throws KeyManagementException {
+    if (signingAlgorithm == SigningAlgorithm.ML_DSA) {
+      final byte[] seed = new byte[ML_DSA_SEED_LENGTH_BYTES];
+      secureRandom.nextBytes(seed);
+      try {
+        final NativeSignerBridge.KeypairBytes pair =
+            NativeSignerBridge.keypairFromSeed(SigningAlgorithm.ML_DSA, seed);
+        return new KeyPair(
+            new MlDsaPublicKey(pair.publicKey()),
+            new MlDsaPrivateKey(pair.privateKey(), pair.publicKey()));
+      } catch (final RuntimeException ex) {
+        throw new KeyManagementException("ML-DSA key generation is not supported on this runtime", ex);
+      } finally {
+        Arrays.fill(seed, (byte) 0);
+      }
+    }
+    if (NativeSigningKeyMaterial.supports(signingAlgorithm)) {
+      try {
+        return NativeSigningKeyMaterial.generate(signingAlgorithm, secureRandom);
+      } catch (final RuntimeException ex) {
+        throw new KeyManagementException(
+            signingAlgorithm.providerName() + " key generation is not supported on this runtime", ex);
+      }
+    }
     final KeyPairGenerator generator = newKeyPairGenerator();
-    final boolean usedBouncyCastle =
-        generator.getProvider() != null && "BC".equals(generator.getProvider().getName());
     final KeyPair keyPair = generateWithGenerator(generator);
     if (isExportable(keyPair)) {
       return keyPair;
-    }
-    if (!usedBouncyCastle && providerPolicy != ProviderPolicy.BOUNCY_CASTLE_REQUIRED) {
-      final Optional<KeyPairGenerator> fallback = tryBouncyCastleGenerator();
-      if (fallback.isPresent()) {
-        final KeyPair fallbackPair = generateWithGenerator(fallback.get());
-        if (isExportable(fallbackPair)) {
-          return fallbackPair;
-        }
-      }
     }
     throw new KeyManagementException(
         "Ed25519 key material is not exportable; use BouncyCastle provider");
@@ -170,24 +214,10 @@ public final class SoftwareKeyProvider implements KeyProvider {
     if (providerPolicy == ProviderPolicy.BOUNCY_CASTLE_REQUIRED) {
       return bouncyCastleGeneratorOrThrow();
     }
-    if (providerPolicy == ProviderPolicy.BOUNCY_CASTLE_PREFERRED) {
-      final Optional<KeyPairGenerator> preferred = tryBouncyCastleGenerator();
-      if (preferred.isPresent()) {
-        return preferred.get();
-      }
-    }
     try {
       return KeyPairGenerator.getInstance("Ed25519");
-    } catch (final NoSuchAlgorithmException ignored) {
-      final Optional<KeyPairGenerator> fallback = tryBouncyCastleGenerator();
-      if (fallback.isPresent()) {
-        return fallback.get();
-      }
-      try {
-        return KeyPairGenerator.getInstance("EdDSA");
-      } catch (final NoSuchAlgorithmException ex) {
-        throw new KeyManagementException("Ed25519 key generation is not supported on this JVM", ex);
-      }
+    } catch (final NoSuchAlgorithmException ex) {
+      throw new KeyManagementException("Ed25519 key generation is not supported on this JVM", ex);
     }
   }
 
@@ -223,11 +253,22 @@ public final class SoftwareKeyProvider implements KeyProvider {
         return Optional.empty();
       }
       final KeyExportBundle bundle = KeyExportBundle.decodeBase64(encoded.get());
+      if (bundle.signingAlgorithm() != signingAlgorithm) {
+        throw new KeyManagementException(
+            "Stored key for alias="
+                + alias
+                + " uses "
+                + bundle.signingAlgorithm().providerName()
+                + ", expected "
+                + signingAlgorithm.providerName());
+      }
       final char[] passphrase = requirePassphrase();
       try {
         final DeterministicKeyExporter.KeyPairData data =
             DeterministicKeyExporter.importKeyPair(bundle, passphrase);
-        return Optional.of(new KeyPair(data.publicKey(), data.privateKey()));
+        final KeyPair keyPair = new KeyPair(data.publicKey(), data.privateKey());
+        ensureExpectedSigningAlgorithm(keyPair);
+        return Optional.of(keyPair);
       } finally {
         Arrays.fill(passphrase, '\0');
       }
@@ -264,6 +305,32 @@ public final class SoftwareKeyProvider implements KeyProvider {
     return passphrase;
   }
 
+  private void ensureExpectedSigningAlgorithm(final KeyPair keyPair)
+      throws KeyManagementException {
+    final boolean matches =
+        switch (signingAlgorithm) {
+          case ED25519 ->
+              !(keyPair.getPrivate() instanceof MlDsaPrivateKey)
+                  && !(keyPair.getPublic() instanceof MlDsaPublicKey)
+                  && !(keyPair.getPrivate() instanceof NativeSigningPrivateKey)
+                  && !(keyPair.getPublic() instanceof NativeSigningPublicKey);
+          case ML_DSA ->
+              keyPair.getPrivate() instanceof MlDsaPrivateKey
+                  && keyPair.getPublic() instanceof MlDsaPublicKey;
+          default ->
+              keyPair.getPrivate() instanceof NativeSigningPrivateKey
+                  && keyPair.getPublic() instanceof NativeSigningPublicKey
+                  && ((NativeSigningPrivateKey) keyPair.getPrivate()).signingAlgorithm()
+                      == signingAlgorithm
+                  && ((NativeSigningPublicKey) keyPair.getPublic()).signingAlgorithm()
+                      == signingAlgorithm;
+        };
+    if (!matches) {
+      throw new KeyManagementException(
+          "Provider expected " + signingAlgorithm.providerName() + " key material");
+    }
+  }
+
   static Optional<KeyPairGenerator> tryBouncyCastleGenerator() {
     try {
       final Class<?> providerClass =
@@ -274,16 +341,12 @@ public final class SoftwareKeyProvider implements KeyProvider {
       if (Security.getProvider(providerName) == null) {
         Security.addProvider(provider);
       }
-      try {
-        return Optional.of(KeyPairGenerator.getInstance("EdDSA", providerName));
-      } catch (final NoSuchAlgorithmException | NoSuchProviderException ex) {
-        return Optional.of(KeyPairGenerator.getInstance("EdDSA"));
-      }
+      return Optional.of(KeyPairGenerator.getInstance("EdDSA", providerName));
     } catch (final ClassNotFoundException e) {
       return Optional.empty();
     } catch (final ReflectiveOperationException | ClassCastException e) {
       return Optional.empty();
-    } catch (final NoSuchAlgorithmException ex) {
+    } catch (final NoSuchAlgorithmException | NoSuchProviderException ex) {
       return Optional.empty();
     }
   }

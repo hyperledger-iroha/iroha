@@ -47,7 +47,7 @@ Torii կամ CLI: Օգնականը հաստատում է յուրաքանչյո�
 | `suffix_id` | Այո | Թվային վերջածանցի նույնացուցիչ (տասնորդական կամ `0x` վեցանկյուն): |
 | `owner` | Այո | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Այո | Ամբողջ թիվ `1..=255`. |
-| `payment_asset_id` | Այո | Հաշվարկային ակտիվ (օրինակ՝ `xor#sora`): |
+| `payment_asset_id` | Այո | Հաշվարկային ակտիվ (օրինակ՝ `61CtjvNd9T3THAR65GsMVHr82Bjc`): |
 | `payment_gross` / `payment_net` | Այո | Աննշան ամբողջ թվեր, որոնք ներկայացնում են ակտիվների բնածին միավորները: |
 | `settlement_tx` | Այո | JSON արժեք կամ բառացի տող, որը նկարագրում է վճարման գործարքը կամ հեշը: |
 | `payment_payer` | Այո | Հաշվի ID, որը թույլ է տվել վճարումը: |
@@ -86,18 +86,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -143,10 +143,10 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Օգնականը թողարկում է մեկ `POST /v1/sns/registrations` մեկ հարցում և ընդհատում է
+- Օգնականը թողարկում է մեկ `POST /v1/sns/names` մեկ հարցում և ընդհատում է
   առաջին HTTP սխալը. Պատասխանները կցվում են գրանցամատյանում որպես NDJSON
   գրառումներ.
-- `--poll-status` կրկին հարցում է անում `/v1/sns/registrations/{selector}` յուրաքանչյուրից հետո
+- `--poll-status` կրկին հարցում է անում `/v1/sns/names/{namespace}/{literal}` յուրաքանչյուրից հետո
   ներկայացում (մինչև `--poll-attempts`, լռելյայն 5)՝ հաստատելու, որ գրառումը
   տեսանելի. Տրամադրեք `--suffix-map` (JSON-ից `suffix_id`-ից մինչև `"suffix"` արժեքներ), որպեսզի
   Գործիքը կարող է ստանալ `{label}.{suffix}` բառացի քվեարկության համար:
@@ -233,7 +233,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -256,7 +256,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   հղումները լուծվում են CSV-ի գտնվելու վայրի համեմատ: Ոչ օբյեկտի մետատվյալներ
   առաջացնում է վավերացման սխալ:
 - **Կարգավորիչներ.** դատարկ բջիջներ հարգում են `--default-controllers`: Տրամադրել բացահայտ
-  վերահսկիչների ցուցակները (օրինակ՝ `i105...;i105...`) ոչ սեփականատիրոջը պատվիրելիս
+  վերահսկիչների ցուցակները (օրինակ՝ `<i105-account-id>;<i105-account-id>`) ոչ սեփականատիրոջը պատվիրելիս
   դերասաններ.
 
 Անհաջողությունները հաղորդվում են համատեքստային տողերի համարներով (օրինակ

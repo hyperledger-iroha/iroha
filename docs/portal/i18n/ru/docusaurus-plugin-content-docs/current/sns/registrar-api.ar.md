@@ -106,17 +106,17 @@ Struct ReservedAssignmentRequestV1 {
 
 | نقطة النهاية | طريقة | حمولة | الوصف |
 |-------------|---------|---------|-------|
-| `/v1/sns/registrations` | ПОСТ | `RegisterNameRequestV1` | تسجيل او اعادة فتح اسم. Он был создан в 2017 году в рамках программы "Старый/Старый мир" в 1990 году. |
-| `/v1/sns/registrations/{selector}/renew` | ПОСТ | `RenewNameRequestV1` | يمدد المدة. يفرض نوافذ благодать/искупление в السياسة. |
-| `/v1/sns/registrations/{selector}/transfer` | ПОСТ | `TransferNameRequestV1` | Он был убит в 2007 году. |
-| `/v1/sns/registrations/{selector}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | Контроллеры управления Это произошло в Сан-Франциско. |
-| `/v1/sns/registrations/{selector}/freeze` | ПОСТ | `FreezeNameRequestV1` | تجميد опекун/совет. Его отец - опекун. |
-| `/v1/sns/registrations/{selector}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | В действительности, это не так. , ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,. |
+| `/v1/sns/names` | ПОСТ | `RegisterNameRequestV1` | تسجيل او اعادة فتح اسم. Он был создан в 2017 году в рамках программы "Старый/Старый мир" в 1990 году. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | ПОСТ | `RenewNameRequestV1` | يمدد المدة. يفرض نوافذ благодать/искупление в السياسة. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | ПОСТ | `TransferNameRequestV1` | Он был убит в 2007 году. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | ПУТЬ | `UpdateControllersRequestV1` | Контроллеры управления Это произошло в Сан-Франциско. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | ПОСТ | `FreezeNameRequestV1` | تجميد опекун/совет. Его отец - опекун. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | УДАЛИТЬ | `GovernanceHookV1` | В действительности, это не так. , ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,. |
 | `/v1/sns/reserved/{selector}` | ПОСТ | `ReservedAssignmentRequestV1` | تعيين اسماء محجوزة بواسطة стюард / совет. |
 | `/v1/sns/policies/{suffix_id}` | ПОЛУЧИТЬ | -- | يجلب `SuffixPolicyV1` الحالي (قابل للكاش). |
-| `/v1/sns/registrations/{selector}` | ПОЛУЧИТЬ | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Активный, Грейс, الخ). |
+| `/v1/sns/names/{namespace}/{literal}` | ПОЛУЧИТЬ | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Активный, Грейс, الخ). |
 
-**Селектор выбора:** `{selector}` для I105 или шестнадцатеричного формата ADDR-5; Torii — это `NameSelectorV1`.
+**Селектор выбора:** `{selector}` для i105 или шестнадцатеричного формата ADDR-5; Torii — это `NameSelectorV1`.
 
 **Открытие:** при использовании Norito JSON для `code`, `message`, `details`. Доступны `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -129,7 +129,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -152,7 +152,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -160,7 +160,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -175,7 +175,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` указывается в списке `GovernanceHookV1` (идентификатор предложения, хэши голосования, управляющий/опекун). Для получения дополнительной информации обратитесь к `/v1/sns/registrations/{selector}/...`. В версии Torii используются SDK.
+`--governance-json` указывается в списке `GovernanceHookV1` (идентификатор предложения, хэши голосования, управляющий/опекун). Для получения дополнительной информации обратитесь к `/v1/sns/names/{namespace}/{literal}/...`. В версии Torii используются SDK.
 
 ## 4. Запуск gRPC
 
@@ -222,7 +222,7 @@ Torii добавлен в раздел:
 
 1. Установите флажок `/v1/sns/policies/{suffix_id}` для получения дополнительной информации о Грейс.
 2. Для `RegisterNameRequestV1`:
-   - `selector` находится на этикетке I105 (открыто) и (отсутствует).
+   - `selector` находится на этикетке i105 (открыто) и (отсутствует).
    - `term_years` добавлен в программу.
    - `payment` находится в сплиттере/стюарде.
 3. Torii Код:
@@ -245,7 +245,7 @@ Torii добавлен в раздел:
 
 ### 6.3 Добавление опекуна и переопределение режима1. опекун يرسل `FreezeNameRequestV1` مع تذكرة تشير الى id حادث.
 2. Torii вместо `NameStatus::Frozen`, вместо `NameFrozen`.
-3. Переопределение режима блокировки; Нажмите кнопку DELETE `/v1/sns/registrations/{selector}/freeze` вместо `GovernanceHookV1`.
+3. Переопределение режима блокировки; Нажмите кнопку DELETE `/v1/sns/names/{namespace}/{literal}/freeze` вместо `GovernanceHookV1`.
 4. Torii используется для переопределения, а также `NameUnfrozen`.
 
 ## 7. التحقق واكواد الخطا

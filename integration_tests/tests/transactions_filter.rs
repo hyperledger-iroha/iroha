@@ -27,7 +27,7 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
         move || {
             let _ = client.submit_blocking(Register::asset_definition({
                 let __asset_definition_id = AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "txfilter".parse().unwrap(),
                 );
                 AssetDefinition::numeric(__asset_definition_id.clone())

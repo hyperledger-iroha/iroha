@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/try-it-console.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5246118a539e2031dcafb8cf384ac7d20b8abc28b67ee1555e1b1211779fe390
-source_last_modified: "2026-01-22T16:26:46.508367+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 2b1c75d262ff579d7b04df9122c9a9c55cd8d694a04cd326d3138717f396cfe7
+source_last_modified: "2026-03-26T11:40:25.614954+00:00"
+translation_last_reviewed: 2026-04-08
 title: Norito Try-It Console
 description: Use the developer-portal proxy, Swagger, and RapiDoc widgets to send real Torii / Norito-RPC requests directly from the documentation site.
 translator: machine-google-reviewed
@@ -79,7 +79,7 @@ OAuth variable များရှိနေသောအခါ sandbox သည် �
 4. "စမ်းကြည့်ပါ" အံဆွဲရှိ `application/x-norito` အကြောင်းအရာအမျိုးအစားကို ရွေးပါ၊ **ဖိုင်ကိုရွေးချယ်ပါ** ကိုနှိပ်ပါ၊ နှင့် သင်၏ပေးချေမှုအား ရွေးချယ်ပါ။ ပရောက်စီသည် တောင်းဆိုချက်ကို `/proxy/v1/pipeline/submit` သို့ ပြန်ရေးပြီး `X-TryIt-Client=docs-portal-rapidoc` ဖြင့် တဂ်ပေးသည်။
 5. Norito တုံ့ပြန်မှုများကို ဒေါင်းလုဒ်လုပ်ရန်၊ `Accept: application/x-norito` ကို သတ်မှတ်ပါ။ Swagger/RapiDoc သည် header selector ကို တူညီသောအံဆွဲတွင် ဖော်ထုတ်ပြီး binary ကို proxy မှတဆင့် ပြန်လွှင့်ပါ။
 
-ထည့်သွင်းထားသော JSON သီးသန့်လမ်းကြောင်းများအတွက် Try it sandbox သည် မကြာခဏ ပိုမြန်သည်- လမ်းကြောင်း (ဥပမာ၊ `/v1/accounts/i105.../assets`) ကို ရိုက်ထည့်ပါ၊ HTTP နည်းလမ်းကို ရွေးချယ်ပါ၊ လိုအပ်သည့်အခါတွင် JSON စာကိုယ်ကို ကူးထည့်ကာ ခေါင်းစီးများ၊ ကြာချိန်နှင့် ပေးဆောင်မှုများကို စစ်ဆေးရန် **Send Request** ကို နှိပ်ပါ။
+ထည့်သွင်းထားသော JSON သီးသန့်လမ်းကြောင်းများအတွက် Try it sandbox သည် မကြာခဏ ပိုမြန်သည်- လမ်းကြောင်း (ဥပမာ၊ `/v1/accounts/<i105-account-id>/assets`) ကို ရိုက်ထည့်ပါ၊ HTTP နည်းလမ်းကို ရွေးချယ်ပါ၊ လိုအပ်သည့်အခါတွင် JSON စာကိုယ်ကို ကူးထည့်ကာ ခေါင်းစီးများ၊ ကြာချိန်နှင့် ပေးဆောင်မှုများကို စစ်ဆေးရန် **Send Request** ကို နှိပ်ပါ။
 
 ## ပြဿနာဖြေရှင်းခြင်း။
 

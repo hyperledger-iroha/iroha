@@ -18,15 +18,21 @@ FROM --platform=$BUILDPLATFORM rust:alpine as xx-build
 WORKDIR /app
 COPY --from=xx / /
 
-# NOTE: `git` for `VERGEN_GIT_SHA`; `clang` for `xx-cargo`
-RUN apk add mold git clang jq
+# NOTE: `git` for `VERGEN_GIT_SHA`; `clang` for `xx-cargo`;
+# `clang21-libclang` for bindgen users such as zstd-sys.
+RUN apk add mold git clang clang21-libclang jq
 
 COPY Cargo.toml Cargo.lock rust-toolchain.toml .
+COPY artifacts/poseidon artifacts/poseidon
 COPY crates crates
 COPY data_model data_model
+COPY fixtures fixtures
 COPY integration_tests integration_tests
-# FIX: needed for `VERGEN_GIT_SHA`; prefer to pass `GIT_SHA` explicitly
-COPY .git .git
+COPY mochi mochi
+COPY python python
+COPY tools tools
+COPY vendor vendor
+COPY xtask xtask
 # PERF: Cache mounts as in https://github.com/tonistiigi/xx#rust
 #       Using _before_ `ARG TARGETPLATFORM` to re-use between platform jobs
 #       (not sure it works exactly this way, but it is said to be done this way)
@@ -47,6 +53,13 @@ ARG PROFILE="deploy"
 ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
+ARG CARGO_BUILD_JOBS=""
+ARG BINARIES=""
+ARG IROHA_GIT_COMMIT_HASH=""
+ARG VERGEN_GIT_SHA=""
+
+ENV IROHA_GIT_COMMIT_HASH=${IROHA_GIT_COMMIT_HASH}
+ENV VERGEN_GIT_SHA=${VERGEN_GIT_SHA}
 
 # HACK: install target platform-specific headers necessary for cross-compilation
 RUN xx-apk add build-base
@@ -61,19 +74,24 @@ ENV CC=xx-clang
 RUN --mount=type=cache,target=/root/.cargo/git/db \
     --mount=type=cache,target=/root/.cargo/registry/cache \
     --mount=type=cache,target=/root/.cargo/registry/index \
+    --mount=type=cache,target=/app/target \
+    if [ -n "${CARGO_BUILD_JOBS}" ]; then export CARGO_BUILD_JOBS; fi; \
     RUSTFLAGS="${RUSTFLAGS}" mold --run \
-    xx-cargo ${CARGOFLAGS} build \
+    xx-cargo build ${CARGOFLAGS} \
     --target $(xx-cargo --print-target-triple) \
     --profile "${PROFILE}" \
     --features "${FEATURES}" \
     --bins
 
-RUN <<EOF
+RUN --mount=type=cache,target=/app/target <<EOF
   set -ex
-  mkdir ./bins
+  mkdir -p ./bins
   target_triple="$(xx-cargo --print-target-triple)"
-  bins="$(cargo metadata --no-deps --format-version 1 \
-    | jq -r 'if .workspace_metadata and .workspace_metadata.docker_bins then .workspace_metadata.docker_bins[] else empty end')"
+  bins="${BINARIES}"
+  if [ -z "${bins}" ]; then
+    bins="$(cargo metadata --no-deps --format-version 1 \
+      | jq -r 'if .workspace_metadata and .workspace_metadata.docker_bins then .workspace_metadata.docker_bins[] else empty end')"
+  fi
   if [ -z "${bins}" ]; then
     bins="iroha irohad kagami"
   fi
@@ -83,6 +101,10 @@ RUN <<EOF
     mv "${bin_path}" ./bins/
   done
 EOF
+
+FROM scratch AS bins
+
+COPY --from=xx-build /app/bins/ /
 
 FROM alpine
 

@@ -38,7 +38,7 @@ O parser exige a seguinte linha de cabecalho (a ordem e flexivel):
 | `suffix_id` | סים | מזהה מספרי סופיקסו (עשרוני או `0x` hex). |
 | `owner` | סים | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | סים | Inteiro `1..=255`. |
-| `payment_asset_id` | סים | Ativo de settlement (por exemplo `xor#sora`). |
+| `payment_asset_id` | סים | Ativo de settlement (por exemplo `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | סים | אינטירוס סם מייצג את הדמויות היחידות. |
 | `settlement_tx` | סים | Valor JSON או מחרוזת מילולית descrevendo a transacao de pagamento ou hash. |
 | `payment_payer` | סים | AccountId que autorizou o pagamento. |
@@ -77,18 +77,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -112,7 +112,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -132,9 +132,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- O helper emite um `POST /v1/sns/registrations` por request e aborta no primeiro
+- O helper emite um `POST /v1/sns/names` por request e aborta no primeiro
   שגיאה ב-HTTP. כמו תשובות למידע נוסף ויומן כמו רישום NDJSON.
-- `--poll-status` reconsulta `/v1/sns/registrations/{selector}` apos cada envio
+- `--poll-status` reconsulta `/v1/sns/names/{namespace}/{literal}` apos cada envio
   (אכלו `--poll-attempts`, ברירת מחדל 5) עבור אישור הרשמה esta visivel.
   Forneca `--suffix-map` (JSON de `suffix_id` para valores "סיומת") para que a
   ferramenta derive literais `{label}.{suffix}` para o polling.
@@ -220,7 +220,7 @@ O arquivo de metricas gerado por `sns_bulk_release.sh` expoe as seguintes series
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -244,7 +244,7 @@ unica execucao de CSV.
   רפרנסים א arquivos sao resolvidas relativo a localizacao do CSV. מטא נתונים
   nao objeto produz um erro de validacao.
 - **בקרים:** celulas em branco respeitam `--default-controllers`. פורנקה
-  רשימה מפורשת (לדוגמה `i105...;i105...`) ao delegar para atores nao הבעלים.
+  רשימה מפורשת (לדוגמה `<i105-account-id>;<i105-account-id>`) ao delegar para atores nao הבעלים.
 
 Falhas sao reportadas com numeros de linha contextuais (por exemplo
 `error: row 12 term_years must be between 1 and 255`). O script sai com codigo

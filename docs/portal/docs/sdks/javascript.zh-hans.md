@@ -68,15 +68,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -164,84 +164,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## 离线津贴和判决元数据
+## Offline V2 readiness
 
-离线津贴响应预先公开丰富的账本元数据 -
-`expires_at_ms`、`policy_expires_at_ms`、`refresh_at_ms`、`verdict_id_hex`、
-`attestation_nonce_hex` 和 `remaining_amount` 与原始数据一起返回
-记录，以便仪表板不必解码嵌入式 Norito 有效负载。新的
-倒计时助手（`deadline_kind`、`deadline_state`、`deadline_ms`、
-`deadline_ms_remaining`) 突出显示下一个即将到期的截止日期（刷新→政策
-→ 证书），以便 UI 徽章可以在津贴出现时警告操作员
-剩余时间< 24 小时。软件开发工具包
-镜像 `/v1/offline/allowances` 暴露的 REST 过滤器：
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`、`attestationNonceHex`、`refreshBeforeMs/AfterMs` 和
-`requireVerdict` / `onlyMissingVerdict` 布尔值。无效组合（对于
-例如 `onlyMissingVerdict` + `verdictIdHex`) 在 Torii 之前被本地拒绝
-被称为。
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## 线下充值（发行+注册）
-
-当您想要立即颁发证书时，请使用充值助手
-将其登记在分类账上。 SDK验证颁发并注册的证书
-返回前 ID 匹配，并且响应包含两个有效负载。有
-无专用充值端点；助手链接问题+注册调用。如果
-您已经拥有签名证书，请致电 `registerOfflineAllowance`（或
-`renewOfflineAllowance`) 直接。
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii 查询和流式传输（WebSockets）
 
 查询助手公开状态、Prometheus 指标、遥测快照和事件
@@ -276,7 +223,7 @@ Explorer 遥测为 `/v1/explorer/metrics` 和
 `/v1/explorer/accounts/{account_id}/qr` 端点，以便仪表板可以重播
 为门户提供支持的相同快照。 `getExplorerMetrics()` 标准化
 当路由被禁用时，有效负载并返回 `null`。与它配对
-`getExplorerAccountQr()` 每当您需要 I105（首选）/sora（第二好的）文字加上内联时
+`getExplorerAccountQr()` 每当您需要 i105（首选）/sora（第二好的）文字加上内联时
 用于共享按钮的 SVG。
 
 ```ts
@@ -291,7 +238,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -299,8 +246,8 @@ console.log(
 );
 ```
 
-传递 `I105` 镜像资源管理器的默认压缩
-选择器；忽略首选 I105 输出的覆盖或请求 `i105_qr`
+传递 `i105` 镜像资源管理器的默认压缩
+选择器；忽略首选 i105 输出的覆盖或请求 `i105_qr`
 当您需要二维码安全版本时。压缩文字是第二好的
 仅 Sora 的 UX 选项。助手总是返回规范标识符，
 所选文字和元数据（网络前缀、QR 版本/模块、错误
@@ -519,7 +466,7 @@ for await (const event of torii.streamEvents({
   按规范账户 ID 对资产持有量进行分组；通过 `assetId` 来过滤
   投资组合缩减为单个资产实例。
 - `getUaidBindings(uaid)` 枚举每个数据空间↔帐户
-  绑定（`I105` 返回 `i105` 文字）。
+  绑定（`i105` 返回 `i105` 文字）。
 - `getUaidManifests(uaid, { dataspaceId })` 返回每个功能清单，
   生命周期状态，以及绑定账户进行审计。对于操作员证据包、清单发布/撤销流程和 SDK 迁移
 指导，遵循通用账户指南 (`docs/source/universal_accounts_guide.md`)
@@ -562,7 +509,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -572,7 +519,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

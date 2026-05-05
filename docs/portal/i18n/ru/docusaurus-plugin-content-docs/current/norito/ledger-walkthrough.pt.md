@@ -30,8 +30,8 @@ Conta que voce planeja usar. O Bundle Padrao ja Inclui Duas Contas Derivadas Das
 демо-версия:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Подтвердите список значений в качестве первых сведений:
@@ -50,7 +50,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts dentro de wonderland (substitua --limit por um numero maior se necessario)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions que ja existem
@@ -66,7 +66,7 @@ Crie um novo ativo infinitamente mintable chamado `coffee` dentro do dominio
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI выводит хэш отправленной транзакции (например, `0x5f...`). Guarde-o для
@@ -75,7 +75,7 @@ CLI выводит хэш отправленной транзакции (нап�
 ## 3. Минте единые инструкции по работе с оператором
 
 Как количество активных жизней по номиналу `(asset definition, account)`. Минта 250
-Объединения `coffee#wonderland` с `$ADMIN_ACCOUNT`:
+Объединения `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` с `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

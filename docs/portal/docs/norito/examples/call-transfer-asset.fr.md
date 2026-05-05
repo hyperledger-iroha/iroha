@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a91fc8841580a836c80129942df7f79f5bc5dd5f6a72dccf1394b740d02536a5
-source_last_modified: "2025-11-23T15:30:33.687233+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 4d7cdc798ae9f1b69608c2b287a76a06a3d8d51116185ff6a5326e755b7b05bd
+source_last_modified: "2026-04-08T09:19:38.794575+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -20,9 +20,9 @@ Démontre comment un point d'entrée Kotodama peut appeler l'instruction hôte `
 
 ## Parcours du registre
 
-- Approvisionnez l'autorité du contrat (par exemple `i105...`) avec l'actif qu'elle transférera et accordez-lui le rôle `CanTransfer` ou une permission équivalente.
-- Appelez le point d'entrée `call_transfer_asset` pour transférer 5 unités du compte du contrat vers `i105...`, en reflétant la manière dont l'automatisation on-chain peut encapsuler des appels hôte.
-- Vérifiez les soldes via `FindAccountAssets` ou `iroha_cli ledger assets list --account i105...` et inspectez les événements pour confirmer que le garde de métadonnées a journalisé le contexte du transfert.
+- Approvisionnez l'autorité du contrat (par exemple `<i105-account-id>`) avec l'actif qu'elle transférera et accordez-lui le rôle `CanTransfer` ou une permission équivalente.
+- Appelez le point d'entrée `call_transfer_asset` pour transférer 5 unités du compte du contrat vers `<i105-account-id>`, en reflétant la manière dont l'automatisation on-chain peut encapsuler des appels hôte.
+- Vérifiez les soldes via `FindAccountAssets` ou `iroha ledger asset list all --verbose` et inspectez les événements pour confirmer que le garde de métadonnées a journalisé le contexte du transfert.
 
 ## Guides SDK associés
 
@@ -37,9 +37,9 @@ Démontre comment un point d'entrée Kotodama peut appeler l'instruction hôte `
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
-      asset_definition!("rose#wonderland"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
   }

@@ -1,0 +1,11 @@
+.idea/
+*.iml
+.gradle/
+.kotlin/
+build/
+.project
+.classpath
+.settings/
+bin/
+local.properties
+*.so

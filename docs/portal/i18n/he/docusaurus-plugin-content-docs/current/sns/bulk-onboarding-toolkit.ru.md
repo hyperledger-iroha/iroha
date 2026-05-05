@@ -37,7 +37,7 @@ translation_last_reviewed: 2026-02-07
 | `suffix_id` | Да | Числовой идентификатор суффикса (десятичный или `0x` hex). |
 | `owner` | Да | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | Да | Целое число `1..=255`. |
-| `payment_asset_id` | Да | יישוב Актив (например `xor#sora`). |
+| `payment_asset_id` | Да | יישוב Актив (например `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `payment_gross` / `payment_net` | Да | Беззнаковые целые, представляющие единицы актива. |
 | `settlement_tx` | Да | JSON מצא או שיטות, אופציונליות של רשתות או hash. |
 | `payment_payer` | Да | AccountId, авторизовавший платеж. |
@@ -76,18 +76,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -113,7 +113,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```## 3. Автоматизированные отправки
 
@@ -131,9 +131,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Хелпер делает один `POST /v1/sns/registrations` על ספרוס או שירותים
+- Хелпер делает один `POST /v1/sns/names` על ספרוס או שירותים
   первой HTTP ошибке. Ответы добавляются в лог как NDJSON записи.
-- `--poll-status` פריט זמין עבור `/v1/sns/registrations/{selector}`
+- `--poll-status` פריט זמין עבור `/v1/sns/names/{namespace}/{literal}`
   каждой отправки (עד `--poll-attempts`, по умолчанию 5), чтобы подтвердить
   видимость записи. Укажите `--suffix-map` (JSON маппинг `suffix_id` в значения
   "סיומת"), чтобы инструмент мог вывести `{label}.{suffix}` לסקר.
@@ -218,7 +218,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```הצג את `metrics.prom` ב-Prometheus קרונית צד (לדוגמה, Promtail או batch
 יבואן), чтобы רשמים, דיילים ועמיתים לממשל видели согласованный
@@ -237,7 +237,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
 - **ניתוח מטא נתונים/ממשל:** JSON парсится напрямую מוטבע; ссылки на файлы
   разрешаются относительно CSV. Metadata не-объект приводит к ошибке валидации.
 - **בקרים:** пустые ячейки соблюдают `--default-controllers`. Указывайте
-  явные списки בקרים (например `i105...;i105...`) при делегировании не-בעלים.
+  явные списки בקרים (например `<i105-account-id>;<i105-account-id>`) при делегировании не-בעלים.
 
 Ошибки сообщаются с контекстными номерами строк (например
 `error: row 12 term_years must be between 1 and 255`). סקריפט выходит с кодом `1`

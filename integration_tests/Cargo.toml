@@ -2,6 +2,7 @@
 name = "integration_tests"
 version.workspace = true
 edition = "2024"
+autotests = false
 
 [lints]
 workspace = true
@@ -10,11 +11,40 @@ workspace = true
 name = "sorafs-gateway-fixtures"
 path = "src/bin/sorafs_gateway_fixtures.rs"
 
+[[test]]
+name = "core_api"
+path = "tests/core_api.rs"
+
+[[test]]
+name = "events_and_triggers"
+path = "tests/events_and_triggers.rs"
+
+[[test]]
+name = "queries_and_proofs"
+path = "tests/queries_and_proofs.rs"
+
+[[test]]
+name = "network_functional"
+path = "tests/network_functional.rs"
+
+[[test]]
+name = "consensus_and_da"
+path = "tests/consensus_and_da.rs"
+
+[[test]]
+name = "nexus_and_streaming"
+path = "tests/nexus_and_streaming.rs"
+
+[[test]]
+name = "torii_load_profile"
+path = "tests/torii_load_profile.rs"
+
 [features]
 default = ["telemetry"]
 fault_injection = []
 telemetry = ["iroha_core/telemetry"]
 norito_streaming_fec = ["reed-solomon-erasure"]
+quic = ["iroha_core/quic", "iroha_p2p/quic"]
 js_host_parity = []
 zk-stark = ["iroha_core/zk-stark", "iroha_torii/zk-stark"]
 
@@ -50,8 +80,8 @@ futures-util = "0.3.31"
 nonzero_ext = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_genesis = { workspace = true }
-iroha_core = { workspace = true, features = ["quic", "iroha-core-tests"] }
-iroha_p2p = { workspace = true, features = ["quic"] }
+iroha_core = { workspace = true, features = ["iroha-core-tests"] }
+iroha_p2p = { workspace = true }
 tracing = { workspace = true }
 sha2 = "0.10.9"
 

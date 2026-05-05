@@ -15,17 +15,180 @@ use iroha_crypto::{
     blake2::{Blake2b512, Digest as _},
 };
 use iroha_data_model::{
+    account::{AccountId, rekey::AccountAlias},
     alias::{
         AliasAttestation, AliasEvent, AliasIndex, AliasRecord, AliasRecordedEvent, AliasTarget,
     },
     name::Name,
+    permission::Permission,
+};
+use iroha_executor_data_model::permission::account::{
+    AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
 };
 use iroha_telemetry::metrics::Metrics;
+use mv::storage::StorageReadOnly;
 use thiserror::Error;
 use tracing::{Level, event, instrument};
 
+use crate::state::WorldReadOnly;
+
 const MOCK_VOPRF_DOMAIN: &[u8] = b"iroha.alias.voprf.mock.v1";
 const MAX_VOPRF_INPUT_BYTES: usize = 4096;
+
+fn authority_has_permission(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    target: &Permission,
+) -> bool {
+    match world.account_permissions_iter(authority) {
+        Ok(permissions) => {
+            let direct_match = permissions
+                .into_iter()
+                .any(|permission| permission == target);
+            if direct_match {
+                return true;
+            }
+        }
+        Err(error) => {
+            iroha_logger::warn!(
+                authority = %authority,
+                target_name = %target.name(),
+                target_payload = %target.payload().get(),
+                ?error,
+                "alias permission lookup could not load authority permissions"
+            );
+        }
+    }
+
+    if world.account_roles_iter(authority).any(|role_id| {
+        world
+            .roles()
+            .get(role_id)
+            .is_some_and(|role| role.permissions.contains(target))
+    }) {
+        return true;
+    }
+
+    let direct_permissions: Vec<String> = world
+        .account_permissions()
+        .get(authority)
+        .map(|permissions| {
+            permissions
+                .iter()
+                .map(|permission| format!("{}:{}", permission.name(), permission.payload().get()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let roles: Vec<String> = world
+        .account_roles_iter(authority)
+        .map(|role_id| role_id.to_string())
+        .collect();
+    let account_present = world.accounts().get(authority).is_some();
+    iroha_logger::warn!(
+        authority = %authority,
+        account_present,
+        target_name = %target.name(),
+        target_payload = %target.payload().get(),
+        direct_permissions = ?direct_permissions,
+        roles = ?roles,
+        "alias permission lookup denied authority"
+    );
+    false
+}
+
+fn account_alias_is_open_retail_namespace(
+    world: &impl WorldReadOnly,
+    alias: &AccountAlias,
+) -> bool {
+    let Some(dataspace) = world.dataspace_catalog().by_id(alias.dataspace) else {
+        return false;
+    };
+    let dataspace_alias = dataspace.alias.as_str();
+    let domain_alias = alias.domain.as_ref().map(|domain| domain.name().as_ref());
+    matches!(
+        (dataspace_alias, domain_alias),
+        ("paynet", None) | ("paynet", Some("hbl" | "ubl")) | ("cbuae", None)
+    )
+}
+
+fn authority_controls_open_retail_account_alias(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    alias: &AccountAlias,
+) -> bool {
+    if !account_alias_is_open_retail_namespace(world, alias) {
+        return false;
+    }
+    if world
+        .account_aliases()
+        .get(alias)
+        .is_some_and(|account_id| account_id == authority)
+    {
+        return true;
+    }
+    world
+        .account_rekey_records()
+        .get(alias)
+        .is_some_and(|record| &record.active_account_id == authority)
+}
+
+/// Return `true` when the authority holds the exact permissions required to resolve `alias`.
+pub fn authority_can_resolve_account_alias(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    alias: &AccountAlias,
+) -> bool {
+    let dataspace_permission: Permission = CanResolveAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
+    }
+    .into();
+    if !authority_has_permission(world, authority, &dataspace_permission) {
+        return false;
+    }
+
+    match alias.domain_id(world.dataspace_catalog()) {
+        Ok(Some(domain_id)) => {
+            let domain_permission: Permission = CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(domain_id),
+            }
+            .into();
+            authority_has_permission(world, authority, &domain_permission)
+        }
+        Ok(None) => true,
+        Err(_) => false,
+    }
+}
+
+/// Return `true` when the authority holds the exact permissions required to mutate `alias`.
+pub fn authority_can_manage_account_alias(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    alias: &AccountAlias,
+) -> bool {
+    if authority_controls_open_retail_account_alias(world, authority, alias) {
+        return true;
+    }
+
+    let dataspace_permission: Permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
+    }
+    .into();
+    if !authority_has_permission(world, authority, &dataspace_permission) {
+        return false;
+    }
+
+    match alias.domain_id(world.dataspace_catalog()) {
+        Ok(Some(domain_id)) => {
+            let domain_permission: Permission = CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(domain_id),
+            }
+            .into();
+            authority_has_permission(world, authority, &domain_permission)
+        }
+        Ok(None) => true,
+        Err(_) => false,
+    }
+}
 
 /// Supported alias VOPRF backend (placeholder).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

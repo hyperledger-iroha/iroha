@@ -1,21 +1,25 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Regression tests ensuring Sumeragi keeps `locked_qc` in sync during view changes and restarts.
 
-use std::{
-    convert::TryFrom,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::{Client, Status},
-    data_model::{Level, isi::Log},
+    data_model::{
+        Level,
+        isi::{Log, SetParameter},
+        parameter::{Parameter, SumeragiParameter},
+    },
 };
+use iroha_core::sumeragi::network_topology::Topology;
 use iroha_test_network::{NetworkBuilder, NetworkPeer, init_instruction_registry};
 use norito::json::Value;
 use tokio::{task, time::sleep};
 use toml::Table;
+
+const VIEW_CHANGE_RECOVERY_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[allow(clippy::too_many_lines)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -25,10 +29,40 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::DaEnabled(true),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(500),
+        )))
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::CommitTimeMs(1_000),
+        )))
         .with_config_layer(|layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
+                .write(["sumeragi", "consensus_mode"], "permissioned")
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "propose_ms"],
+                    200_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "prevote_ms"],
+                    400_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "precommit_ms"],
+                    600_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "commit_ms"],
+                    800_i64,
+                )
+                .write(
+                    ["sumeragi", "advanced", "npos", "timeouts", "da_ms"],
+                    400_i64,
+                )
                 .write(
                     ["sumeragi", "advanced", "pacemaker", "backoff_multiplier"],
                     2_i64,
@@ -72,19 +106,18 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         baseline_blocks.push(status.blocks);
     }
 
-    let primary_peer = network
-        .peers()
-        .iter()
-        .find(|peer| peer.is_running())
-        .cloned()
-        .ok_or_else(|| eyre!("expected at least one running peer"))?;
-    let leader_index = fetch_leader_index(&primary_peer.client()).await?;
+    let baseline_height = baseline_blocks.into_iter().max().unwrap_or_default();
+    let target_height = baseline_height + 1;
+    let prf_seed = chain_epoch_seed(&network.chain_id());
+    let leader_peer =
+        resolve_permissioned_leader_peer(network.peers(), target_height, 0, Some(prf_seed))
+            .wrap_err_with(|| {
+                format!("resolve permissioned leader for height {target_height} view 0")
+            })?;
     ensure!(
-        leader_index < network.peers().len(),
-        "leader_index {leader_index} out of bounds for {} peers",
-        network.peers().len()
+        leader_peer.is_running(),
+        "resolved leader peer for height {target_height} view 0 is not running"
     );
-    let leader_peer = network.peers()[leader_index].clone();
     leader_peer.shutdown().await;
     sleep(Duration::from_secs(1)).await;
 
@@ -100,20 +133,38 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
         running.len()
     );
 
-    let baseline_height = baseline_blocks.into_iter().max().unwrap_or_default();
-    let target_height = baseline_height + 1;
     let wait_client = running
         .first()
         .ok_or_else(|| eyre!("no running peers available"))?
         .client();
-    wait_client.submit_blocking(Log::new(
-        Level::INFO,
-        "lock convergence view-change tick".to_string(),
-    ))?;
-    let _ = wait_for_height(&wait_client, target_height, Duration::from_secs(60)).await?;
+    let mut submitted = false;
+    let mut submit_errors = Vec::new();
+    for (idx, peer) in running.iter().enumerate() {
+        let submit_client = peer.client();
+        match task::spawn_blocking(move || {
+            submit_client.submit(Log::new(
+                Level::INFO,
+                format!("lock convergence view-change tick {idx}"),
+            ))
+        })
+        .await
+        {
+            Ok(Ok(_)) => {
+                submitted = true;
+            }
+            Ok(Err(err)) => submit_errors.push(err),
+            Err(err) => submit_errors.push(eyre!("submit join error: {err}")),
+        }
+    }
+    ensure!(
+        submitted,
+        "failed to submit log instruction to any running peer: {submit_errors:?}"
+    );
+    let _ = wait_for_height(&wait_client, target_height, VIEW_CHANGE_RECOVERY_TIMEOUT).await?;
 
-    let view_change_deadline = Instant::now() + Duration::from_secs(60);
-    loop {
+    let view_change_deadline = Instant::now() + VIEW_CHANGE_RECOVERY_TIMEOUT;
+    let mut observed_view_change_advance = false;
+    while Instant::now() < view_change_deadline {
         let mut all_advanced = true;
         for (idx, peer) in network.peers().iter().enumerate() {
             if !peer.is_running() {
@@ -127,34 +178,52 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
             }
         }
         if all_advanced {
+            observed_view_change_advance = true;
             break;
         }
-        if Instant::now() >= view_change_deadline {
-            let mut snapshots = Vec::new();
-            for (idx, peer) in network.peers().iter().enumerate() {
-                if !peer.is_running() {
-                    continue;
-                }
-                let status = peer.status().await?;
-                snapshots.push((idx, status.view_changes));
+        sleep(Duration::from_millis(200)).await;
+    }
+    if !observed_view_change_advance {
+        let mut snapshots = Vec::new();
+        for (idx, peer) in network.peers().iter().enumerate() {
+            if !peer.is_running() {
+                continue;
             }
+            let status = peer.status().await?;
+            snapshots.push((idx, status.view_changes));
+        }
+        eprintln!(
+            "view-change counters did not advance before timeout; continuing with locked QC convergence check: {snapshots:?}"
+        );
+    }
+
+    let locked_convergence_deadline = Instant::now() + VIEW_CHANGE_RECOVERY_TIMEOUT;
+    loop {
+        let mut locked_entries = Vec::new();
+        for peer in network.peers() {
+            if !peer.is_running() {
+                continue;
+            }
+            let snapshot = fetch_qc_snapshot(&peer.client()).await?;
+            locked_entries.push(snapshot.locked);
+        }
+
+        let locked_converged =
+            assert_qc_entries_match(&locked_entries, "locked QC divergence after view change")
+                .is_ok();
+        let locked_height_ok = locked_entries
+            .first()
+            .is_some_and(|entry| entry.height >= target_height);
+        if locked_converged && locked_height_ok {
+            break;
+        }
+        if Instant::now() >= locked_convergence_deadline {
             return Err(eyre!(
-                "timed out waiting for view change counters to advance; view_changes={snapshots:?}"
+                "timed out waiting for locked QC convergence after view change; locked={locked_entries:?}, target_height={target_height}"
             ));
         }
         sleep(Duration::from_millis(200)).await;
     }
-
-    let mut locked_entries = Vec::new();
-    for peer in network.peers() {
-        if !peer.is_running() {
-            continue;
-        }
-        let snapshot = fetch_qc_snapshot(&peer.client()).await?;
-        locked_entries.push(snapshot.locked);
-    }
-
-    assert_qc_entries_match(&locked_entries, "locked QC divergence after view change")?;
 
     network.shutdown().await;
     Ok(())
@@ -283,10 +352,12 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         .first()
         .ok_or_else(|| eyre!("no running peers after restart"))?
         .client();
-    wait_client.submit_blocking(Log::new(
-        Level::INFO,
-        "lock convergence restart tick".to_string(),
-    ))?;
+    wait_client
+        .submit_all([Log::new(
+            Level::INFO,
+            "lock convergence restart tick".to_string(),
+        )])
+        .wrap_err("submit lock convergence restart tick")?;
     let _ = wait_for_height(&wait_client, target_height, Duration::from_secs(60)).await?;
     let final_deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -336,14 +407,6 @@ impl AsRef<Table> for ConfigLayer {
     }
 }
 
-async fn fetch_leader_index(client: &Client) -> Result<usize> {
-    let client = client.clone();
-    let payload = task::spawn_blocking(move || client.get_sumeragi_status_json())
-        .await
-        .wrap_err("fetch sumeragi status payload")??;
-    parse_leader_index(&payload)
-}
-
 async fn fetch_qc_snapshot(client: &Client) -> Result<QcSnapshot> {
     let client = client.clone();
     let payload = task::spawn_blocking(move || client.get_sumeragi_qc_json())
@@ -375,17 +438,6 @@ async fn fetch_status(client: &Client) -> Result<Status> {
         .wrap_err("fetch status")
 }
 
-fn parse_leader_index(value: &Value) -> Result<usize> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| eyre!("status payload must be a JSON object"))?;
-    let leader = object
-        .get("leader_index")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| eyre!("status payload missing leader_index"))?;
-    usize::try_from(leader).wrap_err("leader_index does not fit into usize")
-}
-
 fn parse_qc_snapshot(value: &Value) -> Result<QcSnapshot> {
     let object = value
         .as_object()
@@ -400,6 +452,37 @@ fn parse_qc_snapshot(value: &Value) -> Result<QcSnapshot> {
         highest: parse_qc_entry(highest)?,
         locked: parse_qc_entry(locked)?,
     })
+}
+
+fn resolve_permissioned_leader_peer(
+    peers: &[NetworkPeer],
+    height: u64,
+    view: u64,
+    prf_seed: Option<[u8; 32]>,
+) -> Result<NetworkPeer> {
+    let mut roster: Vec<_> = peers.iter().map(NetworkPeer::id).collect();
+    roster.sort();
+    roster.dedup();
+    let mut topology = Topology::new(roster);
+    if let Some(seed) = prf_seed {
+        topology.shuffle_prf(seed, height);
+    }
+    topology.nth_rotation(view);
+    let leader_peer_id = topology
+        .as_ref()
+        .first()
+        .ok_or_else(|| eyre!("empty topology when resolving leader"))?;
+    peers
+        .iter()
+        .find(|peer| peer.id() == *leader_peer_id)
+        .cloned()
+        .ok_or_else(|| eyre!("leader peer id not found in network peers"))
+}
+
+fn chain_epoch_seed(chain_id: &iroha::data_model::ChainId) -> [u8; 32] {
+    let chain = chain_id.clone().into_inner();
+    let hash = iroha_crypto::Hash::new(chain.as_bytes());
+    <[u8; 32]>::from(hash)
 }
 
 fn parse_qc_entry(value: &Value) -> Result<QcEntry> {

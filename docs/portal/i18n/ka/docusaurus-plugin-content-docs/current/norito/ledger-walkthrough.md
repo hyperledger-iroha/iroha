@@ -32,8 +32,8 @@ SDK სწრაფად იწყება, ასე რომ თქვე�
 მიღებული დემო კლავიშებიდან:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 დაადასტურეთ მნიშვნელობები პირველი რამდენიმე ანგარიშის ჩამოთვლით:
@@ -52,7 +52,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts inside wonderland (replace --limit with a higher number if needed)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions that already exist
@@ -69,7 +69,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI ბეჭდავს წარდგენილ ტრანზაქციის ჰეშს (მაგალითად,
@@ -78,7 +78,7 @@ CLI ბეჭდავს წარდგენილ ტრანზაქც�
 ## 3. ზარაფხანა ერთეული ოპერატორის ანგარიშზე
 
 აქტივების რაოდენობა ცხოვრობს `(asset definition, account)` წყვილის ქვეშ. ზარაფხანა 250
-`coffee#wonderland`-ის ერთეული `$ADMIN_ACCOUNT`-ში:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ`-ის ერთეული `$ADMIN_ACCOUNT`-ში:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

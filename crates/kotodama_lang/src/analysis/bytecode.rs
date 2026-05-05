@@ -231,7 +231,7 @@ mod tests {
     fn metadata_payload_contains_expected_fields() {
         let meta = ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0x01,
             vector_length: 8,
             max_cycles: 1024,

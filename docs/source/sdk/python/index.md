@@ -24,10 +24,10 @@ The Torii client now exposes the `/v1/explorer/accounts/{account_id}/qr` route
 so wallets and explorers can render canonical account QR codes without re‑implementing
 the encoder. Call
 `ToriiClient.get_explorer_account_qr_typed(account_id)`
-to receive an `ExplorerAccountQrSnapshot`, which includes the canonical account id,
+to receive an `ExplorerAccountQrSnapshot`, which includes the canonical I105 account id,
 the Norito literal used for the QR payload, the network prefix, error‑correction
 setting, module count, QR version, and the inline SVG rendering emitted by Torii.
-described in the ADDR‑6b roadmap item; omit it to keep the preferred I105 output
+described in the ADDR‑6b roadmap item; omit it to keep the preferred i105 output
 while still matching the QR payloads used by the JS and Swift SDKs.
 
 ## ISO 20022 bridge helpers
@@ -69,58 +69,24 @@ transactions, and asset holder listings without building a full query envelope:
 from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
-asset_id = "norito:4e52543000000001"
+asset_id = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 
-assets = client.list_account_assets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=10)
-txs = client.list_account_transactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", asset_id=asset_id, limit=5)
-holders = client.list_asset_holders("rose#wonderland", asset_id=asset_id, limit=5)
+assets = client.list_account_assets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", asset_id=asset_id, limit=10)
+txs = client.list_account_transactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", asset_id=asset_id, limit=5)
+holders = client.list_asset_holders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", asset_id=asset_id, limit=5)
 print(assets, txs, holders)
 ```
 
-## Offline allowances
+## Offline V2 readiness
 
-Use the offline allowance helpers to issue wallet certificates and register them
-on-ledger. `top_up_offline_allowance` chains the certificate issue + register
-steps and returns both responses. There is no single top-up endpoint; the helper
-simply chains the issue + register calls.
+Use `GET /v1/offline/v2/readiness` through `get_offline_v2_readiness()` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+non-V2 offline HTTP routes are no longer published by Torii.
 
 ```python
 from iroha_python import ToriiClient
 
 client = ToriiClient("https://torii.sora.example")
-
-draft = {
-    "controller": "i105:...",
-    "allowance": {"asset": "usd#wonderland", "amount": "10", "commitment": [1, 2]},
-    "spend_public_key": "ed0120deadbeef",
-    "attestation_report": [3, 4],
-    "issued_at_ms": 100,
-    "expires_at_ms": 200,
-    "policy": {"max_balance": "10", "max_tx_value": "5", "expires_at_ms": 200},
-    "metadata": {},
-}
-
-top_up = client.top_up_offline_allowance(
-    certificate=draft,
-    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
-    private_key="operator-private-key",
-)
-print(top_up.registration.certificate_id_hex)
+readiness = client.get_offline_v2_readiness()
+print("offline notes", readiness.offline_note_v2)
 ```
-
-For renewals, use `top_up_offline_allowance_renewal` with the existing
-`certificate_id_hex`:
-
-```python
-renewed = client.top_up_offline_allowance_renewal(
-    certificate_id_hex=top_up.registration.certificate_id_hex,
-    certificate=draft,
-    authority="6cmzPVPX96RC3GJu43xurPoaAiQUx89nVpPgB63M62fpMZ2WibN7DuZ",
-    private_key="operator-private-key",
-)
-print(renewed.registration.certificate_id_hex)
-```
-
-If you need to split the flow, call `issue_offline_certificate` (or
-`issue_offline_certificate_renewal`) followed by `register_offline_allowance`
-or `renew_offline_allowance`.

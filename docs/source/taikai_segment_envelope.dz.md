@@ -492,7 +492,7 @@ The SoraNS anchor API accepts the following payload (simplified):
   "alias": "docs.sora",
   "trm": "<TaikaiRoutingManifestV1 Norito bytes (base64)>",
   "ssm_refs": ["b3f1…", "2a9d…"],
-  "publisher_account": "i105..."
+  "publisher_account": "<i105-account-id>"
 }
 ```
 

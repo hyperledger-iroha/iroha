@@ -407,7 +407,7 @@ time samples alongside the Connect evidence.
 
 Roadmap item **ADDR-6b** calls for parity across SDKs when surfacing the new
 `/v1/explorer/accounts/{account_id}/qr` endpoint. Python now ships the typed
-`ExplorerAccountQrSnapshot` DTO so wallets/tools can fetch the preferred I105 or
+`ExplorerAccountQrSnapshot` DTO so wallets/tools can fetch the preferred i105 or
 canonical I105 literal plus the ready-to-embed SVG payload:
 
 ```python
@@ -415,7 +415,7 @@ from iroha_python import create_torii_client
 
 client = create_torii_client("http://127.0.0.1:8080", auth_token="admin-token")
 snapshot = client.get_explorer_account_qr_typed(
-    "i105...",
+    "<i105-account-id>",
 )
 
 print("Literal:", snapshot.literal)
@@ -424,7 +424,7 @@ print("QR SVG:", snapshot.svg[:80], "…")
 
 The helper accepts canonical I105 literals only and normalizes payload casing selected by Torii. Use the
 typed helper when generating wallet/explorer share buttons so the resulting QR
-carries the canonical account id, network prefix, and error-correction metadata
+carries the canonical I105 account id, network prefix, and error-correction metadata
 expected by ADDR-6 dashboards.
 
 ## 9. Submit ISO 20022 bridge messages

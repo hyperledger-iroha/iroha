@@ -108,7 +108,7 @@ fn render_suites_text(rows: &[String]) -> String {
 mod tests {
     use super::*;
     use iroha_i18n::{Bundle, Language, Localizer};
-    use soranet_pq::generate_mlkem_keypair;
+    use soranet_pq::generate_mlkem_keypair_from_os as generate_mlkem_keypair;
     use std::fmt::Display;
 
     struct TestContext {
@@ -187,7 +187,7 @@ mod tests {
     fn fingerprint_run_emits_json_with_hex() {
         let mut ctx = TestContext::new(crate::CliOutputFormat::Json);
         let suite = STREAMING_DEFAULT_KEM_SUITE;
-        let keypair = generate_mlkem_keypair(suite);
+        let keypair = generate_mlkem_keypair(suite).expect("ML-KEM keypair");
         let args = FingerprintArgs {
             suite: Some(suite.to_string()),
             public_key_hex: hex::encode(keypair.public_key()),

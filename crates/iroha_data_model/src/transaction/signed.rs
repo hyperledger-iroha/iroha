@@ -1,6 +1,5 @@
 //! Transaction structures and related implementations.
 use std::{
-    boxed::Box,
     collections::{BTreeMap, BTreeSet},
     convert::TryFrom,
     iter::IntoIterator,
@@ -20,13 +19,14 @@ use iroha_data_model_derive::model;
 use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
 use iroha_schema::IntoSchema;
 use iroha_version::Version;
-use norito::codec::{Decode, DecodeAll, Encode};
+use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 pub use self::model::*;
 use super::{
     error,
     executable::{Executable, IvmBytecode},
+    private_kaigi::PrivateKaigiTransaction,
 };
 use crate::{
     ChainId,
@@ -183,6 +183,8 @@ mod model {
     pub enum TransactionEntrypoint {
         /// User request that initiates a transaction.
         External(SignedTransaction),
+        /// Authority-free private Kaigi request.
+        PrivateKaigi(PrivateKaigiTransaction),
         /// Scheduled time trigger that initiates a transaction.
         Time(TimeTriggerEntrypoint),
     }
@@ -232,14 +234,38 @@ mod model {
     pub struct ExecutionStep(pub ConstVec<InstructionBox>);
 }
 
-// Provide Norito slice decoding by delegating to `Decode`.
-impl<'a> norito::core::DecodeFromSlice<'a> for model::ExecutionStep {
+// Keep explicit slice decoders for hot ingress paths. The generic derived
+// decoders regressed on versioned payloads carrying adaptive Norito bodies.
+impl<'a> norito::core::DecodeFromSlice<'a> for model::SignedTransaction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let _guard = norito::core::PayloadCtxGuard::enter(bytes);
         let mut cursor = std::io::Cursor::new(bytes);
-        let v: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
+        let decoded: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
         let used =
             usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
-        Ok((v, used))
+        Ok((decoded, used))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionEntrypoint {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let _guard = norito::core::PayloadCtxGuard::enter(bytes);
+        let mut cursor = std::io::Cursor::new(bytes);
+        let decoded: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
+        let used =
+            usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
+        Ok((decoded, used))
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for model::ExecutionStep {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let _guard = norito::core::PayloadCtxGuard::enter(bytes);
+        let mut cursor = std::io::Cursor::new(bytes);
+        let decoded: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
+        let used =
+            usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
+        Ok((decoded, used))
     }
 }
 
@@ -471,14 +497,14 @@ impl SignedTransaction {
                 modified.extend(additions);
                 *instructions = modified.into();
             }
-            Executable::Ivm(_) | Executable::IvmProved(_) => {
+            Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => {
                 Self::apply_fault_injection_overlay(&mut self.payload.metadata, additions);
             }
         }
     }
 
     #[cfg(feature = "fault_injection")]
-    fn fault_injection_overlay(metadata: &Metadata) -> Option<Vec<String>> {
+    pub(crate) fn fault_injection_overlay(metadata: &Metadata) -> Option<Vec<String>> {
         metadata
             .get(&*FAULT_INJECTION_METADATA_NAME)
             .cloned()
@@ -486,7 +512,10 @@ impl SignedTransaction {
     }
 
     #[cfg(feature = "fault_injection")]
-    fn apply_fault_injection_overlay(metadata: &mut Metadata, additions: Vec<InstructionBox>) {
+    pub(crate) fn apply_fault_injection_overlay(
+        metadata: &mut Metadata,
+        additions: Vec<InstructionBox>,
+    ) {
         let mut combined = Self::fault_injection_overlay(metadata).unwrap_or_default();
         combined.extend(additions.into_iter().map(|instruction| {
             let bytes =
@@ -578,43 +607,32 @@ impl iroha_version::codec::EncodeVersioned for SignedTransaction {
 
 impl iroha_version::codec::DecodeVersioned for SignedTransaction {
     fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
-        use iroha_version::error::Error;
-
-        let Some((&version, payload)) = input.split_first() else {
-            return Err(Error::NotVersioned);
-        };
-
-        if !Self::supported_versions().contains(&version) {
-            return Err(Error::UnsupportedVersion(Box::new(
-                iroha_version::UnsupportedVersion::new(
-                    version,
-                    iroha_version::RawVersioned::NoritoBytes(input.to_vec()),
-                ),
-            )));
-        }
-
-        let payload_guard = norito::core::PayloadCtxGuard::enter(payload);
-        let mut cursor = payload;
-        let decoded = <Self as DecodeAll>::decode_all(&mut cursor).map_err(Error::from)?;
-        drop(payload_guard);
-        if cursor.is_empty() {
-            Ok(decoded)
-        } else {
-            Err(Error::NoritoCodec(
-                "SignedTransaction payload contains trailing bytes".into(),
-            ))
-        }
+        iroha_version::codec::decode_exact_versioned(input)
     }
 }
 
-impl<'a> norito::core::DecodeFromSlice<'a> for SignedTransaction {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let _guard = norito::core::PayloadCtxGuard::enter(bytes);
-        let mut cursor = std::io::Cursor::new(bytes);
-        let decoded: SignedTransaction = norito::codec::Decode::decode(&mut cursor)?;
-        let used =
-            usize::try_from(cursor.position()).map_err(|_| norito::core::Error::LengthMismatch)?;
-        Ok((decoded, used))
+impl iroha_version::Version for TransactionEntrypoint {
+    fn version(&self) -> u8 {
+        1
+    }
+
+    fn supported_versions() -> core::ops::Range<u8> {
+        1..2
+    }
+}
+
+impl iroha_version::codec::EncodeVersioned for TransactionEntrypoint {
+    fn encode_versioned(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(1);
+        bytes.push(self.version());
+        bytes.extend(norito::codec::encode_adaptive(self));
+        bytes
+    }
+}
+
+impl iroha_version::codec::DecodeVersioned for TransactionEntrypoint {
+    fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
+        iroha_version::codec::decode_exact_versioned(input)
     }
 }
 
@@ -670,6 +688,11 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
                 out.push(':');
                 norito::json::JsonSerialize::json_serialize(tx, out);
             }
+            TransactionEntrypoint::PrivateKaigi(tx) => {
+                norito::json::write_json_string("PrivateKaigi", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(tx, out);
+            }
             TransactionEntrypoint::Time(trigger) => {
                 norito::json::write_json_string("Time", out);
                 out.push(':');
@@ -692,6 +715,10 @@ impl norito::json::JsonDeserialize for TransactionEntrypoint {
             "External" => {
                 let tx = SignedTransaction::json_deserialize(parser)?;
                 TransactionEntrypoint::External(tx)
+            }
+            "PrivateKaigi" => {
+                let tx = PrivateKaigiTransaction::json_deserialize(parser)?;
+                TransactionEntrypoint::PrivateKaigi(tx)
             }
             "Time" => {
                 let trigger = TimeTriggerEntrypoint::json_deserialize(parser)?;
@@ -957,6 +984,9 @@ impl TransactionBuilder {
 
 #[cfg(test)]
 mod tests {
+    use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
+    use norito::core::DecodeFromSlice;
+
     use super::*;
     use crate::{
         Domain, DomainId, Level,
@@ -966,14 +996,33 @@ mod tests {
         trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
     };
 
+    fn sample_signed_transaction() -> SignedTransaction {
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let public_key: iroha_crypto::PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .unwrap();
+        let authority = AccountId::new(public_key);
+        let private_key: iroha_crypto::PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .unwrap();
+
+        TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "exact slice".into())])
+            .sign(&private_key)
+    }
+
     #[test]
     fn with_instructions_accepts_instruction_box() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
 
         // Pre-boxed instruction
-        let instruction: InstructionBox =
-            Register::domain(Domain::new("wonderland".parse().unwrap())).into();
+        let instruction: InstructionBox = Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .into();
         let expected_id = crate::isi::Instruction::id(&*instruction);
 
         // Use a known matching keypair (values from project samples)
@@ -1010,7 +1059,7 @@ mod tests {
     #[test]
     fn transaction_signature_decode_from_slice_roundtrip() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -1037,9 +1086,190 @@ mod tests {
     }
 
     #[test]
+    fn signed_transaction_decode_from_slice_rejects_trailing_bytes() {
+        let signed_tx = sample_signed_transaction();
+        let mut bytes = norito::codec::encode_adaptive(&signed_tx);
+        bytes.push(0);
+
+        let err = SignedTransaction::decode_from_slice(&bytes)
+            .expect_err("signed transaction slice decoder must reject trailing bytes");
+
+        assert!(matches!(err, norito::core::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn execution_step_decode_from_slice_rejects_trailing_bytes() {
+        let step = ExecutionStep(ConstVec::from(vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "exact execution step".into(),
+        ))]));
+        let mut bytes = norito::codec::encode_adaptive(&step);
+        bytes.push(0);
+
+        let err = ExecutionStep::decode_from_slice(&bytes)
+            .expect_err("execution step slice decoder must reject trailing bytes");
+
+        assert!(matches!(err, norito::core::Error::LengthMismatch));
+    }
+
+    #[test]
+    fn signed_transaction_versioned_decode_rejects_trailing_bytes() {
+        let signed_tx = sample_signed_transaction();
+        let mut bytes = signed_tx.encode_versioned();
+        bytes.push(0);
+
+        let err = SignedTransaction::decode_all_versioned(&bytes)
+            .expect_err("versioned signed transaction decoder must reject trailing bytes");
+
+        assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+    }
+
+    #[test]
+    fn signed_transaction_versioned_roundtrip() {
+        let signed_tx = sample_signed_transaction();
+        let bytes = signed_tx.encode_versioned();
+        let decoded = SignedTransaction::decode_all_versioned(&bytes)
+            .expect("versioned signed transaction must decode");
+
+        assert_eq!(decoded, signed_tx);
+    }
+
+    #[test]
+    fn signed_transaction_versioned_decode_rejects_empty_payload_without_body_decode() {
+        let err = SignedTransaction::decode_all_versioned(&[])
+            .expect_err("empty signed transaction payload must be rejected");
+
+        assert!(matches!(err, iroha_version::error::Error::NotVersioned));
+        assert!(
+            !err.to_string().contains("panic during decode"),
+            "empty payloads should not surface as decode panics: {err}"
+        );
+    }
+
+    #[test]
+    fn signed_transaction_versioned_decode_rejects_version_only_payload_without_decode_panic() {
+        let err = SignedTransaction::decode_all_versioned(&[1])
+            .expect_err("version-only signed transaction payload must be rejected");
+
+        assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+        assert!(
+            !err.to_string().contains("panic during decode"),
+            "truncated payloads should not surface as decode panics: {err}"
+        );
+    }
+
+    #[test]
+    fn signed_transaction_versioned_decode_rejects_unsupported_version_without_body_decode() {
+        let signed_tx = sample_signed_transaction();
+        let mut bytes = signed_tx.encode_versioned();
+        bytes[0] = 2;
+
+        let err = SignedTransaction::decode_all_versioned(&bytes)
+            .expect_err("unsupported signed transaction version must be rejected");
+
+        assert!(matches!(
+            err,
+            iroha_version::error::Error::UnsupportedVersion(_)
+        ));
+        assert!(
+            !err.to_string().contains("panic during decode"),
+            "unsupported versions should not surface as decode panics: {err}"
+        );
+    }
+
+    #[test]
+    fn signed_transaction_versioned_decode_preserves_invalid_signature_for_validation() {
+        let mut invalid_tx = sample_signed_transaction();
+        let mut signature = invalid_tx.signature().0.payload().to_vec();
+        let last = signature
+            .last_mut()
+            .expect("test signature payload is non-empty");
+        *last ^= 0xFF;
+        invalid_tx.signature = TransactionSignature(iroha_crypto::SignatureOf::from_signature(
+            iroha_crypto::Signature::from_bytes(&signature),
+        ));
+
+        let decoded = SignedTransaction::decode_all_versioned(&invalid_tx.encode_versioned())
+            .expect("well-formed transaction with invalid signature must still decode");
+        let err = decoded
+            .verify_signature()
+            .expect_err("invalid transaction signature must fail verification");
+
+        assert!(matches!(err, TransactionSignatureError::CryptoError(_)));
+    }
+
+    #[test]
+    fn transaction_entrypoint_versioned_decode_rejects_trailing_bytes() {
+        let entrypoint = TransactionEntrypoint::from(sample_signed_transaction());
+        let mut bytes = entrypoint.encode_versioned();
+        bytes.push(0);
+
+        let err = TransactionEntrypoint::decode_all_versioned(&bytes)
+            .expect_err("versioned transaction entrypoint decoder must reject trailing bytes");
+
+        assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+    }
+
+    #[test]
+    fn signed_transaction_roundtrip_preserves_instruction_order() {
+        use crate::parameter::{Parameter, system::SumeragiParameter};
+
+        let chain: ChainId = "test-chain".parse().unwrap();
+        let public_key: iroha_crypto::PublicKey =
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .unwrap();
+        let authority = AccountId::new(public_key.clone());
+        let private_key: iroha_crypto::PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .unwrap();
+
+        let ordered = vec![
+            InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::CommitTimeMs(667),
+            ))),
+            InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::MinFinalityMs(100),
+            ))),
+            InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::BlockTimeMs(333),
+            ))),
+            InstructionBox::from(crate::isi::SetParameter::new(Parameter::Block(
+                crate::parameter::BlockParameter::MaxTransactions(
+                    core::num::NonZeroU64::new(10_000).unwrap(),
+                ),
+            ))),
+        ];
+
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions(ordered.clone())
+            .sign(&private_key);
+
+        let bytes = norito::codec::encode_adaptive(&tx);
+        let (decoded, used): (SignedTransaction, usize) =
+            SignedTransaction::decode_from_slice(&bytes).expect("decode signed transaction");
+        assert_eq!(
+            used,
+            bytes.len(),
+            "signed transaction must consume full buffer"
+        );
+
+        let Executable::Instructions(actual) = decoded.instructions() else {
+            panic!("expected instruction executable after roundtrip");
+        };
+
+        let actual = actual.iter().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            actual, ordered,
+            "instruction order must survive signed transaction roundtrip"
+        );
+    }
+
+    #[test]
     fn sign_overwrites_mismatched_signatory_with_signing_key_public_part() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let stored_public_key: iroha_crypto::PublicKey =
             "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
                 .parse()
@@ -1061,7 +1291,7 @@ mod tests {
     #[test]
     fn entrypoint_hashes_match_direct_encoding() {
         let chain: ChainId = "hash-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -1091,7 +1321,7 @@ mod tests {
     #[test]
     fn verify_signature_rejects_missing_multisig_signatures() {
         let chain: ChainId = "multisig-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let member =
@@ -1133,7 +1363,7 @@ mod tests {
     #[test]
     fn verify_signature_accepts_multisig_with_quorum() {
         let chain: ChainId = "multisig-chain-ok".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let member =
@@ -1170,7 +1400,7 @@ mod tests {
     #[test]
     fn verify_signature_ignores_multisig_bundle_for_single_controller() {
         let chain: ChainId = "single-with-multisig-bundle".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let keypair = iroha_crypto::KeyPair::random();
         let authority = AccountId::new(keypair.public_key().clone());
         let mut tx = TransactionBuilder::new(chain, authority.clone())
@@ -1199,7 +1429,7 @@ mod tests {
     #[test]
     fn verify_signature_rejects_empty_multisig_bundle() {
         let chain: ChainId = "multisig-chain-empty".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let member =
@@ -1236,7 +1466,7 @@ mod tests {
     #[test]
     fn verify_signature_rejects_unknown_signer() {
         let chain: ChainId = "multisig-chain-unknown".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let member_key = iroha_crypto::KeyPair::random();
         let unknown_key = iroha_crypto::KeyPair::random();
 
@@ -1279,7 +1509,7 @@ mod tests {
     #[test]
     fn verify_signature_does_not_double_count_duplicates() {
         let chain: ChainId = "multisig-chain-duplicate".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = iroha_crypto::KeyPair::random();
         let other = iroha_crypto::KeyPair::random();
 
@@ -1329,7 +1559,7 @@ mod tests {
     #[test]
     fn verify_signature_accepts_mixed_algorithms() {
         let chain: ChainId = "multisig-mixed-algo".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let ed = iroha_crypto::KeyPair::random();
         let secp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
 
@@ -1351,7 +1581,7 @@ mod tests {
     #[test]
     fn signature_count_tracks_all_multisig_entries() {
         let chain: ChainId = "multisig-count".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let member =
@@ -1414,7 +1644,7 @@ mod tests {
     #[test]
     fn transaction_entrypoint_json_roundtrip() {
         let chain: ChainId = "json-chain".parse().unwrap();
-        let _domain: DomainId = "default".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("default", "universal").unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -1470,6 +1700,7 @@ mod tests {
 #[cfg(test)]
 mod ttl_tests {
     use super::*;
+    use crate::domain::DomainId;
 
     #[test]
     fn zero_ttl_is_preserved_not_none() {
@@ -1497,7 +1728,8 @@ mod ttl_tests {
     fn ingress_metadata_accessors_read_numeric_values() {
         let chain: ChainId = "ingress-chain".parse().unwrap();
         let keypair = iroha_crypto::KeyPair::random();
-        let _domain: crate::domain::DomainId = "wonderland".parse().unwrap();
+        let _domain: crate::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = AccountId::new(keypair.public_key().clone());
 
         let mut metadata = Metadata::default();
@@ -1522,7 +1754,8 @@ mod ttl_tests {
     fn ingress_metadata_accessors_propagate_decode_error() {
         let chain: ChainId = "ingress-chain-invalid".parse().unwrap();
         let keypair = iroha_crypto::KeyPair::random();
-        let _domain: crate::domain::DomainId = "wonderland".parse().unwrap();
+        let _domain: crate::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = AccountId::new(keypair.public_key().clone());
 
         let mut metadata = Metadata::default();
@@ -1654,7 +1887,7 @@ mod attachments_tests {
         }
         let chain: ChainId = "test-chain".parse().unwrap();
         let authority =
-            AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
+            AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
                 .expect("valid authority")
                 .into_account_id();
         let private_key: iroha_crypto::PrivateKey =
@@ -1682,12 +1915,52 @@ mod attachments_tests {
 }
 
 impl TransactionEntrypoint {
+    /// Account authorized to initiate this transaction when one exists.
+    #[inline]
+    pub fn authority_opt(&self) -> Option<&AccountId> {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => Some(entrypoint.authority()),
+            TransactionEntrypoint::PrivateKaigi(_) => None,
+            TransactionEntrypoint::Time(entrypoint) => Some(&entrypoint.authority),
+        }
+    }
+
     /// Account authorized to initiate this transaction.
+    ///
+    /// # Panics
+    ///
+    /// Panics for authority-free private Kaigi entrypoints. Call
+    /// [`Self::authority_opt`] when the entrypoint kind is not known in advance.
     #[inline]
     pub fn authority(&self) -> &AccountId {
         match self {
             TransactionEntrypoint::External(entrypoint) => entrypoint.authority(),
+            TransactionEntrypoint::PrivateKaigi(_) => {
+                panic!("private kaigi entrypoints do not carry a public authority")
+            }
             TransactionEntrypoint::Time(entrypoint) => &entrypoint.authority,
+        }
+    }
+
+    /// Creation timestamp in milliseconds when the entrypoint carries one.
+    #[inline]
+    pub fn creation_time_ms(&self) -> Option<u64> {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => {
+                u64::try_from(entrypoint.creation_time().as_millis()).ok()
+            }
+            TransactionEntrypoint::PrivateKaigi(entrypoint) => Some(entrypoint.creation_time_ms),
+            TransactionEntrypoint::Time(_) => None,
+        }
+    }
+
+    /// Metadata attached to the entrypoint when one exists.
+    #[inline]
+    pub fn metadata(&self) -> Option<&Metadata> {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => Some(entrypoint.metadata()),
+            TransactionEntrypoint::PrivateKaigi(entrypoint) => Some(&entrypoint.metadata),
+            TransactionEntrypoint::Time(_) => None,
         }
     }
 
@@ -1760,12 +2033,11 @@ mod norito_rpc_fixture_tests {
 
     fn optional_u64(map: &json::Map, key: &str, context: &str) -> Option<u64> {
         match map.get(key) {
-            Some(Value::Null) => None,
+            Some(Value::Null) | None => None,
             Some(Value::Number(number)) => number
                 .as_u64()
                 .or_else(|| panic!("{context}: {key} must be an integer or null")),
             Some(_) => panic!("{context}: {key} must be an integer or null"),
-            None => panic!("{context}: missing {key} field"),
         }
     }
 

@@ -21,10 +21,10 @@ This directory hosts canonical samples for the Nexus **Space Directory**:
 
   | Manifest | Norito file | BLAKE3 |
   |----------|-------------|--------|
-  | `capability/cbdc_wholesale.manifest.json` | `capability/cbdc_wholesale.manifest.to` | `11a47182ab51e845d53f40f12387caef1e609585a824c0a4feab38f0922859fe` |
-  | `capability/retail_dapp_access.manifest.json` | `capability/retail_dapp_access.manifest.to` | `d293a8dea5f227d5350c4502044e97e4c60017d22d6e853c4d0846e8d778145c` |
-  | `capability/eu_regulator_audit.manifest.json` | `capability/eu_regulator_audit.manifest.to` | `53193a5e9ddb1c0634de1c14fae1f828dcc42118c3c0d1615777f025623bc42f` |
-  | `capability/jp_regulator_supervision.manifest.json` | `capability/jp_regulator_supervision.manifest.to` | `d797a1683f5c8771d69528425018cd72427be732d4251da9b2b9ca54b2e845a4` |
+  | `capability/cbdc_wholesale.manifest.json` | `capability/cbdc_wholesale.manifest.to` | `0042f6669af7f7efd3291d5a2f5c0414d881bbea7309f281f4b333ec7bf9f297` |
+  | `capability/retail_dapp_access.manifest.json` | `capability/retail_dapp_access.manifest.to` | `4d529963d3f2a29f77362404738e0d5b458f9cc4b80acef5f8dbdbf80ff56d77` |
+  | `capability/eu_regulator_audit.manifest.json` | `capability/eu_regulator_audit.manifest.to` | `1c37c92ff6305b65307bd0f21bc5c8516a270cc072352fd513bb55d40b10c0ff` |
+  | `capability/jp_regulator_supervision.manifest.json` | `capability/jp_regulator_supervision.manifest.to` | `e90a3624e36dade26b0fdd8175cfa8a36c9dbfecc2dd9e1c3e1268fac779509f` |
 
 The fixtures are referenced by docs (`docs/space-directory.md`) and will back
 upcoming integration tests once the Space Directory contract lands.
@@ -35,20 +35,20 @@ upcoming integration tests once the Space Directory contract lands.
    `docs/space-directory.md#manifest-template` as the authoritative schema
    reference.
 2. Convert each JSON manifest into its Norito `.to` representation for on-chain
-   publication. `cargo xtask space-directory encode` takes care of the
+   publication. `iroha app space-directory manifest encode` takes care of the
    conversion (any tool that uses `norito::to_bytes` will emit identical bytes):
 
    ```bash
-   cargo xtask space-directory encode \
+   cargo run -p iroha_cli --bin iroha -- app space-directory manifest encode \
      --json fixtures/space_directory/capability/cbdc_wholesale.manifest.json \
      --out fixtures/space_directory/capability/cbdc_wholesale.manifest.to
-   cargo xtask space-directory encode \
+   cargo run -p iroha_cli --bin iroha -- app space-directory manifest encode \
      --json fixtures/space_directory/capability/retail_dapp_access.manifest.json \
      --out fixtures/space_directory/capability/retail_dapp_access.manifest.to
-   cargo xtask space-directory encode \
+   cargo run -p iroha_cli --bin iroha -- app space-directory manifest encode \
      --json fixtures/space_directory/capability/eu_regulator_audit.manifest.json \
      --out fixtures/space_directory/capability/eu_regulator_audit.manifest.to
-   cargo xtask space-directory encode \
+   cargo run -p iroha_cli --bin iroha -- app space-directory manifest encode \
      --json fixtures/space_directory/capability/jp_regulator_supervision.manifest.json \
      --out fixtures/space_directory/capability/jp_regulator_supervision.manifest.to
    ```

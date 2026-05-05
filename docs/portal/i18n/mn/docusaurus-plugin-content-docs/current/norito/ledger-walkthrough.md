@@ -32,8 +32,8 @@ SDK хурдан ажилладаг тул та CLI болон SDK-ийн үйл
 Демо түлхүүрүүдээс гаралтай:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 Эхний хэдэн дансыг жагсааж утгыг баталгаажуулна уу:
@@ -52,7 +52,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts inside wonderland (replace --limit with a higher number if needed)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions that already exist
@@ -69,7 +69,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI нь илгээсэн гүйлгээний хэшийг хэвлэдэг (жишээлбэл,
@@ -78,7 +78,7 @@ CLI нь илгээсэн гүйлгээний хэшийг хэвлэдэг (ж
 ## 3. Нэгжийг операторын дансанд оруулна
 
 Хөрөнгийн тоо хэмжээ нь `(asset definition, account)` хосын дор амьдардаг. гаа 250
-`coffee#wonderland` нэгжийг `$ADMIN_ACCOUNT` болгон:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` нэгжийг `$ADMIN_ACCOUNT` болгон:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

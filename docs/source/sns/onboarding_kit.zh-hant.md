@@ -180,7 +180,7 @@ any governance-approved deviations in the registrar’s onboarding ticket.
 - REST + CLI contracts live in `docs/source/sns/registrar_api.md`.
 - `scripts/sns_bulk_onboard.py` (documented in
   `docs/source/sns/bulk_onboarding_toolkit.md`) ingests CSV manifests, emits
-  NDJSON, and optionally POSTs `/v1/sns/registrations`. Capture the resulting
+  NDJSON, and optionally POSTs `/v1/sns/names`. Capture the resulting
   `submissions.log` in `artifacts/sns/releases/<timestamp>/`.
 - Torii/CLI submissions must log governance hooks, payment proofs, and alias
   wiring so that the KPI dashboard can link the manifest ID back to finance.
@@ -192,7 +192,7 @@ any governance-approved deviations in the registrar’s onboarding ticket.
 1. Ticket in the registrar tracker including suffix, contact, and payment rails.
 2. DNS/resolver evidence bundle (`scripts/sns_zonefile_skeleton.py` output).
 3. Pricing worksheet referencing the tables above plus any negotiated overrides.
-4. API smoke-test artefacts (Torii `POST /v1/sns/registrations` samples, CLI output).
+4. API smoke-test artefacts (Torii `POST /v1/sns/names` samples, CLI output).
 5. KPI dashboard screenshot + CSV export stored under
    `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`.
 

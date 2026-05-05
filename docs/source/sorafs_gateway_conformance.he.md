@@ -161,7 +161,7 @@ is deterministic and cross-platform; it does not rely on bespoke tooling.
 
 You can generate the report/attestation bundle locally via `cargo xtask sorafs-gateway-attest`.
 The command accepts `--signing-key <path>` (hex-encoded private key),
-`--signer-account <i105...>` (domainless encoded AccountId; `@domain` suffix rejected), and optional `--gateway <url>` plus `--out <dir>`.
+`--signer-account <<i105-account-id>>` (domainless encoded AccountId; `@domain` suffix rejected), and optional `--gateway <url>` plus `--out <dir>`.
 Artifacts default to `artifacts/sorafs_gateway_attest/`.
 
 By keeping the signing hook inside the harness binary, nightly CI runs can
@@ -197,7 +197,7 @@ fixture contains:
 - a `cid` entry encoded in base64 alongside an expiry window.
 - a `url` entry for URL-level blocking.
 - an `account_id` entry using the canonical AccountAddress hex encoding to mirror governance suspensions.
-- an `account_alias` entry that blocks a routing alias (`alias@domain`).
+- an `account_alias` entry that blocks an on-chain account alias (`name@dataspace` or `name@domain.dataspace`).
 - a `perceptual_family` entry that pairs a family/variant UUID with perceptual hash metadata (`perceptual_hash_hex`, `perceptual_hamming_radius`) so gateways can block near-duplicate content clusters.
 
 Each record follows the same Norito JSON layout used by the loader, including optional `issued_at`

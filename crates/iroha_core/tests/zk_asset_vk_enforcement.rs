@@ -59,9 +59,9 @@ fn prepare_state() -> (
     state.zk.verify_timeout = std::time::Duration::ZERO;
 
     let (vk_transfer_id, vk_unshield_id, vk_other_id, asset_def_id, owner) = {
-        let domain_id: DomainId = "zkd".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "zkd".parse().unwrap(),
+            DomainId::try_new("zkd", "universal").unwrap(),
             "zcoin".parse().unwrap(),
         );
         let owner_keypair = KeyPair::random();
@@ -84,8 +84,7 @@ fn prepare_state() -> (
                 .execute_instruction(
                     &mut stx,
                     &owner,
-                    Register::account(NewAccount::new_in_domain(owner.clone(), domain_id.clone()))
-                        .into(),
+                    Register::account(NewAccount::new(owner.clone())).into(),
                 )
                 .expect("register account");
             executor

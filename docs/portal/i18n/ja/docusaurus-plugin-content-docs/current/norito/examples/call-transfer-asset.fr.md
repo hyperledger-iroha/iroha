@@ -19,9 +19,9 @@ Démontre コメント un point d'entrée Kotodama peut appeler l'instruction h�
 
 ## 登録公園
 
-- Approvisionnez l'autorité du contrat (par example `i105...`) avec l'actif qu'elle transfer et accordez-lui le rôle `CanTransfer` ou une permission équivalente.
-- Appelez le point d'entrée `call_transfer_asset` pour transferer 5 Unités du compte du contrat vers `i105...`、en reflétant la manière dont l'automatization on-chain peut encapsuler des appels hôte。
-- `FindAccountAssets` または `iroha_cli ledger assets list --account i105...` を介して、情報を確認し、ジャーナリゼ ル コンテキスト デュ トランスファーを検査します。
+- Approvisionnez l'autorité du contrat (par example `<i105-account-id>`) avec l'actif qu'elle transfer et accordez-lui le rôle `CanTransfer` ou une permission équivalente.
+- Appelez le point d'entrée `call_transfer_asset` pour transferer 5 Unités du compte du contrat vers `<i105-account-id>`、en reflétant la manière dont l'automatization on-chain peut encapsuler des appels hôte。
+- `FindAccountAssets` または `iroha_cli ledger assets list --account <i105-account-id>` を介して、情報を確認し、ジャーナリゼ ル コンテキスト デュ トランスファーを検査します。
 
 ## SDK アソシエをガイドします
 
@@ -36,9 +36,9 @@ Démontre コメント un point d'entrée Kotodama peut appeler l'instruction h�
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
-      asset_definition!("rose#wonderland"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
   }

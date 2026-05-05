@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 
@@ -25,6 +26,29 @@ public interface IrohaClient {
     final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
     future.completeExceptionally(
         new UnsupportedOperationException("waitForTransactionStatus not supported"));
+    return future;
+  }
+
+  default CompletableFuture<Map<String, Object>> waitForTransactionStatusStream(
+      final String hashHex, final PipelineStatusOptions options) {
+    final CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new UnsupportedOperationException("waitForTransactionStatusStream not supported"));
+    return future;
+  }
+
+  /**
+   * Resolves an account alias literal against the node's alias registry via
+   * `POST /v1/aliases/resolve`.
+   *
+   * <p>The returned future resolves to {@link Optional#empty()} when the node responds with
+   * HTTP 404. Implementations that cannot reach a node should fail the future exceptionally.
+   */
+  default CompletableFuture<Optional<AccountAliasResolution>> resolveAccountAlias(
+      final String alias) {
+    final CompletableFuture<Optional<AccountAliasResolution>> future = new CompletableFuture<>();
+    future.completeExceptionally(
+        new UnsupportedOperationException("resolveAccountAlias not supported by this client"));
     return future;
   }
 }

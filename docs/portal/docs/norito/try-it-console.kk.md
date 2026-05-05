@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/try-it-console.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5246118a539e2031dcafb8cf384ac7d20b8abc28b67ee1555e1b1211779fe390
-source_last_modified: "2026-01-22T16:26:46.508367+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 2b1c75d262ff579d7b04df9122c9a9c55cd8d694a04cd326d3138717f396cfe7
+source_last_modified: "2026-03-26T11:40:25.614954+00:00"
+translation_last_reviewed: 2026-04-08
 title: Norito Try-It Console
 description: Use the developer-portal proxy, Swagger, and RapiDoc widgets to send real Torii / Norito-RPC requests directly from the documentation site.
 translator: machine-google-reviewed
@@ -79,7 +79,7 @@ OAuth айнымалы мәндері болған кезде құмсалғыш
 4. “Байқап көру” тартпасында `application/x-norito` мазмұн түрін таңдап, **Файлды таңдау** түймесін басып, пайдалы жүктемені таңдаңыз. Прокси сұрауды `/proxy/v1/pipeline/submit` түріне қайта жазады және оны `X-TryIt-Client=docs-portal-rapidoc` белгісімен белгілейді.
 5. Norito жауаптарын жүктеп алу үшін `Accept: application/x-norito` орнатыңыз. Swagger/RapiDoc бір жәшіктегі тақырып селекторын ашады және екілік файлды прокси арқылы кері ағынмен жібереді.
 
-Тек JSON маршруттары үшін ендірілген "Тапсырма" құмсалғышы жиі жылдамырақ болады: жолды енгізіңіз (мысалы, `/v1/accounts/i105.../assets`), HTTP әдісін таңдаңыз, қажет болғанда JSON негізгі мәтінін қойыңыз және тақырыптарды, ұзақтығын және кірістірілген пайдалы жүктемелерді тексеру үшін **Сұраныс жіберу** түймесін басыңыз.
+Тек JSON маршруттары үшін ендірілген "Тапсырма" құмсалғышы жиі жылдамырақ болады: жолды енгізіңіз (мысалы, `/v1/accounts/<i105-account-id>/assets`), HTTP әдісін таңдаңыз, қажет болғанда JSON негізгі мәтінін қойыңыз және тақырыптарды, ұзақтығын және кірістірілген пайдалы жүктемелерді тексеру үшін **Сұраныс жіберу** түймесін басыңыз.
 
 ## Ақаулықтарды жою
 

@@ -39,6 +39,17 @@ execution model).
    cargo test -p fastpq_prover
    ```
    Run this once per release build to confirm the Stage 6 path before packaging.
+   The public V1 verifier applies `fastpq_prover::VerifyLimits`, checks the
+   canonical batch commitment and public inputs, authenticates sampled LDE query
+   chunks against Merkle paths rooted at `lookup_root`, and uses the proof's
+   `lde_domain_size` when deriving query indices. It no longer rebuilds the LDE
+   or folds the full evaluation vector. Keep node-facing proof batches within
+   the transition-count, payload, query, and path caps. V1 proofs now carry
+   exactly two AIR composition challenges, sampled AIR trace rows, sampled AIR
+   composition openings, and per-round FRI
+   openings; the verifier recomputes the sampled AIR composition value from
+   opened adjacent rows and requires that value to match the FRI base-layer
+   opening.
 
 ### Metal toolchain preparation (macOS)
 1. Install the Metal command-line tools before building: `xcode-select --install` (if the CLI tools are missing) and `xcodebuild -downloadComponent MetalToolchain` to fetch the GPU toolchain. The build script invokes `xcrun metal`/`xcrun metallib` directly and will fail fast if the binaries are absent.【crates/fastpq_prover/build.rs:98】【crates/fastpq_prover/build.rs:121】

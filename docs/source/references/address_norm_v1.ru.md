@@ -98,7 +98,7 @@ SDK, etc.).
 These examples should be mirrored in fixtures for Torii and SDKs so that
 cross-language implementations converge on the same behaviour. The canonical
 bundle in `fixtures/account/address_vectors.json` contains the corresponding
-I105 encodings for regression tests.
+i105 encodings for regression tests.
 
 ## Reference pseudocode
 
@@ -170,8 +170,8 @@ golden vector exercised in
 
 ## Validation artefacts
 
-- **Fixtures:** `fixtures/account/address_vectors.json` captures I105,
-  i105-default-Sora, and canonical-domain samples for every selector class and is
+- **Fixtures:** `fixtures/account/address_vectors.json` captures i105,
+  canonical I105, and canonical-domain samples for every selector class and is
   regenerated via `cargo xtask address-vectors`.
 - **Tests:** `crates/iroha_data_model/tests/account_address_vectors.rs`,
   `javascript/iroha_js/test/address.test.js`, Android/Swift SDK suites, and

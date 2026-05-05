@@ -13,3 +13,4 @@ These examples mirror the SDK quickstarts and ledger walkthroughs. Each snippet 
 - **[Invoke host transfer from Kotodama](./call-transfer-asset)** — Demonstrates how a Kotodama entrypoint can call the host `transfer_asset` instruction with inline metadata validation.
 - **[Transfer asset between accounts](./transfer-asset)** — Straightforward asset transfer workflow that mirrors SDK quickstarts and ledger walkthroughs.
 - **[Mint, transfer, and burn an NFT](./nft-flow)** — Walks through an NFT lifecycle end to end: minting to the owner, transferring, tagging metadata, and burning.
+- **[Threshold escrow](./threshold-escrow)** — Single-payer escrow that accepts top-ups to an exact target amount, then releases or refunds the funds.

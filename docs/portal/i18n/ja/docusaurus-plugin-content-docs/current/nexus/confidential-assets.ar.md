@@ -86,7 +86,7 @@ Swift SDK のセキュリティ シールド グルー JSON のセキュリテ�
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -233,7 +233,7 @@ Swift SDK のセキュリティ シールド グルー JSON のセキュリテ�
 - 回答:
   - `sk_spend` → `nk` (無効化キー) `ivk` (受信表示キー) `ovk` (送信表示キー) `fvk`。
 - ペイロード メモ、AEAD 、 مفاتيح、 مشتركة、 مشتقة、 من ECDH؛監査人はキーを表示し、出力を表示します。
-- CLI: `confidential create-keys`、`confidential send`、`confidential export-view-key`、メモ、`iroha app zk envelope`封筒 Norito です。 Torii 数値 `POST /v1/confidential/derive-keyset` 数値 16 進数 وbase64 数値ありがとうございます。
+- CLI: `confidential create-keys`、`confidential send`、`confidential export-view-key`、メモ、`iroha app zk envelope`封筒 Norito です。
 
 ## セキュリティ DoS
 - ガスの状態:

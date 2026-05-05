@@ -24,7 +24,9 @@ fn main() {
     let mut metadata = Metadata::default();
     metadata.insert("label".parse().unwrap(), Json::new("periodic".to_string()));
 
-    let register_domain = Register::<Domain>::domain(Domain::new("triggerland".parse().unwrap()));
+    let register_domain = Register::<Domain>::domain(Domain::new(
+        DomainId::try_new("triggerland", "universal").unwrap(),
+    ));
     let instruction_box: InstructionBox = register_domain.into();
 
     let action = Action::new(

@@ -111,8 +111,8 @@ so auditors can reconstruct the decision trail within 24 hours.
    the resolver transparency tailer to confirm the new GAR/zone state propagated
    (see §4.5).
 6. **Customer disclosure:** Update the customer-facing ledger (wallet/explorer)
-   via the shared fixtures in `address_display_guidelines.md`, ensuring I105 and
-   i105-default renderings match copy/QR guidance.
+   via the shared fixtures in `address_display_guidelines.md`, ensuring i105 and
+   canonical I105 renderings match copy/QR guidance.
 
 ### 4.3 Renewals, Billing & Treasury Reconciliation
 
@@ -152,11 +152,11 @@ so auditors can reconstruct the decision trail within 24 hours.
 | Phase | Owner | Action & Evidence | SLA |
 |-------|-------|-------------------|-----|
 | Soft freeze request | Steward / support | File ticket `SNS-DF-<id>` with payment proofs, dispute bond reference, and affected selector(s). | ≤4 h from intake. |
-| Guardian ticket | Guardian board | `sns governance freeze --selector <I105> --reason <text> --until <ts>` produces signed `GuardianFreezeTicketV1`. Store ticket JSON under `artifacts/sns/guardian/<id>.json`. | ≤30 min ACK, ≤2 h execution. |
+| Guardian ticket | Guardian board | `sns governance freeze --selector <i105> --reason <text> --until <ts>` produces signed `GuardianFreezeTicketV1`. Store ticket JSON under `artifacts/sns/guardian/<id>.json`. | ≤30 min ACK, ≤2 h execution. |
 | Council ratification | Governance council | Approve or reject freezes, document decision link to guardian ticket and dispute bond digest. | Next council session or asynchronous vote. |
 | Arbitration panel | Compliance + steward | Convene 7-juror panel (per roadmap) with hashed ballots submitted via `sns governance dispute ballot`. Attach anonymised vote receipts to incident packet. | Verdict ≤7 days after bond deposit. |
 | Appeal | Guardian + council | Appeals double the bond and repeat the juror process; record Norito manifest `DisputeAppealV1` and reference primary ticket. | ≤10 days. |
-| Unfreeze & remediation | Registrar + resolver ops | Execute `sns governance unfreeze --selector <I105> --ticket <id>`, update registrar status, and propagate GAR/resolver diffs. | Immediately after verdict. |
+| Unfreeze & remediation | Registrar + resolver ops | Execute `sns governance unfreeze --selector <i105> --ticket <id>`, update registrar status, and propagate GAR/resolver diffs. | Immediately after verdict. |
 
 Emergency canons (guardian-triggered freezes ≤72 h) follow the same flow but
 require retroactive council review and a transparency note under

@@ -14,6 +14,7 @@ use iroha_crypto::{
     encryption::ChaCha20Poly1305,
     kex::X25519Sha256,
 };
+use iroha_data_model::block::consensus::RbcEncoding;
 pub use iroha_data_model::confidential::ConfidentialFeatureDigest;
 pub use network::message::{UpdateTrustedPeers, *};
 use norito::codec::{Decode, Encode};
@@ -125,6 +126,8 @@ pub enum Error {
     ConnectionResetByPeer,
     /// Incoming frame exceeds configured maximum size
     FrameTooLarge,
+    /// Decrypted frame carried a malformed inner payload
+    MalformedPayloadFrame,
     /// Handshake preface header invalid
     HandshakeBadPreface,
     /// Peer consensus handshake mismatch ({reason})
@@ -136,6 +139,13 @@ pub enum Error {
     HandshakeConfidentialMismatch,
     /// Peer crypto handshake mismatch (`sm_enabled/sm_openssl_preview`)
     HandshakeCryptoMismatch,
+    /// Unexpected peer identity during handshake (expected {expected}, found {found})
+    HandshakePeerMismatch {
+        /// Peer identifier the outbound dial expected to authenticate.
+        expected: iroha_data_model::prelude::PeerId,
+        /// Peer identifier actually authenticated by the signed handshake.
+        found: iroha_data_model::prelude::PeerId,
+    },
     /// Handshake metadata exceeds the maximum supported length (`u16::MAX` bytes)
     HandshakeMessageTooLarge,
     /// `SoraNet` handshake negotiation failed.
@@ -185,6 +195,12 @@ pub struct ConsensusConfigCaps {
     pub da_enabled: bool,
     /// Maximum RBC chunk size in bytes.
     pub rbc_chunk_max_bytes: u64,
+    /// RBC payload encoding.
+    pub rbc_encoding: RbcEncoding,
+    /// RS16 data shards per stripe (`0` when plain chunking is active).
+    pub rbc_rs16_data_shards: u16,
+    /// RS16 parity shards per stripe (`0` when plain chunking is active).
+    pub rbc_rs16_parity_shards: u16,
     /// RBC session TTL in milliseconds.
     pub rbc_session_ttl_ms: u64,
     /// Hard cap on persisted RBC sessions.

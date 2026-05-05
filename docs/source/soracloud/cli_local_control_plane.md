@@ -1,541 +1,606 @@
-# Soracloud CLI Local Control Plane
+# Soracloud CLI and Control Plane
 
-`iroha app soracloud` provides:
+Soracloud v1 is an authoritative mixed-plane runtime:
 
-- a deterministic local simulation for Soracloud control-plane workflows; and
-- network-backed control-plane mode that queries and mutates live Torii
-  endpoints.
+- deterministic services run on `SoraContainerRuntimeV1::Ivm`
+- hosted HTTP services run on `execution_plane = HttpService` with
+  `runtime = Inrou`
 
-## Commands
+The control plane remains authoritative. Torii serves status and mutation
+routes directly from committed world state plus the embedded Soracloud runtime
+manager; the CLI does not keep a shadow control-plane mirror.
+
+## Runtime Scope
+
+- Use `HttpService + Inrou` for collector-heavy, SSE, cache-backed, or
+  browser-assisted workloads that need a hosted HTTP plane.
+- Use deterministic IVM services for wallet auth, confidential vault state,
+  governance-sensitive mutations, and other replay-safe handlers.
+- Public routing is longest-prefix authoritative, so one host can safely split
+  `/api/v1/search*` to a hosted service while `/api/auth*` and
+  `/api/v1/user*` stay on an IVM service.
+- Hosted services declare persistent lease-backed storage through
+  `lease_volumes`.
+- `PersistentRootLeaseVolume` is required for `HttpService + Inrou`, must mount
+  at `/`, and is materialized per replica.
+- Non-root `ServiceLeaseVolume` and `ConfidentialLeaseVolume` attachments are
+  shared across replicas of the same service revision by default.
+- At runtime, each mounted volume is exposed as:
+  - `SORACLOUD_LEASE_VOLUME_<NAME>_DIR`
+  - `SORACLOUD_LEASE_VOLUME_<NAME>_MOUNT_PATH`
+- Config and secret materialization is still authoritative. Deploy, upgrade,
+  and rollback fail closed when required config/secret bindings are missing or
+  inconsistent with the active manifests.
+- The current local workflow validates both planes together with
+  `iroha app soracloud app local-plan`, resolves manifest-adjacent workspace
+  scripts with `iroha app soracloud app local-dev` and
+  `iroha app soracloud app build-and-sync`, and verifies deterministic vault
+  builds with `verify-build.sh`. This is a dev shim for the deterministic
+  plane, not a full embedded IVM runtime.
+
+## Vanity Alias Access Modes
+
+- Soracloud deploys keep the registered vanity host stable. Releasing a new
+  revision updates Soracloud route state, not per-release DNS records or
+  per-service nginx host lists.
+- The canonical runtime origin is always the registered alias itself, for
+  example:
+  - `https://docs.sora/`
+  - `https://solswap-indexer.sora/api/indexer/v1/health`
+- For clients that cannot resolve SoraDNS names directly yet, Taira exposes the
+  owned Mon browser gateway:
+  - `https://docs.sora.mon.taira.sora.net/`
+  - `https://solswap-indexer.sora.mon.taira.sora.net/api/indexer/v1/health`
+- Torii also exposes a legacy generic fallback path:
+  - `https://taira.sora.org/soradns/docs.sora/`
+  - `https://taira.sora.org/soradns/solswap-indexer.sora/api/indexer/v1/health`
+- On Taira, the shared public edge serves that fallback form generically for
+  active aliases. Do not replace it with invented per-service paths such as
+  `https://taira.sora.org/<service>/...`.
+- The `/soradns/<alias>/...` path is a compatibility gateway, not the
+  canonical app origin. App manifests, frontend env vars, and release notes
+  should continue to point at the vanity host itself; public browser examples
+  for Taira should use the Mon gateway when native SoraDNS is unavailable.
+- The fallback accepts any active registered alias FQDN, not only `.sora`
+  names. `.dao`, `.nexus`, and future suffixes follow the same rule.
+
+## Offline Scaffolding Commands
 
 - `iroha app soracloud init`
-  - scaffolds `container_manifest.json`, `service_manifest.json`, and
-    `registry.json`.
-  - supports developer templates:
-    - `--template baseline` (manifests only, default)
-    - `--template site` (Vue3/Vite static SPA + SoraFS/SoraDNS workflow files)
-    - `--template webapp` (Vue3 SPA + API starter with deterministic challenge-signature auth)
-    - `--template pii-app` (private PII workload starter: Vue3 + API + consent/retention/deletion policy templates)
+  - scaffolds one service pair:
+    - `container_manifest.json`
+    - `service_manifest.json`
+  - templates now include:
+    - `baseline`
+    - `http-service`
+    - `site`
+    - `webapp`
+    - `pii-app`
+    - `hayahi-app`
+- `iroha app soracloud app init`
+  - scaffolds an app manifest plus one or more service pairs
+  - templates now include:
+    - `single-api`
+    - `split-app`
+    - `nexus-split-app` as an alias for `split-app`
+  - `single-api` produces a root-bound frontend plus one deterministic API
+    service under `/api`
+  - `split-app` produces a SoraFS frontend plus one hosted live API and one
+    deterministic vault API
+- `iroha app soracloud app local-plan`
+  - validates every service referenced by an app manifest locally
+  - prints the mixed-plane runtime split:
+    - hosted `/api/v1/*` ownership for `HttpService + Inrou`
+    - deterministic handler ownership for `/api/auth*` and `/api/v1/user*`
+  - prints the frontend CID gateway URL template when `publish_mode = CidOnly`
+  - prints the root `manifest_path`, root `hostname`, then each service's
+    resolved `container_manifest_path` and `service_manifest_path` for
+    service-scoped Soracloud commands
+  - prints each child service `workspace_dir` plus discovered child scripts such
+    as `dev.sh`, `build.sh`, and `verify-build.sh` when present
+  - reports the manifest-adjacent root script paths for `local-dev.sh`,
+    `build-and-sync.sh`, `deploy.sh`, and `upgrade.sh`
+- `iroha app soracloud app local-dev`
+  - resolves `local-dev.sh` adjacent to the app manifest
+  - `--dry-run` prints the resolved working directory, script path, mixed-plane
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
+  - without `--dry-run`, executes the local app entrypoint in place
+- `iroha app soracloud app build-and-sync`
+  - resolves `build-and-sync.sh` adjacent to the app manifest
+  - `--dry-run` prints the resolved working directory, script path, mixed-plane
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
+  - without `--dry-run`, executes the root rebuild + manifest-sync entrypoint in place
+- `iroha app soracloud app doctor`
+  - validates the split-app release contract locally without Torii
+  - fail-closes on CID-only frontend publication, same-origin `/api`, mixed
+    hosted-live plus deterministic-vault planes, lease-backed live storage,
+    vault-only auth/user bindings, and cross-service route collisions
+- `iroha app soracloud app doctor-workspace`
+  - resolves `doctor.sh` adjacent to the app manifest
+  - `--dry-run` prints the resolved working directory, script path, mixed-plane
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
+  - without `--dry-run`, executes the root doctor entrypoint in place
+- `iroha app soracloud app release-workspace`
+  - resolves `release.sh` adjacent to the app manifest
+  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
+  - `--dry-run` prints the resolved working directory, script path, mixed-plane
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
+  - without `--dry-run`, executes the root release entrypoint in place
+- `iroha app soracloud app deploy-workspace`
+  - resolves `deploy.sh` adjacent to the app manifest
+  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
+  - `--dry-run` prints the resolved working directory, script path, mixed-plane
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
+- `iroha app soracloud app upgrade-workspace`
+  - resolves `upgrade.sh` adjacent to the app manifest
+  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
+  - `--dry-run` prints the resolved working directory, script path, mixed-plane
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
+- `iroha app soracloud sync-manifests`
+  - recomputes `container.bundle_hash`, the service-side referenced container
+    hash, and matching schema versions after local edits
+  - supports:
+    - one service pair via `--container`, `--service`, and optional
+      `--bundle-file`
+    - every service in an app manifest via `--app-manifest`
+- `iroha app soracloud local-plan`
+  - validates one service pair locally
+  - prints the service execution plane, runtime, route ownership, handler routes,
+    and manifest-adjacent root script paths
+- `iroha app soracloud local-dev`
+  - resolves `local-dev.sh` adjacent to one container/service manifest pair
+  - `--dry-run` prints the resolved working directory, script path, and the
+    same service plan that `local-plan` reports, including routes, counts, and
+    workspace scripts
+  - without `--dry-run`, executes the local service entrypoint in place
+- `iroha app soracloud build-and-sync`
+  - resolves `build-and-sync.sh` adjacent to one container/service manifest pair
+  - `--dry-run` prints the resolved working directory, script path, and the
+    same service plan that `local-plan` reports, including routes, counts, and
+    workspace scripts
+  - without `--dry-run`, executes the root rebuild + manifest-sync entrypoint in place
+- `iroha app soracloud deploy-workspace`
+  - resolves `deploy.sh` adjacent to one container/service manifest pair
+  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
+  - `--dry-run` prints the resolved working directory, script path, and the
+    same service plan that `local-plan` reports, including routes, counts, and
+    workspace scripts
+- `iroha app soracloud upgrade-workspace`
+  - resolves `upgrade.sh` adjacent to one container/service manifest pair
+  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
+  - `--dry-run` prints the resolved working directory, script path, and the
+    same service plan that `local-plan` reports, including routes, counts, and
+    workspace scripts
+
+## Network-Backed Commands
+
+All deploy, upgrade, rollback, rollout, status, config, secret, HF lease,
+training-job, model registry/status, and app mutation commands are
+Torii-backed and require `--torii-url`.
+
 - `iroha app soracloud deploy`
-  - validates a deployment bundle and registers a new service revision.
-  - when `--torii-url` is supplied, signs the bundle payload with the
-    configured client keypair and calls `POST /v1/soracloud/deploy`.
-- `iroha app soracloud status`
-  - prints machine-readable registry status (local mode by default).
-  - when `--torii-url` is supplied, fetches a live control-plane snapshot from
-    `GET /v1/soracloud/status`.
+  - validates a single `SoraDeploymentBundleV1` locally and submits it to
+    `POST /v1/soracloud/deploy`
+  - returns the same local route and workspace-script projection that
+    `local-plan` reports, plus the live mutation response
 - `iroha app soracloud upgrade`
-  - validates manifests and appends an upgrade revision.
-  - when `--torii-url` is supplied, signs the bundle payload with the
-    configured client keypair and calls `POST /v1/soracloud/upgrade`.
-- `iroha app soracloud rollback`
-  - switches service state to a previous (or explicit) version and records an
-    audit event.
-  - when `--torii-url` is supplied, signs rollback payload metadata and calls
-    `POST /v1/soracloud/rollback`.
-- `iroha app soracloud rollout`
-  - advances or fails a rollout step for an active canary handle.
-  - accepts health signals (`--health healthy|unhealthy`) and optional
-    traffic promotion (`--promote-to-percent`).
-  - records/forwards `--governance-tx-hash` for deterministic audit linkage.
-  - when `--torii-url` is supplied, signs rollout metadata and calls
-    `POST /v1/soracloud/rollout`.
-- `iroha app soracloud agent-deploy`
-  - validates `AgentApartmentManifestV1` and registers apartment runtime state.
-  - initializes lease expiry (`--lease-ticks`) and append-only apartment events.
-  - when `--torii-url` is supplied, signs payload metadata and calls
-    `POST /v1/soracloud/agent/deploy`.
-- `iroha app soracloud agent-lease-renew`
-  - extends lease duration for an existing apartment.
-  - revives expired leases into `Running` status in local scheduler state.
-- `iroha app soracloud agent-restart`
-  - requests deterministic restart for an apartment with an active lease.
-  - records restart reason and restart sequence in scheduler events.
-- `iroha app soracloud agent-status`
-  - prints apartment scheduler snapshot (status, lease remaining, quotas/policy counts).
-- `iroha app soracloud agent-wallet-spend`
-  - submits an apartment wallet spend request under deterministic policy checks.
-  - enforces `wallet.sign` capability + per-asset `max_per_tx_nanos`/`max_per_day_nanos`.
-  - auto-approves only when `wallet.auto_approve` capability is active.
-- `iroha app soracloud agent-wallet-approve`
-  - approves a pending wallet request by `request_id`.
-  - records spend into deterministic day buckets (`sequence / 10_000`).
-- `iroha app soracloud agent-policy-revoke`
-  - revokes a declared apartment policy capability (for example `wallet.sign`).
-  - updates runtime guardrails without mutating the original manifest payload.
-  - when `--torii-url` is supplied, signs payload metadata and calls
-    `POST /v1/soracloud/agent/policy/revoke`.
-- `iroha app soracloud agent-message-send`
-  - enqueues a deterministic mailbox message to another apartment.
-  - requires active `agent.mailbox.send` on sender and `agent.mailbox.receive` on recipient.
-- `iroha app soracloud agent-message-ack`
-  - consumes a queued mailbox message by `message_id`.
-  - requires active `agent.mailbox.receive` on the recipient apartment.
-- `iroha app soracloud agent-mailbox-status`
-  - shows pending mailbox messages, message hashes, and queue depth for one apartment.
-- `iroha app soracloud agent-artifact-allow`
-  - adds/updates an autonomy artifact allowlist entry (`artifact_hash` +
-    optional required `provenance_hash`) for one apartment.
-  - requires active `governance.audit` or `agent.autonomy.allow`.
-  - when `--torii-url` is supplied, signs payload metadata and calls
-    `POST /v1/soracloud/agent/autonomy/allow`.
-- `iroha app soracloud agent-autonomy-run`
-  - approves a deterministic autonomous run for an allowlisted artifact.
-  - requires active `agent.autonomy.run`, allowlist match, optional provenance
-    match, and available budget (`--budget-units`).
-  - when `--torii-url` is supplied, signs payload metadata and calls
-    `POST /v1/soracloud/agent/autonomy/run`.
-- `iroha app soracloud agent-autonomy-status`
-  - shows autonomy budget ceiling/remaining, artifact allowlist entries, and
-    recent autonomous run approvals for one apartment.
-  - when `--torii-url` is supplied, queries
-    `GET /v1/soracloud/agent/autonomy/status`.
-- `iroha app soracloud training-job-start`
-  - starts a signed distributed training job (`service_name`, `model_name`,
-    `job_id`, worker/budget/checkpoint controls).
-  - requires `--torii-url`; local simulation mode does not implement this flow.
-  - calls `POST /v1/soracloud/training/job/start`.
-- `iroha app soracloud training-job-checkpoint`
-  - submits a signed monotonic checkpoint update (`completed_step`,
-    `checkpoint_size_bytes`, `metrics_hash`).
-  - requires `--torii-url`.
-  - calls `POST /v1/soracloud/training/job/checkpoint`.
-- `iroha app soracloud training-job-retry`
-  - submits a signed retry request with an explicit reason string.
-  - requires `--torii-url`.
-  - calls `POST /v1/soracloud/training/job/retry`.
-- `iroha app soracloud training-job-status`
-  - queries one training job status entry by `service_name` + `job_id`.
-  - requires `--torii-url`.
-  - calls `GET /v1/soracloud/training/job/status`.
-- `iroha app soracloud model-artifact-register`
-  - submits signed artifact-attestation metadata for a completed training job
-    (`weight_artifact_hash`, `dataset_ref`, config/repro/provenance hashes).
-  - requires `--torii-url`.
-  - calls `POST /v1/soracloud/model/artifact/register`.
-- `iroha app soracloud model-artifact-status`
-  - queries artifact-attestation status by `service_name` + `training_job_id`.
-  - requires `--torii-url`.
-  - calls `GET /v1/soracloud/model/artifact/status`.
-- `iroha app soracloud model-weight-register`
-  - submits a signed model weight version registration (optional
-    `--parent-version`) linked to a completed/attested training job.
-  - requires `--torii-url`.
-  - calls `POST /v1/soracloud/model/weight/register`.
-- `iroha app soracloud model-weight-promote`
-  - submits a signed promotion decision with `--gate-approved` and
-    `--gate-report-hash`.
-  - requires `--torii-url`.
-  - calls `POST /v1/soracloud/model/weight/promote`.
-- `iroha app soracloud model-weight-rollback`
-  - submits a signed rollback decision to an already-registered target version.
-  - requires `--torii-url`.
-  - calls `POST /v1/soracloud/model/weight/rollback`.
-- `iroha app soracloud model-weight-status`
-  - queries model lineage/current-version status by `service_name` +
-    `model_name`.
-  - requires `--torii-url`.
-  - calls `GET /v1/soracloud/model/weight/status`.
+  - validates and submits one upgraded bundle to
+    `POST /v1/soracloud/upgrade`
+  - returns the same local route and workspace-script projection that
+    `local-plan` reports, plus the live mutation response
+- `iroha app soracloud app deploy`
+  - loads `app_manifest.json`
+  - synchronizes every referenced service pair before submission
+  - publishes the declared static site from `static_site.dist_dir`
+  - deploys every referenced service in one pass
+  - returns the root app `manifest_path`, root `workspace_dir`, root
+    `workspace_scripts`, root `hostname`, the frontend publish projection, the
+    top-level app `routes` split, and one manifest-derived service entry per
+    app service alongside the mutation responses
+- `iroha app soracloud app upgrade`
+  - follows the same app-wide flow, but uses upgrade semantics
+  - returns the same app-scoped root manifest/hostname/workspace metadata,
+    frontend, top-level `routes`, and service projection
+- `iroha app soracloud app release`
+  - composes the manifest-adjacent `build-and-sync` path with deploy-then-upgrade-on-conflict semantics
+  - is the recommended one-command mixed-app operator path for split apps
+  - returns the same root app `manifest_path`, root `workspace_dir`, root
+    `workspace_scripts`, root `hostname`, the frontend publish projection, the
+    top-level app `routes` split, and one manifest-derived service entry per
+    app service alongside the live mutation response
+- `iroha app soracloud status`
+  - accepts `--service-name` directly or resolves the filter from
+    `--container` plus `--service`
+  - queries authoritative service state from `GET /v1/soracloud/status`
+  - projects typed `schema_version`, service counts, and service summaries while
+    preserving the raw Torii payload
+  - when driven by `--container` plus `--service`, also keeps the same local
+    route and workspace-script projection that `local-plan` reports
+- `iroha app soracloud config-*` and `iroha app soracloud secret-*`
+  - accept `--service-name` directly or resolve the owning service from
+    `--container` plus `--service`
+  - keep service-scoped material operations aligned with manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
+- `iroha app soracloud rollback` and `iroha app soracloud rollout`
+  - accept `--service-name` directly or resolve the target service from
+    `--container` plus `--service`
+  - keep rollback and rollout control aligned with manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
+- `iroha app soracloud hf-deploy`, `hf-status`, `hf-lease-renew`, and `hf-lease-leave`
+  - accept `--service-name` directly or resolve the bound service from
+    `--container` plus `--service` when a service name applies
+  - keep HF shared-lease membership aligned with manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
+- `iroha app soracloud training-job-*`
+  - accept `--service-name` directly or resolve the owning service from
+    `--container` plus `--service`
+  - keep training-job control aligned with manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
+- `iroha app soracloud model-artifact-*`, `model-weight-*`,
+  `model-upload-encryption-recipient`, `model-upload-init`,
+  `model-upload-chunk`, `model-upload-finalize`, `model-upload-status`,
+  `model-compile`, `model-compile-status`, `model-allow`,
+  `model-run-private`, `model-run-status`, `model-decrypt-output`, and
+  `model-publish-private`
+  - accept `--service-name` directly or resolve the owning service from
+    `--container` plus `--service` when a service name applies
+  - keep model registry and uploaded-model status control aligned with
+    manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
+- `iroha app soracloud app status`
+  - keeps one status entry per service declared in one app manifest
+  - projects the root app `manifest_path`, root `workspace_dir`, root
+    `workspace_scripts`, root `hostname`, the top-level app `routes` split, the
+    frontend publish mode, and the expected CID-gateway or root-binding URL
+    when a static site is configured
+  - projects child manifest paths, `workspace_dir`, plane/runtime, route
+    ownership, and the matched Torii control-plane status when present
+  - keeps missing manifest services visible instead of dropping them from the
+    app-scoped output
 
-## Deterministic admission checks
+## Hosted Service Lease Volumes
 
-Deploy/upgrade commands run `SoraDeploymentBundleV1::validate_for_admission()`
-before mutating state, including:
+Hosted HTTP services can persist mutable shared state without inventing their
+own local directory contract.
 
-- container/service schema compatibility;
-- container hash linkage (`service.container.manifest_hash`);
-- mutable state-binding capability checks;
-- public-route healthcheck requirements.
+Example manifest shape:
 
-## Registry format
-
-The default registry path is `.soracloud/registry.json`. The state keeps:
-
-- `services`: per-service current version and revision history;
-- `services[].active_rollout`/`services[].last_rollout`: rollout runtime state
-  (handle, stage, canary traffic, health failures, policy limits);
-- `audit_log`: append-only deploy/upgrade/rollback/rollout records with
-  sequence ids, optional rollout handles, and optional governance tx hash
-  references;
-- `apartments`: persistent apartment runtime state keyed by apartment name
-  (manifest hash, lease window, restart metadata, revoked policy capabilities,
-  pending wallet requests, daily spend accumulators, mailbox queues, autonomy
-  budget counters, artifact allowlist, and autonomous run history);
-- `apartment_events`: append-only deploy/lease-renew/restart events with
-  deterministic sequence ids (including wallet spend request/approve, policy revoke,
-  mailbox enqueue/acknowledge, artifact allow, and autonomy run approval
-  events).
-
-## Network-backed mode
-
-Use Torii control-plane APIs instead of local registry simulation:
-
-```bash
-iroha app soracloud deploy \
-  --container container_manifest.json \
-  --service service_manifest.json \
-  --torii-url http://127.0.0.1:8080 \
-  --api-token <token-if-required> \
-  --timeout-secs 10
+```json
+{
+  "lease_volumes": [
+    { "volume_name": "root_disk", "mount_path": "/" },
+    { "volume_name": "shared_cache", "mount_path": "/var/lib/soracloud/shared-cache" },
+    { "volume_name": "search_sessions", "mount_path": "/var/lib/soracloud/search-sessions" },
+    { "volume_name": "collector_state", "mount_path": "/var/lib/soracloud/collector-state" },
+    { "volume_name": "runtime_cache", "mount_path": "/var/lib/soracloud/runtime-cache" }
+  ]
+}
 ```
 
-```bash
-iroha app soracloud upgrade \
-  --container container_manifest.json \
-  --service service_manifest.json \
-  --torii-url http://127.0.0.1:8080 \
-  --api-token <token-if-required> \
-  --timeout-secs 10
-```
+For the example above, the service receives:
+
+- `SORACLOUD_LEASE_VOLUME_ROOT_DISK_DIR`
+- `SORACLOUD_LEASE_VOLUME_ROOT_DISK_MOUNT_PATH`
+- `SORACLOUD_LEASE_VOLUME_SHARED_CACHE_DIR`
+- `SORACLOUD_LEASE_VOLUME_SHARED_CACHE_MOUNT_PATH`
+- `SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_DIR`
+- `SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_MOUNT_PATH`
+- `SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_DIR`
+- `SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_MOUNT_PATH`
+- `SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_DIR`
+- `SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_MOUNT_PATH`
+
+The `_DIR` value is the materialized runtime path. The `_MOUNT_PATH` value is
+the logical mount path declared in the manifest.
+
+## Inrou Smoke
+
+Inrou now supports both local backend classes: `FirecrackerKvm` on Linux/KVM
+and `PortableVm` everywhere else. Mixed-host validator fleets still proxy
+hosted HTTP through authoritatively placed healthy replicas, but local
+materialization is no longer restricted to Linux/KVM peers. The repo now ships
+dedicated smoke entrypoints for both local backend classes plus a mixed-host
+orchestrator:
 
 ```bash
-iroha app soracloud rollback \
-  --service-name web_portal \
-  --torii-url http://127.0.0.1:8080 \
-  --api-token <token-if-required> \
-  --timeout-secs 10
+cargo xtask soracloud-inrou-smoke portable
+sudo cargo xtask soracloud-inrou-smoke firecracker
+cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/inrou_mixed_host_inventory.example.toml
 ```
+
+PortableVm stays unprivileged and requires only native-ISA QEMU, `qemu-img`,
+and `tar`. Shared non-root lease volumes are attached as persistent block
+devices that the guest formats and mounts on first boot. The Firecracker/KVM
+path keeps the Linux host prerequisites for tap networking and the NFS
+transport adapter:
+
+- host OS is Linux
+- the caller is root
+- `/dev/kvm` exists
+- `/dev/net/tun` exists
+- `/proc/sys/net/ipv4/ip_forward = 1`
+- `firecracker`, `ip`, `iptables`, `tar`, `exportfs`, `rpc.nfsd`, `mount`,
+  `chown`, and `mke2fs` or `mkfs.ext4` are on `PATH`
+
+Portable smoke expects:
+
+- `IROHA_INROU_PORTABLE_KERNEL_IMAGE`
+- `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`
+- optional `IROHA_INROU_PORTABLE_INITRD_IMAGE`
+- optional `IROHA_INROU_PORTABLE_ACCEL` (`auto`, `tcg`, `kvm`, `hvf`, `whpx`)
+
+Prepare a local Debian genericcloud asset set with:
 
 ```bash
-iroha app soracloud rollout \
-  --service-name web_portal \
-  --rollout-handle web_portal:rollout:2 \
-  --health healthy \
-  --promote-to-percent 100 \
-  --governance-tx-hash <tx_hash> \
-  --torii-url http://127.0.0.1:8080 \
-  --api-token <token-if-required> \
-  --timeout-secs 10
+eval "$(python3 scripts/ci/prepare_inrou_portable_guest_assets.py --print-env)"
+cargo xtask soracloud-inrou-smoke portable
 ```
+
+The helper verifies Debian `SHA512SUMS`, extracts the root ext4 partition,
+relabels it for the native PortableVm guest profile, removes cloud-image fstab
+entries for unattached partitions, and exports the matching kernel/initrd paths.
+Use `--force` to refresh an existing cache.
+
+The mixed-host inventory's proxy-only host gate should run the focused
+`proxy_only_inrou_host` runtime tests, proving the host advertises zero hosted
+capacity and does not publish local replica runtime state even if a placement is
+assigned to it.
+
+Production readiness also requires an operator observability evidence JSON file.
+Validate the artifact locally before attaching it to a `full` or `load`
+readiness run:
 
 ```bash
-iroha app soracloud status \
-  --torii-url http://127.0.0.1:8080 \
-  --api-token <token-if-required> \
-  --timeout-secs 10
+python3 scripts/ci/check_soracloud_observability_evidence.py \
+  --evidence ./fixtures/soracloud/production_observability_evidence.example.json
 ```
 
-The CLI output includes `source: "torii_control_plane"` and embeds
-`network_status` from Torii, including:
+Use the example as a schema reference only; production evidence must point to
+the real deployment's metrics, status fields, alerts, runbooks, and dashboards.
+The readiness runner refuses `full` and `load` profiles without
+`--observability-evidence`.
 
-- `schema_version`
-- `service_health`
-- `routing`
-- `resource_pressure`
-- `failed_admissions`
-- `control_plane` (registry/audit snapshot)
+Firecracker smoke expects:
 
-## Templates
+- `IROHA_INROU_LINUX_KVM_KERNEL_IMAGE`
+- `IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE`
+- optional `IROHA_INROU_LINUX_KVM_INITRD_IMAGE`
 
-Generate a static site starter:
+Focused validation now covers both shared-storage transports:
+
+- `build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay`
+- `ensure_inrou_portable_lease_disks_create_reusable_raw_images`
+- `ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file`
+- `build_inrou_user_data_projects_mounts_overlay_and_replica_env`
+- `write_inrou_firecracker_config_serializes_boot_source_drives_and_network`
+- `ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs`
+- `planned_inrou_tap_firewall_rules_keep_isolated_policy_private`
+
+The portable path mounts shared lease storage through attached virtio block
+devices. The Firecracker fast path keeps the backend-private NFS adapter, but
+both backends now expose the same guest-visible lease semantics. Mixed-host
+acceptance is expected to cover one Linux/KVM Firecracker validator, one
+non-Linux PortableVm validator, and one proxy-only validator that publishes
+zero hosted capacity.
+
+## Recommended Hosted-Service Workflow
+
+Use the `http-service` scaffold for one hosted HTTP service that should run on
+the Soracloud hosted plane without an app manifest wrapper.
+
+Build and refresh the single service pair:
 
 ```bash
-iroha app soracloud init \
-  --template site \
-  --service-name docs_portal \
-  --output-dir .soracloud-docs
+cd .soracloud-live
+iroha app soracloud local-plan --container ./container_manifest.json --service ./service_manifest.json
+./build-and-sync.sh
+iroha app soracloud build-and-sync --container ./container_manifest.json --service ./service_manifest.json --dry-run
 ```
 
-Generate a dynamic webapp starter:
+Run the local hosted-service dev entrypoint:
 
 ```bash
-iroha app soracloud init \
-  --template webapp \
-  --service-name agent_console \
-  --output-dir .soracloud-agent
+cd .soracloud-live
+iroha app soracloud local-plan --container ./container_manifest.json --service ./service_manifest.json
+./local-dev.sh
+iroha app soracloud local-dev --container ./container_manifest.json --service ./service_manifest.json --dry-run
 ```
 
-Generate a regulated PII workload starter:
+Deploy or upgrade through the same hosted-service root scripts:
 
 ```bash
-iroha app soracloud init \
-  --template pii-app \
-  --service-name clinic_console \
-  --output-dir .soracloud-pii
+cd .soracloud-live
+TORII_URL=http://127.0.0.1:8080 ./deploy.sh
+iroha app soracloud deploy-workspace --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
+iroha app soracloud upgrade-workspace --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud config-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud secret-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 ```
 
-These templates keep IVM/SCR assumptions (no WASM runtime dependency) and emit
-deterministic starter artifacts that can be versioned in CI:
-
-- `site/`, `webapp/`, or `pii-app/` source tree (Vue3 + API files);
-- canonical Soracloud manifests (`container_manifest.json`, `service_manifest.json`);
-- `registry.json` for local control-plane simulation.
-- pii-app policy templates (`policy/consent_policy_template.json`,
-  `policy/retention_policy_template.json`,
-  `policy/deletion_workflow_template.json`) for consent and retention/deletion governance workflows.
-
-## Scaffold auth/session model (webapp + pii-app)
-
-Generated webapp and pii-app APIs now use the same strict auth core:
-
-- `POST /api/auth/challenge`, `POST /api/auth/login`, `POST /api/auth/logout`,
-  `GET /api/auth/me` (webapp);
-- `POST /pii/api/auth/challenge`, `POST /pii/api/auth/login`,
-  `POST /pii/api/auth/logout`, `GET /pii/api/auth/me` (pii-app);
-- canonical challenge message format (`soracloud.auth.challenge.v1`) with fixed
-  field order and Ed25519-only signature verification;
-- deterministic replay protection using single-use challenge IDs persisted under
-  `/state/auth/challenges`;
-- shared session state persisted under `/state/auth/sessions`; cookie stores
-  only a signed session handle;
-- host-provided shared-state adapter hook via
-  `globalThis.__soracloudSharedStateAdapter` (`get`, `put`, `putIfAbsent`,
-  `delete`, `entries`) for multi-replica runtimes; local file-backed state is
-  retained as deterministic development fallback when
-  `AUTH_REQUIRE_EXTERNAL_SHARED_STATE=0`;
-- strict cookie defaults: `HttpOnly`, `SameSite=Strict`, and `Secure` when
-  `PUBLIC_BASE_URL` resolves to HTTPS (or proxied HTTPS headers are present).
-
-`pii-app` private routes under `/pii/api/*` require both authentication and
-capabilities:
-
-- route namespace is `/pii/api/*` and health probe is `/pii/api/healthz`
-- `pii.consent.grant`
-- `pii.consent.revoke`
-- `pii.records.retention.sweep`
-- `pii.records.delete`
-- `pii.records.read` (state/list endpoints)
-
-Strict runtime env contract for both templates:
-
-- `SESSION_HMAC_KEY` (required in strict/production mode, minimum 32 chars)
-- `AUTH_SESSION_TTL_SECS` (short session TTL)
-- `AUTH_CHALLENGE_TTL_SECS` (short challenge TTL)
-- `AUTH_CAPABILITY_MAP_JSON` (principal public-key hex -> capability list)
-- `AUTH_MODE` (default `strict`; `dev` keeps signature verification enabled)
-- `AUTH_REQUIRE_EXTERNAL_SHARED_STATE` (defaults to enabled in
-  `AUTH_MODE=strict` or production; startup fails unless
-  `globalThis.__soracloudSharedStateAdapter` is configured. Set to `0` only
-  for local single-replica development)
-- `PUBLIC_BASE_URL` (origin binding + cookie security decisions)
-
-## Deterministic state-binding guardrail API
-
-Torii now exposes a signed control-plane mutation path:
-
-- `POST /v1/soracloud/state/mutate`
-
-This endpoint is intended for SCR-hosted services to request canonical state
-mutations under declared `state_bindings` and enforces:
-
-- binding existence for the active service revision;
-- key-prefix confinement (`binding.key_prefix`);
-- mutability policy (`ReadOnly`, `AppendOnly`, `ReadWrite`);
-- encryption-policy match (`request.encryption == binding.encryption`);
-- `max_item_bytes` and `max_total_bytes` quota limits.
-
-Each accepted mutation appends an audit event carrying signer identity and
-`governance_tx_hash` linkage for deterministic policy review.
-
-State-mutation provenance signatures are verified against a canonical tuple
-payload in this exact field order:
-`(service_name, binding_name, key, operation, value_size_bytes, encryption, governance_tx_hash)`.
-Only this canonical tuple layout is accepted.
-
-FHE job-run provenance signatures are verified against canonical tuple payloads:
-`(service_name, binding_name, job, policy, param_set, governance_tx_hash)`.
-Decryption-request provenance signatures are verified against canonical tuple
-payloads:
-`(service_name, policy, request)`.
-Only these canonical tuple layouts are accepted.
-
-Training/model provenance signatures are also verified against canonical tuple
-payloads for:
-`training/job/start`, `training/job/checkpoint`, `training/job/retry`,
-`model/artifact/register`, `model/weight/register`,
-`model/weight/promote`, and `model/weight/rollback`.
-Only canonical tuple layouts are accepted for these endpoints.
-
-Rollback/rollout and agent-control provenance signatures are also verified
-against canonical tuple payloads (`rollback`, `rollout`, `agent/deploy`,
-`agent/lease/renew`, `agent/restart`, `agent/policy/revoke`,
-`agent/wallet/spend`, `agent/wallet/approve`, `agent/message/send`,
-`agent/message/ack`, `agent/artifact/allow`, `agent/autonomy/run`).
-
-## SCR host admission + lifecycle
-
-`deploy`/`upgrade`/`rollback` admission now applies deterministic SCR host
-policy checks before mutating service registry state:
-
-- bounded resource caps for `cpu_millis`, `memory_bytes`,
-  `ephemeral_storage_bytes`, `max_open_files`, and `max_tasks`;
-- bounded lifecycle caps for `start_grace_secs` and `stop_grace_secs`;
-- capability-policy compatibility checks (for example,
-  `allow_state_writes=false` rejects non-readonly state bindings);
-- validated network allowlist policy (non-empty, non-duplicate host entries);
-- deterministic sandbox profile hashing from runtime/capability/resource/lifecycle
-  policy (`sandbox_profile_hash`).
-
-Each admitted service revision records SCR host snapshot fields in
-`latest_revision` status metadata, including runtime kind, capability flags,
-resource/lifecycle limits, and monotonic process-lifecycle markers
-(`process_generation`, `process_started_sequence`) across
-deploy/upgrade/rollback transitions.
-
-## Health access-consent API
-
-Torii exposes signed policy-gated disclosure endpoints for regulated workloads:
-
-- `POST /v1/soracloud/decrypt/request`
-- `POST /v1/soracloud/health/access/request` (health-oriented alias)
-
-Both endpoints enforce `DecryptionAuthorityPolicyV1` + `DecryptionRequestV1`
-admission constraints, including:
-
-- strict jurisdiction-tag matching (`request.jurisdiction_tag == policy.jurisdiction_tag`);
-- consent-evidence hash requirements for non-break-glass requests when
-  `policy.require_consent_evidence=true`;
-- break-glass gating + mandatory `break_glass_reason`;
-- append-only registry audit entries with policy/jurisdiction/break-glass metadata.
-
-## Health compliance report API
-
-Torii also exposes a compliance report-pack endpoint for regulated workload
-operations:
-
-- `GET /v1/soracloud/health/compliance/report`
-
-Supported query parameters:
-
-- `service_name` (optional): scope report rows to one deployed service.
-- `jurisdiction_tag` (optional): scope report rows to one jurisdiction.
-- `limit` (optional): caps recent access entries and policy diff rows
-  (default `50`, max `500`).
-
-The report payload includes:
-
-- access-log totals (`total_access_events`, break-glass/non-break-glass counts);
-- consent-evidence completeness (`consent_evidence_present_events`,
-  `consent_evidence_coverage_bps`);
-- recent disclosure entries (`recent_access_events`);
-- per-jurisdiction summary stats (`jurisdiction_stats`);
-- encrypted-binding data-flow attestations (`data_flow_attestations`);
-- policy snapshot diff history (`policy_diff_history`).
-
-## Health privacy/security test matrix
-
-The Torii Soracloud suite covers the minimum regulated-workload matrix:
-
-- least-privilege scope enforcement:
-  `soracloud::tests::health_privacy_matrix_enforces_declared_binding_scope`
-- unauthorized-access rejection (tampered signature):
-  `soracloud::tests::health_privacy_matrix_rejects_unauthorized_decryption_signatures`
-- evidence completeness reporting:
-  `soracloud::tests::health_privacy_matrix_reports_evidence_completeness_gaps`
-
-## SCR training runtime API
-
-Torii now exposes signed distributed-training runtime endpoints:
-
-- `POST /v1/soracloud/training/job/start`
-- `POST /v1/soracloud/training/job/checkpoint`
-- `POST /v1/soracloud/training/job/retry`
-- `GET /v1/soracloud/training/job/status?service_name=<name>&job_id=<id>`
-
-The runtime enforces deterministic policy and accounting semantics:
-
-- active service revision must enable `allow_model_training`;
-- bounded worker-group size and retry count;
-- monotonic checkpoint progression aligned to checkpoint interval or final step;
-- deterministic compute/storage budget metering per checkpoint;
-- append-only training audit log with signer linkage.
-
-Core regressions:
-
-- `soracloud::tests::training_job_lifecycle_tracks_checkpoints_retries_and_completion`
-- `soracloud::tests::training_job_start_rejects_services_without_training_capability`
-
-## SCR model/weight registry API
-
-Torii also exposes signed model-weight lifecycle endpoints:
-
-- `POST /v1/soracloud/model/weight/register`
-- `POST /v1/soracloud/model/weight/promote`
-- `POST /v1/soracloud/model/weight/rollback`
-- `GET /v1/soracloud/model/weight/status?service_name=<name>&model_name=<name>`
-
-Registry semantics:
-
-- version-lineage enforcement (`parent_version` required for non-root versions);
-- registration requires a completed training job for the same model;
-- registration records artifact metadata (`dataset_ref`, `training_config_hash`,
-  `reproducibility_hash`, `provenance_attestation_hash`) with each version;
-- promotion requires explicit gate approval + gate report hash;
-- rollback requires a previously registered target version and reason;
-- append-only model-weight audit events with signer linkage.
-
-Core regressions:
-
-- `soracloud::tests::model_weight_lifecycle_supports_lineage_promotion_and_rollback`
-- `soracloud::tests::model_weight_register_rejects_non_completed_training_jobs`
-
-## SCR model artifact attestation API
-
-Torii also exposes signed artifact-attestation endpoints for training outputs:
-
-- `POST /v1/soracloud/model/artifact/register`
-- `GET /v1/soracloud/model/artifact/status?service_name=<name>&training_job_id=<id>`
-
-Pipeline semantics:
-
-- attestation registration requires a completed training job for the same model;
-- attestation records bind `weight_artifact_hash`, `dataset_ref`,
-  `training_config_hash`, `reproducibility_hash`,
-  `provenance_attestation_hash` to the training job;
-- model-weight registration rejects missing attestation and any metadata/hash
-  mismatches before version registration;
-- successful model-weight registration consumes the attestation into the
-  registered version lineage (`consumed_by_version`).
-
-Core regressions:
-
-- `soracloud::tests::secure_artifact_pipeline_requires_artifact_registration_before_weight_register`
-- `soracloud::tests::secure_artifact_pipeline_enforces_metadata_match_and_consumption`
-
-## SCR model-training benchmark coverage
-
-Deterministic benchmark-style integration coverage for model-training runtime
-paths is implemented in Torii Soracloud tests:
-
-- `soracloud::tests::training_benchmark_throughput_and_checkpoint_recovery_are_deterministic`
-  validates deterministic throughput accounting (`completed_steps` per event)
-  and checkpoint recovery continuity after persisted registry reload.
-- `soracloud::tests::promotion_policy_benchmark_gate_enforcement_is_deterministic`
-  validates deterministic promotion policy behavior across repeated runs
-  (gate rejection when `gate_approved=false`, promotion success when
-  `gate_approved=true`).
-
-## SCR autonomy runtime API
-
-Torii now exposes signed autonomy runtime endpoints for SCR-side apartment
-controls (beyond local CLI simulation):
-
-- `POST /v1/soracloud/agent/deploy`
-- `POST /v1/soracloud/agent/policy/revoke`
-- `POST /v1/soracloud/agent/autonomy/allow`
-- `POST /v1/soracloud/agent/autonomy/run`
-- `GET /v1/soracloud/agent/autonomy/status?apartment_name=<name>`
-
-These endpoints enforce deterministic runtime policy checks:
-
-- apartment manifest validation + lease model at deploy time;
-- capability revocation guardrails (`agent.autonomy.run`, etc.);
-- artifact allowlist + optional provenance pin matching;
-- autonomy budget accounting and non-negative budget enforcement;
-- deterministic autonomy checkpoint persistence under
-  `manifest.state_quota_bytes` with quota rejection on overflow;
-- append-only apartment audit events with signer linkage.
-
-Torii persists this runtime/control-plane state to:
-
-- `torii.data_dir/soracloud/registry_state.to`
-
-using atomic Norito snapshot writes (`*.tmp` then rename), so apartment queue
-state (wallet approvals, mailbox messages, autonomy budget/history, lease
-windows, process-generation lifecycle metadata, and persisted autonomy
-checkpoint usage) survives peer restarts.
-
-## Runbooks
-
-- Vue3 SPA + API deployment and production operations:
-  `docs/source/soracloud/vue3_spa_api_runbook.md`
+The direct `deploy`, `upgrade`, and manifest-pair `status` outputs keep the
+same local route and workspace-script projection that `local-plan` reports,
+alongside the live control-plane data.
+
+## Recommended Single-App Workflow
+
+Use the single-api scaffold for apps that need:
+
+- one root-bound static frontend on the public host
+- one deterministic IVM API on the same host under `/api`
+- no hosted `Inrou` plane and no split `/api` ownership
+
+```bash
+iroha app soracloud app init \
+  --template single-api \
+  --app-name docs_portal \
+  --app-version 1.0.0 \
+  --output-dir .soracloud-docs-portal
+```
+
+Build the frontend and API bundle:
+
+```bash
+cd .soracloud-docs-portal
+./build-and-sync.sh
+iroha app soracloud app build-and-sync --manifest ./app_manifest.json --dry-run
+```
+
+For local development, the scaffold also includes:
+
+- `services/api/dev.sh` to run a local `/api/healthz` HTTP shim
+- `./local-dev.sh` to boot the frontend plus the local API shim
+- `./build-and-sync.sh` to rebuild the frontend and deterministic bytecode and
+  refresh manifest hashes
+- `./deploy.sh` to run the full app-wide publish + deploy flow
+- `./upgrade.sh` to rerun the same rebuild path and submit the app upgrade
+
+Run the root-bound app locally:
+
+```bash
+cd .soracloud-docs-portal
+./local-dev.sh
+iroha app soracloud app local-dev --manifest ./app_manifest.json --dry-run
+```
+
+Deploy the root-bound frontend plus the API service in one step:
+
+```bash
+cd .soracloud-docs-portal
+TORII_URL=http://127.0.0.1:8080 ./deploy.sh
+iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+```
+
+Upgrade the root-bound frontend plus the API service in one step:
+
+```bash
+cd .soracloud-docs-portal
+TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
+iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+```
+
+This path keeps the frontend at `/` and the API at `/api/healthz` on the same
+hostname.
+
+## Recommended Mixed-App Workflow
+
+Use the split-app scaffold for apps that need:
+
+- a static frontend published to SoraFS
+- a hosted live API on Inrou
+- a deterministic IVM vault or auth plane
+
+```bash
+iroha app soracloud app init \
+  --template split-app \
+  --app-name hayahi \
+  --app-version 1.0.0 \
+  --output-dir .soracloud-hayahi
+```
+
+For local development, the scaffold includes:
+
+- `frontend/` Vite dev mode for the same-host `/api` base with proxy rules for
+  the live and vault planes
+- `services/live/dev.sh` to run the hosted HTTP starter directly with local
+  fallback lease directories
+- `services/vault/dev.sh` to run the local vault HTTP shim for `/api/auth*` and
+  `/api/v1/user*`
+- `services/vault/verify-build.sh` to recompile the deterministic vault
+  contract and verify that the committed build outputs still match
+- `./local-dev.sh` to boot the frontend plus both local API processes
+- `./build-and-sync.sh` to rebuild all artifacts and refresh manifest hashes
+- `./doctor.sh` to rebuild and fail-close on the split-app release contract
+- `./release.sh` to rebuild, validate, and then deploy-or-upgrade the full app
+- `./deploy.sh` as the compatibility wrapper around `./release.sh`
+- `./upgrade.sh` to rerun the same rebuild path, validate, and submit the app upgrade
+
+The scaffolded Vite proxy strips the shared `/api` prefix before forwarding to
+the live and vault child processes, which matches the hosted longest-prefix
+routing behavior Torii applies in production.
+
+Run the local mixed-app loop:
+
+```bash
+cd .soracloud-hayahi
+./local-dev.sh
+iroha app soracloud app local-dev --manifest ./app_manifest.json --dry-run
+```
+
+Build the three app surfaces and refresh manifest hashes:
+
+```bash
+cd .soracloud-hayahi
+./build-and-sync.sh
+iroha app soracloud app build-and-sync --manifest ./app_manifest.json --dry-run
+```
+
+Inspect the local split-plane routing and frontend publish shape before deploy:
+
+```bash
+iroha app soracloud app local-plan \
+  --manifest .soracloud-hayahi/app_manifest.json
+```
+
+Deploy the static site plus every service without SSH or manual pinning:
+
+```bash
+cd .soracloud-hayahi
+./doctor.sh
+TORII_URL=http://127.0.0.1:8080 ./release.sh
+TORII_URL=http://127.0.0.1:8080 ./deploy.sh
+iroha app soracloud app doctor --manifest ./app_manifest.json
+iroha app soracloud app doctor-workspace --manifest ./app_manifest.json --dry-run
+iroha app soracloud app doctor-workspace --manifest ./app_manifest.json
+iroha app soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud app release-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud app release-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+```
+
+`app doctor-workspace` and `app release-workspace` resolve and run the same
+root `doctor.sh` and `release.sh` scripts adjacent to `app_manifest.json`, so
+operators can stay on the manifest-driven CLI path without shelling into the
+workspace manually.
+
+Those generated root scripts resolve `IROHA_CLI_BIN`, `IROHA_BIN`,
+`IROHA_CARGO_TARGET_DIR/.../iroha`, `CARGO_TARGET_DIR/.../iroha`,
+`IROHA_MANIFEST_PATH`, and finally `PATH` `iroha`, so local app workspaces
+can target a nearby `iroha_cli` checkout without requiring a globally
+installed wrapper. When you drive the fallback through `IROHA_MANIFEST_PATH`,
+set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to keep Cargo package and
+artifact state isolated from other local builds.
+
+Upgrade the static site plus every service without SSH or manual pinning:
+
+```bash
+cd .soracloud-hayahi
+TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
+iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+```
+
+For Taira-style deployments, keep Torii root bound to Torii itself and use the
+gateway host only as:
+
+- the Torii/control-plane base URL
+- the public non-SoraDNS browser form `https://<alias>.mon.taira.sora.net/...`
+- the legacy fallback form `https://taira.sora.org/soradns/<alias>/...`
+- the SoraFS CID gateway for intentionally CID-only frontend assets
+
+Do not replace a stable Soracloud vanity host with a `taira.sora.org` path
+just because a new revision, build, or CID was published.

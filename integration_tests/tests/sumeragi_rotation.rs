@@ -29,6 +29,27 @@ fn start_network(
     sandbox::start_network_blocking_or_skip(builder, context)
 }
 
+fn drive_network_to_total_height(
+    network: &sandbox::SerializedNetwork,
+    runtime: &Runtime,
+    client: &iroha::client::Client,
+    target_height: u64,
+    label: &str,
+) -> Result<()> {
+    let mut current_height = client.get_status()?.blocks;
+    while current_height < target_height {
+        let next_height = current_height.saturating_add(1);
+        client.submit_all([Log::new(Level::INFO, format!("{label} {next_height}"))])?;
+        runtime.block_on(async {
+            network
+                .ensure_blocks_with(|height| height.total >= next_height)
+                .await
+        })?;
+        current_height = client.get_status()?.blocks;
+    }
+    Ok(())
+}
+
 /// Compute f = floor((n-1)/3) and the quorum size (`min_votes_for_commit`).
 fn quorum(n: usize) -> (usize, usize) {
     let f = n.saturating_sub(1) / 3;
@@ -197,11 +218,7 @@ fn rotation_signer_indices_match_expected_set_a() -> Result<()> {
     let http = reqwest::Client::new();
 
     // Let the network produce a few blocks
-    let status = client.get_status()?;
-    for idx in status.blocks..6 {
-        client.submit_blocking(Log::new(Level::INFO, format!("set a tick {idx}")))?;
-    }
-    rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 6).await })?;
+    drive_network_to_total_height(&network, &rt, &client, 6, "set a tick")?;
 
     let latest_height = client.get_status()?.blocks;
     let certs = rt.block_on(async {
@@ -239,7 +256,9 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
     init_instruction_registry();
 
     // Start a 7-peer validator network
-    let builder = NetworkBuilder::new().with_peers(7);
+    let builder = NetworkBuilder::new()
+        .with_peers(7)
+        .with_sync_timeout(Duration::from_secs(300));
     let Some((network, rt)) = start_network(
         builder,
         stringify!(rotation_signer_indices_match_expected_set_a_n7_multiple_heights),
@@ -251,11 +270,7 @@ fn rotation_signer_indices_match_expected_set_a_n7_multiple_heights() -> Result<
     let http = reqwest::Client::new();
 
     // Let the network produce a number of blocks (>= 10 total)
-    let status = client.get_status()?;
-    for idx in status.blocks..10 {
-        client.submit_blocking(Log::new(Level::INFO, format!("set a n7 tick {idx}")))?;
-    }
-    rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 10).await })?;
+    drive_network_to_total_height(&network, &rt, &client, 10, "set a n7 tick")?;
 
     let latest_height = client.get_status()?.blocks;
     let certs = rt.block_on(async {
@@ -310,11 +325,7 @@ fn canonical_certificate_identical_across_peers() -> Result<()> {
 
     // Ensure we have several blocks
     let client = network.client();
-    let status = client.get_status()?;
-    for idx in status.blocks..5 {
-        client.submit_blocking(Log::new(Level::INFO, format!("set a cert tick {idx}")))?;
-    }
-    rt.block_on(async { network.ensure_blocks_with(|x| x.total >= 5).await })?;
+    drive_network_to_total_height(&network, &rt, &client, 5, "set a cert tick")?;
 
     let expected_height = client.get_status()?.blocks;
     let http = reqwest::Client::new();

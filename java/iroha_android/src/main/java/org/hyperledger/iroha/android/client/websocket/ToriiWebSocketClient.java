@@ -11,6 +11,7 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import org.hyperledger.iroha.android.client.ClientObserver;
 import org.hyperledger.iroha.android.client.ClientResponse;
+import org.hyperledger.iroha.android.client.TransportSecurity;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportWebSocket;
 
@@ -82,13 +83,16 @@ public final class ToriiWebSocketClient {
   private TransportRequest buildRequest(final String path, final ToriiWebSocketOptions options) {
     final URI httpUri = appendQueryParameters(resolvePath(path), options.queryParameters());
     final URI wsUri = toWebSocketUri(httpUri);
+    final Map<String, String> headers = new LinkedHashMap<>(defaultHeaders);
+    options.headers().forEach(headers::put);
+    TransportSecurity.requireWebSocketRequestAllowed(
+        "ToriiWebSocketClient", baseUri, wsUri, headers);
     final TransportRequest.Builder builder =
         TransportRequest.builder()
             .setMethod("GET")
             .setUri(wsUri)
             .setTimeout(options.connectTimeout());
-    defaultHeaders.forEach(builder::addHeader);
-    options.headers().forEach(builder::addHeader);
+    headers.forEach(builder::addHeader);
     if (!options.subprotocols().isEmpty()) {
       builder.addHeader("Sec-WebSocket-Protocol", String.join(",", options.subprotocols()));
     }

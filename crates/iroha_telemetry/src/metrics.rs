@@ -6,11 +6,11 @@ use core::{
     ops::Deref,
 };
 #[cfg(feature = "otel-exporter")]
-use std::{collections::HashMap, sync::Mutex};
+use std::collections::HashMap;
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{
-        Arc, OnceLock, RwLock,
+        Arc, Mutex, OnceLock, RwLock,
         atomic::{AtomicBool, AtomicU64 as StdAtomicU64, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -21,9 +21,6 @@ use iroha_config::{kura::FsyncMode, parameters::actual::ConfidentialGas as Actua
 use iroha_data_model::{
     block::consensus::PERMISSIONED_TAG,
     da::types::DaRentQuote,
-    offline::{
-        AndroidIntegrityPolicy, OfflineTransferRejectionPlatform, OfflineTransferRejectionReason,
-    },
     soranet::privacy_metrics::{
         SoranetPrivacyBucketMetricsV1, SoranetPrivacyModeV1, SoranetPrivacySuppressionReasonV1,
     },
@@ -60,6 +57,13 @@ pub struct Uptime(pub Duration);
 type MicropaymentSampleSink = Arc<
     dyn Fn(&str, MicropaymentCreditSnapshot, MicropaymentTicketCounters) + Send + Sync + 'static,
 >;
+
+fn current_unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or_default()
+}
 
 impl Default for Uptime {
     fn default() -> Self {
@@ -2573,6 +2577,18 @@ mod tests {
     }
 
     #[test]
+    fn recent_rejected_transactions_prune_after_window() {
+        let metrics = Metrics::default();
+        metrics.record_rejected_transactions(2, 1_000);
+        metrics.record_rejected_transactions(3, 2_000);
+
+        assert_eq!(metrics.last_rejection_at_ms(), Some(2_000));
+        assert_eq!(metrics.txs_rejected_recent_5m(2_500), 5);
+        assert_eq!(metrics.txs_rejected_recent_5m(302_000), 3);
+        assert_eq!(metrics.txs_rejected_recent_5m(303_000), 0);
+    }
+
+    #[test]
     fn status_strip_nexus_clears_lane_fields() {
         let mut status = Status {
             teu_lane_commit: vec![sample_lane_teu_status()],
@@ -2641,18 +2657,12 @@ mod tests {
     }
 
     #[test]
-    fn records_offline_transfer_rejections() {
+    fn records_offline_note_rejections() {
         let metrics = Metrics::default();
-        metrics.record_offline_transfer_rejection(
-            OfflineTransferRejectionPlatform::Apple,
-            OfflineTransferRejectionReason::PlatformAttestationInvalid,
-        );
+        metrics.record_offline_note_rejection("ios-appattest", "proof_invalid");
         let value = metrics
-            .offline_transfer_rejections_total
-            .with_label_values(&[
-                OfflineTransferRejectionPlatform::Apple.as_label(),
-                OfflineTransferRejectionReason::PlatformAttestationInvalid.as_label(),
-            ])
+            .offline_note_rejections_total
+            .with_label_values(&["ios-appattest", "proof_invalid"])
             .get();
         assert_eq!(value, 1);
     }
@@ -3212,12 +3222,20 @@ mod serde_tests {
     #[test]
     fn status_json_roundtrip() {
         let status = Status {
+            build: BuildStatus {
+                version: "2.0.0-rc.test".to_owned(),
+                git_commit_sha: "deadbeef".to_owned(),
+                cargo_features: "telemetry,zk-halo2".to_owned(),
+                target_triple: "aarch64-apple-darwin".to_owned(),
+            },
             peers: 3,
             blocks: 42,
             blocks_non_empty: 39,
             commit_time_ms: 12,
             txs_approved: 7,
             txs_rejected: 2,
+            last_rejection_at_ms: Some(100),
+            txs_rejected_recent_5m: 2,
             uptime: Uptime(Duration::new(9, 0)),
             view_changes: 4,
             queue_size: 5,
@@ -5100,10 +5118,52 @@ impl From<StackSettingsSnapshot> for StackStatus {
     Debug,
     Default,
     IntoSchema,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+)]
+pub struct BuildStatus {
+    /// Semantic version baked into this binary.
+    pub version: String,
+    /// Git commit SHA baked into this binary.
+    pub git_commit_sha: String,
+    /// Enabled Cargo features baked into this binary.
+    pub cargo_features: String,
+    /// Target triple used to compile this binary.
+    pub target_triple: String,
+}
+
+impl BuildStatus {
+    fn current() -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION").to_owned(),
+            git_commit_sha: option_env!("VERGEN_GIT_SHA")
+                .unwrap_or("unknown")
+                .to_owned(),
+            cargo_features: option_env!("VERGEN_CARGO_FEATURES")
+                .unwrap_or("unknown")
+                .to_owned(),
+            target_triple: option_env!("VERGEN_CARGO_TARGET_TRIPLE")
+                .unwrap_or("unknown")
+                .to_owned(),
+        }
+    }
+}
+
+/// Response body for the Torii GET `/status` endpoint.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    IntoSchema,
     crate::json_macros::JsonSerialize,
     crate::json_macros::JsonDeserialize,
 )]
 pub struct Status {
+    /// Build metadata for the currently running node binary.
+    #[norito(default)]
+    pub build: BuildStatus,
     /// Number of currently connected peers excluding the reporting peer
     pub peers: u64,
     /// Number of committed blocks (blockchain height)
@@ -5116,6 +5176,13 @@ pub struct Status {
     pub txs_approved: u64,
     /// Number of rejected transactions
     pub txs_rejected: u64,
+    /// Millisecond UNIX timestamp when this node most recently observed rejected transactions.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_rejection_at_ms: Option<u64>,
+    /// Number of rejected transactions observed by this node within the last five minutes.
+    #[norito(default)]
+    pub txs_rejected_recent_5m: u64,
     /// Uptime since genesis block creation
     pub uptime: Uptime,
     /// Number of view changes in the current round
@@ -5175,12 +5242,19 @@ impl Status {
 
 #[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct StatusPayload {
+    #[norito(default)]
+    build: BuildStatus,
     peers: u64,
     blocks: u64,
     blocks_non_empty: u64,
     commit_time_ms: u64,
     txs_approved: u64,
     txs_rejected: u64,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    last_rejection_at_ms: Option<u64>,
+    #[norito(default)]
+    txs_rejected_recent_5m: u64,
     uptime: Uptime,
     view_changes: u32,
     queue_size: u64,
@@ -5211,12 +5285,15 @@ struct StatusPayload {
 impl From<&Status> for StatusPayload {
     fn from(status: &Status) -> Self {
         Self {
+            build: status.build.clone(),
             peers: status.peers,
             blocks: status.blocks,
             blocks_non_empty: status.blocks_non_empty,
             commit_time_ms: status.commit_time_ms,
             txs_approved: status.txs_approved,
             txs_rejected: status.txs_rejected,
+            last_rejection_at_ms: status.last_rejection_at_ms,
+            txs_rejected_recent_5m: status.txs_rejected_recent_5m,
             uptime: status.uptime,
             view_changes: status.view_changes,
             queue_size: status.queue_size,
@@ -5239,12 +5316,15 @@ impl From<&Status> for StatusPayload {
 impl From<StatusPayload> for Status {
     fn from(payload: StatusPayload) -> Self {
         Self {
+            build: payload.build,
             peers: payload.peers,
             blocks: payload.blocks,
             blocks_non_empty: payload.blocks_non_empty,
             commit_time_ms: payload.commit_time_ms,
             txs_approved: payload.txs_approved,
             txs_rejected: payload.txs_rejected,
+            last_rejection_at_ms: payload.last_rejection_at_ms,
+            txs_rejected_recent_5m: payload.txs_rejected_recent_5m,
             uptime: payload.uptime,
             view_changes: payload.view_changes,
             queue_size: payload.queue_size,
@@ -5273,6 +5353,8 @@ impl<'a> DecodeFromSlice<'a> for Status {
 
 /// Number of manifest activation records retained in telemetry snapshots.
 pub const GOVERNANCE_MANIFEST_RECENT_CAP: usize = 8;
+const REJECTION_RECENT_WINDOW_MS: u64 = 5 * 60 * 1_000;
+const REJECTION_RECENT_EVENT_CAP: usize = 1_024;
 
 /// Governance-related telemetry snapshot embedded into [`Status`].
 #[derive(
@@ -5400,10 +5482,8 @@ pub struct GovernanceManifestQuorumCounters {
     crate::json_macros::JsonDeserialize,
 )]
 pub struct GovernanceManifestActivation {
-    /// Namespace whose manifest was activated.
-    pub namespace: String,
-    /// Identifier of the deployed contract.
-    pub contract_id: String,
+    /// Canonical contract address whose manifest was activated.
+    pub contract_address: String,
     /// Hex-encoded code hash pinned by the activation.
     pub code_hash_hex: String,
     /// Optional ABI hash associated with the activation.
@@ -5656,8 +5736,7 @@ impl<'a> DecodeFromSlice<'a> for GovernanceManifestQuorumCounters {
 impl norito::core::NoritoSerialize for GovernanceManifestActivation {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
         let payload = (
-            self.namespace.clone(),
-            self.contract_id.clone(),
+            self.contract_address.clone(),
             self.code_hash_hex.clone(),
             self.abi_hash_hex.clone(),
             self.height,
@@ -5669,8 +5748,7 @@ impl norito::core::NoritoSerialize for GovernanceManifestActivation {
 
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestActivation {
     fn deserialize(archived: &'a norito::core::Archived<GovernanceManifestActivation>) -> Self {
-        let (namespace, contract_id, code_hash_hex, abi_hash_hex, height, activated_at_ms): (
-            String,
+        let (contract_address, code_hash_hex, abi_hash_hex, height, activated_at_ms): (
             String,
             String,
             Option<String>,
@@ -5678,8 +5756,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestActivation {
             u64,
         ) = norito::core::NoritoDeserialize::deserialize(archived.cast());
         Self {
-            namespace,
-            contract_id,
+            contract_address,
             code_hash_hex,
             abi_hash_hex,
             height,
@@ -5690,12 +5767,11 @@ impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestActivation {
 
 impl<'a> DecodeFromSlice<'a> for GovernanceManifestActivation {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let ((namespace, contract_id, code_hash_hex, abi_hash_hex, height, activated_at_ms), used) =
-            <(String, String, String, Option<String>, u64, u64)>::decode_from_slice(bytes)?;
+        let ((contract_address, code_hash_hex, abi_hash_hex, height, activated_at_ms), used) =
+            <(String, String, Option<String>, u64, u64)>::decode_from_slice(bytes)?;
         Ok((
             Self {
-                namespace,
-                contract_id,
+                contract_address,
                 code_hash_hex,
                 abi_hash_hex,
                 height,
@@ -5926,13 +6002,17 @@ fn collect_da_receipt_cursors(metrics: &Metrics) -> Vec<DaReceiptCursorStatus> {
 
 impl From<&Metrics> for Status {
     fn from(value: &Metrics) -> Self {
+        let now_ms = current_unix_time_ms();
         Self {
+            build: BuildStatus::current(),
             peers: value.connected_peers.get(),
             blocks: value.block_height.get(),
             blocks_non_empty: value.block_height_non_empty.get(),
             commit_time_ms: value.last_commit_time_ms.get(),
             txs_approved: value.txs.with_label_values(&["accepted"]).get(),
             txs_rejected: value.txs.with_label_values(&["rejected"]).get(),
+            last_rejection_at_ms: value.last_rejection_at_ms(),
+            txs_rejected_recent_5m: value.txs_rejected_recent_5m(now_ms),
             uptime: Uptime(Duration::from_millis(value.uptime_since_genesis_ms.get())),
             view_changes: value
                 .view_changes
@@ -6190,16 +6270,16 @@ pub struct Metrics {
     pub subscription_billing_attempts_total: IntCounterVec,
     /// Subscription billing outcomes grouped by pricing kind and result.
     pub subscription_billing_outcomes_total: IntCounterVec,
-    /// Offline-to-online transfer lifecycle events grouped by event kind.
-    pub offline_transfer_events_total: IntCounterVec,
-    /// Aggregate offline receipt counters grouped by event kind.
-    pub offline_transfer_receipts_total: IntCounterVec,
-    /// Distribution of settled offline bundle amounts.
-    pub offline_transfer_settled_amount: Histogram,
-    /// Offline transfer validation rejections grouped by platform and reason.
-    pub offline_transfer_rejections_total: IntCounterVec,
-    /// Offline transfer bundles pruned from hot storage.
-    pub offline_transfer_pruned_total: IntCounter,
+    /// Offline V2 note lifecycle events grouped by event kind.
+    pub offline_note_events_total: IntCounterVec,
+    /// Aggregate Offline V2 receipt-ack counters grouped by event kind.
+    pub offline_note_receipts_total: IntCounterVec,
+    /// Distribution of redeemed Offline V2 note amounts.
+    pub offline_note_settled_amount: Histogram,
+    /// Offline note validation rejections grouped by platform and reason.
+    pub offline_note_rejections_total: IntCounterVec,
+    /// Offline V2 note records pruned from hot storage.
+    pub offline_note_pruned_total: IntCounter,
     /// Offline attestation tokens processed grouped by integrity policy.
     pub offline_attestation_policy_total: IntCounterVec,
     /// iOS App Attest assertions accepted through the compatibility signature path.
@@ -6318,6 +6398,10 @@ pub struct Metrics {
     taikai_ingest_snapshot_order: Arc<RwLock<VecDeque<(String, String)>>>,
     /// Cached DA receipt cursors keyed by (lane, epoch) for status snapshots.
     da_receipt_cursors: Arc<RwLock<BTreeMap<DaReceiptCursorKey, u64>>>,
+    /// Recent rejected-transaction batches retained for `/status` freshness reporting.
+    recent_rejection_events: Mutex<VecDeque<(u64, u64)>>,
+    /// Millisecond UNIX timestamp when the latest rejected transaction batch was observed.
+    last_rejection_at_ms: StdAtomicU64,
     taikai_alias_rotation_snapshots: TaikaiAliasRotationSnapshots,
     /// Alias service usage grouped by lane and event kind.
     pub alias_usage_total: IntCounterVec,
@@ -6677,6 +6761,16 @@ pub struct Metrics {
     pub sumeragi_rbc_sessions_active: GenericGauge<AtomicU64>,
     /// Sumeragi RBC: sessions pruned due to TTL (cumulative)
     pub sumeragi_rbc_sessions_pruned_total: IntCounter,
+    /// Sumeragi RBC: targeted INIT repair requests sent (cumulative)
+    pub sumeragi_rbc_init_requests_total: IntCounter,
+    /// Sumeragi RBC: targeted chunk repair requests sent (cumulative)
+    pub sumeragi_rbc_chunk_requests_total: IntCounter,
+    /// Sumeragi RBC: encoded chunk indices requested via targeted repair (cumulative)
+    pub sumeragi_rbc_requested_chunks_total: IntCounter,
+    /// Sumeragi RBC: initial chunk target outcomes by encoding and fanout policy.
+    pub sumeragi_rbc_initial_chunk_targets_total: IntCounterVec,
+    /// Sumeragi RBC: targeted repair windows that fell back to broad rebroadcast (kind=init|chunk)
+    pub sumeragi_rbc_repair_fallback_total: IntCounterVec,
     /// Sumeragi RBC: READY broadcasts sent (cumulative)
     pub sumeragi_rbc_ready_broadcasts_total: IntCounter,
     /// Sumeragi RBC: rebroadcasts skipped (kind=payload|ready)
@@ -6685,6 +6779,10 @@ pub struct Metrics {
     pub sumeragi_rbc_deliver_broadcasts_total: IntCounter,
     /// Sumeragi RBC: total payload bytes delivered and cached (gauge)
     pub sumeragi_rbc_payload_bytes_delivered_total: GenericGauge<AtomicU64>,
+    /// Sumeragi RBC: RS16 stripes reconstructed from parity (cumulative)
+    pub sumeragi_rbc_reconstructed_stripes_total: IntCounter,
+    /// Sumeragi RBC: seed/preprocessing latency histogram (milliseconds)
+    pub sumeragi_rbc_seed_latency_ms: Histogram,
     /// Pending RBC backlog aggregated per lane (tx count).
     pub sumeragi_rbc_lane_tx_count: GenericGaugeVec<AtomicU64>,
     /// Total RBC chunks aggregated per lane.
@@ -6721,6 +6819,10 @@ pub struct Metrics {
     pub sumeragi_rbc_store_evictions_total: IntCounter,
     /// Sumeragi RBC: persist requests dropped due to a full async queue (cumulative)
     pub sumeragi_rbc_persist_drops_total: IntCounter,
+    /// Sumeragi RBC status snapshot persistence disabled due to fatal disk faults (0/1)
+    pub sumeragi_rbc_status_persistence_disabled: GenericGauge<AtomicU64>,
+    /// Sumeragi RBC status snapshot fatal persist failures (cumulative)
+    pub sumeragi_rbc_status_persist_failures_total: IntCounter,
     /// Sumeragi RBC: proposals deferred due to store back-pressure (cumulative)
     pub sumeragi_rbc_backpressure_deferrals_total: IntCounter,
     /// Sumeragi RBC: DELIVER deferrals waiting on READY quorum (cumulative)
@@ -7098,6 +7200,8 @@ pub struct Metrics {
     pub confidential_gas_total: IntCounter,
     /// Total fee units charged in the latest validated block
     pub block_fee_total_units: GenericGauge<AtomicU64>,
+    /// Scale associated with `block_fee_total_units`
+    pub block_fee_total_scale: GenericGauge<AtomicU64>,
     /// Merge ledger: total entries appended (cumulative)
     pub merge_ledger_entries_total: IntCounter,
     /// Merge ledger: latest committed epoch id
@@ -7114,6 +7218,8 @@ pub struct Metrics {
     pub torii_stream_rows: HistogramVec,
     /// Torii: transaction admission latency (seconds) by lane and endpoint
     pub torii_lane_admission_latency_seconds: HistogramVec,
+    /// Torii: route-stage latency (seconds) by route kind, stage, and outcome
+    pub torii_route_stage_latency_seconds: HistogramVec,
     /// Torii: attachment rejects grouped by reason.
     pub torii_attachment_reject_total: IntCounterVec,
     /// Torii: attachment sanitization latency (milliseconds).
@@ -7405,6 +7511,14 @@ pub struct Metrics {
     pub torii_da_receipt_highest_sequence: GenericGaugeVec<AtomicU64>,
     /// DA chunking + erasure coding duration (seconds).
     pub torii_da_chunking_seconds: Histogram,
+    /// DA spool worker batch outcomes.
+    pub torii_da_spool_batches_total: IntCounterVec,
+    /// DA spool worker artifact outcomes.
+    pub torii_da_spool_artifacts_total: IntCounterVec,
+    /// Current DA spool worker queue depth.
+    pub torii_da_spool_queue_depth: GenericGauge<AtomicU64>,
+    /// DA spool worker batch disk-write duration (milliseconds).
+    pub torii_da_spool_batch_write_ms: Histogram,
     /// DA shard cursor events grouped by outcome/lane/shard.
     pub da_shard_cursor_events_total: IntCounterVec,
     /// Latest block height recorded for each shard cursor advance.
@@ -8177,28 +8291,28 @@ impl Default for Metrics {
                 let _ = subscription_billing_outcomes_total.with_label_values(&[pricing, result]);
             }
         }
-        let offline_transfer_events_total = IntCounterVec::new(
+        let offline_note_events_total = IntCounterVec::new(
             Opts::new(
-                "iroha_offline_transfer_events_total",
-                "Offline transfer lifecycle events grouped by event kind",
+                "iroha_offline_note_events_total",
+                "Offline note lifecycle events grouped by event kind",
             ),
             &["event"],
         )
         .expect("Infallible");
         for event in ["settled", "archived", "pruned"] {
-            let _ = offline_transfer_events_total.with_label_values(&[event]);
+            let _ = offline_note_events_total.with_label_values(&[event]);
         }
-        let offline_transfer_receipts_total = IntCounterVec::new(
+        let offline_note_receipts_total = IntCounterVec::new(
             Opts::new(
-                "iroha_offline_transfer_receipts_total",
-                "Offline transfer receipt aggregates grouped by event kind",
+                "iroha_offline_note_receipts_total",
+                "Offline note receipt aggregates grouped by event kind",
             ),
             &["event"],
         )
         .expect("Infallible");
-        let offline_transfer_pruned_total = IntCounter::new(
-            "iroha_offline_transfer_pruned_total",
-            "Offline transfer bundles pruned from hot storage",
+        let offline_note_pruned_total = IntCounter::new(
+            "iroha_offline_note_pruned_total",
+            "Offline note bundles pruned from hot storage",
         )
         .expect("Infallible");
         let offline_attestation_policy_total = IntCounterVec::new(
@@ -8297,18 +8411,13 @@ impl Default for Metrics {
             "Open viral escrows currently tracked on-ledger",
         )
         .expect("Infallible");
-        for label in [
-            AndroidIntegrityPolicy::MarkerKey.as_str(),
-            AndroidIntegrityPolicy::PlayIntegrity.as_str(),
-            AndroidIntegrityPolicy::HmsSafetyDetect.as_str(),
-            AndroidIntegrityPolicy::Provisioned.as_str(),
-        ] {
+        for label in ["ios-appattest", "android-keymint"] {
             let _ = offline_attestation_policy_total.with_label_values(&[label]);
         }
-        let _ = offline_transfer_receipts_total.with_label_values(&["settled"]);
-        let offline_transfer_settled_amount = Histogram::with_opts(
+        let _ = offline_note_receipts_total.with_label_values(&["settled"]);
+        let offline_note_settled_amount = Histogram::with_opts(
             HistogramOpts::new(
-                "iroha_offline_transfer_settled_amount",
+                "iroha_offline_note_settled_amount",
                 "Distribution of offline settlement bundle amounts (asset units)",
             )
             .buckets(
@@ -8317,10 +8426,10 @@ impl Default for Metrics {
             ),
         )
         .expect("Infallible");
-        let offline_transfer_rejections_total = IntCounterVec::new(
+        let offline_note_rejections_total = IntCounterVec::new(
             Opts::new(
-                "iroha_offline_transfer_rejections_total",
-                "Offline transfer validation rejections grouped by platform and reason",
+                "iroha_offline_note_rejections_total",
+                "Offline note validation rejections grouped by platform and reason",
             ),
             &["platform", "reason"],
         )
@@ -8806,6 +8915,9 @@ impl Default for Metrics {
             Arc::new(RwLock::new(BTreeMap::new()));
         let da_receipt_cursors: Arc<RwLock<BTreeMap<DaReceiptCursorKey, u64>>> =
             Arc::new(RwLock::new(BTreeMap::new()));
+        let recent_rejection_events =
+            Mutex::new(VecDeque::with_capacity(REJECTION_RECENT_EVENT_CAP));
+        let last_rejection_at_ms = StdAtomicU64::new(0);
         let alias_usage_total = IntCounterVec::new(
             Opts::new(
                 "alias_usage_total",
@@ -9938,6 +10050,37 @@ impl Default for Metrics {
             "Sumeragi RBC sessions pruned due to TTL",
         )
         .expect("Infallible");
+        let sumeragi_rbc_init_requests_total = IntCounter::new(
+            "sumeragi_rbc_init_requests_total",
+            "Sumeragi RBC targeted INIT repair requests sent",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_chunk_requests_total = IntCounter::new(
+            "sumeragi_rbc_chunk_requests_total",
+            "Sumeragi RBC targeted chunk repair requests sent",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_requested_chunks_total = IntCounter::new(
+            "sumeragi_rbc_requested_chunks_total",
+            "Sumeragi RBC encoded chunk indices requested via targeted repair",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_initial_chunk_targets_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_rbc_initial_chunk_targets_total",
+                "Sumeragi RBC initial chunk target outcomes by encoding and fanout policy",
+            ),
+            &["encoding", "fanout", "outcome"],
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_repair_fallback_total = IntCounterVec::new(
+            Opts::new(
+                "sumeragi_rbc_repair_fallback_total",
+                "Sumeragi RBC targeted repair windows that fell back to broad rebroadcast (kind=init|chunk)",
+            ),
+            &["kind"],
+        )
+        .expect("Infallible");
         let sumeragi_rbc_ready_broadcasts_total = IntCounter::new(
             "sumeragi_rbc_ready_broadcasts_total",
             "Sumeragi RBC READY broadcasts sent",
@@ -9959,6 +10102,21 @@ impl Default for Metrics {
         let sumeragi_rbc_payload_bytes_delivered_total = GenericGauge::new(
             "sumeragi_rbc_payload_bytes_delivered_total",
             "Sumeragi RBC payload bytes delivered and cached (cumulative)",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_reconstructed_stripes_total = IntCounter::new(
+            "sumeragi_rbc_reconstructed_stripes_total",
+            "Sumeragi RBC RS16 stripes reconstructed from parity",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_seed_latency_ms = Histogram::with_opts(
+            HistogramOpts::new(
+                "sumeragi_rbc_seed_latency_ms",
+                "Sumeragi RBC seed/preprocessing latency in milliseconds",
+            )
+            .buckets(vec![
+                0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
+            ]),
         )
         .expect("Infallible");
         let sumeragi_rbc_lane_tx_count = GenericGaugeVec::new(
@@ -10088,6 +10246,16 @@ impl Default for Metrics {
         let sumeragi_rbc_persist_drops_total = IntCounter::new(
             "sumeragi_rbc_persist_drops_total",
             "Sumeragi RBC persist requests dropped due to full async queue",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_status_persistence_disabled = GenericGauge::new(
+            "sumeragi_rbc_status_persistence_disabled",
+            "Sumeragi RBC status snapshot persistence disabled due to fatal disk faults (0/1)",
+        )
+        .expect("Infallible");
+        let sumeragi_rbc_status_persist_failures_total = IntCounter::new(
+            "sumeragi_rbc_status_persist_failures_total",
+            "Sumeragi RBC status snapshot fatal persist failures",
         )
         .expect("Infallible");
         let sumeragi_rbc_backpressure_deferrals_total = IntCounter::new(
@@ -11418,6 +11586,17 @@ impl Default for Metrics {
             &["lane_id", "endpoint"],
         )
         .expect("Infallible");
+        let torii_route_stage_latency_seconds = HistogramVec::new(
+            HistogramOpts::new(
+                "torii_route_stage_latency_seconds",
+                "Torii route-stage latency (seconds) by route kind, stage, and outcome",
+            )
+            .buckets(
+                prometheus::exponential_buckets(0.000_001, 2.0, 20).expect("inputs are valid"),
+            ),
+            &["route_kind", "stage", "outcome"],
+        )
+        .expect("Infallible");
         let torii_attachment_reject_total = IntCounterVec::new(
             Opts::new(
                 "torii_attachment_reject_total",
@@ -12190,6 +12369,16 @@ impl Default for Metrics {
             &["stat"],
         )
         .expect("Infallible");
+        register_guarded(&registry, &torii_sorafs_registry_manifests_total);
+        register_guarded(&registry, &torii_sorafs_registry_aliases_total);
+        register_guarded(&registry, &torii_sorafs_registry_orders_total);
+        register_guarded(&registry, &torii_sorafs_replication_sla_total);
+        register_guarded(&registry, &torii_sorafs_replication_backlog_total);
+        register_guarded(
+            &registry,
+            &torii_sorafs_replication_completion_latency_epochs,
+        );
+        register_guarded(&registry, &torii_sorafs_replication_deadline_slack_epochs);
         let soranet_privacy_circuit_events_total = IntCounterVec::new(
             Opts::new(
                 "soranet_privacy_circuit_events_total",
@@ -12552,6 +12741,37 @@ impl Default for Metrics {
             ]),
         )
         .expect("Infallible");
+        let torii_da_spool_batches_total = IntCounterVec::new(
+            Opts::new(
+                "torii_da_spool_batches_total",
+                "DA spool worker batch outcomes",
+            ),
+            &["outcome"],
+        )
+        .expect("Infallible");
+        let torii_da_spool_artifacts_total = IntCounterVec::new(
+            Opts::new(
+                "torii_da_spool_artifacts_total",
+                "DA spool worker artifact outcomes by artifact kind",
+            ),
+            &["kind", "outcome"],
+        )
+        .expect("Infallible");
+        let torii_da_spool_queue_depth = GenericGauge::new(
+            "torii_da_spool_queue_depth",
+            "Current number of DA spool batches waiting for disk persistence",
+        )
+        .expect("Infallible");
+        let torii_da_spool_batch_write_ms = Histogram::with_opts(
+            HistogramOpts::new(
+                "torii_da_spool_batch_write_ms",
+                "DA spool worker batch disk-write duration in milliseconds",
+            )
+            .buckets(vec![
+                0.1, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1_000.0,
+            ]),
+        )
+        .expect("Infallible");
         let da_shard_cursor_events_total = IntCounterVec::new(
             Opts::new(
                 "da_shard_cursor_events_total",
@@ -12860,6 +13080,10 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_da_receipts_total);
         register_guarded(&registry, &torii_da_receipt_highest_sequence);
         register_guarded(&registry, &torii_da_chunking_seconds);
+        register_guarded(&registry, &torii_da_spool_batches_total);
+        register_guarded(&registry, &torii_da_spool_artifacts_total);
+        register_guarded(&registry, &torii_da_spool_queue_depth);
+        register_guarded(&registry, &torii_da_spool_batch_write_ms);
         register_guarded(&registry, &da_shard_cursor_events_total);
         register_guarded(&registry, &da_shard_cursor_height);
         register_guarded(&registry, &da_shard_cursor_lag_blocks);
@@ -12867,11 +13091,11 @@ impl Default for Metrics {
             registry,
             subscription_billing_attempts_total,
             subscription_billing_outcomes_total,
-            offline_transfer_events_total,
-            offline_transfer_receipts_total,
-            offline_transfer_settled_amount,
-            offline_transfer_rejections_total,
-            offline_transfer_pruned_total,
+            offline_note_events_total,
+            offline_note_receipts_total,
+            offline_note_settled_amount,
+            offline_note_rejections_total,
+            offline_note_pruned_total,
             offline_attestation_policy_total,
             offline_app_attest_signature_compat_total,
             social_events_total,
@@ -13237,6 +13461,11 @@ impl Default for Metrics {
         let block_fee_total_units = GenericGauge::new(
             "block_fee_total_units",
             "Total fee units charged in the latest validated block",
+        )
+        .expect("Infallible");
+        let block_fee_total_scale = GenericGauge::new(
+            "block_fee_total_scale",
+            "Scale for block_fee_total_units so the exact latest-block fee amount can be reconstructed",
         )
         .expect("Infallible");
 
@@ -13741,6 +13970,11 @@ impl Default for Metrics {
         register!(
             registry,
             sumeragi_rbc_sessions_pruned_total,
+            sumeragi_rbc_init_requests_total,
+            sumeragi_rbc_chunk_requests_total,
+            sumeragi_rbc_requested_chunks_total,
+            sumeragi_rbc_initial_chunk_targets_total,
+            sumeragi_rbc_repair_fallback_total,
             sumeragi_rbc_ready_broadcasts_total,
             sumeragi_rbc_rebroadcast_skipped_total,
             sumeragi_rbc_deliver_broadcasts_total,
@@ -13754,6 +13988,8 @@ impl Default for Metrics {
         register!(
             registry,
             sumeragi_rbc_payload_bytes_delivered_total,
+            sumeragi_rbc_reconstructed_stripes_total,
+            sumeragi_rbc_seed_latency_ms,
             sumeragi_rbc_lane_tx_count,
             sumeragi_rbc_lane_total_chunks,
             sumeragi_rbc_lane_pending_chunks,
@@ -13774,7 +14010,9 @@ impl Default for Metrics {
             sumeragi_rbc_store_bytes,
             sumeragi_rbc_store_pressure,
             sumeragi_rbc_store_evictions_total,
-            sumeragi_rbc_persist_drops_total
+            sumeragi_rbc_persist_drops_total,
+            sumeragi_rbc_status_persistence_disabled,
+            sumeragi_rbc_status_persist_failures_total
         );
         register!(
             registry,
@@ -13841,6 +14079,7 @@ impl Default for Metrics {
         );
         register!(registry, confidential_gas_total);
         register!(registry, block_fee_total_units);
+        register!(registry, block_fee_total_scale);
         register!(
             registry,
             torii_filter_depth,
@@ -13848,6 +14087,7 @@ impl Default for Metrics {
             torii_scan_ms,
             torii_stream_rows,
             torii_lane_admission_latency_seconds,
+            torii_route_stage_latency_seconds,
             torii_attachment_reject_total,
             torii_attachment_sanitize_ms
         );
@@ -13977,11 +14217,11 @@ impl Default for Metrics {
             settlement_haircut_total,
             subscription_billing_attempts_total,
             subscription_billing_outcomes_total,
-            offline_transfer_events_total,
-            offline_transfer_receipts_total,
-            offline_transfer_settled_amount,
-            offline_transfer_rejections_total,
-            offline_transfer_pruned_total,
+            offline_note_events_total,
+            offline_note_receipts_total,
+            offline_note_settled_amount,
+            offline_note_rejections_total,
+            offline_note_pruned_total,
             offline_attestation_policy_total,
             offline_app_attest_signature_compat_total,
             social_events_total,
@@ -14041,6 +14281,8 @@ impl Default for Metrics {
             taikai_ingest_snapshots,
             taikai_ingest_snapshot_order,
             da_receipt_cursors,
+            recent_rejection_events,
+            last_rejection_at_ms,
             taikai_alias_rotation_snapshots,
             alias_usage_total,
             iso_reference_status,
@@ -14272,10 +14514,17 @@ impl Default for Metrics {
             sumeragi_da_pin_intent_spool_total,
             sumeragi_rbc_sessions_active,
             sumeragi_rbc_sessions_pruned_total,
+            sumeragi_rbc_init_requests_total,
+            sumeragi_rbc_chunk_requests_total,
+            sumeragi_rbc_requested_chunks_total,
+            sumeragi_rbc_initial_chunk_targets_total,
+            sumeragi_rbc_repair_fallback_total,
             sumeragi_rbc_ready_broadcasts_total,
             sumeragi_rbc_rebroadcast_skipped_total,
             sumeragi_rbc_deliver_broadcasts_total,
             sumeragi_rbc_payload_bytes_delivered_total,
+            sumeragi_rbc_reconstructed_stripes_total,
+            sumeragi_rbc_seed_latency_ms,
             sumeragi_rbc_lane_tx_count,
             sumeragi_rbc_lane_total_chunks,
             sumeragi_rbc_lane_pending_chunks,
@@ -14294,6 +14543,8 @@ impl Default for Metrics {
             sumeragi_rbc_store_pressure,
             sumeragi_rbc_store_evictions_total,
             sumeragi_rbc_persist_drops_total,
+            sumeragi_rbc_status_persistence_disabled,
+            sumeragi_rbc_status_persist_failures_total,
             sumeragi_rbc_backpressure_deferrals_total,
             sumeragi_rbc_deliver_defer_ready_total,
             sumeragi_rbc_deliver_defer_chunks_total,
@@ -14436,11 +14687,13 @@ impl Default for Metrics {
             confidential_gas_block_used,
             confidential_gas_total,
             block_fee_total_units,
+            block_fee_total_scale,
             torii_filter_depth,
             torii_filter_match_count,
             torii_scan_ms,
             torii_stream_rows,
             torii_lane_admission_latency_seconds,
+            torii_route_stage_latency_seconds,
             torii_attachment_reject_total,
             torii_attachment_sanitize_ms,
             torii_zk_prover_attachment_bytes,
@@ -14586,6 +14839,10 @@ impl Default for Metrics {
             torii_da_receipts_total,
             torii_da_receipt_highest_sequence,
             torii_da_chunking_seconds,
+            torii_da_spool_batches_total,
+            torii_da_spool_artifacts_total,
+            torii_da_spool_queue_depth,
+            torii_da_spool_batch_write_ms,
             da_shard_cursor_events_total,
             da_shard_cursor_height,
             da_shard_cursor_lag_blocks,
@@ -14774,6 +15031,16 @@ pub struct LaneSettlementSnapshot<'a> {
 }
 
 impl Metrics {
+    fn prune_recent_rejection_events(events: &mut VecDeque<(u64, u64)>, now_ms: u64) {
+        let cutoff_ms = now_ms.saturating_sub(REJECTION_RECENT_WINDOW_MS);
+        while matches!(events.front(), Some((timestamp_ms, _)) if *timestamp_ms < cutoff_ms) {
+            events.pop_front();
+        }
+        while events.len() > REJECTION_RECENT_EVENT_CAP {
+            events.pop_front();
+        }
+    }
+
     fn to_f64(value: u64) -> f64 {
         #[allow(clippy::cast_precision_loss)]
         {
@@ -14787,6 +15054,43 @@ impl Metrics {
         }
         let ratio = numerator_ms / window_ms;
         ratio.clamp(0.0, 1.0)
+    }
+
+    /// Record a newly observed batch of rejected transactions for `/status` freshness reporting.
+    pub fn record_rejected_transactions(&self, count: u64, observed_at_ms: u64) {
+        if count == 0 {
+            return;
+        }
+        self.last_rejection_at_ms
+            .store(observed_at_ms, Ordering::Relaxed);
+        let mut events = self
+            .recent_rejection_events
+            .lock()
+            .expect("recent rejection event cache poisoned");
+        events.push_back((observed_at_ms, count));
+        Self::prune_recent_rejection_events(&mut events, observed_at_ms);
+    }
+
+    /// Return the latest rejection timestamp observed by this node, if any.
+    #[must_use]
+    pub fn last_rejection_at_ms(&self) -> Option<u64> {
+        match self.last_rejection_at_ms.load(Ordering::Relaxed) {
+            0 => None,
+            timestamp_ms => Some(timestamp_ms),
+        }
+    }
+
+    /// Return the number of rejected transactions observed within the last five minutes.
+    #[must_use]
+    pub fn txs_rejected_recent_5m(&self, now_ms: u64) -> u64 {
+        let mut events = self
+            .recent_rejection_events
+            .lock()
+            .expect("recent rejection event cache poisoned");
+        Self::prune_recent_rejection_events(&mut events, now_ms);
+        events
+            .iter()
+            .fold(0_u64, |total, (_, count)| total.saturating_add(*count))
     }
 
     /// Update stack sizing gauges and counters from the latest snapshot.
@@ -14939,6 +15243,35 @@ impl Metrics {
     /// Observe DA chunking + erasure coding duration in seconds.
     pub fn observe_da_chunking_seconds(&self, seconds: f64) {
         self.torii_da_chunking_seconds.observe(seconds);
+    }
+
+    /// Record a Torii DA spool batch write outcome.
+    pub fn record_torii_da_spool_batch(&self, outcome: &'static str, write_ms: f64) {
+        self.torii_da_spool_batches_total
+            .with_label_values(&[outcome])
+            .inc();
+        self.torii_da_spool_batch_write_ms
+            .observe(write_ms.max(0.0));
+    }
+
+    /// Record Torii DA spool artifact outcomes.
+    pub fn record_torii_da_spool_artifact(
+        &self,
+        kind: &'static str,
+        outcome: &'static str,
+        count: u64,
+    ) {
+        if count == 0 {
+            return;
+        }
+        self.torii_da_spool_artifacts_total
+            .with_label_values(&[kind, outcome])
+            .inc_by(count);
+    }
+
+    /// Set the current Torii DA spool queue depth.
+    pub fn set_torii_da_spool_queue_depth(&self, depth: u64) {
+        self.torii_da_spool_queue_depth.set(depth);
     }
 
     /// Update the highest-seen DA receipt sequence for a lane/epoch.
@@ -15426,12 +15759,12 @@ impl Metrics {
             .inc_by(u128_to_f64(haircut_micro) / 1_000_000.0);
     }
 
-    /// Record a settled offline-to-online transfer bundle.
-    pub fn record_offline_transfer_settlement(&self, amount: f64, receipt_count: u32) {
-        self.offline_transfer_events_total
+    /// Record a settled offline V2 note bundle.
+    pub fn record_offline_note_settlement(&self, amount: f64, receipt_count: u32) {
+        self.offline_note_events_total
             .with_label_values(&["settled"])
             .inc();
-        self.offline_transfer_receipts_total
+        self.offline_note_receipts_total
             .with_label_values(&["settled"])
             .inc_by(u64::from(receipt_count));
         let observed = if amount.is_finite() {
@@ -15439,32 +15772,28 @@ impl Metrics {
         } else {
             0.0
         };
-        self.offline_transfer_settled_amount.observe(observed);
+        self.offline_note_settled_amount.observe(observed);
     }
 
-    /// Record an offline transfer archival transition.
-    pub fn inc_offline_transfer_archived(&self) {
-        self.offline_transfer_events_total
+    /// Record an offline note archival transition.
+    pub fn inc_offline_note_archived(&self) {
+        self.offline_note_events_total
             .with_label_values(&["archived"])
             .inc();
     }
 
-    /// Record an offline bundle being pruned from hot storage.
-    pub fn inc_offline_transfer_pruned(&self) {
-        self.offline_transfer_events_total
+    /// Record an Offline V2 note record being pruned from hot storage.
+    pub fn inc_offline_note_pruned(&self) {
+        self.offline_note_events_total
             .with_label_values(&["pruned"])
             .inc();
-        self.offline_transfer_pruned_total.inc();
+        self.offline_note_pruned_total.inc();
     }
 
-    /// Record a validation rejection for an offline transfer bundle.
-    pub fn record_offline_transfer_rejection(
-        &self,
-        platform: OfflineTransferRejectionPlatform,
-        reason: OfflineTransferRejectionReason,
-    ) {
-        self.offline_transfer_rejections_total
-            .with_label_values(&[platform.as_label(), reason.as_label()])
+    /// Record a validation rejection for an Offline V2 note operation.
+    pub fn record_offline_note_rejection(&self, platform: &str, reason: &str) {
+        self.offline_note_rejections_total
+            .with_label_values(&[platform, reason])
             .inc();
     }
 
@@ -17504,12 +17833,17 @@ mod test {
     #[test]
     fn settlement_conversion_and_haircut_totals_increment() {
         let metrics = Metrics::default();
-        metrics.inc_settlement_conversion_total("lane-1", "ds-7", "xor#sora", 4);
+        metrics.inc_settlement_conversion_total(
+            "lane-1",
+            "ds-7",
+            "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            4,
+        );
         metrics.inc_settlement_haircut_total("lane-1", "ds-7", 3_500_000);
 
         let conversions = metrics
             .settlement_conversion_total
-            .with_label_values(&["lane-1", "ds-7", "xor#sora"])
+            .with_label_values(&["lane-1", "ds-7", "61CtjvNd9T3THAR65GsMVHr82Bjc"])
             .get();
         assert_eq!(conversions, 4);
 
@@ -17803,6 +18137,12 @@ mod test {
     #[allow(clippy::too_many_lines)]
     fn sample_status() -> Status {
         Status {
+            build: BuildStatus {
+                version: "2.0.0-rc.test".to_owned(),
+                git_commit_sha: "deadbeef".to_owned(),
+                cargo_features: "telemetry,zk-halo2".to_owned(),
+                target_triple: "aarch64-apple-darwin".to_owned(),
+            },
             peers: 4,
             blocks: 5,
             blocks_non_empty: 3,
@@ -17810,6 +18150,8 @@ mod test {
             da_reschedule_total: 7,
             txs_approved: 31,
             txs_rejected: 3,
+            last_rejection_at_ms: Some(1_234_890),
+            txs_rejected_recent_5m: 2,
             uptime: Uptime(Duration::new(5, 937_000_000)),
             view_changes: 2,
             queue_size: 18,
@@ -17913,8 +18255,8 @@ mod test {
                     rejected: 1,
                 },
                 recent_manifest_activations: vec![GovernanceManifestActivation {
-                    namespace: "apps".to_string(),
-                    contract_id: "demo.contract".to_string(),
+                    contract_address: "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s"
+                        .to_string(),
                     code_hash_hex: "deadbeef".to_string(),
                     abi_hash_hex: Some("cafebabe".to_string()),
                     height: 42,
@@ -17969,6 +18311,12 @@ mod test {
         let actual = json::to_json_pretty(&value).expect("Sample is valid");
         let actual_value: Value = json::from_json(&actual).expect("pretty JSON should parse");
         let expected_value = norito::json!({
+            "build": {
+                "version": "2.0.0-rc.test",
+                "git_commit_sha": "deadbeef",
+                "cargo_features": "telemetry,zk-halo2",
+                "target_triple": "aarch64-apple-darwin"
+            },
             "peers": 4,
             "blocks": 5,
             "blocks_non_empty": 3,
@@ -17976,6 +18324,8 @@ mod test {
             "da_reschedule_total": 7,
             "txs_approved": 31,
             "txs_rejected": 3,
+            "last_rejection_at_ms": 1_234_890,
+            "txs_rejected_recent_5m": 2,
             "uptime": {
                 "secs": 5,
                 "nanos": 937_000_000
@@ -18083,8 +18433,7 @@ mod test {
                     "rejected": 1
                 },
                 "recent_manifest_activations": [{
-                    "namespace": "apps",
-                    "contract_id": "demo.contract",
+                    "contract_address": "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
                     "code_hash_hex": "deadbeef",
                     "abi_hash_hex": "cafebabe",
                     "height": 42,
@@ -18128,12 +18477,20 @@ mod test {
         // https://docs.iroha.tech/reference/torii-endpoints.html#status
         let expected = expect_test::expect![[r#"
             {
+              "build": {
+                "version": "2.0.0-rc.test",
+                "git_commit_sha": "deadbeef",
+                "cargo_features": "telemetry,zk-halo2",
+                "target_triple": "aarch64-apple-darwin"
+              },
               "peers": 4,
               "blocks": 5,
               "blocks_non_empty": 3,
               "commit_time_ms": 130,
               "txs_approved": 31,
               "txs_rejected": 3,
+              "last_rejection_at_ms": 1234890,
+              "txs_rejected_recent_5m": 2,
               "uptime": {
                 "secs": 5,
                 "nanos": 937000000
@@ -18241,8 +18598,7 @@ mod test {
                 },
                 "recent_manifest_activations": [
                   {
-                    "namespace": "apps",
-                    "contract_id": "demo.contract",
+                    "contract_address": "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
                     "code_hash_hex": "deadbeef",
                     "abi_hash_hex": "cafebabe",
                     "height": 42,

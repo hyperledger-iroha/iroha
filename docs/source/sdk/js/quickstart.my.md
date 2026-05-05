@@ -2,12 +2,14 @@
 lang: my
 direction: ltr
 source: docs/source/sdk/js/quickstart.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 137a43a6ef4f6bfba104aba151e73785aab912fe4df34cb52ee59540c47e6fec
-source_last_modified: "2026-01-30T18:06:03.356414+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: ed490b7e796183ba923148179dbbe4b923b6d5e52c203853bd2d1236e760e631
+source_last_modified: "2026-04-04T12:16:49.583988+00:00"
+translation_last_reviewed: 2026-04-05
 ---
+
+> Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
 <!--
   SPDX-License-Identifier: Apache-2.0
@@ -72,21 +74,21 @@ import {
 } from "@iroha/iroha-js";
 
 const mintInstruction = buildMintAssetInstruction({
-  assetId: "norito:4e52543000000001",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   quantity: "10",
 });
 
 const transferInstruction = buildTransferAssetInstruction({
-  sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  sourceAssetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
-  mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  authority: "<i105-account-id>",
+  mint: { assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM", quantity: "10" },
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -109,16 +111,16 @@ import {
 const registerDomain = noritoEncodeInstruction(
   buildRegisterDomainInstruction({ domainId: "wonderland" }),
 );
-const registerAccount = buildRegisterAccountInstruction({ accountId: "i105..." });
+const registerAccount = buildRegisterAccountInstruction({ accountId: "<i105-account-id>" });
 const transfer = buildTransferAssetInstruction({
-  sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  sourceAssetHoldingId: "<base58-asset-definition-id>#<i105-account-id>",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const tx = buildTransaction({
   chainId: "demo-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   instructions: [registerAccount, transfer],
   privateKey: Buffer.alloc(32, 0x42),
 });
@@ -178,7 +180,7 @@ const nftPage = await torii.listNfts({
 });
 console.log("nfts:", nftPage.items.map((it) => it.id));
 
-for await (const holding of torii.iterateAccountAssetsQuery("i105...", {
+for await (const holding of torii.iterateAccountAssetsQuery("<i105-account-id>", {
   requirePermissions: true,
   pageSize: 2,
   filter: { Gte: ["quantity", 1] },
@@ -191,8 +193,10 @@ for await (const holding of torii.iterateAccountAssetsQuery("i105...", {
 ### Auth headers and TLS guardrails
 
 `ToriiClient` and `NoritoRpcClient` refuse to send credentials over insecure `http`/`ws` or to
-absolute URLs outside the configured base. Opt into `allowInsecure: true` only for local testing;
-the telemetry hook fires whenever the escape hatch is used.
+absolute URLs outside the configured base. `ToriiClient` applies the same guard to
+`canonicalAuth` requests and JSON payloads that carry raw `private_key` fields. Opt into
+`allowInsecure: true` only for local testing; the telemetry hook fires whenever the escape hatch is
+used.
 
 ```js
 import { NoritoRpcClient } from "@iroha/iroha-js";
@@ -287,8 +291,9 @@ const torii = new ToriiClient("http://127.0.0.1:8080", {
 
 ### Canonical request headers
 
-App-facing JSON endpoints accept optional `X-Iroha-Account` / `X-Iroha-Signature`
-headers. Provide `canonicalAuth` to sign requests on the fly:
+App-facing JSON endpoints accept optional `X-Iroha-Account`,
+`X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and `X-Iroha-Nonce` headers.
+Provide `canonicalAuth` to sign requests on the fly:
 
 ```js
 import { ToriiClient, generateKeyPair } from "@iroha/iroha-js";
@@ -296,14 +301,15 @@ import { ToriiClient, generateKeyPair } from "@iroha/iroha-js";
 const torii = new ToriiClient("https://torii.nexus.example");
 const { privateKey } = generateKeyPair({ seed: Buffer.alloc(32, 7) });
 
-const { items } = await torii.listAccountAssets("i105...", {
+const { items } = await torii.listAccountAssets("<i105-account-id>", {
   limit: 10,
-  canonicalAuth: { accountId: "i105...", privateKey },
+  canonicalAuth: { accountId: "<i105-account-id>", privateKey },
 });
 ```
 
 When constructing ad-hoc HTTP calls, reuse `buildCanonicalRequestHeaders` to
-render the two headers from a method/path/query/body tuple.
+render the four headers from a method/path/query/body tuple. The helper also
+includes freshness metadata to prevent replay.
 
 ## Iterable Lists & Pagination
 
@@ -332,42 +338,42 @@ const defs = await torii.queryAssetDefinitions({
 });
 console.log("filtered definitions", defs.items);
 
-const perms = await torii.listAccountPermissions("i105...", {
+const perms = await torii.listAccountPermissions("<i105-account-id>", {
   limit: 10,
 });
 console.log("direct permissions", perms.items);
-for await (const perm of torii.iterateAccountPermissions("i105...", {
+for await (const perm of torii.iterateAccountPermissions("<i105-account-id>", {
   pageSize: 5,
 })) {
   console.log("iterated permission", perm.name);
 }
-const holdings = await torii.listAccountAssets("i105...", {
+const holdings = await torii.listAccountAssets("<i105-account-id>", {
   limit: 5,
-  assetId: "norito:4e52543000000001",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
 });
 console.log("asset holdings", holdings.items);
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
-  assetId: "norito:4e52543000000001",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
 });
 console.log("top holders", holders.items.map((entry) => entry.account_id));
-const txs = await torii.listAccountTransactions("i105...", {
+const txs = await torii.listAccountTransactions("<i105-account-id>", {
   limit: 3,
-  assetId: "norito:4e52543000000001",
+  assetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
 });
 console.log("recent hashes", txs.items.map((tx) => tx.entrypoint_hash));
 
 for await (const nft of torii.iterateNfts({
   pageSize: 10,
-  filter: { Eq: ["id.definition_id", "art#wonderland"] },
+  filter: { Eq: ["id.definition_id", "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o"] },
   sort: [{ key: "id", order: "asc" }],
 })) {
   console.log("nft:", nft.id);
 }
 
-for await (const holding of torii.iterateAccountAssetsQuery("i105...", {
+for await (const holding of torii.iterateAccountAssetsQuery("<i105-account-id>", {
   pageSize: 8,
-  filter: { Eq: ["asset_id.definition_id", "rose#wonderland"] },
+  filter: { Eq: ["asset_id.definition_id", "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"] },
   select: [{ Fields: ["asset_id", "quantity"] }],
 })) {
   console.log("compressed holding", holding.asset_id, "->", holding.quantity);
@@ -384,7 +390,7 @@ in UI flows.
 
 ```js
 const assets = [];
-for await (const holding of torii.iterateAccountAssets("i105...", {
+for await (const holding of torii.iterateAccountAssets("<i105-account-id>", {
   pageSize: 2,
   maxItems: 10,
   sort: [{ key: "quantity", order: "desc" }],
@@ -414,7 +420,7 @@ try {
 }
 
 try {
-  await torii.listAccountAssets("i105...", { limit: 1 });
+  await torii.listAccountAssets("<i105-account-id>", { limit: 1 });
 } catch (error) {
   if (error instanceof ToriiHttpError && error.code === "permission_denied") {
     console.warn("missing asset read permission", error.errorMessage);
@@ -423,13 +429,13 @@ try {
   }
 }
 
-const ownedNfts = await torii.listAccountNfts("i105...", {
+const ownedNfts = await torii.listAccountNfts("<i105-account-id>", {
   domainId: "wonderland",
   limit: 5,
 });
 console.log("alice NFTs", ownedNfts.items.map((entry) => entry.id));
 
-for await (const nft of torii.iterateAccountNfts("i105...", {
+for await (const nft of torii.iterateAccountNfts("<i105-account-id>", {
   domainId: "wonderland",
   pageSize: 10,
   maxItems: 20,
@@ -440,120 +446,16 @@ for await (const nft of torii.iterateAccountNfts("i105...", {
 // env-driven pagination/filters so you can smoke-test permissions against a live Torii.
 ```
 
-Offline allowance responses expose the enriched ledger metadata up-front —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex`, and `remaining_amount` sit alongside the embedded
-record so dashboards do not have to drill into the raw payloads to understand
-refresh cadence or verdict bindings. `integrity_metadata` mirrors the Android
-policy slug (`policy`) for quick filtering; when `policy === "provisioned"`
-the helper adds the inspector key plus manifest schema/version/TTL/digest under
-`integrity_metadata.provisioned` so auditors can confirm which manifest profile
-was authorised. The new countdown helpers
-(`deadline_kind`, `deadline_state`, `deadline_ms`, `deadline_ms_remaining`)
-surface the next expiring deadline (refresh → policy → certificate) so UIs can
-render “warning” badges whenever an allowance has <24 h remaining.
+## Offline V2 readiness
 
-Offline transfer entries now expose `platform_policy` plus
-`platform_token_snapshot.policy`/`.attestation_jws_b64`, which mirrors the
-Android policy label (`marker_key`, `play_integrity`, `hms_safety_detect`,
-`provisioned`) and bundles the inspector-issued attestation JWS. Dashboards can
-split queues by policy source or export the attestation token directly to
-reporting tooling without parsing the raw Norito record. When you need the full
-manifest metadata, inspect `integrity_metadata`: the helper mirrors the policy
-slug and, for Provisioned allowances, surfaces the inspector key, schema,
-version, TTL, and optional digest under `integrity_metadata.provisioned`.
-
-`listOfflineAllowances` accepts the same convenience filters exposed via
-`/v1/offline/allowances`: pass `assetId`, `certificateExpiresBeforeMs/AfterMs`,
-`policyExpiresBeforeMs/AfterMs`, `verdictIdHex`, `requireVerdict`, or
-`onlyMissingVerdict` to avoid building JSON predicates for common reports.
-
-To top up an offline allowance, issue a certificate and register it on-ledger.
-`topUpOfflineAllowance` performs both steps in one call and returns the issued
-certificate plus registration response. There is no dedicated top-up endpoint;
-the helper simply chains the issue + register calls.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+non-V2 offline HTTP routes are no longer published by Torii.
 
 ```js
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "i105:...",
-  privateKey: "ed25519:...",
-  certificate: draft,
-});
-console.log("certificate id", topUp.registration.certificate_id_hex);
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-For renewals, call `topUpOfflineAllowanceRenewal` with the existing certificate id:
-
-```js
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "i105:...",
-    privateKey: "ed25519:...",
-    certificate: draft,
-  },
-);
-console.log("renewed id", renewed.registration.certificate_id_hex);
-```
-
-If you already have a signed certificate (for example, issued out-of-band),
-call `registerOfflineAllowance` or `renewOfflineAllowance` directly instead of
-the top-up helpers.
-
-### Norito encoding and transaction helpers
-
-Use the Norito helpers when you need canonical instruction bytes or to build and
-sign transactions without hand-rolled JSON.
-
-```js
-import {
-  noritoEncodeInstruction,
-  noritoDecodeInstruction,
-  buildRegisterDomainTransaction,
-  submitSignedTransaction,
-  hashSignedTransaction,
-} from "@iroha/iroha-js";
-
-const instructionJson = { RegisterDomain: { id: "docs", metadata: null } };
-const encoded = noritoEncodeInstruction(instructionJson);
-const decoded = noritoDecodeInstruction(encoded); // => normalized JSON object
-
-// Build and sign a transaction using the native helper (requires `npm run build:native`)
-const { signedTransaction, hash } = buildRegisterDomainTransaction({
-  chainId: "sora-mainnet",
-  authority: "i105...",
-  domainId: "docs",
-  privateKey: Buffer.alloc(32, 1), // replace with a real seed
-});
-console.log("tx hash (bytes)", hash.toString("hex"));
-
-// Submit over Norito RPC (Torii pipeline)
-await submitSignedTransaction(torii, signedTransaction, {
-  retryProfile: "pipeline",
-});
-
-// Derive the hash later if needed
-const hashHex = hashSignedTransaction(signedTransaction);
-console.log("tx hash (derived)", hashHex);
-```
-
-For ad hoc instruction payloads, `noritoEncodeInstruction` also accepts JSON
-strings and base64/hex payloads and will normalise account/asset identifiers
-before encoding. The native binding falls back to pure JS automatically when
-unavailable.
-Invalid combinations (for example, `verdictIdHex` + `onlyMissingVerdict`) are
-rejected locally before Torii is called.
-
-```js
-const { items: allowances } = await torii.listOfflineAllowances({ limit: 10 });
-console.log(
-  "first certificate",
-  allowances[0]?.controller_display,
-  allowances[0]?.remaining_amount,
-  allowances[0]?.verdict_id_hex,
-);
-```
-
 ## Torii Queries & Streaming
 
 ```js
@@ -577,7 +479,7 @@ Explorer telemetry surfaces two helper endpoints so SDKs can capture the same re
 snapshots and QR payloads exposed in the portal. `getExplorerMetrics()` fetches
 `/v1/explorer/metrics`, normalises the payload, and returns `null` when the route is
 disabled or gated. Pair it with `getExplorerAccountQr()` when you need a share-ready
-preferred I105 literal (or the I105 literal) plus inline SVG for QR buttons.
+preferred i105 literal (or the i105 literal) plus inline SVG for QR buttons.
 
 ```js
 import { promises as fs } from "node:fs";
@@ -591,7 +493,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.promises.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -600,7 +502,7 @@ console.log(
 ```
 
 `getExplorerAccountQr()` returns canonical I105 output. The helper trims invalid
-combinations locally and always returns the canonical account identifier,
+combinations locally and always returns the canonical I105 account identifier,
 selected literal, and QR metadata (version, error correction level, module count,
 network prefix, and inline SVG) so automation can cache or embed the same payloads the
 Explorer renders.
@@ -835,28 +737,24 @@ scripts can be dropped into staging rehearals or release workflows without bespo
 
 ### Contract deployment recipe (JS-06)
 
-JS-06 also requires a deterministic way to publish bytecode/manifest payloads without
-rewriting curl invocations. The new `javascript/iroha_js/recipes/contracts.mjs` helper
-reads bytecode from `CONTRACT_CODE_PATH`, optional manifest JSON from either
-`CONTRACT_MANIFEST_PATH` or `CONTRACT_MANIFEST_JSON`, and runs `/v1/contracts/deploy`
-followed by `/v1/contracts/instance` when `CONTRACT_STAGE` includes `instance` (default:
-`both`). Supply the credentials and namespace context via:
+JS-06 also requires a deterministic way to publish bytecode without rewriting
+curl invocations. The `javascript/iroha_js/recipes/contracts.mjs` helper reads
+bytecode from `CONTRACT_CODE_PATH`, requires a stable `CONTRACT_ALIAS`, and
+runs the alias-first `/v1/contracts/deploy` flow. Supply the credentials and
+alias context via:
 
 ```
 TORII_URL=https://torii.devnet.example \
-AUTHORITY=i105... \
+AUTHORITY=<i105-account-id> \
 PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
 CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
-CONTRACT_MANIFEST_PATH=./artifacts/demo_manifest.json \
-CONTRACT_NAMESPACE=apps \
-CONTRACT_ID=demo.contract \
+CONTRACT_ALIAS=demo_contract::universal \
 node javascript/iroha_js/recipes/contracts.mjs
 ```
 
-Set `CONTRACT_STAGE=register` to upload the manifest/bytecode without activating a
-namespace binding (useful when governance controls activation), or `CONTRACT_STAGE=instance`
-when bytecode already lives on-chain and you only need to bind an `ActivateContractInstance`.
-`TORII_AUTH_TOKEN`/`TORII_API_TOKEN` propagate directly to `ToriiClient`, and private keys are
+Set `CONTRACT_LEASE_EXPIRY_MS` when you need a leased alias binding for a
+rehearsal environment. `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` propagate directly
+to `ToriiClient`, and private keys are
 validated whether you pass `PRIVATE_KEY=ed25519:<hex>` or a raw `PRIVATE_KEY_HEX` string, so
 the script can run inside CI without bespoke wrappers.
 

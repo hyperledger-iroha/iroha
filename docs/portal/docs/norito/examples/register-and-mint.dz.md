@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 19babc3c24608a2eaaff8d205392c10a46f044feb91dd22c3cff4d7a0d12d542
-source_last_modified: "2026-01-22T16:26:46.501854+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 470eb5de8cd9a7f94275062d1e8c3a448a2d734bf86f650ce94a3971baa3527d
+source_last_modified: "2026-04-08T09:19:38.793794+00:00"
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -47,8 +47,8 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("i105...");
-    let asset = asset_definition!("rose#wonderland");
+    let to = account!("<i105-account-id>");
+    let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }
 }

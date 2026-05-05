@@ -36,16 +36,14 @@ async fn set_up_trigger(
     network: &sandbox::SerializedNetwork,
 ) -> eyre::Result<(DomainId, AccountId, TriggerId)> {
     let iroha = network.client();
-    let failand: DomainId = "failand".parse()?;
+    let failand: DomainId = DomainId::try_new("failand", "universal")?;
     let create_failand = Register::domain(Domain::new(failand.clone()));
 
     let (the_one_who_fails, account_keypair) = gen_account_in(failand.name());
-    let create_the_one_who_fails = Register::account(Account::new(
-        the_one_who_fails.to_account_id(failand.clone()),
-    ));
+    let create_the_one_who_fails = Register::account(Account::new(the_one_who_fails.clone()));
 
     let fail_on_account_events = "fail".parse::<TriggerId>()?;
-    let fail_isi = Unregister::domain("dummy".parse().unwrap());
+    let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
     let register_fail_on_account_events = Register::trigger(Trigger::new(
         fail_on_account_events.clone(),
         Action::new(
@@ -66,6 +64,7 @@ async fn set_up_trigger(
         .first()
         .expect("test network should expose at least one peer")
         .client_for(&the_one_who_fails, account_keypair.private_key().clone());
+    ensure_domain_registration_lease_for_network(network, &failand)?;
     spawn_blocking({
         let client = iroha.clone();
         let create_failand: InstructionBox = create_failand.into();

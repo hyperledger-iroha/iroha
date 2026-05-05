@@ -15,14 +15,18 @@ use iroha_data_model::{
         BridgeFinalityProof,
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
+    isi::InstructionBox,
     peer::PeerId,
+    transaction::Executable,
 };
+use iroha_sccp::{SccpHubCommitmentV1, SccpPayloadV1};
 use thiserror::Error;
 
 use crate::{
     mmr::BlockMmr,
     state::{State as CoreState, StateReadOnly, consensus_key_pop_for_public_key},
     sumeragi,
+    tx::AcceptedTransaction,
 };
 
 /// Narrow read-only surface used by bridge finality proof builders.
@@ -73,6 +77,90 @@ struct MmrCache {
     chain_id: Option<ChainId>,
     /// Cached hash for the tip at `height` to detect top-block rewrites.
     tip_hash: Option<HashOf<BlockHeader>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+/// Decoded SCCP message plus its location in a transaction stream.
+pub struct RecordedSccpMessage {
+    /// Zero-based index of the transaction that emitted the SCCP message.
+    pub tx_index: usize,
+    /// Zero-based index of the instruction within the transaction executable.
+    pub instruction_index: usize,
+    /// Canonically decoded SCCP payload recorded by the instruction.
+    pub payload: SccpPayloadV1,
+    /// Commitment derived from the decoded SCCP payload.
+    pub commitment: SccpHubCommitmentV1,
+}
+
+fn decode_recorded_sccp_message(instruction: &InstructionBox) -> Option<SccpPayloadV1> {
+    let record = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()?;
+    let payload = iroha_sccp::decode_canonical_sccp_payload_bytes(&record.payload_bytes)?;
+    iroha_sccp::verify_sccp_payload_structure(&payload).then_some(payload)
+}
+
+fn collect_sccp_messages_from_executable(
+    tx_index: usize,
+    executable: &Executable,
+    out: &mut Vec<RecordedSccpMessage>,
+) {
+    let mut push_instruction = |instruction_index: usize, instruction: &InstructionBox| {
+        let Some(payload) = decode_recorded_sccp_message(instruction) else {
+            return;
+        };
+        out.push(RecordedSccpMessage {
+            tx_index,
+            instruction_index,
+            commitment: iroha_sccp::hub_commitment_from_sccp_payload(&payload),
+            payload,
+        });
+    };
+
+    match executable {
+        Executable::Instructions(instructions) => {
+            for (instruction_index, instruction) in instructions.iter().enumerate() {
+                push_instruction(instruction_index, instruction);
+            }
+        }
+        Executable::ContractCall(_) | Executable::Ivm(_) => {}
+        Executable::IvmProved(proved) => {
+            for (instruction_index, instruction) in proved.overlay.iter().enumerate() {
+                push_instruction(instruction_index, instruction);
+            }
+        }
+    }
+}
+
+/// Extract all SCCP message records from accepted external transactions.
+pub fn collect_sccp_messages_from_accepted_transactions(
+    transactions: &[AcceptedTransaction<'_>],
+) -> Vec<RecordedSccpMessage> {
+    let mut messages = Vec::new();
+    for (tx_index, transaction) in transactions.iter().enumerate() {
+        if let Some(signed) = transaction.external() {
+            collect_sccp_messages_from_executable(tx_index, signed.instructions(), &mut messages);
+        }
+    }
+    messages
+}
+
+/// Extract all SCCP message records from the external transactions in a signed block.
+pub fn collect_sccp_messages_from_signed_block(block: &SignedBlock) -> Vec<RecordedSccpMessage> {
+    let mut messages = Vec::new();
+    for (tx_index, transaction) in block.external_transactions().enumerate() {
+        collect_sccp_messages_from_executable(tx_index, transaction.instructions(), &mut messages);
+    }
+    messages
+}
+
+/// Compute the SCCP commitment Merkle root for a set of recorded messages.
+pub fn sccp_commitment_root_from_messages(messages: &[RecordedSccpMessage]) -> Option<[u8; 32]> {
+    let commitments: Vec<_> = messages
+        .iter()
+        .map(|message| message.commitment.clone())
+        .collect();
+    iroha_sccp::commitment_merkle_root(&commitments)
 }
 
 /// Errors returned when constructing a bridge finality proof.
@@ -622,4 +710,409 @@ pub fn verify_finality_proof(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{borrow::Cow, num::NonZeroU64};
+
+    use iroha_crypto::{Hash, KeyPair, SignatureOf};
+    use iroha_data_model::{
+        ChainId,
+        account::AccountId,
+        block::{BlockSignature, SignedBlock},
+        isi::InstructionBox,
+        nexus::DataSpaceId,
+        prelude::TransactionBuilder,
+        smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress},
+        transaction::{
+            DataTriggerSequence, Executable, ExecutionStep, IvmBytecode, IvmProved,
+            SignedTransaction, TransactionEntrypoint, TransactionResultInner,
+            executable::ContractInvocation,
+        },
+        trigger::{TimeTriggerEntrypoint, TriggerId},
+    };
+
+    use super::*;
+    use crate::tx::AcceptedTransaction;
+
+    fn sample_transfer_payload(nonce: u64, recipient: &[u8]) -> SccpPayloadV1 {
+        SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: 1,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: 1,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            recipient: recipient.to_vec(),
+            route_id_codec: 1,
+            route_id: b"nexus:eth:xor".to_vec(),
+        })
+    }
+
+    fn signed_transaction_with_executable(executable: Executable) -> SignedTransaction {
+        let keypair = KeyPair::random();
+        let chain: ChainId = "bridge-sccp-tests".parse().expect("chain id");
+        let authority = AccountId::new(keypair.public_key().clone());
+        TransactionBuilder::new(chain, authority)
+            .with_executable(executable)
+            .sign(keypair.private_key())
+    }
+
+    fn signed_block_with_transactions(
+        transactions: Vec<SignedTransaction>,
+        height: u64,
+    ) -> SignedBlock {
+        let keypair = KeyPair::random();
+        let entry_hashes: Vec<_> = transactions
+            .iter()
+            .map(SignedTransaction::hash_as_entrypoint)
+            .collect();
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+        );
+        let mut block = SignedBlock::presigned(signature, header, transactions);
+        let results =
+            std::iter::repeat_with(|| TransactionResultInner::Ok(DataTriggerSequence::default()))
+                .take(entry_hashes.len())
+                .collect();
+        block.set_transaction_results(Vec::new(), &entry_hashes, results);
+        block
+    }
+
+    fn signed_block_with_sccp_payloads(
+        payloads: &[Vec<u8>],
+        height: u64,
+    ) -> (SignedBlock, Vec<SccpPayloadV1>) {
+        let keypair = KeyPair::random();
+        let chain: ChainId = "bridge-sccp-tests".parse().expect("chain id");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let decoded_payloads: Vec<_> = payloads
+            .iter()
+            .filter_map(|payload| iroha_sccp::decode_canonical_sccp_payload_bytes(payload))
+            .collect();
+        let instructions: Vec<InstructionBox> = payloads
+            .iter()
+            .cloned()
+            .map(iroha_data_model::isi::bridge::RecordSccpMessage::new)
+            .map(InstructionBox::from)
+            .collect();
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions(instructions)
+            .sign(keypair.private_key());
+        let entry_hash = tx.hash_as_entrypoint();
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+        );
+        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
+        let entry_hashes = [entry_hash];
+        block.set_transaction_results(
+            Vec::new(),
+            &entry_hashes,
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
+        (block, decoded_payloads)
+    }
+
+    #[test]
+    fn sccp_commitment_root_is_none_for_empty_messages() {
+        assert_eq!(sccp_commitment_root_from_messages(&[]), None);
+    }
+
+    #[test]
+    fn sccp_commitment_root_matches_direct_merkle_root() {
+        let payloads = vec![
+            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+                1,
+                b"0x0000000000000000000000000000000000000aaa",
+            )),
+            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+                2,
+                b"0x0000000000000000000000000000000000000bbb",
+            )),
+        ];
+        let (block, _) = signed_block_with_sccp_payloads(&payloads, 1);
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        let commitments: Vec<_> = messages
+            .iter()
+            .map(|message| message.commitment.clone())
+            .collect();
+
+        assert_eq!(
+            sccp_commitment_root_from_messages(&messages),
+            iroha_sccp::commitment_merkle_root(&commitments)
+        );
+    }
+
+    #[test]
+    fn collect_sccp_messages_from_empty_accepted_transactions_is_empty() {
+        assert!(collect_sccp_messages_from_accepted_transactions(&[]).is_empty());
+    }
+
+    #[test]
+    fn collect_sccp_messages_from_block_preserves_payload_order() {
+        let payloads = vec![
+            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+                1,
+                b"0x0000000000000000000000000000000000000aaa",
+            )),
+            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+                2,
+                b"0x0000000000000000000000000000000000000bbb",
+            )),
+        ];
+        let (block, decoded_payloads) = signed_block_with_sccp_payloads(&payloads, 1);
+
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| &message.payload)
+                .collect::<Vec<_>>(),
+            decoded_payloads.iter().collect::<Vec<_>>()
+        );
+
+        let commitments: Vec<_> = messages
+            .iter()
+            .map(|message| message.commitment.clone())
+            .collect();
+        let root = sccp_commitment_root_from_messages(&messages).expect("commitment root");
+        let proof = iroha_sccp::commitment_merkle_proof(&commitments, 1).expect("proof");
+        assert_eq!(
+            iroha_sccp::merkle_root_from_commitment(&messages[1].commitment, &proof),
+            root
+        );
+    }
+
+    #[test]
+    fn collect_sccp_messages_skips_undecodable_payloads() {
+        let payloads = vec![
+            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+                3,
+                b"0x0000000000000000000000000000000000000ccc",
+            )),
+            vec![0xff, 0x00, 0x01],
+        ];
+        let (block, decoded_payloads) = signed_block_with_sccp_payloads(&payloads, 2);
+
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].payload, decoded_payloads[0]);
+    }
+
+    #[test]
+    fn collect_sccp_messages_skips_decodable_but_invalid_payloads() {
+        let invalid = sample_transfer_payload(4, b"0x0000000000000000000000000000000000000ddd");
+        let SccpPayloadV1::Transfer(mut invalid_transfer) = invalid else {
+            panic!("sample payload should be a transfer");
+        };
+        invalid_transfer.amount = 0;
+        let invalid_payload = SccpPayloadV1::Transfer(invalid_transfer);
+        assert!(
+            iroha_sccp::decode_canonical_sccp_payload_bytes(
+                &iroha_sccp::canonical_sccp_payload_bytes(&invalid_payload)
+            )
+            .is_some()
+        );
+        assert!(!iroha_sccp::verify_sccp_payload_structure(&invalid_payload));
+        let valid_payload =
+            sample_transfer_payload(5, b"0x0000000000000000000000000000000000000eee");
+        let payloads = vec![
+            iroha_sccp::canonical_sccp_payload_bytes(&invalid_payload),
+            iroha_sccp::canonical_sccp_payload_bytes(&valid_payload),
+        ];
+        let (block, _) = signed_block_with_sccp_payloads(&payloads, 3);
+
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].payload, valid_payload);
+        assert_eq!(messages[0].instruction_index, 1);
+    }
+
+    #[test]
+    fn collect_sccp_messages_from_plain_ivm_executable_is_empty() {
+        let tx =
+            signed_transaction_with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![
+                0x01, 0x02, 0x03,
+            ])));
+        let block = signed_block_with_transactions(vec![tx], 3);
+
+        assert!(collect_sccp_messages_from_signed_block(&block).is_empty());
+    }
+
+    #[test]
+    fn collect_sccp_messages_from_contract_call_executable_is_empty() {
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let contract_address = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive contract address");
+        let tx = signed_transaction_with_executable(Executable::ContractCall(ContractInvocation {
+            contract_address,
+            entrypoint: "bridge".to_string(),
+            payload: None,
+        }));
+        let block = signed_block_with_transactions(vec![tx], 4);
+
+        assert!(collect_sccp_messages_from_signed_block(&block).is_empty());
+    }
+
+    #[test]
+    fn collect_sccp_messages_preserves_instruction_indices_after_skips() {
+        let payloads = vec![
+            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+                4,
+                b"0x0000000000000000000000000000000000000ddd",
+            )),
+            vec![0x00, 0x01, 0xff],
+            iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+                5,
+                b"0x0000000000000000000000000000000000000eee",
+            )),
+        ];
+        let (block, decoded_payloads) = signed_block_with_sccp_payloads(&payloads, 3);
+
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| (message.tx_index, message.instruction_index))
+                .collect::<Vec<_>>(),
+            vec![(0, 0), (0, 2)]
+        );
+        assert_eq!(messages[0].payload, decoded_payloads[0]);
+        assert_eq!(messages[1].payload, decoded_payloads[1]);
+    }
+
+    #[test]
+    fn collect_sccp_messages_preserves_transaction_indices_across_block() {
+        let first_payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            6,
+            b"0x0000000000000000000000000000000000000f01",
+        ));
+        let second_payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            7,
+            b"0x0000000000000000000000000000000000000f02",
+        ));
+        let ignored_tx =
+            signed_transaction_with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![
+                0xAA,
+            ])));
+        let first_tx = signed_transaction_with_executable(Executable::Instructions(
+            vec![InstructionBox::from(
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(first_payload),
+            )]
+            .into(),
+        ));
+        let second_tx = signed_transaction_with_executable(Executable::Instructions(
+            vec![InstructionBox::from(
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(second_payload),
+            )]
+            .into(),
+        ));
+        let block = signed_block_with_transactions(vec![ignored_tx, first_tx, second_tx], 5);
+
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|message| (message.tx_index, message.instruction_index))
+                .collect::<Vec<_>>(),
+            vec![(1, 0), (2, 0)]
+        );
+    }
+
+    #[test]
+    fn collect_sccp_messages_from_accepted_transactions_skips_non_external_entrypoints() {
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let time_entry = TimeTriggerEntrypoint {
+            id: "bridge_tick".parse::<TriggerId>().expect("trigger id"),
+            instructions: ExecutionStep(Vec::<InstructionBox>::new().into()),
+            authority,
+        };
+        let internal_tx = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            TransactionEntrypoint::Time(time_entry),
+        ));
+
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            6,
+            b"0x0000000000000000000000000000000000000fff",
+        ));
+        let external_tx = signed_transaction_with_executable(Executable::Instructions(
+            vec![InstructionBox::from(
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload.clone()),
+            )]
+            .into(),
+        ));
+        let external_tx = AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(
+            TransactionEntrypoint::External(external_tx),
+        ));
+
+        let messages =
+            collect_sccp_messages_from_accepted_transactions(&[internal_tx, external_tx]);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tx_index, 1);
+        assert_eq!(messages[0].instruction_index, 0);
+        assert_eq!(
+            messages[0].payload,
+            iroha_sccp::decode_canonical_sccp_payload_bytes(&payload).expect("payload decodes")
+        );
+    }
+
+    #[test]
+    fn collect_sccp_messages_from_ivm_proved_overlay() {
+        let payload = iroha_sccp::canonical_sccp_payload_bytes(&sample_transfer_payload(
+            7,
+            b"0x0000000000000000000000000000000000000111",
+        ));
+        let executable = Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+            overlay: vec![InstructionBox::from(
+                iroha_data_model::isi::bridge::RecordSccpMessage::new(payload.clone()),
+            )]
+            .into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        });
+        let tx = signed_transaction_with_executable(executable);
+        let block = signed_block_with_transactions(vec![tx], 4);
+
+        let messages = collect_sccp_messages_from_signed_block(&block);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].tx_index, 0);
+        assert_eq!(messages[0].instruction_index, 0);
+        assert_eq!(
+            messages[0].payload,
+            iroha_sccp::decode_canonical_sccp_payload_bytes(&payload).expect("payload decodes")
+        );
+    }
 }

@@ -1404,6 +1404,8 @@ mod tests {
         let topology = Topology::new(peers);
         // N = 4 => min_votes = 3, max collectors = 3.
         assert_eq!(topology.collector_fanout_floor(1), 3);
+        assert_eq!(topology.collector_fanout_floor(2), 3);
+        assert_eq!(topology.collector_fanout_floor(3), 3);
         assert_eq!(topology.collector_fanout_floor(5), 3);
 
         let peers = test_peers(2);

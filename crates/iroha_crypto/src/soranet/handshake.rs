@@ -26,8 +26,9 @@ use sha3::{
     digest::{ExtendableOutput, Update, XofReader},
 };
 use soranet_pq::{
-    MlKemMetadata, MlKemParameters, MlKemSharedSecret, MlKemSuite, decapsulate_mlkem,
-    encapsulate_mlkem, generate_mlkem_keypair, mlkem_metadata, validate_mlkem_ciphertext,
+    HedgedRngSeed, MlKemMetadata, MlKemParameters, MlKemSharedSecret, MlKemSuite,
+    decapsulate_mlkem, encapsulate_mlkem_from_os, generate_mlkem_keypair,
+    generate_mlkem_keypair_from_os, hedged_chacha20_rng, mlkem_metadata, validate_mlkem_ciphertext,
     validate_mlkem_public_key,
 };
 use tempfile::TempDir;
@@ -3012,7 +3013,13 @@ pub fn build_client_hello<R: CryptoRng + RngCore>(
     let client_ephemeral_secret = StaticSecret::from(client_ephemeral_bytes);
     let client_ephemeral_public = X25519PublicKey::from(&client_ephemeral_secret).to_bytes();
 
-    let kem_keys = generate_mlkem_keypair(kem_profile.suite());
+    let mut kem_seed = [0u8; 32];
+    rng.fill_bytes(&mut kem_seed);
+    let mut kem_rng = hedged_chacha20_rng(
+        HedgedRngSeed::from_entropy(kem_seed),
+        b"soranet-handshake:client-kem",
+    );
+    let kem_keys = generate_mlkem_keypair(kem_profile.suite(), &mut kem_rng);
     let client_kem_public = kem_keys.public_key.clone();
     let client_kem_secret = {
         let secret = kem_keys.secret_key;
@@ -3086,7 +3093,8 @@ fn build_client_hello_nk3(
     materials: ClientHelloMaterials,
     kem_suite: MlKemSuite,
 ) -> Result<(Vec<u8>, ClientState), HarnessError> {
-    let forward_keys = generate_mlkem_keypair(kem_suite);
+    let forward_keys = generate_mlkem_keypair_from_os(kem_suite)
+        .map_err(|err| HarnessError::Kem(err.to_string()))?;
     let forward_public = forward_keys.public_key.clone();
     let forward_secret = {
         let secret = forward_keys.secret_key;
@@ -3942,9 +3950,10 @@ impl RuntimeKemArtifacts {
         let soranet_pq::MlKemKeyPair {
             public_key: relay_public,
             secret_key: relay_secret_raw,
-        } = generate_mlkem_keypair(suite);
+        } = generate_mlkem_keypair_from_os(suite)
+            .map_err(|err| HarnessError::Kem(err.to_string()))?;
         let relay_secret = Zeroizing::new(relay_secret_raw.deref().clone());
-        let (shared_secret, ciphertext) = encapsulate_mlkem(suite, client_public)
+        let (shared_secret, ciphertext) = encapsulate_mlkem_from_os(suite, client_public)
             .map_err(|err| HarnessError::Kem(err.to_string()))?;
         Ok(Self {
             relay_public,

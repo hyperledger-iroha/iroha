@@ -43,11 +43,11 @@ fn soranet_gateway_billing_runs_end_to_end() {
             "--output-dir",
             out_dir.to_str().expect("utf8"),
             "--payer",
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             "--treasury",
-            "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9",
+            "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D",
             "--asset",
-            "xor#wonderland",
+            "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
         ])
         .env("CARGO_NET_OFFLINE", "true")
         .output()
@@ -113,7 +113,7 @@ fn soranet_gateway_billing_runs_end_to_end() {
     );
     assert_eq!(
         ledger["asset_definition"],
-        Value::from("xor#wonderland"),
+        Value::from("4cuvDVPuLBKJyN6dPbRQhmLh68sU"),
         "ledger asset definition mismatch"
     );
 }

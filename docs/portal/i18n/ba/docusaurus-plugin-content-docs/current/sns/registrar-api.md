@@ -108,17 +108,17 @@ Struct ReservedAssignmentRequestV1 {
 
 | Аҙаҡҡы нөктә | Ысул | Түләү | Тасуирлама |
 |---------|---------|----------|------------- |
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Исем йәки яңынан асыу исем. Хаҡтар ярусын хәл итә, түләү/идара итеү дәлилдәрен раҫлай, реестр ваҡиғаларын сығара. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Оҙайтыу срогы. Сәйәсәттән рәхмәт/ҡотҡарыу тәҙрәләрен үтәй. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Күсерергә милекселек бер тапҡыр идара итеү раҫлау беркетергә. |
-| `/v1/sns/registrations/{selector}/controllers` | ПУТ | `UpdateControllersRequestV1` | Контроллер комплектын алмаштырыу; раҫлау өсөн ҡул ҡуйылған иҫәп-хисап адрестары. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Һаҡсы/кәңәш туңдырыу. Опекун билеты һәм идара итеү докетына һылтанма талап итә. |
-| `/v1/sns/registrations/{selector}/freeze` | ДЕЛЕТ | `GovernanceHookV1` | Ремедиациянан һуң туңдырмау; совет өҫтөнән теркәүен тәьмин итә. |
+| `/v1/sns/names` | POST | `RegisterNameRequestV1` | Исем йәки яңынан асыу исем. Хаҡтар ярусын хәл итә, түләү/идара итеү дәлилдәрен раҫлай, реестр ваҡиғаларын сығара. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POST | `RenewNameRequestV1` | Оҙайтыу срогы. Сәйәсәттән рәхмәт/ҡотҡарыу тәҙрәләрен үтәй. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POST | `TransferNameRequestV1` | Күсерергә милекселек бер тапҡыр идара итеү раҫлау беркетергә. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | ПУТ | `UpdateControllersRequestV1` | Контроллер комплектын алмаштырыу; раҫлау өсөн ҡул ҡуйылған иҫәп-хисап адрестары. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POST | `FreezeNameRequestV1` | Һаҡсы/кәңәш туңдырыу. Опекун билеты һәм идара итеү докетына һылтанма талап итә. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | ДЕЛЕТ | `GovernanceHookV1` | Ремедиациянан һуң туңдырмау; совет өҫтөнән теркәүен тәьмин итә. |
 | `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Стюард/кәңәшмә запас исемдәрҙе тәғәйенләү. |
 | `/v1/sns/policies/{suffix_id}` | GET | — | Фетч ток I18NI000000065X (качина). |
-| `/v1/sns/registrations/{selector}` | GET | — | Ҡайтарыу ағымдағы `NameRecordV1` + һөҙөмтәле дәүләт (Әүҙем, Грейс һ.б.). |
+| `/v1/sns/names/{namespace}/{literal}` | GET | — | Ҡайтарыу ағымдағы `NameRecordV1` + һөҙөмтәле дәүләт (Әүҙем, Грейс һ.б.). |
 
-**Һайлаусы кодлау:** I18NI000000068X юл сегменты I105 (өҫтөнлөклө), ҡыҫылған (`sora`, икенсе иң яҡшы), йәки канонлы гекс бер ADDR-5; I18NT0000001X уны I18NI000000070X аша нормалаштыра.
+**Һайлаусы кодлау:** I18NI000000068X юл сегменты i105 (өҫтөнлөклө), ҡыҫылған (`sora`, икенсе иң яҡшы), йәки канонлы гекс бер ADDR-5; I18NT0000001X уны I18NI000000070X аша нормалаштыра.
 
 **Хата моделе:** бөтә ос нөктәләре ҡайтарыу I18NT0000000002X JSON менән I18NI000000071X, `message`, `details`. Кодтар араһында `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -131,7 +131,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -200,7 +200,7 @@ I18NT000000014X тикшергәндән һуң дәлилдәрҙе раҫла�
 
 1. Клиент һорауҙары I18NI000000098X тиклем хаҡтарҙы алыу, рәхмәт, һәм мөмкин ярустары.
 2. Клиент I18NI000000099Х төҙөй:
-   - I105 йәки икенсе иң яҡшы ҡыҫылған (I18NI0000010101X) лейблынан алынған I18NI0000100X.
+   - i105 йәки икенсе иң яҡшы ҡыҫылған (I18NI0000010101X) лейблынан алынған I18NI0000100X.
    - `term_years` сәйәсәт сиктәрендә.
    - `payment` ҡаҙна/стуард сплиттер тапшырыуына һылтанма яһап.
 3. I18NT000000015X раҫлай:
@@ -225,7 +225,7 @@ I18NT000000014X тикшергәндән һуң дәлилдәрҙе раҫла�
 
 1. Guardian тапшыра I18NI000000114X менән билет һылтанмалар инцидент id.
 .
-3. Ремедиациянан һуң совет мәсьәләләре өҫтөнлөк итә; операторы I18NI0000000118X менән ДЕЛЕТ `/v1/sns/registrations/{selector}/freeze` ебәрә.
+3. Ремедиациянан һуң совет мәсьәләләре өҫтөнлөк итә; операторы I18NI0000000118X менән ДЕЛЕТ `/v1/sns/names/{namespace}/{literal}/freeze` ебәрә.
 4. I18NT000000019X раҫлай өҫтөнлөк, `NameUnfrozen` сыға.
 
 ## 7. Валидация & Хата Кодтары

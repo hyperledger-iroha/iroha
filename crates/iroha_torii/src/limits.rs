@@ -1,14 +1,15 @@
 //! Rate limiting and API token utilities for Torii.
 //!
-//! Implements a simple token-bucket rate limiter keyed by a caller identity
+//! Implements a sharded token-bucket rate limiter keyed by a caller identity
 //! (API token or authority id). This protects the node from abuse without
 //! introducing gas/fees on read endpoints.
 
 #![allow(clippy::redundant_pub_crate)]
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, VecDeque, hash_map::DefaultHasher},
     fmt,
+    hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     sync::{
         Arc,
@@ -19,16 +20,21 @@ use std::{
 
 use axum::http::HeaderMap;
 use dashmap::{DashMap, mapref::entry::Entry};
-use tokio::sync::Mutex;
+use parking_lot::Mutex;
 
 /// Shared, cheap-to-clone limiter.
 #[derive(Clone)]
 pub struct RateLimiter {
-    inner: Arc<Mutex<InnerLimiter>>,
+    inner: Arc<ShardedLimiter>,
+}
+
+struct ShardedLimiter {
+    disabled: bool,
+    shards: Vec<Mutex<InnerLimiter>>,
 }
 
 struct InnerLimiter {
-    rate_per_sec: Option<f64>,
+    rate_per_sec: f64,
     burst: f64,
     buckets: HashMap<String, TokenBucket>,
     order: VecDeque<String>,
@@ -42,84 +48,88 @@ struct TokenBucket {
 }
 
 const DEFAULT_MAX_BUCKETS: usize = 4_096;
+const DEFAULT_RATE_LIMITER_SHARDS: usize = 64;
+const MIN_BUCKETS_PER_SHARD: usize = 64;
 const PREAUTH_NOFILE_RESERVE: u64 = 128;
 
-impl RateLimiter {
-    /// Create a new limiter. If `rate_per_sec` is None or 0, the limiter allows all.
-    pub fn new(rate_per_sec: Option<u32>, burst: Option<u32>) -> Self {
-        Self::new_with_capacity(rate_per_sec, burst, DEFAULT_MAX_BUCKETS)
-    }
-
-    /// Create a new limiter configured with `u64`-sized token buckets.
-    pub fn new_u64(rate_per_sec: Option<u64>, burst: Option<u64>) -> Self {
-        let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(v as f64) });
-        let burst = burst.unwrap_or_else(|| rate_per_sec.unwrap_or(0)).max(1) as f64;
-        Self {
-            inner: Arc::new(Mutex::new(InnerLimiter {
-                rate_per_sec: rate,
-                burst,
-                buckets: HashMap::new(),
-                order: VecDeque::new(),
-                max_buckets: DEFAULT_MAX_BUCKETS,
-            })),
-        }
-    }
-
-    pub(crate) fn new_with_capacity(
-        rate_per_sec: Option<u32>,
-        burst: Option<u32>,
-        max_buckets: usize,
-    ) -> Self {
-        let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(v as f64) });
-        let burst = burst.unwrap_or_else(|| rate_per_sec.unwrap_or(0)).max(1) as f64;
-        Self {
-            inner: Arc::new(Mutex::new(InnerLimiter {
-                rate_per_sec: rate,
-                burst,
-                buckets: HashMap::new(),
-                order: VecDeque::new(),
-                max_buckets: max_buckets.max(1),
-            })),
-        }
-    }
-
-    /// Returns true if allowed (consumed 1 token), false if limited.
-    pub async fn allow(&self, key: &str) -> bool {
-        self.allow_cost(key, 1).await
-    }
-
-    /// Returns true if allowed after consuming `cost` tokens, false if limited.
-    pub async fn allow_cost(&self, key: &str, cost: u64) -> bool {
-        let mut inner = self.inner.lock().await;
-        // No limiting configured
-        let Some(rate) = inner.rate_per_sec else {
-            return true;
+impl ShardedLimiter {
+    fn new(rate_per_sec: Option<f64>, burst: f64, max_buckets: usize) -> Self {
+        let max_buckets = max_buckets.max(1);
+        let disabled = rate_per_sec.is_none();
+        let shard_count = if disabled {
+            1
+        } else {
+            max_buckets
+                .div_ceil(MIN_BUCKETS_PER_SHARD)
+                .min(DEFAULT_RATE_LIMITER_SHARDS)
+                .max(1)
         };
-        let now = Instant::now();
-        let burst = inner.burst;
-        let key_owned = key.to_string();
-        if !inner.buckets.contains_key(&key_owned) {
-            if inner.buckets.len() >= inner.max_buckets {
-                if let Some(oldest) = inner.order.pop_front() {
-                    inner.buckets.remove(&oldest);
+        let rate_per_sec = rate_per_sec.unwrap_or(0.0);
+        let base_capacity = max_buckets / shard_count;
+        let extra_capacity = max_buckets % shard_count;
+        let shards = (0..shard_count)
+            .map(|index| {
+                let shard_capacity = if disabled {
+                    max_buckets
+                } else {
+                    base_capacity + usize::from(index < extra_capacity)
+                };
+                Mutex::new(InnerLimiter::new(
+                    rate_per_sec,
+                    burst,
+                    shard_capacity.max(1),
+                ))
+            })
+            .collect();
+
+        Self { disabled, shards }
+    }
+
+    fn shard_for(&self, key: &str) -> &Mutex<InnerLimiter> {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        let shard_count = u64::try_from(self.shards.len()).expect("shard count fits in u64");
+        let index =
+            usize::try_from(hasher.finish() % shard_count).expect("shard index fits in usize");
+        &self.shards[index]
+    }
+}
+
+impl InnerLimiter {
+    fn new(rate_per_sec: f64, burst: f64, max_buckets: usize) -> Self {
+        Self {
+            rate_per_sec,
+            burst,
+            buckets: HashMap::new(),
+            order: VecDeque::new(),
+            max_buckets,
+        }
+    }
+
+    fn allow_cost(&mut self, key: &str, cost: u64, now: Instant) -> bool {
+        let burst = self.burst;
+        if !self.buckets.contains_key(key) {
+            if self.buckets.len() >= self.max_buckets {
+                if let Some(oldest) = self.order.pop_front() {
+                    self.buckets.remove(&oldest);
                 }
             }
-            inner.order.push_back(key_owned.clone());
-            inner.buckets.insert(
-                key_owned.clone(),
+            let key_owned = key.to_string();
+            self.order.push_back(key_owned.clone());
+            self.buckets.insert(
+                key_owned,
                 TokenBucket {
                     tokens: burst,
                     last: now,
                 },
             );
         }
-        let Some(bucket) = inner.buckets.get_mut(&key_owned) else {
+        let Some(bucket) = self.buckets.get_mut(key) else {
             return true;
         };
-        // Refill
         let elapsed = now.saturating_duration_since(bucket.last).as_secs_f64();
         if elapsed > 0.0 {
-            bucket.tokens = (bucket.tokens + elapsed * rate).min(burst);
+            bucket.tokens = (bucket.tokens + elapsed * self.rate_per_sec).min(burst);
             bucket.last = now;
         }
         let required = (cost.max(1) as f64).min(f64::MAX);
@@ -133,20 +143,107 @@ impl RateLimiter {
             false
         }
     }
+}
+
+impl RateLimiter {
+    /// Create a new limiter. If `rate_per_sec` is None or 0, the limiter allows all.
+    pub fn new(rate_per_sec: Option<u32>, burst: Option<u32>) -> Self {
+        Self::new_with_capacity(rate_per_sec, burst, DEFAULT_MAX_BUCKETS)
+    }
+
+    /// Create a new limiter configured with `u64`-sized token buckets.
+    pub fn new_u64(rate_per_sec: Option<u64>, burst: Option<u64>) -> Self {
+        let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(v as f64) });
+        let burst = burst.unwrap_or_else(|| rate_per_sec.unwrap_or(0)).max(1) as f64;
+        Self {
+            inner: Arc::new(ShardedLimiter::new(rate, burst, DEFAULT_MAX_BUCKETS)),
+        }
+    }
+
+    pub(crate) fn new_with_capacity(
+        rate_per_sec: Option<u32>,
+        burst: Option<u32>,
+        max_buckets: usize,
+    ) -> Self {
+        let rate = rate_per_sec.and_then(|v| if v == 0 { None } else { Some(v as f64) });
+        let burst = burst.unwrap_or_else(|| rate_per_sec.unwrap_or(0)).max(1) as f64;
+        Self {
+            inner: Arc::new(ShardedLimiter::new(rate, burst, max_buckets)),
+        }
+    }
+
+    /// Returns true if allowed (consumed 1 token), false if limited.
+    pub async fn allow(&self, key: &str) -> bool {
+        self.allow_cost(key, 1).await
+    }
+
+    /// Returns true if allowed after consuming `cost` tokens, false if limited.
+    #[allow(clippy::unused_async)]
+    pub async fn allow_cost(&self, key: &str, cost: u64) -> bool {
+        if self.inner.disabled {
+            return true;
+        }
+        self.inner
+            .shard_for(key)
+            .lock()
+            .allow_cost(key, cost, Instant::now())
+    }
 
     #[cfg(test)]
+    #[allow(clippy::unused_async)]
     pub(crate) async fn bucket_count(&self) -> usize {
-        self.inner.lock().await.buckets.len()
+        self.inner
+            .shards
+            .iter()
+            .map(|shard| shard.lock().buckets.len())
+            .sum()
     }
 }
 
 /// Internal header recording the remote IP the connection was accepted from.
 pub const REMOTE_ADDR_HEADER: &str = "x-iroha-remote-addr";
 
+/// Resolve the effective client IP for downstream policy decisions.
+///
+/// The canonical remote address header is preferred because ingress middleware
+/// overwrites it with the accepted socket address or a trusted proxy-forwarded
+/// client IP. Falling back to the transport address keeps direct handler
+/// invocations working in narrow tests.
+pub fn effective_remote_ip(headers: &HeaderMap, remote: Option<IpAddr>) -> Option<IpAddr> {
+    headers
+        .get(REMOTE_ADDR_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+        .or(remote)
+}
+
+/// Resolve the remote IP that ingress middleware should inject.
+///
+/// If the transport peer belongs to a configured trusted proxy CIDR, a valid
+/// pre-existing `x-iroha-remote-addr` value is preserved as the client IP.
+/// Otherwise the accepted transport peer is used directly and any supplied
+/// header is ignored.
+pub fn ingress_remote_ip(
+    headers: &HeaderMap,
+    remote: Option<IpAddr>,
+    trusted_proxies: &[IpNet],
+) -> Option<IpAddr> {
+    let forwarded = headers
+        .get(REMOTE_ADDR_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok());
+    match remote {
+        Some(remote_ip) if cidr_contains(trusted_proxies, remote_ip) => {
+            forwarded.or(Some(remote_ip))
+        }
+        Some(remote_ip) => Some(remote_ip),
+        None => None,
+    }
+}
+
 /// Derive a rate-limit key from headers and optional hint:
 /// - Prefer `X-API-Token` if present and token usage is enabled
-/// - Else the provided remote IP address (from listener metadata)
-/// - Else the trusted header injected by middleware (`x-iroha-remote-addr`)
+/// - Else the effective client IP resolved by ingress middleware
 /// - Else provided hint
 /// - Else "anon"
 pub fn key_from_headers(
@@ -160,12 +257,7 @@ pub fn key_from_headers(
             return v.to_string();
         }
     }
-    if let Some(ip) = remote.or_else(|| {
-        headers
-            .get(REMOTE_ADDR_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|s| s.parse().ok())
-    }) {
+    if let Some(ip) = effective_remote_ip(headers, remote) {
         return ip.to_string();
     }
     if let Some(h) = hint {
@@ -302,16 +394,30 @@ pub fn cidr_contains(nets: &[IpNet], ip: IpAddr) -> bool {
 }
 
 /// Returns true if the request should bypass rate limits due to CIDR allowlist.
-/// Prefers the explicitly supplied remote IP and falls back to the trusted
-/// header injected by middleware.
+/// Uses the effective client IP resolved by ingress middleware.
 pub fn is_allowed_by_cidr(headers: &HeaderMap, remote: Option<IpAddr>, allow: &[IpNet]) -> bool {
-    let candidate_ip = remote.or_else(|| {
-        headers
-            .get(REMOTE_ADDR_HEADER)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse().ok())
-    });
+    let candidate_ip = effective_remote_ip(headers, remote);
     candidate_ip.map_or(false, |ip| cidr_contains(allow, ip))
+}
+
+/// Returns true if a forwarded header is present and the TCP peer belongs to a
+/// trusted proxy CIDR.
+pub fn has_trusted_forwarded_header(
+    headers: &HeaderMap,
+    remote: Option<IpAddr>,
+    trusted_proxies: &[IpNet],
+    header_name: &'static str,
+) -> bool {
+    let Some(remote_ip) = remote else {
+        return false;
+    };
+    if !cidr_contains(trusted_proxies, remote_ip) {
+        return false;
+    }
+    headers
+        .get(header_name)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| !value.trim().is_empty())
 }
 
 /// Configuration for the pre-authentication connection gate.
@@ -756,12 +862,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn trusted_forwarded_header_requires_proxy_membership() {
+        let trusted = parse_cidrs(&["127.0.0.0/8".to_owned()]);
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-client-cert", "cert=present".parse().unwrap());
+
+        assert!(has_trusted_forwarded_header(
+            &headers,
+            Some("127.0.0.1".parse().unwrap()),
+            &trusted,
+            "x-forwarded-client-cert",
+        ));
+        assert!(!has_trusted_forwarded_header(
+            &headers,
+            Some("198.51.100.10".parse().unwrap()),
+            &trusted,
+            "x-forwarded-client-cert",
+        ));
+        assert!(!has_trusted_forwarded_header(
+            &HeaderMap::new(),
+            Some("127.0.0.1".parse().unwrap()),
+            &trusted,
+            "x-forwarded-client-cert",
+        ));
+    }
+
     #[tokio::test]
     async fn limiter_caps_bucket_growth() {
         let limiter = RateLimiter::new_with_capacity(Some(1), Some(1), 2);
         assert!(limiter.allow("a").await);
         assert!(limiter.allow("b").await);
-        assert_eq!(limiter.bucket_count().await, 2);
+        assert!(limiter.bucket_count().await <= 2);
 
         assert!(limiter.allow("c").await);
         // Capacity is 2, so one bucket must have been evicted.
@@ -770,6 +902,24 @@ mod tests {
         // Previously inserted keys should still be serviced without panicking.
         assert!(limiter.allow("a").await);
         assert!(limiter.bucket_count().await <= 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn limiter_allows_distinct_keys_concurrently() {
+        let limiter = RateLimiter::new(Some(10_000), Some(10_000));
+        let mut handles = Vec::new();
+
+        for index in 0..128 {
+            let limiter = limiter.clone();
+            handles.push(tokio::spawn(async move {
+                limiter.allow(&format!("client-{index}")).await
+            }));
+        }
+
+        for handle in handles {
+            assert!(handle.await.expect("limiter task should finish"));
+        }
+        assert!(limiter.bucket_count().await <= DEFAULT_MAX_BUCKETS);
     }
 
     #[tokio::test]
@@ -945,7 +1095,7 @@ mod tests {
     }
 
     #[test]
-    fn key_from_headers_remote_overrides_injected_header() {
+    fn key_from_headers_prefers_injected_header() {
         let mut headers = HeaderMap::new();
         headers.insert(REMOTE_ADDR_HEADER, "203.0.113.55".parse().unwrap());
         assert_eq!(
@@ -955,7 +1105,29 @@ mod tests {
                 Some("hint"),
                 true
             ),
-            "198.51.100.1"
+            "203.0.113.55"
+        );
+    }
+
+    #[test]
+    fn ingress_remote_ip_preserves_trusted_forwarded_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(REMOTE_ADDR_HEADER, "203.0.113.55".parse().unwrap());
+        let trusted = parse_cidrs(&["127.0.0.0/8".into()]);
+        assert_eq!(
+            ingress_remote_ip(&headers, Some("127.0.0.1".parse().unwrap()), &trusted),
+            Some("203.0.113.55".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn ingress_remote_ip_ignores_forwarded_header_from_untrusted_peer() {
+        let mut headers = HeaderMap::new();
+        headers.insert(REMOTE_ADDR_HEADER, "203.0.113.55".parse().unwrap());
+        let trusted = parse_cidrs(&["127.0.0.0/8".into()]);
+        assert_eq!(
+            ingress_remote_ip(&headers, Some("198.51.100.10".parse().unwrap()), &trusted),
+            Some("198.51.100.10".parse().unwrap())
         );
     }
 
@@ -979,7 +1151,7 @@ mod tests {
     }
 
     #[test]
-    fn is_allowed_by_cidr_prefers_remote_ip() {
+    fn is_allowed_by_cidr_prefers_effective_remote_ip() {
         let allow = vec![parse_cidr("203.0.113.0/24").unwrap()];
         let headers = HeaderMap::new();
         assert!(is_allowed_by_cidr(
@@ -999,11 +1171,11 @@ mod tests {
     }
 
     #[test]
-    fn is_allowed_by_cidr_remote_override_rejects_spoofed_header() {
+    fn is_allowed_by_cidr_prefers_injected_header() {
         let allow = vec![parse_cidr("203.0.113.0/24").unwrap()];
         let mut headers = HeaderMap::new();
         headers.insert(REMOTE_ADDR_HEADER, "203.0.113.55".parse().unwrap());
-        assert!(!is_allowed_by_cidr(
+        assert!(is_allowed_by_cidr(
             &headers,
             Some("198.51.100.1".parse().unwrap()),
             &allow

@@ -1,7 +1,7 @@
 use crate::bitstream::{BitReader, BitstreamError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HuffmanError {
+pub enum HuffmanError {
     EmptyInput,
     TooDeep,
     Bitstream(BitstreamError),

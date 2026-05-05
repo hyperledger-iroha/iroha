@@ -43,6 +43,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Confidential transfer v2 helpers, circuits, and proof builders.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub mod confidential_v2;
+
 #[cfg(feature = "zk-preverify")]
 use iroha_crypto::streaming::TransportCapabilityResolutionSnapshot;
 use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
@@ -194,25 +198,430 @@ pub const ZK_BACKEND_HALO2_IPA: &str = "halo2/ipa";
 /// Canonical backend family identifier for native STARK/FRI verification.
 pub const ZK_BACKEND_STARK_FRI_V1: &str = "stark/fri";
 /// Canonical circuit identifier suffix for proved IVM execution commitments.
-pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution";
+pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution-v1";
 
-/// Canonical public-input schema descriptor for `halo2/ipa:ivm-execution`.
+/// Canonical public-input schema descriptor for `halo2/ipa:ivm-execution-v1`.
 ///
 /// The execution proof instances still carry concrete values in the proof payload;
 /// this descriptor is only used for stable registry binding via
 /// `VerifyingKeyRecord.public_inputs_schema_hash`.
 pub const IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"ivm_execution_current","public_inputs":["code_hash_limb0","code_hash_limb1","code_hash_limb2","code_hash_limb3","overlay_hash_limb0","overlay_hash_limb1","overlay_hash_limb2","overlay_hash_limb3","events_commitment_limb0","events_commitment_limb1","events_commitment_limb2","events_commitment_limb3","gas_policy_commitment_limb0","gas_policy_commitment_limb1","gas_policy_commitment_limb2","gas_policy_commitment_limb3"]}"#;
 
-/// Returns the canonical schema descriptor bytes for `ivm-execution`.
+/// Returns the canonical schema descriptor bytes for `ivm-execution-v1`.
 #[must_use]
 pub fn ivm_execution_public_inputs_schema_descriptor() -> &'static [u8] {
     IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1
 }
 
-/// Returns the canonical schema hash for `ivm-execution`.
+/// Returns the canonical schema hash for `ivm-execution-v1`.
 #[must_use]
 pub fn ivm_execution_public_inputs_schema_hash() -> [u8; 32] {
     iroha_crypto::Hash::new(ivm_execution_public_inputs_schema_descriptor()).into()
+}
+
+/// Canonical circuit identifier for Offline V2 recursive note proofs.
+pub const OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID: &str = "offline-note-v2-recursive-v1";
+/// Halo2 IPA parameter degree used by the canonical Offline V2 recursive note circuit.
+pub const OFFLINE_NOTE_V2_RECURSIVE_V1_IPA_K: u32 = 7;
+/// Maximum encoded proof payload accepted for Offline V2 recursive note proofs.
+pub const OFFLINE_NOTE_V2_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
+
+const OFFLINE_NOTE_V2_MODE_REDEEM: u64 = 1;
+const OFFLINE_NOTE_V2_MODE_AUDIT: u64 = 2;
+/// Number of public instance columns exposed by Offline V2 recursive note proofs.
+pub const OFFLINE_NOTE_V2_INSTANCE_COLUMNS: usize = 16;
+/// Maximum number of input amount witness slots supported by Offline V2 proofs.
+pub const OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS: usize = 4;
+/// Maximum number of output amount witness slots supported by Offline V2 proofs.
+pub const OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS: usize = 2;
+
+/// Public and private witness values for the canonical Offline V2 semantic circuit.
+///
+/// The first sixteen values are public instance columns. The private amount slots
+/// let the circuit enforce bounded input/output counts and amount conservation
+/// without exposing each individual note amount as a public instance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OfflineNoteV2InstanceValues {
+    /// Public instance values encoded as single-row Pasta field columns.
+    pub public_values: [u64; OFFLINE_NOTE_V2_INSTANCE_COLUMNS],
+    /// Private input amount slots, normalized to a common decimal scale.
+    pub input_amounts: [u64; OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS],
+    /// Private output amount slots, normalized to the same decimal scale.
+    pub output_amounts: [u64; OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS],
+}
+
+impl OfflineNoteV2InstanceValues {
+    /// Return public instances in the byte layout carried by Halo2/STARK proof envelopes.
+    #[must_use]
+    pub fn public_instance_columns(&self) -> Vec<Vec<[u8; 32]>> {
+        self.public_values
+            .iter()
+            .copied()
+            .map(limb_as_instance_bytes)
+            .map(|value| vec![value])
+            .collect()
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn public_scalars(
+        &self,
+    ) -> [halo2_proofs::halo2curves::pasta::Fp; OFFLINE_NOTE_V2_INSTANCE_COLUMNS] {
+        self.public_values
+            .map(halo2_proofs::halo2curves::pasta::Fp::from)
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn input_amount_scalars(
+        &self,
+    ) -> [halo2_proofs::halo2curves::pasta::Fp; OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS] {
+        self.input_amounts
+            .map(halo2_proofs::halo2curves::pasta::Fp::from)
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    fn output_amount_scalars(
+        &self,
+    ) -> [halo2_proofs::halo2curves::pasta::Fp; OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS] {
+        self.output_amounts
+            .map(halo2_proofs::halo2curves::pasta::Fp::from)
+    }
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn is_offline_note_v2_recursive_circuit_id(circuit_id: &str) -> bool {
+    matches!(
+        circuit_id,
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID
+            | "halo2/ipa:offline-note-v2-recursive-v1"
+            | "halo2/ipa/offline-note-v2-recursive-v1"
+            | "halo2/pasta/offline-note-v2-recursive-v1"
+            | "halo2/pasta/ipa/offline-note-v2-recursive-v1"
+    )
+}
+
+/// Build the canonical inline verifier key for Offline V2 recursive note proofs.
+///
+/// The returned key is a real Halo2 IPA verifier key envelope (`IPAK` + `H2VK`)
+/// for `offline-note-v2-recursive-v1`; it is suitable for WSV registration.
+///
+/// # Errors
+///
+/// Returns an error if Halo2 verifier-key generation fails.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn offline_note_v2_recursive_vk_box() -> Result<VerifyingKeyBox, String> {
+    static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
+
+    CACHE
+        .get_or_init(|| {
+            build_offline_note_v2_recursive_vk_box().map_err(|err| {
+                format!("failed to generate offline-note-v2-recursive-v1 verifying key: {err}")
+            })
+        })
+        .clone()
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn build_offline_note_v2_recursive_vk_box() -> Result<VerifyingKeyBox, halo2_proofs::plonk::Error> {
+    use halo2_proofs::plonk::keygen_vk;
+
+    ensure_halo2_max_degree(1024);
+    let params = pasta_params_new(OFFLINE_NOTE_V2_RECURSIVE_V1_IPA_K);
+    let circuit = pasta_tiny::OfflineNoteV2SemanticV1::default();
+    let vk = keygen_vk(&params, &circuit)?;
+    let mut bytes = zk1::wrap_start();
+    zk1::wrap_append_ipa_k(&mut bytes, OFFLINE_NOTE_V2_RECURSIVE_V1_IPA_K);
+    zk1::wrap_append_vk_pasta(&mut bytes, &vk);
+    Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
+}
+
+/// Build a governance/WSV verifier-key record for Offline V2 recursive note proofs.
+///
+/// The record is active, embeds the real Halo2 IPA verifier key inline, and
+/// binds to the canonical Offline V2 public-input schema hash.
+///
+/// # Errors
+///
+/// Returns an error if verifier-key generation fails or the key length cannot be encoded.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn offline_note_v2_recursive_vk_record(
+    namespace: impl Into<String>,
+    version: u32,
+) -> Result<iroha_data_model::proof::VerifyingKeyRecord, String> {
+    use iroha_data_model::{
+        confidential::ConfidentialStatus,
+        offline::offline_note_v2_recursive_public_inputs_schema_hash, zk::BackendTag,
+    };
+
+    let vk_box = offline_note_v2_recursive_vk_box()?;
+    let mut record = iroha_data_model::proof::VerifyingKeyRecord::new(
+        version,
+        OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+        BackendTag::Halo2IpaPasta,
+        "pallas",
+        offline_note_v2_recursive_public_inputs_schema_hash(),
+        hash_vk(&vk_box),
+    );
+    record.vk_len = u32::try_from(vk_box.bytes.len())
+        .map_err(|_| "offline V2 verifying key length overflowed u32".to_owned())?;
+    record.max_proof_bytes = OFFLINE_NOTE_V2_MAX_PROOF_BYTES;
+    record.gas_schedule_id = Some("halo2_default".to_owned());
+    record.key = Some(vk_box);
+    record.status = ConfidentialStatus::Active;
+    record.namespace = namespace.into();
+    Ok(record)
+}
+
+fn hash_limb0(hash: &iroha_crypto::Hash) -> u64 {
+    hash_to_u64_limbs_le(hash)[0]
+}
+
+fn hash_limb0_sum(hashes: &[iroha_crypto::Hash]) -> u64 {
+    hashes
+        .iter()
+        .fold(0u64, |sum, hash| sum.wrapping_add(hash_limb0(hash)))
+}
+
+fn validate_offline_note_v2_count(count: usize, max: usize, label: &str) -> Result<u64, String> {
+    if count == 0 || count > max {
+        return Err(format!("offline V2 {label} count must be in 1..={max}"));
+    }
+    Ok(u64::try_from(count).expect("bounded offline V2 count fits into u64"))
+}
+
+fn trimmed_numeric_scale(value: &iroha_primitives::Numeric) -> u32 {
+    value.clone().trim_trailing_zeros().scale()
+}
+
+fn normalized_numeric_to_u64(value: &iroha_primitives::Numeric, target_scale: u32) -> Option<u64> {
+    let value = value.clone().trim_trailing_zeros();
+    if value.mantissa().is_negative() || value.scale() > target_scale {
+        return None;
+    }
+
+    let scale_delta = target_scale - value.scale();
+    let factor = iroha_primitives::BigInt::pow10(scale_delta)?;
+    let scaled = value.mantissa().checked_mul(&factor).ok()?;
+    scaled.to_string().parse::<u64>().ok()
+}
+
+fn normalized_amount_vec(amounts: &[&iroha_primitives::Numeric]) -> Result<Vec<u64>, String> {
+    let target_scale = amounts
+        .iter()
+        .copied()
+        .map(trimmed_numeric_scale)
+        .max()
+        .unwrap_or(0);
+    amounts
+        .iter()
+        .copied()
+        .map(|amount| {
+            normalized_numeric_to_u64(amount, target_scale).ok_or_else(|| {
+                "offline V2 proof amount does not fit into u64 witness units".to_owned()
+            })
+        })
+        .collect()
+}
+
+fn checked_u64_sum(values: &[u64], label: &str) -> Result<u64, String> {
+    values.iter().try_fold(0u64, |sum, value| {
+        sum.checked_add(*value)
+            .ok_or_else(|| format!("offline V2 {label} amount sum overflows u64 witness units"))
+    })
+}
+
+fn offline_note_v2_public_values(
+    public_inputs_hash: &iroha_crypto::Hash,
+    mode: u64,
+    input_count: u64,
+    output_count: u64,
+    input_sum: u64,
+    output_sum: u64,
+    input_nullifier_sum: u64,
+    output_commitment_sum: u64,
+    key_certificate_payload_hash: &iroha_crypto::Hash,
+    source_or_token: &iroha_crypto::Hash,
+    input_claim_hash_sum: u64,
+    output_claim_hash_sum: u64,
+) -> [u64; OFFLINE_NOTE_V2_INSTANCE_COLUMNS] {
+    let hash_limbs = hash_to_u64_limbs_le(public_inputs_hash);
+    [
+        hash_limbs[0],
+        hash_limbs[1],
+        hash_limbs[2],
+        hash_limbs[3],
+        mode,
+        input_count,
+        output_count,
+        input_sum,
+        output_sum,
+        input_nullifier_sum,
+        output_commitment_sum,
+        hash_limb0(key_certificate_payload_hash),
+        hash_limb0(source_or_token),
+        input_claim_hash_sum,
+        output_claim_hash_sum,
+        0,
+    ]
+}
+
+/// Build the public/private instance values expected for an Offline V2 redemption proof.
+///
+/// # Errors
+///
+/// Returns an error if the redemption shape is outside the circuit corridor, if
+/// Norito hashing fails, or if normalized amounts do not fit in `u64` witness units.
+pub fn offline_note_v2_redeem_instance_values(
+    redemption: &iroha_data_model::offline::OfflineNoteRedeemV2,
+) -> Result<OfflineNoteV2InstanceValues, String> {
+    use iroha_data_model::offline::OfflineNoteIssuedClaimV2;
+
+    let input_count = validate_offline_note_v2_count(
+        redemption.input_nullifiers.len(),
+        OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS,
+        "redemption input",
+    )?;
+    let output_count = 1;
+    let public_inputs_hash = redemption
+        .public_inputs_hash()
+        .map_err(|err| format!("failed to encode Offline V2 redemption public inputs: {err}"))?;
+    let key_certificate_payload_hash = redemption
+        .sender_key_certificate
+        .payload_hash()
+        .map_err(|err| format!("failed to encode Offline V2 key certificate payload: {err}"))?;
+    let issued_claim_hash = OfflineNoteIssuedClaimV2::from_redemption(redemption)
+        .and_then(|claim| claim.claim_hash())
+        .map_err(|err| format!("failed to encode Offline V2 redemption issued claim: {err}"))?;
+
+    let normalized_amounts = normalized_amount_vec(&[&redemption.amount, &redemption.amount])?;
+    let input_sum = normalized_amounts[0];
+    let output_sum = normalized_amounts[1];
+    let public_values = offline_note_v2_public_values(
+        &public_inputs_hash,
+        OFFLINE_NOTE_V2_MODE_REDEEM,
+        input_count,
+        output_count,
+        input_sum,
+        output_sum,
+        hash_limb0_sum(&redemption.input_nullifiers),
+        0,
+        &key_certificate_payload_hash,
+        &redemption.source_note_commitment,
+        hash_limb0(&issued_claim_hash),
+        0,
+    );
+
+    let mut input_amounts = [0u64; OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS];
+    input_amounts[0] = input_sum;
+    let mut output_amounts = [0u64; OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS];
+    output_amounts[0] = output_sum;
+
+    Ok(OfflineNoteV2InstanceValues {
+        public_values,
+        input_amounts,
+        output_amounts,
+    })
+}
+
+/// Build the public/private instance values expected for an Offline V2 audit proof.
+///
+/// # Errors
+///
+/// Returns an error if the audit shape is outside the circuit corridor, if Norito
+/// hashing fails, if amounts do not fit in witness units, or if audited input and
+/// output amounts are not conserved.
+pub fn offline_note_v2_audit_instance_values(
+    audit: &iroha_data_model::offline::OfflineNoteAuditBundleV2,
+) -> Result<OfflineNoteV2InstanceValues, String> {
+    use iroha_data_model::offline::OfflineNoteIssuedClaimV2;
+
+    let input_count = validate_offline_note_v2_count(
+        audit.input_claims.len(),
+        OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS,
+        "audit input",
+    )?;
+    let output_count = validate_offline_note_v2_count(
+        audit.output_claims.len(),
+        OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS,
+        "audit output",
+    )?;
+    if audit.input_nullifiers.len() != audit.input_claims.len() {
+        return Err(
+            "offline V2 audit input claim count must match input nullifier count".to_owned(),
+        );
+    }
+
+    let public_inputs_hash = audit
+        .public_inputs_hash()
+        .map_err(|err| format!("failed to encode Offline V2 audit public inputs: {err}"))?;
+    let key_certificate_payload_hash = audit
+        .sender_key_certificate
+        .payload_hash()
+        .map_err(|err| format!("failed to encode Offline V2 key certificate payload: {err}"))?;
+
+    let input_claim_hashes = audit
+        .input_claims
+        .iter()
+        .map(|claim| {
+            claim
+                .claim_hash()
+                .map_err(|err| format!("failed to encode Offline V2 audit input claim: {err}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let output_claim_hashes = audit
+        .output_claims
+        .iter()
+        .map(|claim| {
+            OfflineNoteIssuedClaimV2::from_audit_output(claim)
+                .and_then(|claim| claim.claim_hash())
+                .map_err(|err| format!("failed to encode Offline V2 audit output claim: {err}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let amount_refs = audit
+        .input_claims
+        .iter()
+        .map(|claim| &claim.amount)
+        .chain(audit.output_claims.iter().map(|claim| &claim.amount))
+        .collect::<Vec<_>>();
+    let normalized_amounts = normalized_amount_vec(&amount_refs)?;
+    let input_len = audit.input_claims.len();
+    let input_units = &normalized_amounts[..input_len];
+    let output_units = &normalized_amounts[input_len..];
+    let input_sum = checked_u64_sum(input_units, "input")?;
+    let output_sum = checked_u64_sum(output_units, "output")?;
+    if input_sum != output_sum {
+        return Err("offline V2 audit proof amounts are not conserved".to_owned());
+    }
+
+    let mut input_amounts = [0u64; OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS];
+    for (slot, amount) in input_amounts.iter_mut().zip(input_units.iter().copied()) {
+        *slot = amount;
+    }
+    let mut output_amounts = [0u64; OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS];
+    for (slot, amount) in output_amounts.iter_mut().zip(output_units.iter().copied()) {
+        *slot = amount;
+    }
+
+    let public_values = offline_note_v2_public_values(
+        &public_inputs_hash,
+        OFFLINE_NOTE_V2_MODE_AUDIT,
+        input_count,
+        output_count,
+        input_sum,
+        output_sum,
+        hash_limb0_sum(&audit.input_nullifiers),
+        hash_limb0_sum(&audit.output_commitments),
+        &key_certificate_payload_hash,
+        &audit.token_id,
+        hash_limb0_sum(&input_claim_hashes),
+        hash_limb0_sum(&output_claim_hashes),
+    );
+
+    Ok(OfflineNoteV2InstanceValues {
+        public_values,
+        input_amounts,
+        output_amounts,
+    })
 }
 
 /// Compute a stable 32-byte hash of the proof payload along with backend ID.
@@ -245,14 +654,13 @@ pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
     backend == ZK_BACKEND_STARK_FRI_V1 || backend.starts_with("stark/fri/")
 }
 
-/// Returns `true` when `backend` is accepted for `ivm-execution` proofs.
+/// Returns `true` when `backend` is accepted for `ivm-execution-v1` proofs.
 #[inline]
 #[must_use]
 pub fn is_ivm_execution_backend(backend: &str) -> bool {
     backend == ZK_BACKEND_HALO2_IPA || is_stark_fri_v1_backend(backend)
 }
 
-#[cfg(any(feature = "zk-halo2-ipa", feature = "zk-stark"))]
 fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
     let mut limbs = [0u64; 4];
     let bytes: &[u8; 32] = hash.as_ref();
@@ -264,7 +672,6 @@ fn hash_to_u64_limbs_le(hash: &iroha_crypto::Hash) -> [u64; 4] {
     limbs
 }
 
-#[cfg(feature = "zk-stark")]
 fn limb_as_instance_bytes(limb: u64) -> [u8; 32] {
     let mut out = [0u8; 32];
     out[..8].copy_from_slice(&limb.to_le_bytes());
@@ -292,12 +699,12 @@ fn ivm_execution_public_inputs_columns(
         .collect()
 }
 
-/// Build a Halo2 IPA `ivm-execution` proof envelope for IVM proved execution.
+/// Build a Halo2 IPA `ivm-execution-v1` proof envelope for IVM proved execution.
 ///
 /// The produced proof binds these public commitments:
 /// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)`.
 ///
-/// Note: the current `ivm-execution` circuit is a **binding** circuit. It does **not**
+/// Note: the current `ivm-execution-v1` circuit is a **binding** circuit. It does **not**
 /// prove correct IVM execution semantics by itself, so admission still performs deterministic
 /// VM replay to recompute the overlay/commitments and reject mismatches.
 ///
@@ -335,7 +742,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     let parsed_vk: VerifyingKey<Curve> =
         zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(vk_box.bytes.as_slice(), &params)
             .ok_or_else(|| {
-                "missing/invalid H2VK payload for ivm-execution verifying key".to_owned()
+                "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned()
             })?;
 
     let code_limbs = hash_to_u64_limbs_le(&code_hash);
@@ -404,7 +811,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
         OsRng,
         &mut transcript,
     )
-    .map_err(|err| format!("failed to create ivm-execution proof: {err}"))?;
+    .map_err(|err| format!("failed to create ivm-execution-v1 proof: {err}"))?;
     let proof_raw = transcript.finalize();
 
     let mut proof_payload = zk1::wrap_start();
@@ -425,7 +832,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     Ok(ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), encoded))
 }
 
-/// Derive Halo2 IPA proving-key bytes for the canonical `ivm-execution` circuit.
+/// Derive Halo2 IPA proving-key bytes for the canonical `ivm-execution-v1` circuit.
 ///
 /// The returned bytes are the Halo2 `ProvingKey` serialization using `SerdeFormat::Processed`,
 /// suitable for persistence in the Torii prover key store (`<backend>__<name>.pk`).
@@ -453,7 +860,7 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
     let parsed_vk: VerifyingKey<Curve> =
         zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(vk_box.bytes.as_slice(), &params)
             .ok_or_else(|| {
-                "missing/invalid H2VK payload for ivm-execution verifying key".to_owned()
+                "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned()
             })?;
 
     let pk = keygen_pk(
@@ -463,6 +870,186 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
     )
     .map_err(|err| format!("failed to derive proving key: {err}"))?;
     Ok(pk.to_bytes(SerdeFormat::Processed))
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn prove_halo2_ipa_offline_note_v2_envelope(
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    instance_values: OfflineNoteV2InstanceValues,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<ProofBox, String> {
+    use std::io::Cursor;
+
+    use halo2_proofs::{
+        SerdeFormat,
+        halo2curves::pasta::{EqAffine as Curve, Fp as Scalar},
+        plonk::{ProvingKey, VerifyingKey, create_proof, keygen_pk},
+        poly::ipa::{commitment::IPACommitmentScheme, multiopen::ProverIPA},
+        transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer as _},
+    };
+    use iroha_data_model::{
+        offline::OFFLINE_NOTE_V2_RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1,
+        zk::{BackendTag, OpenVerifyEnvelope},
+    };
+    use rand_core_06::OsRng;
+
+    if !is_offline_note_v2_recursive_circuit_id(circuit_id) {
+        return Err(format!(
+            "unsupported Offline V2 recursive circuit id `{circuit_id}`"
+        ));
+    }
+    if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
+        return Err("offline V2 proving requires halo2/ipa verifying key backend".to_owned());
+    }
+
+    let params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
+    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+        pasta_tiny::OfflineNoteV2SemanticV1,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        "missing/invalid H2VK payload for offline-note-v2-recursive-v1 verifying key".to_owned()
+    })?;
+
+    let public_values = instance_values.public_scalars();
+    let instance_columns_owned: Vec<Vec<Scalar>> =
+        public_values.iter().map(|value| vec![*value]).collect();
+    let instance_columns: Vec<&[Scalar]> =
+        instance_columns_owned.iter().map(Vec::as_slice).collect();
+    let instance_refs: Vec<&[&[Scalar]]> = vec![instance_columns.as_slice()];
+
+    let proving_key: ProvingKey<Curve> = if let Some(bytes) = proving_key_bytes {
+        let mut cursor = Cursor::new(bytes);
+        let pk = read_proving_key::<pasta_tiny::OfflineNoteV2SemanticV1, _>(&mut cursor)
+            .map_err(|err| format!("failed to decode proving key: {err}"))?;
+        let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
+        if consumed != bytes.len() {
+            return Err("failed to decode proving key: trailing bytes".to_owned());
+        }
+        if pk.get_vk().get_domain().k() != params.k() {
+            return Err("proving key domain does not match IPAK parameters".to_owned());
+        }
+        if pk.get_vk().to_bytes(SerdeFormat::Processed)
+            != parsed_vk.to_bytes(SerdeFormat::Processed)
+        {
+            return Err("proving key verifying key does not match vk_ref bytes".to_owned());
+        }
+        pk
+    } else {
+        keygen_pk(
+            &params,
+            parsed_vk.clone(),
+            &pasta_tiny::OfflineNoteV2SemanticV1::default(),
+        )
+        .map_err(|err| format!("failed to derive proving key: {err}"))?
+    };
+
+    let circuit = pasta_tiny::OfflineNoteV2SemanticV1 {
+        public_values,
+        input_amounts: instance_values.input_amount_scalars(),
+        output_amounts: instance_values.output_amount_scalars(),
+    };
+    let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
+    create_proof::<IPACommitmentScheme<Curve>, ProverIPA<'_, Curve>, Challenge255<Curve>, _, _, _>(
+        &params,
+        &proving_key,
+        &[circuit],
+        &instance_refs,
+        OsRng,
+        &mut transcript,
+    )
+    .map_err(|err| format!("failed to create offline-note-v2-recursive-v1 proof: {err}"))?;
+    let proof_raw = transcript.finalize();
+
+    let mut proof_payload = zk1::wrap_start();
+    zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
+    zk1::wrap_append_instances_pasta_fp_cols(instance_columns.as_slice(), &mut proof_payload);
+
+    let envelope = OpenVerifyEnvelope {
+        backend: BackendTag::Halo2IpaPasta,
+        circuit_id: circuit_id.to_owned(),
+        vk_hash: hash_vk(vk_box),
+        public_inputs: OFFLINE_NOTE_V2_RECURSIVE_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+        proof_bytes: proof_payload,
+        aux: Vec::new(),
+    };
+    let encoded = norito::to_bytes(&envelope)
+        .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
+    Ok(ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), encoded))
+}
+
+/// Derive Halo2 IPA proving-key bytes for the canonical Offline V2 recursive note circuit.
+///
+/// The returned bytes are the Halo2 `ProvingKey` serialization using
+/// `SerdeFormat::Processed`. They are intended to be generated offline and
+/// supplied to the real prover path; no mock or debug prover is used.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn derive_halo2_ipa_offline_note_v2_proving_key_bytes(
+    vk_box: &VerifyingKeyBox,
+) -> Result<Vec<u8>, String> {
+    use halo2_proofs::{
+        SerdeFormat,
+        halo2curves::pasta::EqAffine as Curve,
+        plonk::{VerifyingKey, keygen_pk},
+    };
+
+    if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
+        return Err(
+            "offline V2 proving key derivation requires halo2/ipa verifying key backend".to_owned(),
+        );
+    }
+
+    let params = zkparse::params_any(vk_box.bytes.as_slice())
+        .ok_or_else(|| "missing/invalid IPAK parameters in verifying key envelope".to_owned())?;
+    let parsed_vk: VerifyingKey<Curve> = zkparse::vk_from_bytes::<
+        pasta_tiny::OfflineNoteV2SemanticV1,
+    >(vk_box.bytes.as_slice(), &params)
+    .ok_or_else(|| {
+        "missing/invalid H2VK payload for offline-note-v2-recursive-v1 verifying key".to_owned()
+    })?;
+
+    let pk = keygen_pk(
+        &params,
+        parsed_vk,
+        &pasta_tiny::OfflineNoteV2SemanticV1::default(),
+    )
+    .map_err(|err| format!("failed to derive proving key: {err}"))?;
+    Ok(pk.to_bytes(SerdeFormat::Processed))
+}
+
+/// Prove an Offline V2 redemption with the real Halo2 IPA recursive-note circuit.
+///
+/// # Errors
+///
+/// Returns an error if the verifier/proving key is incompatible, the redemption
+/// cannot be converted to the semantic instance layout, or proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_offline_note_v2_redeem(
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    redemption: &iroha_data_model::offline::OfflineNoteRedeemV2,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<ProofBox, String> {
+    let instance_values = offline_note_v2_redeem_instance_values(redemption)?;
+    prove_halo2_ipa_offline_note_v2_envelope(circuit_id, vk_box, instance_values, proving_key_bytes)
+}
+
+/// Prove an Offline V2 audit with the real Halo2 IPA recursive-note circuit.
+///
+/// # Errors
+///
+/// Returns an error if the verifier/proving key is incompatible, the audit cannot
+/// be converted to the semantic instance layout, or proof generation fails.
+#[cfg(feature = "zk-halo2-ipa")]
+pub fn prove_offline_note_v2_audit(
+    circuit_id: &str,
+    vk_box: &VerifyingKeyBox,
+    audit: &iroha_data_model::offline::OfflineNoteAuditBundleV2,
+    proving_key_bytes: Option<&[u8]>,
+) -> Result<ProofBox, String> {
+    let instance_values = offline_note_v2_audit_instance_values(audit)?;
+    prove_halo2_ipa_offline_note_v2_envelope(circuit_id, vk_box, instance_values, proving_key_bytes)
 }
 
 #[cfg(feature = "zk-stark")]
@@ -510,17 +1097,98 @@ fn stark_open_verify_domain_tag_current(
     hex::encode(digest)
 }
 
+#[cfg(feature = "zk-stark")]
+const STARK_BINDING_AIR_CONSTANT: u64 = 17;
+#[cfg(feature = "zk-stark")]
+const STARK_BINDING_AIR_Z_COEFF: u64 = 19;
+#[cfg(feature = "zk-stark")]
+const STARK_GOLDILOCKS_MODULUS: u128 = (1u128 << 64) - (1u128 << 32) + 1;
+
+#[cfg(feature = "zk-stark")]
+fn stark_binding_air_preimage(
+    backend: &str,
+    circuit_id: &str,
+    vk_hash: [u8; 32],
+    env_public_inputs: &[u8],
+    public_inputs: &[Vec<[u8; 32]>],
+) -> Vec<u8> {
+    let mut preimage = Vec::new();
+    preimage.extend_from_slice(b"iroha:zk:stark-binding-air:v1");
+    preimage.extend_from_slice(&(backend.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(backend.as_bytes());
+    preimage.extend_from_slice(&(circuit_id.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(circuit_id.as_bytes());
+    preimage.extend_from_slice(&vk_hash);
+    preimage.extend_from_slice(&(env_public_inputs.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(env_public_inputs);
+    preimage.extend_from_slice(&(public_inputs.len() as u64).to_le_bytes());
+    let mut cell_count = 0u64;
+    for column in public_inputs {
+        preimage.extend_from_slice(&(column.len() as u64).to_le_bytes());
+        cell_count = cell_count.saturating_add(column.len() as u64);
+        for value in column {
+            preimage.extend_from_slice(value);
+        }
+    }
+    preimage.extend_from_slice(&cell_count.to_le_bytes());
+    preimage
+}
+
+#[cfg(feature = "zk-stark")]
+fn stark_field_limb_from_digest(bytes: &[u8]) -> u64 {
+    let mut word = [0u8; 8];
+    word.copy_from_slice(bytes);
+    let value = u64::from_le_bytes(word);
+    (u128::from(value) % STARK_GOLDILOCKS_MODULUS) as u64
+}
+
+#[cfg(feature = "zk-stark")]
+fn stark_binding_air_terms(
+    backend: &str,
+    circuit_id: &str,
+    vk_hash: [u8; 32],
+    env_public_inputs: &[u8],
+    public_inputs: &[Vec<[u8; 32]>],
+) -> Vec<crate::zk_stark::StarkCompositionTermV1> {
+    let preimage = stark_binding_air_preimage(
+        backend,
+        circuit_id,
+        vk_hash,
+        env_public_inputs,
+        public_inputs,
+    );
+    let digest = Sha256::digest(&preimage);
+    let mut terms = Vec::with_capacity(6);
+    for (idx, chunk) in digest.chunks_exact(8).enumerate() {
+        let coeff = (idx as u64) + 3;
+        terms.push(crate::zk_stark::StarkCompositionTermV1 {
+            wire_index: idx as u32,
+            value: stark_field_limb_from_digest(chunk),
+            coeff,
+        });
+    }
+    terms.push(crate::zk_stark::StarkCompositionTermV1 {
+        wire_index: 4,
+        value: (public_inputs.len() as u128 % STARK_GOLDILOCKS_MODULUS) as u64,
+        coeff: 11,
+    });
+    let cell_count = public_inputs
+        .iter()
+        .map(Vec::len)
+        .fold(0usize, usize::saturating_add);
+    terms.push(crate::zk_stark::StarkCompositionTermV1 {
+        wire_index: 5,
+        value: (cell_count as u128 % STARK_GOLDILOCKS_MODULUS) as u64,
+        coeff: 13,
+    });
+    terms
+}
+
 /// Build a STARK/FRI `OpenVerifyEnvelope` from backend-native public inputs.
 ///
-/// The produced envelope is accepted by the native `stark/fri` verifier and binds:
-/// - backend family/variant tag
-/// - circuit identifier
-/// - verifying-key commitment
-/// - schema descriptor bytes
-/// - backend-native public inputs (`StarkFriOpenProofV1.public_inputs`)
-///
-/// Note: this helper synthesizes the STARK layer witness deterministically from verifier
-/// parameters. Execution semantics remain enforced by deterministic replay in admission paths.
+/// The first-release native V1 circuit carries an explicit AIR section whose
+/// public statement digest is reconstructed from the outer envelope metadata,
+/// verifying-key hash, schema descriptor, and public input columns.
 #[cfg(feature = "zk-stark")]
 pub fn prove_stark_fri_open_verify_envelope(
     backend: &str,
@@ -529,43 +1197,35 @@ pub fn prove_stark_fri_open_verify_envelope(
     schema_descriptor: &[u8],
     public_inputs: Vec<Vec<[u8; 32]>>,
 ) -> Result<ProofBox, String> {
-    use crate::zk_stark::{STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriParamsV1};
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
 
     if !is_stark_fri_v1_backend(backend) {
-        return Err("STARK proving requires stark/fri backend".to_owned());
-    }
-    if vk_box.backend.as_str() != backend {
-        return Err("STARK proving requires vk backend to match requested backend".to_owned());
+        return Err("backend is not a STARK/FRI V1 backend".to_owned());
     }
     let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
         norito::decode_from_bytes(&vk_box.bytes)
-            .map_err(|_| "invalid STARK verifying key payload".to_owned())?;
+            .map_err(|err| format!("invalid STARK verifying key payload: {err}"))?;
     if vk_payload.version != 1 {
         return Err("unsupported STARK verifying key payload version".to_owned());
     }
-    if vk_payload.hash_fn != STARK_HASH_SHA256_V1 && vk_payload.hash_fn != STARK_HASH_POSEIDON2_V1 {
-        return Err("unsupported STARK verifying key hash_fn".to_owned());
-    }
-    if backend.contains("/sha256-") && vk_payload.hash_fn != STARK_HASH_SHA256_V1 {
-        return Err("STARK verifying key hash_fn does not match backend variant".to_owned());
-    }
-    if backend.contains("/poseidon2-") && vk_payload.hash_fn != STARK_HASH_POSEIDON2_V1 {
-        return Err("STARK verifying key hash_fn does not match backend variant".to_owned());
-    }
-    if backend != ZK_BACKEND_STARK_FRI_V1
-        && !backend.contains("/sha256-")
-        && !backend.contains("/poseidon2-")
-    {
-        return Err("unsupported stark/fri backend variant".to_owned());
-    }
-
-    let req_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
+    let env_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
         .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
     let vk_circuit_id = normalize_stark_fri_circuit_id_for_backend(backend, &vk_payload.circuit_id)
         .ok_or_else(|| "invalid STARK verifying key circuit_id".to_owned())?;
-    if req_circuit_id != vk_circuit_id {
+    if env_circuit_id != vk_circuit_id {
         return Err("STARK verifying key circuit_id mismatch".to_owned());
+    }
+    let expected_hash_fn = if backend == ZK_BACKEND_STARK_FRI_V1 {
+        vk_payload.hash_fn
+    } else if backend.contains("/sha256-") {
+        crate::zk_stark::STARK_HASH_SHA256_V1
+    } else if backend.contains("/poseidon2-") {
+        crate::zk_stark::STARK_HASH_POSEIDON2_V1
+    } else {
+        return Err("unsupported STARK/FRI backend variant".to_owned());
+    };
+    if vk_payload.hash_fn != expected_hash_fn {
+        return Err("STARK verifying key hash_fn mismatch".to_owned());
     }
 
     let vk_hash = hash_vk(vk_box);
@@ -576,7 +1236,7 @@ pub fn prove_stark_fri_open_verify_envelope(
         schema_descriptor,
         &public_inputs,
     );
-    let params = StarkFriParamsV1 {
+    let params = crate::zk_stark::StarkFriParamsV1 {
         version: 1,
         n_log2: vk_payload.n_log2,
         blowup_log2: vk_payload.blowup_log2,
@@ -586,29 +1246,44 @@ pub fn prove_stark_fri_open_verify_envelope(
         hash_fn: vk_payload.hash_fn,
         domain_tag,
     };
-    let inner =
-        crate::zk_stark::synthesize_stark_fri_envelope_bytes(params, "IROHA-STARK-IVM".to_owned())?;
+    let terms = stark_binding_air_terms(
+        backend,
+        circuit_id,
+        vk_hash,
+        schema_descriptor,
+        &public_inputs,
+    );
+    let public_digest = crate::zk_stark::stark_air_public_digest_from_composition(
+        STARK_BINDING_AIR_CONSTANT,
+        STARK_BINDING_AIR_Z_COEFF,
+        &terms,
+    )?;
+    let envelope_bytes = crate::zk_stark::prove_stark_fri_air_envelope_bytes(
+        params,
+        "IROHA-STARK-AIR-V1".to_owned(),
+        env_circuit_id.clone(),
+        public_digest,
+    )?;
     let open = StarkFriOpenProofV1 {
         version: 1,
         public_inputs,
-        envelope_bytes: inner,
+        envelope_bytes,
     };
-    let proof_bytes = norito::to_bytes(&open)
-        .map_err(|err| format!("failed to encode STARK open proof: {err}"))?;
     let env = OpenVerifyEnvelope {
         backend: BackendTag::Stark,
         circuit_id: circuit_id.to_owned(),
         vk_hash,
         public_inputs: schema_descriptor.to_vec(),
-        proof_bytes,
+        proof_bytes: norito::to_bytes(&open)
+            .map_err(|err| format!("failed to encode STARK wrapper payload: {err}"))?,
         aux: Vec::new(),
     };
-    let encoded = norito::to_bytes(&env)
+    let bytes = norito::to_bytes(&env)
         .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
-    Ok(ProofBox::new(backend.to_owned(), encoded))
+    Ok(ProofBox::new(backend.to_owned(), bytes))
 }
 
-/// Build a STARK/FRI `ivm-execution` proof envelope for IVM proved execution.
+/// Build a STARK/FRI `ivm-execution-v1` proof envelope for IVM proved execution.
 ///
 /// This is the STARK analogue to [`prove_halo2_ipa_ivm_execution_envelope`]. It binds
 /// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)` as backend-native
@@ -1014,7 +1689,7 @@ pub mod test_utils {
         halo2_ivm_binding_envelope("halo2/ipa:ivm-overlay-bind", code_hash, overlay_hash)
     }
 
-    /// Deterministic Halo2 IPA fixture for `ivm-execution` proof attachments.
+    /// Deterministic Halo2 IPA fixture for `ivm-execution-v1` proof attachments.
     ///
     /// The circuit exposes 16 instance columns (1 row each) corresponding to:
     /// - `code_hash` (4 `u64` limbs, little-endian)
@@ -1030,7 +1705,7 @@ pub mod test_utils {
         gas_policy_commitment: CryptoHash,
     ) -> FixtureEnvelope {
         halo2_ivm_execution_bind_v1_envelope(
-            "halo2/ipa:ivm-execution",
+            "halo2/ipa:ivm-execution-v1",
             code_hash,
             overlay_hash,
             events_commitment,
@@ -4511,6 +5186,21 @@ fn verify_stark_fri_open_verify_envelope(
     proof: &ProofBox,
     vk: Option<&VerifyingKeyBox>,
 ) -> bool {
+    verify_stark_fri_open_verify_envelope_with_limits(
+        backend,
+        proof,
+        vk,
+        &crate::zk_stark::StarkVerifierLimits::default(),
+    )
+}
+
+#[cfg(feature = "zk-stark")]
+fn verify_stark_fri_open_verify_envelope_with_limits(
+    backend: &str,
+    proof: &ProofBox,
+    vk: Option<&VerifyingKeyBox>,
+    limits: &crate::zk_stark::StarkVerifierLimits,
+) -> bool {
     use crate::zk_stark::{STARK_HASH_POSEIDON2_V1, STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1};
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
 
@@ -4588,6 +5278,9 @@ fn verify_stark_fri_open_verify_envelope(
     if open.version != 1 {
         return reject("unsupported STARK wrapper version");
     }
+    if open.envelope_bytes.len() > limits.max_envelope_bytes {
+        return reject("inner STARK envelope exceeds verifier limits");
+    }
 
     // Bind the inner STARK envelope to the outer OpenVerifyEnvelope metadata and public inputs by
     // requiring `params.domain_tag` to equal the SHA-256 digest (hex, 64 chars) of:
@@ -4626,8 +5319,37 @@ fn verify_stark_fri_open_verify_envelope(
         return reject("domain tag integrity mismatch");
     }
 
-    if !crate::zk_stark::verify_stark_fri_envelope(&open.envelope_bytes) {
-        return reject("native STARK verifier rejected proof");
+    let expected_terms = stark_binding_air_terms(
+        backend,
+        &env.circuit_id,
+        env.vk_hash,
+        &env.public_inputs,
+        &open.public_inputs,
+    );
+    let expected_public_digest = match crate::zk_stark::stark_air_public_digest_from_composition(
+        STARK_BINDING_AIR_CONSTANT,
+        STARK_BINDING_AIR_Z_COEFF,
+        &expected_terms,
+    ) {
+        Ok(digest) => digest,
+        Err(_) => return reject("STARK AIR public digest reconstruction failed"),
+    };
+    let Some(air) = inner.proof.air.as_ref() else {
+        return reject("missing STARK AIR section");
+    };
+    let air_circuit_id = match normalize_stark_fri_circuit_id_for_backend(backend, &air.circuit_id)
+    {
+        Some(id) => id,
+        None => return reject("invalid STARK AIR circuit_id"),
+    };
+    if air_circuit_id != env_circuit_id {
+        return reject("STARK AIR circuit_id mismatch");
+    }
+    if air.public_digest != expected_public_digest {
+        return reject("STARK AIR public digest mismatch");
+    }
+    if !crate::zk_stark::verify_stark_fri_envelope_with_limits(&open.envelope_bytes, limits) {
+        return reject("inner STARK/FRI verifier rejected proof");
     }
     true
 }
@@ -4752,17 +5474,14 @@ mod stark_backend_tag_tests {
 mod stark_prover_tests {
     use super::{
         prove_stark_fri_ivm_execution_envelope, prove_stark_fri_open_verify_envelope,
-        verify_backend, verify_backend_with_timing,
+        verify_backend_with_timing,
     };
-    use crate::zk_stark::{STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1};
+    use crate::zk_stark::{STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1, StarkVerifyEnvelopeV1};
     use iroha_crypto::Hash;
-    use iroha_data_model::{
-        proof::{ProofBox, VerifyingKeyBox},
-        zk::OpenVerifyEnvelope,
-    };
+    use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
+    use iroha_data_model::zk::{OpenVerifyEnvelope, StarkFriOpenProofV1};
 
-    #[test]
-    fn prove_stark_open_verify_envelope_roundtrip() {
+    fn sample_stark_open_verify_proof() -> (&'static str, String, VerifyingKeyBox, ProofBox) {
         let backend = "stark/fri/sha256-goldilocks";
         let circuit_id = format!("{backend}:tiny-open");
         let vk_payload = StarkFriVerifyingKeyV1 {
@@ -4777,22 +5496,126 @@ mod stark_prover_tests {
         };
         let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
         let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
-        let public_inputs = vec![vec![[0x11; 32]], vec![[0x22; 32]]];
         let proof = prove_stark_fri_open_verify_envelope(
             backend,
             &circuit_id,
             &vk_box,
             b"tiny:schema:v1",
-            public_inputs,
+            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
         )
-        .expect("build stark open proof");
-        assert!(verify_backend(backend, &proof, Some(&vk_box)));
+        .expect("binding AIR STARK proof");
+        (backend, circuit_id, vk_box, proof)
     }
 
     #[test]
-    fn prove_stark_ivm_execution_envelope_roundtrip() {
+    fn prove_stark_open_verify_envelope_emits_binding_air_proof() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+        assert!(report.ok);
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_bound_public_input_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
+        open.public_inputs[0][0][0] ^= 0x01;
+        outer.proof_bytes = norito::to_bytes(&open).expect("encode tampered STARK open proof");
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_bound_schema_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        outer.public_inputs.push(0xAA);
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_vk_hash_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        outer.vk_hash[0] ^= 0x01;
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_missing_vk() {
+        let (backend, _circuit_id, _vk_box, proof) = sample_stark_open_verify_proof();
+        let report = verify_backend_with_timing(backend, &proof, None);
+        assert!(!report.ok);
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_inner_air_circuit_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
+        let mut inner: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&open.envelope_bytes).expect("decode inner STARK envelope");
+        inner
+            .proof
+            .air
+            .as_mut()
+            .expect("AIR section")
+            .circuit_id
+            .push_str(":tampered");
+        open.envelope_bytes = norito::to_bytes(&inner).expect("encode tampered inner STARK proof");
+        outer.proof_bytes = norito::to_bytes(&open).expect("encode tampered STARK open proof");
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
+
+    #[test]
+    fn verify_stark_open_verify_envelope_rejects_inner_parameter_tampering() {
+        let (backend, _circuit_id, vk_box, proof) = sample_stark_open_verify_proof();
+        let mut outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        let mut open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
+        let mut inner: StarkVerifyEnvelopeV1 =
+            norito::decode_from_bytes(&open.envelope_bytes).expect("decode inner STARK envelope");
+        inner.params.queries = inner.params.queries.saturating_add(1);
+        open.envelope_bytes = norito::to_bytes(&inner).expect("encode tampered inner STARK proof");
+        outer.proof_bytes = norito::to_bytes(&open).expect("encode tampered STARK open proof");
+        let tampered = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&outer).expect("encode tampered outer STARK envelope"),
+        );
+        let report = verify_backend_with_timing(backend, &tampered, Some(&vk_box));
+        assert!(!report.ok);
+    }
+
+    #[test]
+    fn prove_stark_ivm_execution_envelope_emits_binding_air_proof() {
         let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = format!("{backend}:ivm-execution");
+        let circuit_id = format!("{backend}:ivm-execution-v1");
         let vk_payload = StarkFriVerifyingKeyV1 {
             version: 1,
             circuit_id: circuit_id.clone(),
@@ -4814,43 +5637,9 @@ mod stark_prover_tests {
             Hash::new(b"events"),
             Hash::new(b"gas"),
         )
-        .expect("build stark ivm proof");
-        assert!(verify_backend(backend, &proof, Some(&vk_box)));
-    }
-
-    #[test]
-    fn verify_stark_open_verify_envelope_rejects_circuit_id_mismatch() {
-        let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = format!("{backend}:tiny-open");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: 4,
-            blowup_log2: 2,
-            fold_arity: 2,
-            queries: 2,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
-        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
-        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
-        let proof = prove_stark_fri_open_verify_envelope(
-            backend,
-            &circuit_id,
-            &vk_box,
-            b"tiny:schema:v1",
-            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
-        )
-        .expect("build stark open proof");
-
-        let mut envelope: OpenVerifyEnvelope =
-            norito::decode_from_bytes(&proof.bytes).expect("decode OpenVerifyEnvelope");
-        envelope.circuit_id = format!("{backend}:wrong-circuit");
-        let tampered = ProofBox::new(
-            backend.to_owned(),
-            norito::to_bytes(&envelope).expect("encode tampered OpenVerifyEnvelope"),
-        );
-        assert!(!verify_backend(backend, &tampered, Some(&vk_box)));
+        .expect("binding AIR STARK proof");
+        let report = verify_backend_with_timing(backend, &proof, Some(&vk_box));
+        assert!(report.ok);
     }
 
     #[test]
@@ -4871,70 +5660,6 @@ mod stark_prover_tests {
         let malformed = ProofBox::new(backend.to_owned(), vec![0xAA, 0xBB, 0xCC]);
         let report = verify_backend_with_timing(backend, &malformed, Some(&vk_box));
         assert!(!report.ok);
-    }
-
-    #[test]
-    fn verify_stark_open_verify_envelope_rejects_backend_variant_mismatch() {
-        let backend = "stark/fri/sha256-goldilocks";
-        let wrong_backend = "stark/fri/poseidon2-goldilocks";
-        let circuit_id = format!("{backend}:tiny-open");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: 4,
-            blowup_log2: 2,
-            fold_arity: 2,
-            queries: 2,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
-        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
-        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
-        let proof = prove_stark_fri_open_verify_envelope(
-            backend,
-            &circuit_id,
-            &vk_box,
-            b"tiny:schema:v1",
-            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
-        )
-        .expect("build stark open proof");
-        assert!(
-            !verify_backend(wrong_backend, &proof, Some(&vk_box)),
-            "proof must be rejected when declared backend variant mismatches the proof hash family"
-        );
-    }
-
-    #[test]
-    fn verify_stark_open_verify_envelope_rejects_vk_backend_mismatch() {
-        let backend = "stark/fri/sha256-goldilocks";
-        let mismatched_vk_backend = "stark/fri/poseidon2-goldilocks";
-        let circuit_id = format!("{backend}:tiny-open");
-        let vk_payload = StarkFriVerifyingKeyV1 {
-            version: 1,
-            circuit_id: circuit_id.clone(),
-            n_log2: 4,
-            blowup_log2: 2,
-            fold_arity: 2,
-            queries: 2,
-            merkle_arity: 2,
-            hash_fn: STARK_HASH_SHA256_V1,
-        };
-        let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
-        let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes.clone());
-        let proof = prove_stark_fri_open_verify_envelope(
-            backend,
-            &circuit_id,
-            &vk_box,
-            b"tiny:schema:v1",
-            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
-        )
-        .expect("build stark open proof");
-
-        let wrong_vk = VerifyingKeyBox::new(mismatched_vk_backend.to_owned(), vk_bytes);
-        assert!(
-            !verify_backend(backend, &proof, Some(&wrong_vk)),
-            "proof must be rejected when verifying key backend differs from proof backend"
-        );
     }
 }
 
@@ -4961,7 +5686,9 @@ pub struct ZkVerifyGuardrails {
     pub halo2_max_proof_bytes: usize,
     /// Whether STARK verification is enabled.
     pub stark_enabled: bool,
-    /// Maximum accepted STARK proof payload size (bytes).
+    /// Maximum accepted outer STARK OpenVerifyEnvelope size (bytes).
+    pub stark_max_envelope_bytes: usize,
+    /// Maximum accepted backend-native STARK proof payload size (bytes).
     pub stark_max_proof_bytes: usize,
 }
 
@@ -4973,6 +5700,7 @@ impl ZkVerifyGuardrails {
             halo2_max_envelope_bytes: cfg.halo2.max_envelope_bytes,
             halo2_max_proof_bytes: cfg.halo2.max_proof_bytes,
             stark_enabled: cfg.stark.enabled,
+            stark_max_envelope_bytes: cfg.stark.max_envelope_bytes,
             stark_max_proof_bytes: cfg.stark.max_proof_bytes,
         }
     }
@@ -5053,10 +5781,49 @@ pub fn verify_backend_with_timing_guardrails(
                 elapsed: Duration::ZERO,
             };
         }
-        if proof.bytes.len() > guardrails.stark_max_proof_bytes {
+        if proof.bytes.len() > guardrails.stark_max_envelope_bytes {
             iroha_logger::debug!(
                 backend,
-                "stark proof exceeds node-configured max_proof_bytes"
+                "stark payload exceeds node-configured max_envelope_bytes"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
+        }
+        if let Ok(env) =
+            norito::decode_from_bytes::<iroha_data_model::zk::OpenVerifyEnvelope>(&proof.bytes)
+            && let Ok(open) = norito::decode_from_bytes::<iroha_data_model::zk::StarkFriOpenProofV1>(
+                &env.proof_bytes,
+            )
+            && open.envelope_bytes.len() > guardrails.stark_max_proof_bytes
+        {
+            iroha_logger::debug!(
+                backend,
+                "stark envelope proof bytes exceed node-configured max_proof_bytes"
+            );
+            return VerifyReport {
+                ok: false,
+                elapsed: Duration::ZERO,
+            };
+        }
+
+        #[cfg(feature = "zk-stark")]
+        {
+            let started = Instant::now();
+            let mut limits = crate::zk_stark::StarkVerifierLimits::default();
+            limits.max_envelope_bytes = guardrails.stark_max_proof_bytes;
+            let ok = verify_stark_fri_open_verify_envelope_with_limits(backend, proof, vk, &limits);
+            return VerifyReport {
+                ok,
+                elapsed: started.elapsed(),
+            };
+        }
+        #[cfg(not(feature = "zk-stark"))]
+        {
+            iroha_logger::debug!(
+                backend,
+                "stark/fri backend requested but binary was built without `zk-stark`"
             );
             return VerifyReport {
                 ok: false,
@@ -5084,7 +5851,7 @@ pub fn verify_backend_with_timing_checked(
 #[cfg(test)]
 mod guardrails_tests {
     use super::*;
-    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+    use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1};
 
     #[test]
     fn guardrails_disable_halo2_returns_zero_duration() {
@@ -5098,6 +5865,7 @@ mod guardrails_tests {
                 halo2_max_envelope_bytes: 1024,
                 halo2_max_proof_bytes: 1024,
                 stark_enabled: true,
+                stark_max_envelope_bytes: 1024,
                 stark_max_proof_bytes: 1024,
             },
         );
@@ -5117,6 +5885,7 @@ mod guardrails_tests {
                 halo2_max_envelope_bytes: 8,
                 halo2_max_proof_bytes: 1024,
                 stark_enabled: true,
+                stark_max_envelope_bytes: 1024,
                 stark_max_proof_bytes: 1024,
             },
         );
@@ -5145,6 +5914,7 @@ mod guardrails_tests {
                 halo2_max_envelope_bytes: 1024,
                 halo2_max_proof_bytes: 5,
                 stark_enabled: true,
+                stark_max_envelope_bytes: 1024,
                 stark_max_proof_bytes: 1024,
             },
         );
@@ -5164,6 +5934,7 @@ mod guardrails_tests {
                 halo2_max_envelope_bytes: 1024,
                 halo2_max_proof_bytes: 1024,
                 stark_enabled: false,
+                stark_max_envelope_bytes: 1024,
                 stark_max_proof_bytes: 1024,
             },
         );
@@ -5172,7 +5943,7 @@ mod guardrails_tests {
     }
 
     #[test]
-    fn guardrails_enforce_stark_max_proof_bytes() {
+    fn guardrails_enforce_stark_max_envelope_bytes() {
         let proof = ProofBox::new(ZK_BACKEND_STARK_FRI_V1.into(), vec![0xAA; 9]);
         let report = verify_backend_with_timing_guardrails(
             ZK_BACKEND_STARK_FRI_V1,
@@ -5183,11 +5954,102 @@ mod guardrails_tests {
                 halo2_max_envelope_bytes: 1024,
                 halo2_max_proof_bytes: 1024,
                 stark_enabled: true,
+                stark_max_envelope_bytes: 8,
+                stark_max_proof_bytes: 1024,
+            },
+        );
+        assert!(!report.ok);
+        assert_eq!(report.elapsed, Duration::ZERO);
+    }
+
+    #[test]
+    fn guardrails_enforce_stark_max_proof_bytes_inside_open_verify_envelope() {
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: Vec::new(),
+            envelope_bytes: vec![0xCC; 10],
+        };
+        let env = OpenVerifyEnvelope {
+            backend: BackendTag::Stark,
+            circuit_id: "stark/fri/sha256-goldilocks:dummy".to_owned(),
+            vk_hash: [0x11; 32],
+            public_inputs: vec![0xAA; 32],
+            proof_bytes: norito::to_bytes(&open).expect("encode stark wrapper"),
+            aux: Vec::new(),
+        };
+        let proof = ProofBox::new(
+            ZK_BACKEND_STARK_FRI_V1.into(),
+            norito::to_bytes(&env).expect("encode envelope"),
+        );
+        let report = verify_backend_with_timing_guardrails(
+            ZK_BACKEND_STARK_FRI_V1,
+            &proof,
+            None,
+            ZkVerifyGuardrails {
+                halo2_enabled: true,
+                halo2_max_envelope_bytes: 1024,
+                halo2_max_proof_bytes: 1024,
+                stark_enabled: true,
+                stark_max_envelope_bytes: 1024,
                 stark_max_proof_bytes: 8,
             },
         );
         assert!(!report.ok);
         assert_eq!(report.elapsed, Duration::ZERO);
+    }
+
+    #[cfg(feature = "zk-stark")]
+    #[test]
+    fn guardrails_stark_proof_limit_applies_to_inner_envelope_not_outer_wrapper() {
+        use crate::zk_stark::{STARK_HASH_SHA256_V1, StarkFriVerifyingKeyV1};
+
+        let backend = "stark/fri/sha256-goldilocks";
+        let circuit_id = format!("{backend}:guardrail-split");
+        let vk_payload = StarkFriVerifyingKeyV1 {
+            version: 1,
+            circuit_id: circuit_id.clone(),
+            n_log2: 4,
+            blowup_log2: 2,
+            fold_arity: 2,
+            queries: 2,
+            merkle_arity: 2,
+            hash_fn: STARK_HASH_SHA256_V1,
+        };
+        let vk_box = VerifyingKeyBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&vk_payload).expect("encode STARK verifying key"),
+        );
+        let proof = prove_stark_fri_open_verify_envelope(
+            backend,
+            &circuit_id,
+            &vk_box,
+            b"guardrail:schema:v1",
+            vec![vec![[0x11; 32]], vec![[0x22; 32]]],
+        )
+        .expect("STARK OpenVerify proof");
+        let outer: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("decode outer STARK envelope");
+        let open: StarkFriOpenProofV1 =
+            norito::decode_from_bytes(&outer.proof_bytes).expect("decode STARK open proof");
+        assert!(
+            proof.bytes.len() > open.envelope_bytes.len(),
+            "outer wrapper should be larger than the native STARK proof bytes"
+        );
+
+        let report = verify_backend_with_timing_guardrails(
+            backend,
+            &proof,
+            Some(&vk_box),
+            ZkVerifyGuardrails {
+                halo2_enabled: true,
+                halo2_max_envelope_bytes: 1024,
+                halo2_max_proof_bytes: 1024,
+                stark_enabled: true,
+                stark_max_envelope_bytes: proof.bytes.len(),
+                stark_max_proof_bytes: open.envelope_bytes.len(),
+            },
+        );
+        assert!(report.ok);
     }
 }
 
@@ -5234,6 +6096,218 @@ mod halo2_ipa_alias_tests {
     }
 }
 
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+mod offline_note_v2_real_prover_tests {
+    use super::*;
+    use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
+    use iroha_data_model::{
+        account::AccountId,
+        asset::{AssetDefinitionId, AssetId},
+        domain::DomainId,
+        offline::{
+            OfflineNoteAuditBundleV2, OfflineNoteAuditOutputClaimV2, OfflineNoteIssueV2,
+            OfflineNoteIssuedClaimV2, OfflineNoteKeyCertificateV2, OfflineNoteRecursiveProofV2,
+            OfflineNoteRedeemV2,
+        },
+        proof::{ProofBox, VerifyingKeyBox, VerifyingKeyId},
+        zk::OpenVerifyEnvelope,
+    };
+    use iroha_primitives::numeric::Numeric;
+
+    fn offline_note_v2_vk_box() -> VerifyingKeyBox {
+        offline_note_v2_recursive_vk_box().expect("offline note v2 verifying key")
+    }
+
+    fn sample_signature(seed: u8) -> Signature {
+        let mut bytes = [0u8; 64];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = seed.wrapping_add(u8::try_from(index).expect("signature index fits"));
+        }
+        Signature::from_bytes(&bytes)
+    }
+
+    fn sample_account(seed: u8) -> AccountId {
+        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(keypair.public_key().clone())
+    }
+
+    fn sample_asset(account: AccountId) -> AssetId {
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "xor".parse().expect("asset definition name"),
+        );
+        AssetId::new(definition, account)
+    }
+
+    fn sample_certificate(account: &AccountId, seed: u8) -> OfflineNoteKeyCertificateV2 {
+        let note_keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        let (_algorithm, public_key) = note_keypair.public_key().to_bytes();
+        OfflineNoteKeyCertificateV2 {
+            version: 2,
+            platform: "ios-appattest".to_owned(),
+            key_id: format!("one-use-key-{seed}"),
+            device_id: "device-1".to_owned(),
+            account_id: account.clone(),
+            public_key: public_key.to_vec(),
+            assertion_scheme: "apple-appattest-counter-v1".to_owned(),
+            assertion_key_algorithm: "app-attest-p256".to_owned(),
+            assertion_public_key: vec![0x04; 65],
+            assertion_usage_count_limit: None,
+            one_use: true,
+            issuer_signature: sample_signature(seed.wrapping_add(1)),
+        }
+    }
+
+    fn placeholder_recursive_proof() -> OfflineNoteRecursiveProofV2 {
+        OfflineNoteRecursiveProofV2 {
+            verifier_key_id: VerifyingKeyId::new(
+                ZK_BACKEND_HALO2_IPA,
+                OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            ),
+            public_inputs_hash: Hash::new(b"placeholder-offline-note-v2-public-inputs"),
+            proof: ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), Vec::new()),
+        }
+    }
+
+    fn sample_redemption() -> OfflineNoteRedeemV2 {
+        let account = sample_account(0xA1);
+        let asset = sample_asset(account.clone());
+        OfflineNoteRedeemV2 {
+            source_note_commitment: Hash::new(b"offline-note-v2-source-note"),
+            input_nullifiers: vec![Hash::new(b"offline-note-v2-redeem-nullifier")],
+            sender_key_certificate: sample_certificate(&account, 0xB1),
+            recipient: account,
+            asset,
+            amount: Numeric::new(10, 0),
+            recursive_proof: placeholder_recursive_proof(),
+        }
+    }
+
+    fn sample_audit() -> OfflineNoteAuditBundleV2 {
+        let account = sample_account(0xC1);
+        let asset = sample_asset(account.clone());
+        let certificate = sample_certificate(&account, 0xD1);
+        let issue = OfflineNoteIssueV2 {
+            note_commitment: Hash::new(b"offline-note-v2-audit-input-note"),
+            key_certificate: certificate.clone(),
+            asset: asset.clone(),
+            amount: Numeric::new(10, 0),
+        };
+        OfflineNoteAuditBundleV2 {
+            token_id: Hash::new(b"offline-note-v2-audit-token"),
+            sender_key_certificate: certificate.clone(),
+            input_nullifiers: vec![Hash::new(b"offline-note-v2-audit-nullifier")],
+            input_claims: vec![OfflineNoteIssuedClaimV2::from_issue(&issue).expect("input claim")],
+            output_commitments: vec![Hash::new(b"offline-note-v2-audit-output-note")],
+            output_claims: vec![OfflineNoteAuditOutputClaimV2 {
+                note_commitment: Hash::new(b"offline-note-v2-audit-output-note"),
+                key_certificate: certificate,
+                asset,
+                amount: Numeric::new(10, 0),
+            }],
+            recursive_proof: placeholder_recursive_proof(),
+        }
+    }
+
+    fn envelope_instances(proof: &ProofBox) -> Vec<Vec<[u8; 32]>> {
+        let envelope: OpenVerifyEnvelope =
+            norito::decode_from_bytes(&proof.bytes).expect("OpenVerifyEnvelope");
+        extract_pasta_instance_columns_bytes(&envelope.proof_bytes).expect("public instances")
+    }
+
+    #[test]
+    fn swift_native_offline_note_v2_proof_verifies_against_rust() {
+        let Some(path) = std::env::var_os("SWIFT_OFFLINE_V2_PROOF") else {
+            return;
+        };
+        let bytes = std::fs::read(path).expect("swift proof artifact");
+        let proof = ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes);
+        let vk_box = offline_note_v2_vk_box();
+        assert!(verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(&vk_box)));
+    }
+
+    #[test]
+    fn prove_offline_note_v2_redeem_emits_real_halo2_ipa_proof() {
+        let vk_box = offline_note_v2_vk_box();
+        let proving_key = derive_halo2_ipa_offline_note_v2_proving_key_bytes(&vk_box)
+            .expect("offline note v2 proving key");
+        let redemption = sample_redemption();
+        let proof = prove_offline_note_v2_redeem(
+            OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            &vk_box,
+            &redemption,
+            Some(&proving_key),
+        )
+        .expect("real offline note v2 redemption proof");
+
+        assert!(verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(&vk_box)));
+        assert_eq!(
+            envelope_instances(&proof),
+            offline_note_v2_redeem_instance_values(&redemption)
+                .expect("redemption instance values")
+                .public_instance_columns()
+        );
+    }
+
+    #[test]
+    fn prove_offline_note_v2_audit_emits_real_halo2_ipa_proof() {
+        let vk_box = offline_note_v2_vk_box();
+        let audit = sample_audit();
+        let proof = prove_offline_note_v2_audit(
+            OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            &vk_box,
+            &audit,
+            None,
+        )
+        .expect("real offline note v2 audit proof");
+
+        assert!(verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(&vk_box)));
+        assert_eq!(
+            envelope_instances(&proof),
+            offline_note_v2_audit_instance_values(&audit)
+                .expect("audit instance values")
+                .public_instance_columns()
+        );
+    }
+
+    #[test]
+    fn offline_note_v2_real_proof_rejects_tampered_bytes() {
+        let vk_box = offline_note_v2_vk_box();
+        let redemption = sample_redemption();
+        let mut proof = prove_offline_note_v2_redeem(
+            OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID,
+            &vk_box,
+            &redemption,
+            None,
+        )
+        .expect("real offline note v2 redemption proof");
+        let last = proof.bytes.last_mut().expect("proof bytes");
+        *last ^= 0x01;
+
+        assert!(!verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(&vk_box)));
+    }
+
+    #[test]
+    fn offline_note_v2_vk_record_embeds_real_active_verifier_key() {
+        let record = offline_note_v2_recursive_vk_record("offline_note_v2", 7).expect("vk record");
+        let vk_box = record.key.as_ref().expect("inline verifier key");
+
+        assert_eq!(record.version, 7);
+        assert_eq!(record.circuit_id, OFFLINE_NOTE_V2_RECURSIVE_V1_CIRCUIT_ID);
+        assert_eq!(record.namespace, "offline_note_v2");
+        assert!(record.is_active());
+        assert_eq!(record.max_proof_bytes, OFFLINE_NOTE_V2_MAX_PROOF_BYTES);
+        assert_eq!(record.vk_len as usize, vk_box.bytes.len());
+        assert_eq!(record.commitment, hash_vk(vk_box));
+        assert_eq!(vk_box.backend, ZK_BACKEND_HALO2_IPA);
+
+        let redemption = sample_redemption();
+        let proof = prove_offline_note_v2_redeem(&record.circuit_id, vk_box, &redemption, None)
+            .expect("real redeem proof");
+        assert!(verify_backend(ZK_BACKEND_HALO2_IPA, &proof, Some(vk_box)));
+    }
+}
+
 /// Native IPA polynomial-opening verifier using internal `iroha_zkp_halo2`.
 /// Expects proof bytes to be a Norito-encoded `OpenVerifyEnvelope`.
 #[cfg(feature = "zk-ipa-native")]
@@ -5256,6 +6330,7 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
         Err(_) => return false,
     };
     let mut tr = Transcript::new(&env.transcript_label);
+    let metadata = env.transcript_metadata();
     let res = match decoded {
         DecodedEnvelope::Pallas {
             params,
@@ -5263,7 +6338,15 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
             z,
             t,
             p_g,
-        } => pallas::Polynomial::verify_open(params.as_ref(), &mut tr, z, p_g, t, proof.as_ref()),
+        } => pallas::Polynomial::verify_open_with_metadata(
+            params.as_ref(),
+            &mut tr,
+            z,
+            p_g,
+            t,
+            proof.as_ref(),
+            metadata,
+        ),
         #[cfg(feature = "goldilocks_backend")]
         DecodedEnvelope::Goldilocks {
             params,
@@ -5271,9 +6354,15 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
             z,
             t,
             p_g,
-        } => {
-            goldilocks::Polynomial::verify_open(params.as_ref(), &mut tr, z, p_g, t, proof.as_ref())
-        }
+        } => goldilocks::Polynomial::verify_open_with_metadata(
+            params.as_ref(),
+            &mut tr,
+            z,
+            p_g,
+            t,
+            proof.as_ref(),
+            metadata,
+        ),
         #[cfg(not(feature = "goldilocks_backend"))]
         DecodedEnvelope::Goldilocks => return false,
         DecodedEnvelope::Bn254 {
@@ -5282,7 +6371,15 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
             z,
             t,
             p_g,
-        } => bn254::Polynomial::verify_open(params.as_ref(), &mut tr, z, p_g, t, proof.as_ref()),
+        } => bn254::Polynomial::verify_open_with_metadata(
+            params.as_ref(),
+            &mut tr,
+            z,
+            p_g,
+            t,
+            proof.as_ref(),
+            metadata,
+        ),
     };
     res.is_ok()
 }
@@ -5497,7 +6594,7 @@ mod pasta_tiny {
     use halo2_proofs::{
         circuit::{Layouter, SimpleFloorPlanner, Value},
         halo2curves::pasta::Fp as Scalar,
-        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Selector},
+        plonk::{Circuit, ConstraintSystem, Error as PlonkError, Expression, Selector},
         poly::Rotation,
     };
 
@@ -6132,7 +7229,7 @@ mod pasta_tiny {
 
     /// Circuit binding sixteen single-row instance columns to witness values.
     ///
-    /// This is used by `ivm-execution` fixtures to ensure the proof is bound to
+    /// This is used by `ivm-execution-v1` fixtures to ensure the proof is bound to
     /// all public commitments required by `Executable::IvmProved` admission.
     ///
     /// Note: This circuit does **not** prove correct IVM execution by itself.
@@ -6196,6 +7293,179 @@ mod pasta_tiny {
                             *column,
                             0,
                             || Value::known(values[i]),
+                        )?;
+                    }
+                    Ok(())
+                },
+            )
+        }
+    }
+
+    /// Real semantic circuit for Offline V2 recursive note proofs.
+    ///
+    /// The circuit binds all public instance columns and proves the bounded
+    /// note-transfer corridor used by the runtime: mode is redeem/audit,
+    /// input/output counts are in range, unused amount slots are zero, and
+    /// normalized input/output amount sums are conserved.
+    #[derive(Clone)]
+    pub struct OfflineNoteV2SemanticV1 {
+        /// Public instance values constrained to equal the proof envelope.
+        pub public_values: [Scalar; super::OFFLINE_NOTE_V2_INSTANCE_COLUMNS],
+        /// Private normalized input amount slots.
+        pub input_amounts: [Scalar; super::OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS],
+        /// Private normalized output amount slots.
+        pub output_amounts: [Scalar; super::OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS],
+    }
+
+    impl Default for OfflineNoteV2SemanticV1 {
+        fn default() -> Self {
+            Self {
+                public_values: [Scalar::from(0); super::OFFLINE_NOTE_V2_INSTANCE_COLUMNS],
+                input_amounts: [Scalar::from(0); super::OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS],
+                output_amounts: [Scalar::from(0); super::OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS],
+            }
+        }
+    }
+
+    impl Circuit<Scalar> for OfflineNoteV2SemanticV1 {
+        type Config = (
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::OFFLINE_NOTE_V2_INSTANCE_COLUMNS],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>;
+                super::OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS],
+            [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>;
+                super::OFFLINE_NOTE_V2_INSTANCE_COLUMNS],
+            Selector,
+        );
+        type FloorPlanner = SimpleFloorPlanner;
+
+        type Params = ();
+        fn without_witnesses(&self) -> Self {
+            Self::default()
+        }
+        fn configure(meta: &mut ConstraintSystem<Scalar>) -> Self::Config {
+            meta.set_minimum_degree(6);
+            let public_adv = std::array::from_fn(|_| meta.advice_column());
+            let input_adv = std::array::from_fn(|_| meta.advice_column());
+            let output_adv = std::array::from_fn(|_| meta.advice_column());
+            let inst = std::array::from_fn(|_| meta.instance_column());
+            let s = meta.selector();
+            meta.create_gate("offline_note_v2_semantic_v1", |meta| {
+                let s = meta.query_selector(s);
+                let constant = |value: u64| Expression::Constant(Scalar::from(value));
+                let mut public = Vec::with_capacity(super::OFFLINE_NOTE_V2_INSTANCE_COLUMNS);
+                for column in &public_adv {
+                    public.push(meta.query_advice(*column, Rotation::cur()));
+                }
+                let mut inputs = Vec::with_capacity(super::OFFLINE_NOTE_V2_MAX_INPUT_AMOUNTS);
+                for column in &input_adv {
+                    inputs.push(meta.query_advice(*column, Rotation::cur()));
+                }
+                let mut outputs = Vec::with_capacity(super::OFFLINE_NOTE_V2_MAX_OUTPUT_AMOUNTS);
+                for column in &output_adv {
+                    outputs.push(meta.query_advice(*column, Rotation::cur()));
+                }
+
+                let mode = public[4].clone();
+                let input_count = public[5].clone();
+                let output_count = public[6].clone();
+                let input_sum_public = public[7].clone();
+                let output_sum_public = public[8].clone();
+
+                let mut cons = Vec::with_capacity(30);
+                for i in 0..super::OFFLINE_NOTE_V2_INSTANCE_COLUMNS {
+                    let instance = meta.query_instance(inst[i], Rotation::cur());
+                    cons.push(s.clone() * (public[i].clone() - instance));
+                }
+
+                cons.push(
+                    s.clone()
+                        * (mode.clone() - constant(super::OFFLINE_NOTE_V2_MODE_REDEEM))
+                        * (mode - constant(super::OFFLINE_NOTE_V2_MODE_AUDIT)),
+                );
+                cons.push(
+                    s.clone()
+                        * (input_count.clone() - constant(1))
+                        * (input_count.clone() - constant(2))
+                        * (input_count.clone() - constant(3))
+                        * (input_count.clone() - constant(4)),
+                );
+                cons.push(
+                    s.clone()
+                        * (output_count.clone() - constant(1))
+                        * (output_count.clone() - constant(2)),
+                );
+                cons.push(
+                    s.clone()
+                        * (public[4].clone() - constant(super::OFFLINE_NOTE_V2_MODE_AUDIT))
+                        * (output_count.clone() - constant(1)),
+                );
+
+                let input_sum_private =
+                    inputs[0].clone() + inputs[1].clone() + inputs[2].clone() + inputs[3].clone();
+                let output_sum_private = outputs[0].clone() + outputs[1].clone();
+                cons.push(s.clone() * (input_sum_private - input_sum_public.clone()));
+                cons.push(s.clone() * (output_sum_private - output_sum_public.clone()));
+                cons.push(s.clone() * (input_sum_public - output_sum_public));
+
+                cons.push(
+                    s.clone()
+                        * inputs[1].clone()
+                        * (input_count.clone() - constant(2))
+                        * (input_count.clone() - constant(3))
+                        * (input_count.clone() - constant(4)),
+                );
+                cons.push(
+                    s.clone()
+                        * inputs[2].clone()
+                        * (input_count.clone() - constant(3))
+                        * (input_count.clone() - constant(4)),
+                );
+                cons.push(s.clone() * inputs[3].clone() * (input_count - constant(4)));
+                cons.push(s * outputs[1].clone() * (output_count - constant(2)));
+                cons
+            });
+            (public_adv, input_adv, output_adv, inst, s)
+        }
+        fn synthesize(
+            &self,
+            (public_adv, input_adv, output_adv, _inst, s): Self::Config,
+            mut layouter: impl Layouter<Scalar>,
+        ) -> Result<(), PlonkError> {
+            let public_values = self.public_values;
+            let input_amounts = self.input_amounts;
+            let output_amounts = self.output_amounts;
+            layouter.assign_region(
+                || "offline_note_v2_semantic_v1",
+                |mut region| {
+                    s.enable(&mut region, 0)?;
+                    for (i, column) in public_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("public{i}"),
+                            *column,
+                            0,
+                            || Value::known(public_values[i]),
+                        )?;
+                    }
+                    for (i, column) in input_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("input_amount{i}"),
+                            *column,
+                            0,
+                            || Value::known(input_amounts[i]),
+                        )?;
+                    }
+                    for (i, column) in output_adv.iter().enumerate() {
+                        crate::zk::assign_advice_compat(
+                            &mut region,
+                            move || format!("output_amount{i}"),
+                            *column,
+                            0,
+                            || Value::known(output_amounts[i]),
                         )?;
                     }
                     Ok(())
@@ -9044,7 +10314,10 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
         return reject("empty verifying key bytes");
     }
 
-    ensure_halo2_max_degree(64);
+    // Confidential v2 circuits inline nested Poseidon expressions; clamping the
+    // quotient degree at 64 yields proofs that can be generated but later fail
+    // verification because the effective circuit degree is truncated too low.
+    ensure_halo2_max_degree(1024);
 
     let params: PastaParams = match zkparse::params_any(vk_box.bytes.as_slice()) {
         Some(p) => p,
@@ -9302,7 +10575,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
-        "halo2/pasta/ivm-execution" => {
+        "halo2/pasta/ivm-execution-v1" => {
             // Instances: 16 columns (code_hash limbs + overlay_hash limbs + events_commitment limbs + gas_policy_commitment limbs), 1 row each.
             if col_refs.len() != 16 || col_refs.iter().any(|col| col.len() != 1) {
                 return false;
@@ -9325,6 +10598,26 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             )
             .is_ok()
         }
+        "halo2/pasta/offline-note-v2-recursive-v1" => {
+            if col_refs.len() != OFFLINE_NOTE_V2_INSTANCE_COLUMNS
+                || col_refs.iter().any(|col| col.len() != 1)
+            {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                pasta_tiny::OfflineNoteV2SemanticV1::default(),
+                |vk| {
+                    let mut transcript =
+                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+                    let strategy = SingleVerifier::new(&params);
+                    let proofs_instances = [&col_refs[..]];
+                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                }
+            )
+        }
         "halo2/pasta/tiny-anon-transfer-2x2" => {
             let circuit = pasta_tiny::AnonTransfer2x2;
             let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
@@ -9343,6 +10636,46 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 &mut transcript,
             )
             .is_ok()
+        }
+        circuit_id if confidential_v2::is_confidential_transfer_v2_circuit_id(circuit_id) => {
+            if col_refs.len() != 9 || col_refs.iter().any(|col| col.len() != 1) {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                confidential_v2::ConfidentialTransferCircuitV2::<
+                    { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+                >::default(),
+                |vk| {
+                    let mut transcript =
+                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+                    let strategy = SingleVerifier::new(&params);
+                    let proofs_instances = [&col_refs[..]];
+                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                }
+            )
+        }
+        circuit_id if confidential_v2::is_confidential_unshield_v2_circuit_id(circuit_id) => {
+            if col_refs.len() != 8 || col_refs.iter().any(|col| col.len() != 1) {
+                return false;
+            }
+            cached_vk_for!(
+                &params,
+                normalized.as_str(),
+                vk_box,
+                confidential_v2::ConfidentialUnshieldCircuitV2::<
+                    { confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 },
+                >::default(),
+                |vk| {
+                    let mut transcript =
+                        Blake2bRead::<_, Curve, _>::init(Cursor::new(proof_payload.as_slice()));
+                    let strategy = SingleVerifier::new(&params);
+                    let proofs_instances = [&col_refs[..]];
+                    verify_proof(&params, vk, strategy, &proofs_instances, &mut transcript).is_ok()
+                }
+            )
         }
         "halo2/pasta/anon-transfer-2x2" => {
             // Instances: 5 columns [cm_in0, cm_in1, cm_out0, cm_out1, nf], 1 row

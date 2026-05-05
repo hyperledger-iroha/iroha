@@ -24,8 +24,8 @@ fn aos_bytes_bool_small_golden() {
     // Rows: (1, b"abc", true), (2, b"\x00\xff", false)
     let rows: Vec<(u64, &[u8], bool)> = vec![(1, b"abc", true), (2, b"\x00\xff", false)];
     let bytes = ncb::encode_rows_u64_bytes_bool_adaptive(&rows);
-    // Sequential layout encodes [tag=0x01][len:u32][rows...], each row prefixed with length.
-    let expected = "01020000005400000001000000000000000200000000000000030000000500000061626300ff01";
+    // Compact AoS layout encodes [tag][len][ver][rows...].
+    let expected = "0002010100000000000000036162630102000000000000000200ff00";
     assert_eq!(to_hex(&bytes), expected);
 }
 
@@ -34,9 +34,8 @@ fn aos_str_u32_bool_small_golden() {
     // Rows: (1, "x", 7, true), (2, "yy", 9, false)
     let rows: Vec<(u64, &str, u32, bool)> = vec![(1, "x", 7, true), (2, "yy", 9, false)];
     let bytes = ncb::encode_rows_u64_str_u32_bool_adaptive(&rows);
-    // Sequential layout encodes [tag=0x01][len:u32][rows...], each field prefixed with length.
-    let expected =
-        "01020000007700000001000000000000000200000000000000010000000300000078797900070000000401";
+    // Compact AoS layout encodes [tag][len][ver][rows...].
+    let expected = "00020101000000000000000178070000000102000000000000000279790900000000";
     assert_eq!(to_hex(&bytes), expected);
 }
 
@@ -190,8 +189,8 @@ fn aos_enum_small_golden() {
         (2, EnumBorrow::Code(7), true),
     ];
     let bytes = ncb::encode_rows_u64_enum_bool_adaptive(&rows);
-    // Sequential layout encodes [tag=0x01][len:u32][rows...], enum payloads include per-field lengths.
-    let expected = "0102000000630000000100000000000000020001000000000001000000780000000700000002";
+    // Compact AoS layout encodes [tag][len][rows...].
+    let expected = "00020100000000000000000178000200000000000000010700000001";
     assert_eq!(to_hex(&bytes), expected);
 }
 

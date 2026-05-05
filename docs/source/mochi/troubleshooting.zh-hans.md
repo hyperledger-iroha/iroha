@@ -25,7 +25,7 @@ translator: machine-google-reviewed
 
 1. 捕获 MOCHI 正在使用的数据根。默认如下
    `$TMPDIR/mochi/<profile-slug>`；自定义路径出现在 UI 标题栏中，并且
-   通过 `cargo run -p mochi-ui-egui -- --data-root ...`。
+   通过 `cargo run -p mochi-ui -- --data-root ...`。
 2. 从工作区根目录运行 `./ci/check_mochi.sh`。这验证了核心，
    在开始修改配置之前，先了解 UI 和集成箱。
 3. 记下预设（`single-peer` 或 `four-peer-bft`）。生成的拓扑
@@ -68,7 +68,7 @@ translator: machine-google-reviewed
 在已知良好的二进制文件中：
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --irohad /path/to/irohad \
   --kagami /path/to/kagami \
   --iroha-cli /path/to/iroha_cli
@@ -87,7 +87,7 @@ cargo run -p mochi-ui-egui -- \
 具有明确的基础：
 
 ```bash
-cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
+cargo run -p mochi-ui -- --torii-start 12000 --p2p-start 19000
 ```
 
 构建器将从这些基地扇出连续端口，因此保留一个范围
@@ -119,7 +119,7 @@ cargo run -p mochi-ui-egui -- --torii-start 12000 --p2p-start 19000
    - 使用保留的 CLI/环境覆盖重新启动对等点。
 3. 如果您必须手动执行此操作：
    ```bash
-   cargo run -p mochi-ui-egui -- --data-root /tmp/mochi --profile four-peer-bft --help
+   cargo run -p mochi-ui -- --data-root /tmp/mochi --profile four-peer-bft --help
    # Note the actual root printed above, then:
    rm -rf /tmp/mochi/four-peer-bft
    ```

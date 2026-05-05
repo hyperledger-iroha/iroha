@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/ledger-walkthrough.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2c61035c0e4b0fd478f08beeef34d7ae41415f55b09dc93dfda9490efe94fb91
-source_last_modified: "2026-01-22T16:26:46.505734+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: a26e8de48d00066a9551f1909840165fc33e0ffc18b38b7ac4c6491b2c825f7b
+source_last_modified: "2026-04-03T17:43:03.931384+00:00"
+translation_last_reviewed: 2026-04-08
 title: Ledger Walkthrough
 description: Reproduce a deterministic register → mint → transfer flow with the `iroha` CLI and verify the resulting ledger state.
 slug: /norito/ledger-walkthrough
@@ -34,8 +34,8 @@ SDK သည် CLI နှင့် SDK အပြုအမူကြား တူ�
 သရုပ်ပြသော့များမှ ဆင်းသက်လာသည်-
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 ပထမအကောင့်အနည်းငယ်ကို စာရင်းပြုစုခြင်းဖြင့် တန်ဖိုးများကို အတည်ပြုပါ-
@@ -54,7 +54,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts inside wonderland (replace --limit with a higher number if needed)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions that already exist
@@ -71,7 +71,7 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI သည် တင်ပြထားသော ငွေပေးငွေယူ hash ကို print ထုတ်သည် (ဥပမာ၊
@@ -80,7 +80,7 @@ CLI သည် တင်ပြထားသော ငွေပေးငွေယ�
 ## 3. အော်ပရေတာအကောင့်ထဲသို့ Mint ယူနစ်များ
 
 ပိုင်ဆိုင်မှုပမာဏများသည် `(asset definition, account)` အတွဲအောက်တွင် နေထိုင်ပါသည်။ Mint 250
-`coffee#wonderland` ၏ ယူနစ် `$ADMIN_ACCOUNT` သို့
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` ၏ ယူနစ် `$ADMIN_ACCOUNT` သို့
 
 ```sh
 iroha --config defaults/client.toml asset mint \

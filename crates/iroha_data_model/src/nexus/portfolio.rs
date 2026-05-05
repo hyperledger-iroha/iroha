@@ -5,7 +5,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
-    account::{AccountId, rekey::AccountLabel},
+    account::{AccountId, rekey::AccountAlias},
     asset::{AssetDefinitionId, AssetId},
     nexus::{DataSpaceId, UniversalAccountId},
 };
@@ -65,9 +65,9 @@ pub struct DataspacePortfolio {
 pub struct AccountPortfolio {
     /// Canonical account identifier.
     pub account_id: AccountId,
-    /// Stable label assigned to the account, if present.
+    /// Stable alias assigned to the account, if present.
     #[norito(default)]
-    pub label: Option<AccountLabel>,
+    pub label: Option<AccountAlias>,
     /// Asset positions for the account.
     #[norito(default)]
     pub assets: Vec<AssetPosition>,

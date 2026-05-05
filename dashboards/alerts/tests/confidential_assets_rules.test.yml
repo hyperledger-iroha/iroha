@@ -2,9 +2,9 @@ evaluation_interval: 1m
 tests:
   - interval: 1m
     input_series:
-      - series: 'iroha_confidential_tree_commitments{asset_id="rose#wonderland"}'
+      - series: 'iroha_confidential_tree_commitments{asset_id="62Fk4FPcMuLvW5QjDGNF2a4jAmjM"}'
         values: '0 1 2 3 4 5 6'
-      - series: 'iroha_confidential_tree_depth{asset_id="rose#wonderland"}'
+      - series: 'iroha_confidential_tree_depth{asset_id="62Fk4FPcMuLvW5QjDGNF2a4jAmjM"}'
         values: '0 0 0 0 0 0 0'
       - series: 'iroha_zk_verifier_cache_events_total{cache="vk",event="miss"}'
         values: '0 1 3 5 7 9 11 13 15 17 19 21'
@@ -16,7 +16,7 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: page
-              asset_id: rose#wonderland
+              asset_id: 62Fk4FPcMuLvW5QjDGNF2a4jAmjM
       - eval_time: 11m
         alertname: ConfidentialVerifierCacheMissSpike
         exp_alerts:

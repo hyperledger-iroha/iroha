@@ -110,6 +110,24 @@ static uint64_t crc64_combine(uint64_t crc1, uint64_t crc2, size_t len2) {
     return shifted ^ crc2;
 }
 
+static BOOL wait_for_command_buffer(id<MTLCommandBuffer> command) {
+    static const NSTimeInterval kMetalCommandTimeoutSeconds = 10.0;
+    NSDate* deadline = [NSDate dateWithTimeIntervalSinceNow:kMetalCommandTimeoutSeconds];
+    while (true) {
+        MTLCommandBufferStatus status = [command status];
+        if (status == MTLCommandBufferStatusCompleted) {
+            return [command error] == nil;
+        }
+        if (status == MTLCommandBufferStatusError) {
+            return NO;
+        }
+        if ([deadline timeIntervalSinceNow] <= 0.0) {
+            return NO;
+        }
+        [NSThread sleepForTimeInterval:0.001];
+    }
+}
+
 // CPU finalize: combine masks into tape offsets with correct escape + quote parity across blocks.
 static void finalize_tape_from_masks(const uint8_t* in, size_t n, const uint32_t* s, const uint32_t* q, const uint32_t* b, size_t blocks, uint32_t* out, size_t out_cap, size_t* out_len) {
     (void)in; // suppress unused-parameter warning; masks provide all needed info
@@ -198,7 +216,7 @@ int json_stage1_build_tape_metal_impl(const uint8_t* input_ptr,
         [enc dispatchThreads:threadsPerGrid threadsPerThreadgroup:threadsPerTG];
         [enc endEncoding];
         [cb commit];
-        [cb waitUntilCompleted];
+        if (!wait_for_command_buffer(cb)) { return 3; }
 
         // CPU finalize using masks
         const uint32_t* s = (const uint32_t*)[sBuf contents];
@@ -260,7 +278,7 @@ int norito_crc64_metal_impl(const uint8_t* input_ptr,
         [enc dispatchThreads:threadsPerGrid threadsPerThreadgroup:threadsPerTG];
         [enc endEncoding];
         [cb commit];
-        [cb waitUntilCompleted];
+        if (!wait_for_command_buffer(cb)) { return 3; }
 
         const uint64_t* out_ptr = (const uint64_t*)[outBuf contents];
         uint64_t crc = CRC64_INIT;

@@ -117,7 +117,7 @@ seiyaku Name {
 Semántica
 - `meta { ... }` anula los valores por defecto del compilador para el encabezado IVM emitido: `abi_version`, `vector_length` (0 significa sin establecer), `max_cycles` (0 significa el valor por defecto del compilador), `features` activa bits de características del encabezado (trazado ZK, anuncio de vector). Las características no soportadas se ignoran con una advertencia. Cuando se omite `meta {}`, el compilador emite `abi_version = 1` y usa los valores por defecto de las opciones para los demás campos del encabezado.
 - `features: ["zk", "simd"]` (alias: `"vector"`) solicita explícitamente los bits de encabezado correspondientes. Las cadenas de características desconocidas ahora producen un error de parser en lugar de ignorarse.
-- `state` declara variables de contrato durables. El compilador baja los accesos a syscalls `STATE_GET/STATE_SET/STATE_DEL` y el host los guarda en un overlay por transaccion (checkpoint/restore para rollback, flush en el commit hacia WSV). Se emiten access hints para rutas literales; las claves dinamicas caen a conflictos a nivel de mapa. Para lecturas/escrituras explicitas del host, usa los helpers `state_get/state_set/state_del` y los helpers de mapa `get_or_insert_default`; pasan por TLVs Norito y mantienen nombres/orden de campos estables.
+- `state` declara variables de contrato durables. El compilador baja los accesos a syscalls `STATE_GET/STATE_SET/STATE_DEL` y el host los guarda en un overlay por transaccion (checkpoint/restore para rollback, flush en el commit hacia WSV). Se emiten access hints para rutas literales; las claves dinamicas caen a conflictos a nivel de mapa. Para lecturas/escrituras explicitas del host, usa los helpers `state_get/state_set/state_del` y los helpers de mapa `map.ensure(...)`; pasan por TLVs Norito y mantienen nombres/orden de campos estables.
 - Los identificadores `state` están reservados; sombrear un nombre de `state` en parámetros o `let` se rechaza (`E_STATE_SHADOWED`).
 - Los valores de mapas de estado no son de primera clase: usa el identificador de estado directamente para operaciones de mapa e iteración. Enlazar o pasar mapas de estado a funciones definidas por el usuario se rechaza (`E_STATE_MAP_ALIAS`).
 - Los mapas de estado durables actualmente admiten solo tipos de clave `int` y pointer-ABI; otros tipos de clave se rechazan en compilación.
@@ -216,8 +216,8 @@ Constructores de punteros (emiten TLV Norito en INPUT y devuelven un puntero tip
 - `proof_blob(string|0xhex) -> ProofBlob*`
 
 Las macros del preludio proporcionan alias más cortos y validación en línea para estos constructores:
-- `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
+- `account!("<i105-account-id>")`, `account_id!("<i105-account-id>")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` o literales estructurados como `json!{ hello: "world" }`

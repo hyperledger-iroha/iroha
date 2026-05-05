@@ -121,7 +121,7 @@ Enum AuctionKind {
 | `suffix` | `AsciiString` | مثلا `sora`. |
 | `steward` | `AccountId` | ستيوارد معرف في ميثاق ال تور. |
 | `status` | `SuffixStatus` | `Active`، `Paused`، `Revoked`. |
-| `payment_asset_id` | `AsciiString` | معرف اصل التسوية الافتراضية (مثلا `xor#sora`). |
+| `payment_asset_id` | `AsciiString` | معرف اصل التسوية الافتراضية (مثلا `61CtjvNd9T3THAR65GsMVHr82Bjc`). |
 | `pricing` | `Vec<PriceTierV1>` | اتفاقيات التسعير حسب المستويات والقواعد المدة. |
 | `min_term_years` | `u8` | حد ادنى للشراء بغض النظر عن التجاوزات. |
 | `grace_period_days` | `u16` | الافتراضي 30. |
@@ -228,7 +228,7 @@ Enum RegistryEventKind {
 ##5.الاحداث القياسية و المزامنة للبوابات
 
 اشترك البوابات في `RegistryEventV1` وتزامن DNS/SoraFS عبر:1. اخر جلب `NameRecordV1` ما اليه في سلسلة الاحداث.
-2. إعادة توليد قوالب المحلل (عناوين I105 المفضلة + المضغوطة (`sora`) كخيار ثانٍ، السجلات النصية).
+2. إعادة توليد قوالب المحلل (عناوين i105 المفضلة + المضغوطة (`sora`) كخيار ثانٍ، السجلات النصية).
 3. تثبيت بيانات المنطقة عبر تدفق SoraDNS الموضح في [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 ضمانات تسليم الاحداث:
@@ -248,7 +248,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "i105...",
+    owner: "<i105-account-id>",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -275,9 +275,9 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "i105...",
+    steward: "<i105-account-id>",
     status: Active,
-    payment_asset_id: "xor#sora",
+    payment_asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc",
     pricing: [
         PriceTierV1 { tier_id:0, label_regex:"^[a-z0-9]{3,}$", base_price:"120 XOR", auction_kind:VickreyCommitReveal, dutch_floor:None, min_duration_years:1, max_duration_years:5 },
         PriceTierV1 { tier_id:1, label_regex:"^[a-z]{1,2}$", base_price:"10_000 XOR", auction_kind:DutchReopen, dutch_floor:Some("1_000 XOR"), min_duration_years:1, max_duration_years:3 }
@@ -288,10 +288,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("i105..."), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("<i105-account-id>"), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "i105...",
+    fund_splitter_account: "<i105-account-id>",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

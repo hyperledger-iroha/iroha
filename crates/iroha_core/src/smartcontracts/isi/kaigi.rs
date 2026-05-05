@@ -1,7 +1,7 @@
 //! Host-side execution of Kaigi instruction family.
 use std::{collections::BTreeSet, convert::TryFrom};
 
-use iroha_crypto::Hash;
+use iroha_crypto::{Algorithm, Hash, PublicKey};
 use iroha_data_model::{
     HasMetadata,
     events::{
@@ -12,6 +12,7 @@ use iroha_data_model::{
         prelude::{DomainEvent, MetadataChanged},
     },
     isi::{
+        InstructionBox,
         error::{InstructionExecutionError as Error, InvalidParameterError},
         kaigi::{
             CreateKaigi, EndKaigi, JoinKaigi, LeaveKaigi, RecordKaigiUsage, RegisterKaigiRelay,
@@ -26,8 +27,10 @@ use iroha_data_model::{
     },
     prelude::{AccountId, DomainId, Json, Name},
     query::error::FindError,
+    transaction::{PrivateKaigiAction, PrivateKaigiTemplate, PrivateKaigiTransaction},
 };
-use privacy::PrivacyArtifacts;
+use mv::storage::StorageReadOnly;
+use privacy::{HostPrivacyArtifacts, PrivacyArtifacts};
 
 use crate::{
     smartcontracts::limits,
@@ -35,6 +38,141 @@ use crate::{
 };
 
 mod privacy;
+
+fn opaque_account_from_seed(label: &str, seed: &[u8]) -> Result<AccountId, Error> {
+    let mut preimage = Vec::with_capacity(label.len() + 1 + seed.len());
+    preimage.extend_from_slice(label.as_bytes());
+    preimage.push(0);
+    preimage.extend_from_slice(seed);
+    let digest = Hash::new(preimage);
+    let public_key = PublicKey::from_bytes(Algorithm::Ed25519, digest.as_ref()).map_err(|err| {
+        Error::InvariantViolation(
+            format!("failed to derive opaque private Kaigi authority: {err}").into(),
+        )
+    })?;
+    Ok(AccountId::new(public_key))
+}
+
+fn opaque_host_account(commitment: &KaigiParticipantCommitment) -> Result<AccountId, Error> {
+    opaque_account_from_seed(
+        "iroha.private_kaigi.host.v1",
+        commitment.commitment.as_ref(),
+    )
+}
+
+fn opaque_participant_account(
+    call_id: &KaigiId,
+    commitment: &KaigiParticipantCommitment,
+) -> Result<AccountId, Error> {
+    let mut seed = Vec::new();
+    seed.extend_from_slice(call_id.to_string().as_bytes());
+    seed.push(0);
+    seed.extend_from_slice(commitment.commitment.as_ref());
+    opaque_account_from_seed("iroha.private_kaigi.participant.v1", &seed)
+}
+
+fn private_template_to_new_kaigi(
+    template: &PrivateKaigiTemplate,
+    host: AccountId,
+) -> iroha_data_model::kaigi::NewKaigi {
+    iroha_data_model::kaigi::NewKaigi {
+        id: template.id.clone(),
+        host,
+        title: template.title.clone(),
+        description: template.description.clone(),
+        max_participants: template.max_participants,
+        gas_rate_per_minute: template.gas_rate_per_minute,
+        metadata: template.metadata.clone(),
+        scheduled_start_ms: template.scheduled_start_ms,
+        billing_account: None,
+        privacy_mode: KaigiPrivacyMode::ZkRosterV1,
+        room_policy: template.room_policy,
+        relay_manifest: template.relay_manifest.clone(),
+    }
+}
+
+pub(crate) fn private_instruction_box(
+    tx: &PrivateKaigiTransaction,
+) -> Result<InstructionBox, Error> {
+    Ok(match &tx.action {
+        PrivateKaigiAction::Create(create) => {
+            let host = opaque_host_account(&tx.artifacts.commitment)?;
+            CreateKaigi {
+                call: private_template_to_new_kaigi(&create.call, host),
+                commitment: Some(tx.artifacts.commitment.clone()),
+                nullifier: Some(tx.artifacts.nullifier.clone()),
+                roster_root: Some(tx.artifacts.roster_root),
+                proof: Some(tx.artifacts.proof.clone()),
+            }
+            .into()
+        }
+        PrivateKaigiAction::Join(join) => {
+            let participant = opaque_participant_account(&join.call_id, &tx.artifacts.commitment)?;
+            JoinKaigi {
+                call_id: join.call_id.clone(),
+                participant,
+                commitment: Some(tx.artifacts.commitment.clone()),
+                nullifier: Some(tx.artifacts.nullifier.clone()),
+                roster_root: Some(tx.artifacts.roster_root),
+                proof: Some(tx.artifacts.proof.clone()),
+            }
+            .into()
+        }
+        PrivateKaigiAction::End(end) => EndKaigi {
+            call_id: end.call_id.clone(),
+            ended_at_ms: end.ended_at_ms,
+            commitment: Some(tx.artifacts.commitment.clone()),
+            nullifier: Some(tx.artifacts.nullifier.clone()),
+            roster_root: Some(tx.artifacts.roster_root),
+            proof: Some(tx.artifacts.proof.clone()),
+        }
+        .into(),
+    })
+}
+
+pub(crate) fn execute_private_transaction(
+    tx: &PrivateKaigiTransaction,
+    state_transaction: &mut StateTransaction<'_, '_>,
+) -> Result<(), Error> {
+    match &tx.action {
+        PrivateKaigiAction::Create(create) => {
+            let host = opaque_host_account(&tx.artifacts.commitment)?;
+            let call = private_template_to_new_kaigi(&create.call, host.clone());
+            CreateKaigi {
+                call,
+                commitment: Some(tx.artifacts.commitment.clone()),
+                nullifier: Some(tx.artifacts.nullifier.clone()),
+                roster_root: Some(tx.artifacts.roster_root),
+                proof: Some(tx.artifacts.proof.clone()),
+            }
+            .execute(&host, state_transaction)
+        }
+        PrivateKaigiAction::Join(join) => {
+            let participant = opaque_participant_account(&join.call_id, &tx.artifacts.commitment)?;
+            JoinKaigi {
+                call_id: join.call_id.clone(),
+                participant: participant.clone(),
+                commitment: Some(tx.artifacts.commitment.clone()),
+                nullifier: Some(tx.artifacts.nullifier.clone()),
+                roster_root: Some(tx.artifacts.roster_root),
+                proof: Some(tx.artifacts.proof.clone()),
+            }
+            .execute(&participant, state_transaction)
+        }
+        PrivateKaigiAction::End(end) => {
+            let host = opaque_host_account(&tx.artifacts.commitment)?;
+            EndKaigi {
+                call_id: end.call_id.clone(),
+                ended_at_ms: end.ended_at_ms,
+                commitment: Some(tx.artifacts.commitment.clone()),
+                nullifier: Some(tx.artifacts.nullifier.clone()),
+                roster_root: Some(tx.artifacts.roster_root),
+                proof: Some(tx.artifacts.proof.clone()),
+            }
+            .execute(&host, state_transaction)
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AccessGrant {
@@ -50,9 +188,48 @@ impl Execute for CreateKaigi {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let template = self.call;
+        let CreateKaigi {
+            call: template,
+            commitment,
+            nullifier,
+            roster_root,
+            proof,
+        } = self;
         if !same_account_subject(authority, template.host()) {
             return Err(unauthorized("only the host account may create a Kaigi"));
+        }
+
+        match template.privacy_mode {
+            KaigiPrivacyMode::Transparent => {
+                privacy::ensure_transparent_payload(&PrivacyArtifacts {
+                    authority,
+                    host: template.host(),
+                    commitment: commitment.as_ref(),
+                    nullifier: nullifier.as_ref(),
+                    roster_root: roster_root.as_ref(),
+                    proof: proof.as_deref(),
+                })?;
+            }
+            KaigiPrivacyMode::ZkRosterV1 => {
+                let has_privacy_artifacts = commitment.is_some()
+                    || nullifier.is_some()
+                    || roster_root.is_some()
+                    || proof.is_some();
+                if has_privacy_artifacts {
+                    let host_artifacts = HostPrivacyArtifacts {
+                        commitment: commitment.as_ref(),
+                        nullifier: nullifier.as_ref(),
+                        roster_root: roster_root.as_ref(),
+                        proof: proof.as_deref(),
+                    };
+                    let expected_root = kaigi_zk::empty_roster_root_hash();
+                    privacy::verify_host_create(
+                        state_transaction,
+                        &host_artifacts,
+                        &expected_root,
+                    )?;
+                }
+            }
         }
 
         if let Some(manifest) = template.relay_manifest() {
@@ -70,7 +247,10 @@ impl Execute for CreateKaigi {
         let created_at_ms = u64::try_from(creation_ms).map_err(|_| {
             Error::InvariantViolation("block creation time exceeds u64::MAX milliseconds".into())
         })?;
-        let record = KaigiRecord::from_new(&template, created_at_ms);
+        let mut record = KaigiRecord::from_new(&template, created_at_ms);
+        if template.privacy_mode == KaigiPrivacyMode::ZkRosterV1 {
+            record.host_commitment = commitment;
+        }
 
         store_record(state_transaction, &domain_id, key, &record)?;
         emit_roster_summary(state_transaction, &record);
@@ -155,6 +335,11 @@ impl Execute for LeaveKaigi {
             authority,
             false,
             |stx, record| {
+                if record.privacy_mode == KaigiPrivacyMode::ZkRosterV1 {
+                    return Err(privacy_error(
+                        "private Kaigi leave is off-chain only; use local session disconnect or host end",
+                    ));
+                }
                 process_leave(
                     stx,
                     record,
@@ -180,6 +365,10 @@ impl Execute for EndKaigi {
         let EndKaigi {
             call_id,
             ended_at_ms,
+            commitment,
+            nullifier,
+            roster_root,
+            proof,
         } = self;
 
         let end_ms = state_transaction._curr_block.creation_time().as_millis();
@@ -193,16 +382,61 @@ impl Execute for EndKaigi {
             &call_id,
             authority,
             false,
-            move |_, record| {
-                if !same_account_subject(authority, &record.host) {
-                    return Err(unauthorized("only the host may end a Kaigi"));
-                }
+            move |stx, record| {
                 if record.status == KaigiStatus::Ended {
                     return Err(Error::InvariantViolation("Kaigi already ended".into()));
                 }
+                match record.privacy_mode {
+                    KaigiPrivacyMode::Transparent => {
+                        privacy::ensure_transparent_payload(&PrivacyArtifacts {
+                            authority,
+                            host: &record.host,
+                            commitment: commitment.as_ref(),
+                            nullifier: nullifier.as_ref(),
+                            roster_root: roster_root.as_ref(),
+                            proof: proof.as_deref(),
+                        })?;
+                        if !same_account_subject(authority, &record.host) {
+                            return Err(unauthorized("only the host may end a Kaigi"));
+                        }
+                    }
+                    KaigiPrivacyMode::ZkRosterV1 => {
+                        let stored_commitment =
+                            record.host_commitment.as_ref().ok_or_else(|| {
+                                privacy_error("privacy mode requires a stored host commitment")
+                            })?;
+                        let provided_nullifier = nullifier
+                            .as_ref()
+                            .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
+                        let host_artifacts = HostPrivacyArtifacts {
+                            commitment: commitment.as_ref(),
+                            nullifier: Some(provided_nullifier),
+                            roster_root: roster_root.as_ref(),
+                            proof: proof.as_deref(),
+                        };
+                        let expected_root = record.roster_root();
+                        privacy::verify_host_action(
+                            stx,
+                            &host_artifacts,
+                            &expected_root,
+                            stored_commitment,
+                        )?;
+                        if record.has_nullifier(provided_nullifier) {
+                            return Err(Error::InvalidParameter(
+                                InvalidParameterError::SmartContract(
+                                    "nullifier already used".into(),
+                                ),
+                            ));
+                        }
+                        record.push_nullifier(provided_nullifier.clone());
+                    }
+                }
                 record.status = KaigiStatus::Ended;
                 record.ended_at_ms = Some(resolved_end);
-                Ok(AccessGrant::Default)
+                Ok(match record.privacy_mode {
+                    KaigiPrivacyMode::Transparent => AccessGrant::Default,
+                    KaigiPrivacyMode::ZkRosterV1 => AccessGrant::PrivacyAuthorized,
+                })
             },
         )?;
         Ok(())
@@ -769,16 +1003,53 @@ fn relay_domain(
     state_transaction: &StateTransaction<'_, '_>,
     relay_id: &AccountId,
 ) -> Result<DomainId, Error> {
-    let linked_domains = state_transaction
+    let alias_domains = state_transaction
         .world
-        .domains_for_subject(&relay_id.subject_id());
-    match linked_domains.as_slice() {
+        .bound_account_aliases(&relay_id.subject_id())
+        .into_iter()
+        .filter_map(|alias| {
+            alias
+                .domain_id(&state_transaction.nexus.dataspace_catalog)
+                .expect("bound account alias dataspace must exist in catalog")
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if !alias_domains.is_empty() {
+        return match alias_domains.as_slice() {
+            [domain_id] => Ok(domain_id.clone()),
+            _ => Err(relay_error(
+                "relay account has aliases in multiple domains; explicit relay domain is required",
+            )),
+        };
+    }
+
+    let mut allowlisted_domains = Vec::new();
+    let allowlist_key = kaigi_relay_allowlist_key().map_err(|err| {
+        Error::InvalidParameter(InvalidParameterError::SmartContract(err.to_string()))
+    })?;
+    for (_domain_id, domain) in state_transaction.world.domains().iter() {
+        let Some(stored) = domain.metadata().get(&allowlist_key) else {
+            continue;
+        };
+        let allowlist: KaigiRelayAllowlist = stored
+            .clone()
+            .try_into_any_norito()
+            .map_err(|err| Error::Conversion(err.to_string()))?;
+        if allowlist.contains(relay_id) {
+            allowlisted_domains.push(domain.id.clone());
+        }
+    }
+    allowlisted_domains.sort();
+    allowlisted_domains.dedup();
+
+    match allowlisted_domains.as_slice() {
         [domain_id] => Ok(domain_id.clone()),
         [] => Err(relay_error(
-            "relay account is not linked to any domain; explicit relay domain is required",
+            "relay account has no domain-qualified alias; explicit relay domain is required",
         )),
         _ => Err(relay_error(
-            "relay account is linked to multiple domains; explicit relay domain is required",
+            "relay account has aliases in multiple domains; explicit relay domain is required",
         )),
     }
 }
@@ -969,48 +1240,18 @@ fn process_leave(
             Ok(AccessGrant::Default)
         }
         KaigiPrivacyMode::ZkRosterV1 => {
-            if !same_account_subject(authority, participant) {
-                return Err(unauthorized(
-                    "privacy mode leaves must be submitted by the participant",
-                ));
-            }
-
-            let commitment = commitment
-                .take()
-                .ok_or_else(|| privacy_error("privacy mode requires commitment"))?;
-            let nullifier = nullifier
-                .take()
-                .ok_or_else(|| privacy_error("privacy mode requires nullifier"))?;
-            let proof_bytes = proof.ok_or_else(|| privacy_error("privacy mode requires proof"))?;
-            let provided_root = roster_root
-                .take()
-                .ok_or_else(|| privacy_error("privacy mode requires roster root"))?;
-            let artifacts = PrivacyArtifacts {
+            let _ = (
+                state_transaction,
                 authority,
-                host: &record.host,
-                commitment: Some(&commitment),
-                nullifier: Some(&nullifier),
-                roster_root: Some(&provided_root),
-                proof: Some(proof_bytes),
-            };
-            let expected_root = record.roster_root();
-            privacy::verify_roster_leave(state_transaction, &artifacts, &expected_root)?;
-
-            if !record.remove_commitment(&commitment) {
-                return Err(Error::InvalidParameter(
-                    InvalidParameterError::SmartContract(
-                        "commitment not registered with roster".into(),
-                    ),
-                ));
-            }
-            if record.has_nullifier(&nullifier) {
-                return Err(Error::InvalidParameter(
-                    InvalidParameterError::SmartContract("nullifier already used".into()),
-                ));
-            }
-            record.push_nullifier(nullifier);
-            emit_roster_summary(state_transaction, record);
-            Ok(AccessGrant::PrivacyAuthorized)
+                participant,
+                commitment.take(),
+                nullifier.take(),
+                roster_root.take(),
+                proof,
+            );
+            Err(privacy_error(
+                "private Kaigi leave is off-chain only; use local session disconnect or host end",
+            ))
         }
     }
 }
@@ -1154,7 +1395,7 @@ mod tests {
     }
 
     fn sample_ids() -> (DomainId, AccountId, AccountId) {
-        let domain = DomainId::from_str("nexus").expect("domain id");
+        let domain = DomainId::try_new("nexus", "universal").expect("domain id");
         let (host, _) = gen_account_in("nexus");
         let (participant, _) = gen_account_in("nexus");
         (domain, host, participant)
@@ -1191,6 +1432,42 @@ mod tests {
         let query = LiveQueryStore::start_test();
 
         let state = State::new(World::default(), kura, query);
+
+        let header = iroha_data_model::block::BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        {
+            let mut stx = block.transaction();
+            f(&mut stx);
+        }
+    }
+
+    fn with_seeded_kaigi_state_transaction<F>(domain: &DomainId, accounts: &[AccountId], mut f: F)
+    where
+        F: FnMut(&mut StateTransaction<'_, '_>),
+    {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let seeded_domain = Domain::new(domain.clone()).build(&ALICE_ID);
+        let seeded_accounts = accounts
+            .iter()
+            .cloned()
+            .map(|account| Account::new(account).build(&ALICE_ID));
+        let state = State::new(
+            World::with(
+                [seeded_domain],
+                seeded_accounts,
+                std::iter::empty::<AssetDefinition>(),
+            ),
+            kura,
+            query,
+        );
 
         let header = iroha_data_model::block::BlockHeader::new(
             NonZeroU64::new(1).expect("non-zero height"),
@@ -1376,7 +1653,7 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host account");
             stx.world.take_external_events();
@@ -1385,9 +1662,15 @@ mod tests {
             template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
             template.relay_manifest = Some(sample_manifest());
 
-            CreateKaigi { call: template }
-                .execute(&host, stx)
-                .expect("create kaigi");
+            CreateKaigi {
+                call: template,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("create kaigi");
 
             let events = stx.world.take_external_events();
             let summary = extract_roster_summary(&events).expect("roster summary event");
@@ -1405,6 +1688,93 @@ mod tests {
     }
 
     #[test]
+    fn private_create_stores_host_commitment() {
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(domain.clone(), Name::from_str("private-host").unwrap());
+        let commitment = sample_commitment();
+        let nullifier = sample_nullifier(0xA1);
+
+        with_seeded_kaigi_state_transaction(&domain, std::slice::from_ref(&host), |stx| {
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
+
+            CreateKaigi {
+                call: template,
+                commitment: Some(commitment.clone()),
+                nullifier: Some(nullifier.clone()),
+                roster_root: Some(kaigi_zk::empty_roster_root_hash()),
+                proof: Some(vec![1, 2, 3]),
+            }
+            .execute(&host, stx)
+            .expect("create private kaigi");
+
+            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
+            let domain = stx.world.domain(&call.domain_id).expect("domain");
+            let record: KaigiRecord = domain
+                .metadata()
+                .get(&key)
+                .expect("record metadata")
+                .clone()
+                .try_into_any_norito()
+                .expect("deserialize metadata");
+            assert_eq!(record.host_commitment.as_ref(), Some(&commitment));
+            assert_eq!(record.status, KaigiStatus::Active);
+        });
+    }
+
+    #[test]
+    fn private_end_accepts_host_commitment_proof() {
+        let (domain, host, participant) = sample_ids();
+        let call = KaigiId::new(domain.clone(), Name::from_str("private-end").unwrap());
+        let commitment = sample_commitment();
+        let create_nullifier = sample_nullifier(0xA2);
+        let end_nullifier = sample_nullifier(0xA3);
+
+        with_seeded_kaigi_state_transaction(&domain, &[host.clone(), participant.clone()], |stx| {
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.privacy_mode = KaigiPrivacyMode::ZkRosterV1;
+            CreateKaigi {
+                call: template,
+                commitment: Some(commitment.clone()),
+                nullifier: Some(create_nullifier.clone()),
+                roster_root: Some(kaigi_zk::empty_roster_root_hash()),
+                proof: Some(vec![4, 5, 6]),
+            }
+            .execute(&host, stx)
+            .expect("create private kaigi");
+
+            EndKaigi {
+                call_id: call.clone(),
+                ended_at_ms: Some(55),
+                commitment: Some(commitment.clone()),
+                nullifier: Some(end_nullifier.clone()),
+                roster_root: Some(kaigi_zk::empty_roster_root_hash()),
+                proof: Some(vec![7, 8, 9]),
+            }
+            .execute(&participant, stx)
+            .expect("end private kaigi with host proof");
+
+            let key = kaigi_metadata_key(&call.call_name).expect("metadata key");
+            let domain = stx.world.domain(&call.domain_id).expect("domain");
+            let record: KaigiRecord = domain
+                .metadata()
+                .get(&key)
+                .expect("record metadata")
+                .clone()
+                .try_into_any_norito()
+                .expect("deserialize metadata");
+            assert_eq!(record.status, KaigiStatus::Ended);
+            assert_eq!(record.ended_at_ms, Some(55));
+            assert!(
+                record
+                    .nullifier_log
+                    .iter()
+                    .any(|entry| entry.digest == end_nullifier.digest)
+            );
+        });
+    }
+
+    #[test]
     fn host_can_update_relay_manifest() {
         let (domain, host, _participant) = sample_ids();
         let call = KaigiId::new(domain.clone(), Name::from_str("manifest-update").unwrap());
@@ -1413,13 +1783,17 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
             stx.world.take_external_events();
 
             CreateKaigi {
                 call: NewKaigi::with_defaults(call.clone(), host.clone()),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
             }
             .execute(&host, stx)
             .expect("create kaigi");
@@ -1427,17 +1801,16 @@ mod tests {
 
             let manifest = sample_manifest();
             for hop in &manifest.hops {
-                let relay_domain: DomainId = "relay".parse().expect("relay domain");
+                let relay_domain: DomainId =
+                    DomainId::try_new("relay", "universal").expect("relay domain");
                 if stx.world.domain(&relay_domain).is_err() {
                     Register::domain(Domain::new(relay_domain.clone()))
                         .execute(&ALICE_ID, stx)
                         .expect("register relay domain");
                 }
-                Register::account(Account::new(
-                    hop.relay_id.clone().to_account_id(relay_domain.clone()),
-                ))
-                .execute(&ALICE_ID, stx)
-                .expect("register relay account");
+                Register::account(Account::new(hop.relay_id.clone()))
+                    .execute(&ALICE_ID, stx)
+                    .expect("register relay account");
                 add_relay_to_allowlist(stx, &relay_domain, &hop.relay_id);
                 RegisterKaigiRelay {
                     relay: KaigiRelayRegistration {
@@ -1495,18 +1868,20 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
-            Register::account(Account::new(
-                participant.clone().to_account_id(domain.clone()),
-            ))
-            .execute(&ALICE_ID, stx)
-            .expect("register participant");
+            Register::account(Account::new(participant.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register participant");
             stx.world.take_external_events();
 
             CreateKaigi {
                 call: NewKaigi::with_defaults(call.clone(), host.clone()),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
             }
             .execute(&host, stx)
             .expect("create kaigi");
@@ -1536,10 +1911,10 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
-            Register::account(Account::new(relay_id.clone().to_account_id(domain.clone())))
+            Register::account(Account::new(relay_id.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register relay account");
             stx.world.take_external_events();
@@ -1580,11 +1955,11 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
             for relay in [&relay_a, &relay_b, &relay_c] {
-                Register::account(Account::new(relay.clone().to_account_id(domain.clone())))
+                Register::account(Account::new(relay.clone()))
                     .execute(&ALICE_ID, stx)
                     .expect("register relay account");
             }
@@ -1626,6 +2001,10 @@ mod tests {
             );
             CreateKaigi {
                 call: NewKaigi::with_defaults(call.clone(), host.clone()),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
             }
             .execute(&host, stx)
             .expect("create kaigi");
@@ -1683,16 +2062,22 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
             stx.world.take_external_events();
 
             let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
             template.relay_manifest = Some(sample_manifest());
-            CreateKaigi { call: template }
-                .execute(&host, stx)
-                .expect("create kaigi");
+            CreateKaigi {
+                call: template,
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
+            }
+            .execute(&host, stx)
+            .expect("create kaigi");
             stx.world.take_external_events();
 
             SetKaigiRelayManifest {
@@ -1724,7 +2109,7 @@ mod tests {
     #[test]
     fn relay_registration_persists_metadata_and_emits_summary() {
         let (relay_id, _relay_account) = gen_account_in("relay");
-        let domain_id = DomainId::from_str("relay").expect("domain id");
+        let domain_id = DomainId::try_new("relay", "universal").expect("domain id");
         let registration = KaigiRelayRegistration {
             relay_id: relay_id.clone(),
             hpke_public_key: vec![0x10, 0x20, 0x30],
@@ -1735,11 +2120,10 @@ mod tests {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(
-                relay_id.clone().to_account_id(domain_id.clone()),
-            ))
-            .execute(&ALICE_ID, stx)
-            .expect("register relay account");
+            Register::account(Account::new(relay_id.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register relay account");
+            add_relay_to_allowlist(stx, &domain_id, &relay_id);
             stx.world.take_external_events();
 
             RegisterKaigiRelay {
@@ -1782,13 +2166,17 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host domain");
-            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host account");
             stx.world.take_external_events();
 
             CreateKaigi {
                 call: NewKaigi::with_defaults(call.clone(), host.clone()),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
             }
             .execute(&host, stx)
             .expect("create kaigi");
@@ -1796,7 +2184,8 @@ mod tests {
 
             let manifest = sample_manifest();
             for _hop in &manifest.hops {
-                let relay_domain: DomainId = "relay".parse().expect("relay domain");
+                let relay_domain: DomainId =
+                    DomainId::try_new("relay", "universal").expect("relay domain");
                 if stx.world.domain(&relay_domain).is_err() {
                     Register::domain(Domain::new(relay_domain))
                         .execute(&ALICE_ID, stx)
@@ -1817,17 +2206,16 @@ mod tests {
             }
 
             for hop in &manifest.hops {
-                let relay_domain: DomainId = "relay".parse().expect("relay domain");
+                let relay_domain: DomainId =
+                    DomainId::try_new("relay", "universal").expect("relay domain");
                 if stx.world.domain(&relay_domain).is_err() {
                     Register::domain(Domain::new(relay_domain.clone()))
                         .execute(&ALICE_ID, stx)
                         .expect("register relay domain");
                 }
-                Register::account(Account::new(
-                    hop.relay_id.clone().to_account_id(relay_domain.clone()),
-                ))
-                .execute(&ALICE_ID, stx)
-                .expect("register relay account");
+                Register::account(Account::new(hop.relay_id.clone()))
+                    .execute(&ALICE_ID, stx)
+                    .expect("register relay account");
                 stx.world.take_external_events();
                 add_relay_to_allowlist(stx, &relay_domain, &hop.relay_id);
 
@@ -1869,7 +2257,7 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host account");
             stx.world.take_external_events();
@@ -1934,18 +2322,20 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
-            Register::account(Account::new(
-                participant.clone().to_account_id(domain.clone()),
-            ))
-            .execute(&ALICE_ID, stx)
-            .expect("register participant");
+            Register::account(Account::new(participant.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register participant");
             stx.world.take_external_events();
 
             CreateKaigi {
                 call: NewKaigi::with_defaults(call_id.clone(), host.clone()),
+                commitment: None,
+                nullifier: None,
+                roster_root: None,
+                proof: None,
             }
             .execute(&host, stx)
             .expect("create kaigi");
@@ -1991,7 +2381,7 @@ mod tests {
             Register::domain(Domain::new(domain.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register domain");
-            Register::account(Account::new(host.clone().to_account_id(domain.clone())))
+            Register::account(Account::new(host.clone()))
                 .execute(&ALICE_ID, stx)
                 .expect("register host");
             stx.world.take_external_events();
@@ -2045,6 +2435,10 @@ mod tests {
     fn create_call(stx: &mut StateTransaction<'_, '_>, record: &KaigiRecord, host: &AccountId) {
         CreateKaigi {
             call: NewKaigi::with_defaults(record.id.clone(), host.clone()),
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
         }
         .execute(host, stx)
         .expect("create kaigi");

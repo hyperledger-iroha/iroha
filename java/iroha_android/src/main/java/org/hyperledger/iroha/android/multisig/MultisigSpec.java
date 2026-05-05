@@ -125,10 +125,8 @@ public final class MultisigSpec {
   }
 
   private static String normalizeAccountId(final String accountId) {
-    if (accountId == null || accountId.isBlank()) {
-      throw new IllegalArgumentException("accountId must be a non-empty string");
-    }
-    return accountId.trim();
+    return org.hyperledger.iroha.android.address.AccountIdLiteral.requireCanonicalI105Address(
+        accountId, "accountId");
   }
 
   private static long safeExpiry(final long nowMs, final long ttlMs) {

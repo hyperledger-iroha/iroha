@@ -2,8 +2,11 @@
 
 /// Re-export account visitor helpers used by the default executor.
 pub use account::{
-    visit_register_account, visit_remove_account_key_value, visit_set_account_key_value,
-    visit_unregister_account,
+    visit_approve_account_recovery, visit_cancel_account_recovery,
+    visit_clear_account_recovery_policy, visit_finalize_account_recovery,
+    visit_propose_account_recovery, visit_register_account, visit_remove_account_key_value,
+    visit_replace_account_controller, visit_set_account_key_value,
+    visit_set_account_recovery_policy, visit_unregister_account,
 };
 /// Re-export asset visitor helpers used by the default executor.
 pub use asset::{
@@ -29,12 +32,11 @@ use iroha_smart_contract::data_model::{
     isi::{
         ActivatePublicLaneValidator, ApprovePinManifest, BindManifestAlias,
         CompleteReplicationOrder, ExitPublicLaneValidator, IssueReplicationOrder,
-        ReclaimExpiredOfflineAllowance, RecordCapacityTelemetry, RecordReplicationReceipt,
-        RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterOfflineAllowance,
-        RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
+        RecordCapacityTelemetry, RecordReplicationReceipt, RegisterCapacityDeclaration,
+        RegisterCapacityDispute, RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
         RegisterPublicLaneValidator, RemoveAssetKeyValue, RetirePinManifest, SetAssetKeyValue,
-        SetLaneRelayEmergencyValidators, SetPricingSchedule, SubmitOfflineToOnlineTransfer,
-        UnregisterProviderOwner, UpsertProviderCredit,
+        SetLaneRelayEmergencyValidators, SetPricingSchedule, UnregisterProviderOwner,
+        UpsertProviderCredit,
         bridge::RecordBridgeReceipt,
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
     },
@@ -67,13 +69,6 @@ pub use role::{
 pub use staking::{
     visit_activate_public_lane_validator, visit_exit_public_lane_validator,
     visit_register_public_lane_validator,
-};
-mod offline;
-
-/// Re-export offline settlement visitor helper.
-pub use offline::{
-    visit_reclaim_expired_offline_allowance, visit_register_offline_allowance,
-    visit_submit_offline_to_online_transfer,
 };
 /// Re-export trigger visitor helpers used by the default executor.
 pub use trigger::{
@@ -160,6 +155,7 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
                 }
             }
         }
+        Executable::ContractCall(_) => {}
         Executable::Instructions(instructions) => {
             for isi in instructions {
                 if executor.verdict().is_ok() {
@@ -234,6 +230,34 @@ impl InstructionDispatch for InstructionBox {
             executor.visit_set_key_value(isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<ReplaceAccountController>() {
+            account::visit_replace_account_controller(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetAccountRecoveryPolicy>() {
+            account::visit_set_account_recovery_policy(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ClearAccountRecoveryPolicy>() {
+            account::visit_clear_account_recovery_policy(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ProposeAccountRecovery>() {
+            account::visit_propose_account_recovery(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ApproveAccountRecovery>() {
+            account::visit_approve_account_recovery(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<CancelAccountRecovery>() {
+            account::visit_cancel_account_recovery(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<FinalizeAccountRecovery>() {
+            account::visit_finalize_account_recovery(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>() {
             visit_set_asset_key_value(executor, isi);
             return;
@@ -260,18 +284,6 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<TransferBox>() {
             executor.visit_transfer(isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<SubmitOfflineToOnlineTransfer>() {
-            visit_submit_offline_to_online_transfer(executor, isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<RegisterOfflineAllowance>() {
-            visit_register_offline_allowance(executor, isi);
-            return;
-        }
-        if let Some(isi) = any.downcast_ref::<ReclaimExpiredOfflineAllowance>() {
-            visit_reclaim_expired_offline_allowance(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<RepoInstructionBox>() {
@@ -451,7 +463,7 @@ pub mod staking {
 
 /// Permission-checked visitors for Nexus lane relay recovery instructions.
 pub mod nexus {
-    use iroha_executor_data_model::permission::peer::CanManagePeers;
+    use iroha_executor_data_model::permission::peer::CanManageLaneRelayEmergency;
 
     use super::*;
 
@@ -463,7 +475,7 @@ pub mod nexus {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        if CanManagePeers.is_owned_by(&executor.context().authority, executor.host()) {
+        if CanManageLaneRelayEmergency.is_owned_by(&executor.context().authority, executor.host()) {
             execute!(executor, isi);
         }
         deny!(executor, "Can't set lane relay emergency validators");
@@ -474,27 +486,22 @@ pub mod nexus {
 pub mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
-        CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
-        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner, CanRetireSorafsPin,
-        CanSetSorafsPricing, CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
-        CanUpsertSorafsProviderCredit,
+        CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
+        CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
+        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
 
-    /// Register a `SoraFS` pin manifest when permitted (or during genesis).
+    /// Register a `SoraFS` pin manifest.
+    ///
+    /// Public submissions rely on the universal-lane Nexus fee schedule instead
+    /// of an additional executor permission gate.
     pub fn visit_register_pin_manifest<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &RegisterPinManifest,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanRegisterSorafsPin.is_owned_by(&executor.context().authority, executor.host()) {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't register SoraFS pin manifest");
+        execute!(executor, isi);
     }
 
     /// Approve a pending `SoraFS` pin manifest when permitted.
@@ -547,14 +554,7 @@ pub mod sorafs {
         executor: &mut V,
         isi: &RegisterCapacityDeclaration,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanDeclareSorafsCapacity.is_owned_by(&executor.context().authority, executor.host()) {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't register SoraFS capacity declaration");
+        execute!(executor, isi);
     }
 
     /// Record a capacity telemetry snapshot when permitted.
@@ -562,14 +562,7 @@ pub mod sorafs {
         executor: &mut V,
         isi: &RecordCapacityTelemetry,
     ) {
-        if executor.context().curr_block.is_genesis() {
-            execute!(executor, isi);
-        }
-        if CanSubmitSorafsTelemetry.is_owned_by(&executor.context().authority, executor.host()) {
-            execute!(executor, isi);
-        }
-
-        deny!(executor, "Can't record SoraFS capacity telemetry");
+        execute!(executor, isi);
     }
 
     /// File a capacity dispute when permitted.
@@ -710,7 +703,7 @@ pub mod domain {
     use iroha_executor_data_model::permission::domain::{
         CanModifyDomainMetadata, CanRegisterDomain, CanUnregisterDomain,
     };
-    use iroha_smart_contract::data_model::domain::DomainId;
+    use iroha_smart_contract::data_model::{asset::AssetDefinitionId, domain::DomainId};
 
     use super::*;
     use crate::permission::{
@@ -849,39 +842,55 @@ pub mod domain {
         let Ok(permission) = AnyPermission::try_from(permission) else {
             return false;
         };
+        let asset_definition_matches_domain =
+            |definition: &AssetDefinitionId| definition.try_domain() == Some(domain_id);
         match permission {
             AnyPermission::CanUnregisterDomain(permission) => &permission.domain == domain_id,
             AnyPermission::CanModifyDomainMetadata(permission) => &permission.domain == domain_id,
             AnyPermission::CanRegisterAccount(permission) => &permission.domain == domain_id,
+            AnyPermission::CanResolveAccountAlias(permission) => {
+                matches!(
+                    permission.scope,
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(ref domain)
+                        if domain == domain_id
+                )
+            }
+            AnyPermission::CanManageAccountAlias(permission) => {
+                matches!(
+                    permission.scope,
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(ref domain)
+                        if domain == domain_id
+                )
+            }
             AnyPermission::CanUnregisterAssetDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanModifyAssetDefinitionMetadata(permission) => {
-                permission.asset_definition.domain() == domain_id
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanMintAssetWithDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanBurnAssetWithDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanTransferAssetWithDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanModifyAssetMetadataWithDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanMintAsset(permission) => {
-                permission.asset.definition().domain() == domain_id
+                asset_definition_matches_domain(permission.asset.definition())
             }
             AnyPermission::CanBurnAsset(permission) => {
-                permission.asset.definition().domain() == domain_id
+                asset_definition_matches_domain(permission.asset.definition())
             }
             AnyPermission::CanTransferAsset(permission) => {
-                permission.asset.definition().domain() == domain_id
+                asset_definition_matches_domain(permission.asset.definition())
             }
             AnyPermission::CanModifyAssetMetadata(permission) => {
-                permission.asset.definition().domain() == domain_id
+                asset_definition_matches_domain(permission.asset.definition())
             }
             AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
             AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,
@@ -890,12 +899,14 @@ pub mod domain {
             AnyPermission::CanUseFeeSponsor(_)
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
+            | AnyPermission::CanReplaceAccountController(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
             | AnyPermission::CanModifyTrigger(_)
             | AnyPermission::CanModifyTriggerMetadata(_)
             | AnyPermission::CanManagePeers(_)
+            | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageRoles(_)
@@ -923,42 +934,18 @@ pub mod domain {
 /// Permission-checked visitors for account management instructions.
 pub mod account {
     use iroha_executor_data_model::permission::account::{
-        CanModifyAccountMetadata, CanRegisterAccount, CanUnregisterAccount,
+        CanModifyAccountMetadata, CanReplaceAccountController, CanUnregisterAccount,
     };
 
     use super::*;
     use crate::permission::{account::is_account_owner, revoke_permissions};
 
-    /// Registers an account when the caller owns the domain or holds the registration permission.
+    /// Registers a canonical account.
     pub fn visit_register_account<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Register<Account>,
     ) {
-        let domain_id = isi.object().domain();
-
-        match crate::permission::domain::is_domain_owner(
-            domain_id,
-            &executor.context().authority,
-            executor.host(),
-        ) {
-            Err(err) => deny!(executor, err),
-            Ok(true) => execute!(executor, isi),
-            Ok(false) => {}
-        }
-
-        let can_register_account_in_domain = CanRegisterAccount {
-            domain: domain_id.clone(),
-        };
-        if can_register_account_in_domain
-            .is_owned_by(&executor.context().authority, executor.host())
-        {
-            execute!(executor, isi);
-        }
-
-        deny!(
-            executor,
-            "Can't register account in a domain owned by another account"
-        );
+        execute!(executor, isi);
     }
 
     /// Unregisters an account when the caller owns it or has the unregister permission.
@@ -995,7 +982,10 @@ pub mod account {
         executor: &mut V,
         isi: &SetKeyValue<Account>,
     ) {
-        if crate::default::isi::is_reserved_multisig_metadata_key(isi.key()) {
+        let is_multisig_spec_key = isi.key().as_ref() == "multisig/spec";
+        if crate::default::isi::is_reserved_multisig_metadata_key(isi.key())
+            && !is_multisig_spec_key
+        {
             deny!(
                 executor,
                 ValidationFail::NotPermitted(format!(
@@ -1064,6 +1054,98 @@ pub mod account {
         );
     }
 
+    /// Replaces the controller for an account when the caller owns it or has the replacement permission.
+    pub fn visit_replace_account_controller<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ReplaceAccountController,
+    ) {
+        let account_id = isi.account();
+
+        if executor.context().curr_block.is_genesis()
+            || is_account_owner(account_id, &executor.context().authority, executor.host())
+            || (CanReplaceAccountController {
+                account: account_id.clone(),
+            })
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(executor, "Can't replace another account controller");
+    }
+
+    /// Sets an account recovery policy when the caller owns the account or has replacement rights.
+    pub fn visit_set_account_recovery_policy<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetAccountRecoveryPolicy,
+    ) {
+        let account_id = isi.account();
+
+        if executor.context().curr_block.is_genesis()
+            || is_account_owner(account_id, &executor.context().authority, executor.host())
+            || (CanReplaceAccountController {
+                account: account_id.clone(),
+            })
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(executor, "Can't set another account recovery policy");
+    }
+
+    /// Clears an account recovery policy when the caller owns the account or has replacement rights.
+    pub fn visit_clear_account_recovery_policy<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ClearAccountRecoveryPolicy,
+    ) {
+        let account_id = isi.account();
+
+        if executor.context().curr_block.is_genesis()
+            || is_account_owner(account_id, &executor.context().authority, executor.host())
+            || (CanReplaceAccountController {
+                account: account_id.clone(),
+            })
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(executor, "Can't clear another account recovery policy");
+    }
+
+    /// Delegates proposal authorisation to the core recovery state machine.
+    pub fn visit_propose_account_recovery<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ProposeAccountRecovery,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Delegates approval authorisation to the core recovery state machine.
+    pub fn visit_approve_account_recovery<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ApproveAccountRecovery,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Delegates cancellation authorisation to the core recovery state machine.
+    pub fn visit_cancel_account_recovery<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &CancelAccountRecovery,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Delegates finalization authorisation to the core recovery state machine.
+    pub fn visit_finalize_account_recovery<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &FinalizeAccountRecovery,
+    ) {
+        execute!(executor, isi);
+    }
+
     pub(crate) fn is_permission_account_associated(
         permission: &Permission,
         account_id: &AccountId,
@@ -1074,6 +1156,9 @@ pub mod account {
         match permission {
             AnyPermission::CanUnregisterAccount(permission) => permission.account == *account_id,
             AnyPermission::CanModifyAccountMetadata(permission) => {
+                permission.account == *account_id
+            }
+            AnyPermission::CanReplaceAccountController(permission) => {
                 permission.account == *account_id
             }
             AnyPermission::CanMintAsset(permission) => permission.asset.account() == account_id,
@@ -1088,7 +1173,10 @@ pub mod account {
             | AnyPermission::CanExecuteTrigger(_)
             | AnyPermission::CanModifyTrigger(_)
             | AnyPermission::CanModifyTriggerMetadata(_)
+            | AnyPermission::CanResolveAccountAlias(_)
+            | AnyPermission::CanManageAccountAlias(_)
             | AnyPermission::CanManagePeers(_)
+            | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
@@ -1313,12 +1401,16 @@ pub mod asset_definition {
             }
             AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
+            | AnyPermission::CanReplaceAccountController(_)
+            | AnyPermission::CanResolveAccountAlias(_)
+            | AnyPermission::CanManageAccountAlias(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
             | AnyPermission::CanModifyTrigger(_)
             | AnyPermission::CanModifyTriggerMetadata(_)
             | AnyPermission::CanManagePeers(_)
+            | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
@@ -1624,7 +1716,8 @@ pub mod asset {
 
         impl StubExecutor {
             fn new(height: u64) -> (Self, AssetId) {
-                let domain: DomainId = "test_domain".parse().expect("valid domain");
+                let domain: DomainId =
+                    DomainId::try_new("test_domain", "universal").expect("valid domain");
                 let seed_byte = height.to_le_bytes()[0];
                 let keypair = KeyPair::from_seed(vec![seed_byte; 32], Algorithm::Ed25519);
                 let account = AccountId::new(keypair.public_key().clone());
@@ -1758,6 +1851,7 @@ pub mod asset {
             let instruction = RegisterPublicLaneValidator::new(
                 LaneId::SINGLE,
                 validator.clone(),
+                PeerId::from(validator.signatory().clone()),
                 validator,
                 Numeric::from(1u64),
                 Metadata::default(),
@@ -1799,7 +1893,8 @@ pub mod asset {
         #[test]
         fn visit_instruction_dispatches_repo_instruction_box() {
             let (mut executor, _) = StubExecutor::new(1);
-            let domain: DomainId = "wonderland".parse().expect("valid domain");
+            let domain: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("valid domain");
             let counterparty_keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
             let counterparty = AccountId::new(counterparty_keypair.public_key().clone());
             let cash_def =
@@ -2147,7 +2242,7 @@ pub mod role {
                     .as_ref()
                     .strip_prefix(&format!("{MULTISIG_SIGNATORY}{DELIMITER}"))?
                     .split_once(DELIMITER)
-                    .and_then(|(domain, _)| domain.parse().ok())
+                    .and_then(|(domain, _)| DomainId::parse_fully_qualified(domain).ok())
             }
 
             if role.id().name().as_ref().starts_with(MULTISIG_SIGNATORY) {
@@ -2478,12 +2573,16 @@ pub mod trigger {
             }
             AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanManagePeers(_)
+            | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanRegisterDomain(_)
             | AnyPermission::CanUnregisterDomain(_)
             | AnyPermission::CanModifyDomainMetadata(_)
             | AnyPermission::CanRegisterAccount(_)
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
+            | AnyPermission::CanReplaceAccountController(_)
+            | AnyPermission::CanResolveAccountAlias(_)
+            | AnyPermission::CanManageAccountAlias(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)
             | AnyPermission::CanModifyAssetMetadataWithDefinition(_)
@@ -2527,6 +2626,7 @@ pub mod trigger {
 
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_executor_data_model::permission::{
+            account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
             asset::{CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition},
             nexus::CanUseFeeSponsor,
             sorafs::{
@@ -2575,9 +2675,12 @@ pub mod trigger {
         fn asset_metadata_permissions_not_trigger_associated() {
             let trigger_id =
                 TriggerId::from_str("metadata_cleanup").expect("trigger id must be valid");
-            let domain_id = DomainId::from_str("test").expect("domain id must be valid");
-            let asset_definition_id =
-                AssetDefinitionId::new("test".parse().unwrap(), "token".parse().unwrap());
+            let domain_id =
+                DomainId::try_new("test", "universal").expect("domain id must be valid");
+            let asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("test", "universal").unwrap(),
+                "token".parse().unwrap(),
+            );
             let account_id = sample_account_id(0x11, &domain_id);
             let asset_id = AssetId::new(asset_definition_id.clone(), account_id);
 
@@ -2616,10 +2719,13 @@ pub mod trigger {
 
         #[test]
         fn sora_permissions_not_domain_account_or_definition_associated() {
-            let domain_id = DomainId::from_str("test").expect("domain id must be valid");
+            let domain_id =
+                DomainId::try_new("test", "universal").expect("domain id must be valid");
             let account_id = sample_account_id(0x12, &domain_id);
-            let asset_definition_id =
-                AssetDefinitionId::new("test".parse().unwrap(), "token".parse().unwrap());
+            let asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("test", "universal").unwrap(),
+                "token".parse().unwrap(),
+            );
 
             for permission in sora_permissions() {
                 let permission = Permission::from(permission);
@@ -2643,12 +2749,16 @@ pub mod trigger {
 
         #[test]
         fn fee_sponsor_permission_associations() {
-            let domain_id = DomainId::from_str("test").expect("domain id must be valid");
+            let domain_id =
+                DomainId::try_new("test", "universal").expect("domain id must be valid");
             let sponsor = sample_account_id(0x21, &domain_id);
             let other_account = sample_account_id(0x22, &domain_id);
-            let other_domain = DomainId::from_str("other").expect("domain id must be valid");
-            let asset_definition_id =
-                AssetDefinitionId::new("test".parse().unwrap(), "token".parse().unwrap());
+            let other_domain =
+                DomainId::try_new("other", "universal").expect("domain id must be valid");
+            let asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("test", "universal").unwrap(),
+                "token".parse().unwrap(),
+            );
             let trigger_id =
                 TriggerId::from_str("fee_sponsor_trigger").expect("trigger id must be valid");
 
@@ -2682,6 +2792,42 @@ pub mod trigger {
             assert!(
                 !is_permission_trigger_associated(&permission, &trigger_id),
                 "fee sponsor permission should not bind to triggers"
+            );
+        }
+
+        #[test]
+        fn account_alias_domain_permissions_match_qualified_domain() {
+            let domain_id =
+                DomainId::try_new("test", "universal").expect("domain id must be valid");
+            let other_domain =
+                DomainId::try_new("other", "universal").expect("domain id must be valid");
+
+            let resolve_permission = Permission::from(AnyPermission::CanResolveAccountAlias(
+                CanResolveAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
+                },
+            ));
+            let manage_permission = Permission::from(AnyPermission::CanManageAccountAlias(
+                CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
+                },
+            ));
+
+            assert!(
+                domain::is_permission_domain_associated(&resolve_permission, &domain_id),
+                "alias resolve permission should bind to the matching domain"
+            );
+            assert!(
+                !domain::is_permission_domain_associated(&resolve_permission, &other_domain),
+                "alias resolve permission should not bind to other domains"
+            );
+            assert!(
+                domain::is_permission_domain_associated(&manage_permission, &domain_id),
+                "alias manage permission should bind to the matching domain"
+            );
+            assert!(
+                !domain::is_permission_domain_associated(&manage_permission, &other_domain),
+                "alias manage permission should not bind to other domains"
             );
         }
     }
@@ -2719,10 +2865,9 @@ mod sorafs_permission_tests {
     };
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
-        CanDeclareSorafsCapacity, CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
-        CanRegisterSorafsPin, CanRegisterSorafsProviderOwner, CanRetireSorafsPin,
-        CanSetSorafsPricing, CanSubmitSorafsTelemetry, CanUnregisterSorafsProviderOwner,
-        CanUpsertSorafsProviderCredit,
+        CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder,
+        CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
+        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
@@ -2811,6 +2956,18 @@ mod sorafs_permission_tests {
         assert!(
             executor.verdict().is_err(),
             "expected denial without permission"
+        );
+    }
+
+    fn assert_allowed_without_permission<T: Clone>(
+        instruction: T,
+        visit: impl Fn(&mut MockExecutor, &T),
+    ) {
+        let mut executor = MockExecutor::new(false);
+        visit(&mut executor, &instruction);
+        assert!(
+            executor.verdict().is_ok(),
+            "expected instruction to be permitted without permission"
         );
     }
 
@@ -3001,12 +3158,13 @@ mod sorafs_permission_tests {
         };
     }
 
-    sorafs_permission_case!(
-        register_pin_manifest_requires_permission,
-        register_pin_manifest(),
-        CanRegisterSorafsPin,
-        sorafs::visit_register_pin_manifest
-    );
+    #[test]
+    fn register_pin_manifest_is_public() {
+        assert_allowed_without_permission(
+            register_pin_manifest(),
+            sorafs::visit_register_pin_manifest,
+        );
+    }
 
     sorafs_permission_case!(
         approve_pin_manifest_requires_permission,
@@ -3029,19 +3187,21 @@ mod sorafs_permission_tests {
         sorafs::visit_bind_manifest_alias
     );
 
-    sorafs_permission_case!(
-        register_capacity_declaration_requires_permission,
-        register_capacity_declaration(),
-        CanDeclareSorafsCapacity,
-        sorafs::visit_register_capacity_declaration
-    );
+    #[test]
+    fn register_capacity_declaration_is_public() {
+        assert_allowed_without_permission(
+            register_capacity_declaration(),
+            sorafs::visit_register_capacity_declaration,
+        );
+    }
 
-    sorafs_permission_case!(
-        record_capacity_telemetry_requires_permission,
-        record_capacity_telemetry(),
-        CanSubmitSorafsTelemetry,
-        sorafs::visit_record_capacity_telemetry
-    );
+    #[test]
+    fn record_capacity_telemetry_is_public() {
+        assert_allowed_without_permission(
+            record_capacity_telemetry(),
+            sorafs::visit_record_capacity_telemetry,
+        );
+    }
 
     sorafs_permission_case!(
         record_capacity_dispute_requires_permission,

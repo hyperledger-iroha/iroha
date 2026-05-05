@@ -83,10 +83,10 @@ Norito བཀོད་རྒྱ་དང་ CLI/SDK གྲོགས་རམ་�
 [settlement.repo]
 default_haircut_bps = 1500
 margin_frequency_secs = 86400
-eligible_collateral = ["bond#wonderland", "note#wonderland"]
+eligible_collateral = ["4fEiy2n5VMFVfi6BzDJge519zAzg", "7dk8Pj8Bqo6XUqch4K2sF8MCM1zd"]
 
 [settlement.repo.collateral_substitution_matrix]
-"bond#wonderland" = ["note#wonderland", "bill#wonderland"]
+"4fEiy2n5VMFVfi6BzDJge519zAzg" = ["7dk8Pj8Bqo6XUqch4K2sF8MCM1zd", "6zK1LDcJ3FvkpfoZQ8kHUaW6sA7F"]
 ```
 
 བཀོལ་སྤྱོད་ཞིབ་དཔྱད་ཐོ་ཡིག་:
@@ -186,10 +186,10 @@ tak-site, སྲིད་བྱུས་བསྒྱུར་བཅོས་འ�
 [settlement.repo]
 default_haircut_bps = 1750
 margin_frequency_secs = 43200
-eligible_collateral = ["bond#wonderland", "note#wonderland"]
+eligible_collateral = ["4fEiy2n5VMFVfi6BzDJge519zAzg", "7dk8Pj8Bqo6XUqch4K2sF8MCM1zd"]
 
 [settlement.repo.collateral_substitution_matrix]
-"bond#wonderland" = ["note#wonderland", "bill#wonderland"]
+"4fEiy2n5VMFVfi6BzDJge519zAzg" = ["7dk8Pj8Bqo6XUqch4K2sF8MCM1zd", "6zK1LDcJ3FvkpfoZQ8kHUaW6sA7F"]
 ```
 
 **འཛིན་སྐྱོང་-འཛིན་སྐྱོང་ཞིབ་དཔྱད་ཐོ་ཡིག་**1. གྲོས་འཆར་ཕུལ་བའི་TOML snippet (ཚབ་བཙུགས་ནིའི་མེ་ཊིགསི་ཌེལ་ཊ་ཚུ་རྩིས་ཏེ་) ཧེཤ་།
@@ -573,7 +573,7 @@ artifacts/finance/repo/<agreement-id>/
 ```bash
 python3 scripts/repo_evidence_manifest.py \
   --root artifacts/finance/repo/wonderland-2026q1 \
-  --agreement-id repo#wonderland \
+  --agreement-id 7mxD1tKRyv32je4kZwcWa9wa33bX \
   --output artifacts/finance/repo/wonderland-2026q1/manifest.json \
   --exclude 'scratch/*'
 ```
@@ -588,7 +588,7 @@ stdout འདི་ ཡིག་ཆའི་བསྐྱར་ཞིབ་འབ
 
 ```json
 {
-  "agreement_id": "repo#wonderland",
+  "agreement_id": "7mxD1tKRyv32je4kZwcWa9wa33bX",
   "generated_at": "2026-04-30T11:58:43Z",
   "root": "/var/tmp/repo/wonderland-2026q1",
   "file_count": 5,
@@ -808,8 +808,8 @@ tri-party Unds. འོག་གི་ཐིག་ཁྲམ་འདི་གི�
      --agreement-id <repo-id> \
      --output artifacts/finance/repo/<slug>/manifest.json
    ```) ཡང་ན་
-   `iroha_python` གྲོགས་རམ་འབད་མི་གིས་ `i105...` གི་དོན་ལུ་ XOR ལྷག་ལུས་ཚུ་ ཕྱིར་འདྲེན་འབདཝ་ཨིན།
-   `i105...`, དང་ བསྐྱར་ཞིབ་ནང་འབྲེལ་གཏོགས་ཡོད་པའི་ ཌིཀསི་རྩིས་ཐོ་རེ་རེ་བཞིན་ཨིན། བསགས་བཞག་ནི
+   `iroha_python` གྲོགས་རམ་འབད་མི་གིས་ `<i105-account-id>` གི་དོན་ལུ་ XOR ལྷག་ལུས་ཚུ་ ཕྱིར་འདྲེན་འབདཝ་ཨིན།
+   `<i105-account-id>`, དང་ བསྐྱར་ཞིབ་ནང་འབྲེལ་གཏོགས་ཡོད་པའི་ ཌིཀསི་རྩིས་ཐོ་རེ་རེ་བཞིན་ཨིན། བསགས་བཞག་ནི
    འོག་ལུ་ JSON the གཤམ་ལུ།
    `artifacts/finance/repo/<period>/treasury_assets.json` དང་ git འདི་ཐོ་བཀོད་འབད།
    མཉམ་དུ་ `README.md` ནང་ ལག་ཆ་ ཆེན།

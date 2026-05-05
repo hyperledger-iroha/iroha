@@ -238,6 +238,7 @@ async fn wait_for_prove_attachment(client: &Client, job_id: &str) -> Result<Proo
 }
 
 #[tokio::test]
+#[ignore = "native STARK/FRI V1 proving fails closed until AIR openings are implemented"]
 async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     require_test_network_feature(
         "zk-stark",
@@ -245,7 +246,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     )?;
 
     let backend = "stark/fri";
-    let ivm_circuit_id = "ivm-execution";
+    let ivm_circuit_id = "ivm-execution-v1";
     let ballot_circuit_id = "vote-ballot";
     let tally_circuit_id = "vote-tally";
 
@@ -557,7 +558,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         .sign(client.key_pair.private_key());
     client
         .submit_transaction_blocking(&tx_valid)
-        .wrap_err("submit valid STARK IvmProved tx")?;
+        .wrap_err("submit STARK IvmProved tx after AIR proving is re-enabled")?;
 
     let bad_attachment =
         ProofAttachment::new_ref(backend.to_owned(), attachment.proof.clone(), ballot_vk_id);

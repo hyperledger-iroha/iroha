@@ -8,11 +8,14 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["std", "derive", "json", "json-std-io", "columnar", "strict-safe"] }
+iroha_core = { workspace = true, features = ["zk-halo2-ipa"] }
 iroha_torii_shared = { workspace = true }
-iroha_crypto = { workspace = true, default-features = false, features = ["std"] }
+fastpq_prover = { workspace = true }
+iroha_crypto = { workspace = true, default-features = false, features = ["std", "bls", "gost", "sm"] }
 iroha_data_model = { workspace = true }
 iroha_executor_data_model = { workspace = true }
 iroha_primitives = { workspace = true }
+iroha_version = { workspace = true }
 ivm = { workspace = true }
 libc = "0.2.177"
 blake3.workspace = true

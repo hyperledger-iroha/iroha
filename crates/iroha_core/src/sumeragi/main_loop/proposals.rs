@@ -1,10 +1,10 @@
 //! Proposal-cache and proposal/header mismatch helpers.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Instant};
 
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::block::{BlockHeader, BlockPayload, SignedBlock};
-use iroha_data_model::transaction::signed::{SignedTransaction, TransactionEntrypoint};
+use iroha_data_model::transaction::signed::TransactionEntrypoint;
 use norito::codec::Encode as _;
 
 use crate::sumeragi::status;
@@ -13,6 +13,7 @@ use crate::sumeragi::{consensus::Proposal, message::ProposalHint};
 pub(super) struct ProposalCache {
     pub(super) hints: BTreeMap<(u64, u64), ProposalHint>,
     pub(super) proposals: BTreeMap<(u64, u64), Proposal>,
+    pub(super) observed_at: BTreeMap<(u64, u64), Instant>,
     limit: usize,
 }
 
@@ -35,12 +36,14 @@ impl ProposalCache {
         Self {
             hints: BTreeMap::new(),
             proposals: BTreeMap::new(),
+            observed_at: BTreeMap::new(),
             limit,
         }
     }
 
     pub(super) fn insert_hint(&mut self, hint: ProposalHint) {
         let key = (hint.height, hint.view);
+        self.observed_at.entry(key).or_insert_with(Instant::now);
         self.hints.insert(key, hint);
         self.evict_if_needed();
     }
@@ -53,18 +56,35 @@ impl ProposalCache {
         self.proposals.get(&(height, view))
     }
 
+    pub(super) fn observed_at(&self, height: u64, view: u64) -> Option<Instant> {
+        self.observed_at.get(&(height, view)).copied()
+    }
+
     pub(super) fn pop_hint(&mut self, height: u64, view: u64) -> Option<ProposalHint> {
-        self.hints.remove(&(height, view))
+        let key = (height, view);
+        let removed = self.hints.remove(&key);
+        self.remove_observed_if_empty(key);
+        removed
     }
 
     pub(super) fn insert_proposal(&mut self, proposal: Proposal) {
         let key = (proposal.header.height, proposal.header.view);
+        self.observed_at.entry(key).or_insert_with(Instant::now);
         self.proposals.insert(key, proposal);
         self.evict_if_needed();
     }
 
     pub(super) fn pop_proposal(&mut self, height: u64, view: u64) -> Option<Proposal> {
-        self.proposals.remove(&(height, view))
+        let key = (height, view);
+        let removed = self.proposals.remove(&key);
+        self.remove_observed_if_empty(key);
+        removed
+    }
+
+    fn remove_observed_if_empty(&mut self, key: (u64, u64)) {
+        if !self.hints.contains_key(&key) && !self.proposals.contains_key(&key) {
+            self.observed_at.remove(&key);
+        }
     }
 
     fn evict_if_needed(&mut self) {
@@ -85,6 +105,8 @@ impl ProposalCache {
                 break;
             }
         }
+        self.observed_at
+            .retain(|key, _| self.hints.contains_key(key) || self.proposals.contains_key(key));
         if evicted > 0 {
             status::inc_pending_queue_evictions_total(evicted);
         }
@@ -93,6 +115,7 @@ impl ProposalCache {
     pub(super) fn prune_height_leq(&mut self, height: u64) {
         self.hints.retain(|(h, _), _| *h > height);
         self.proposals.retain(|(h, _), _| *h > height);
+        self.observed_at.retain(|(h, _), _| *h > height);
     }
 
     #[cfg(test)]
@@ -212,15 +235,17 @@ pub(super) fn detect_proposal_mismatch(
 pub(super) fn block_payload_bytes(block: &SignedBlock) -> Vec<u8> {
     let mut header = block.header();
     header.result_merkle_root = None;
+    let external_entrypoints: Vec<_> = block.external_entrypoints_cloned().collect();
     let entry_merkle: MerkleTree<TransactionEntrypoint> = block
-        .transactions_vec()
-        .iter()
-        .map(SignedTransaction::hash_as_entrypoint)
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
         .collect();
     header.merkle_root = entry_merkle.root();
     BlockPayload {
         header,
         transactions: block.transactions_vec().clone(),
+        external_entrypoints,
+        execution_context: block.execution_context().cloned(),
         da_commitments: block.da_commitments().cloned(),
         da_proof_policies: block.da_proof_policies().cloned(),
         da_pin_intents: block.da_pin_intents().cloned(),

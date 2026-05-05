@@ -89,7 +89,7 @@ Grafana གིས་ ཡིག་དཔར་རྐྱབས་ཡོད་པ�
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ Grafana གིས་ ཡིག་དཔར་རྐྱབས་ཡོད་པ�
 - རྩིས་ཐོ་ལྡེ་མིག་ལས་ཐོན་པའི་རིམ་པ་:
   - `sk_spend` → `nk` (nullifier ལྡེ་མིག་) `ivk` (འོང་བའི་མཐོང་སྣང་ལྡེ་མིག་) `ovk` (outgoing view ལྡེ་མིག་) `fvk`.
 - གསང་བཟོས་དྲན་འཛིན་ཚུ་ ECDH-བཏོན་ཡོད་པའི་བགོ་བཤའ་རྐྱབ་ཡོད་པའི་ལྡེ་མིག་ཚུ་དང་གཅིག་ཁར་ AEAD ལག་ལེན་འཐབ། གདམ་ཁ་ཅན་གྱི་རྩིས་ཞིབ་པ་མཐོང་སྣང་ལྡེ་མིག་ཚུ་ རྒྱུ་དངོས་སྲིད་བྱུས་རེ་ལུ་ ཐོན་འབྲས་ཚུ་ལུ་ མཐུད་འོང་།
-- CLI ཁ་སྐོང་: `confidential create-keys`, `confidential send`, `confidential export-view-key` རྩིས་ཞིབ་པ་གིས་ དྲན་ཐོ་གསང་བཟོའི་དོན་ལུ་ ལག་ཆས་དང་ `iroha app zk envelope` གྲོགས་རམ་གྱི་དོན་ལུ་ `iroha app zk envelope` གིས་ Norito བརྡ་བརྙན་ཚུ་ ཕྱིར་ཐོན་འབདཝ་ཨིན། Torii གིས་ `POST /v1/confidential/derive-keyset` བརྒྱུད་དེ་ འབྱུང་ཁུངས་ཅོག་འཐདཔ་འདི་ གསལ་སྟོན་འབདཝ་ཨིནམ་དང་ འདི་གིས་ hex དང་ base64 འབྲི་ཤོག་གཉིས་ཆ་ར་ ལོག་སྤྲོད་ཚུགསཔ་ལས་ དངུལ་ཁུག་འདི་གིས་ ལྡེ་མིག་རིམ་པ་གི་རིམ་པ་ལེན་ཚུགས།
+- CLI ཁ་སྐོང་: `confidential create-keys`, `confidential send`, `confidential export-view-key` རྩིས་ཞིབ་པ་གིས་ དྲན་ཐོ་གསང་བཟོའི་དོན་ལུ་ ལག་ཆས་དང་ `iroha app zk envelope` གྲོགས་རམ་གྱི་དོན་ལུ་ `iroha app zk envelope` གིས་ Norito བརྡ་བརྙན་ཚུ་ ཕྱིར་ཐོན་འབདཝ་ཨིན།
 
 ## རླངས་རྫས་དང་ཚད་དང་ ཌོ་ཨེསི་ཚད་འཛིན་ཚུ།
 - གཏན་འཁེལ་གྱི་རླངས་རྫས་ལས་རིམ།
@@ -315,7 +315,7 @@ Grafana གིས་ ཡིག་དཔར་རྐྱབས་ཡོད་པ�
   - `GET /confidential/zk_registry`
   - ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```## བརྟག་དཔྱད།
 - གཏན་འབེབས་བཟོ་ནི: བཀག་ཆ་ནང་འཁོད་ལུ་ གང་བྱུང་སྦེ་ བརྡབ་འགྱོ་མི་འདི་གིས་ མར་ཀལ་རྩ་བ་དང་ ཀླད་ཀོར་གྱི་ཆ་ཚན་ཚུ་ ཐོན་དོ་ཡོདཔ་ཨིན།
 - བསྐྱར་བཟོ་འབད་ཚུགསཔ་: སྣ་མང་བཀག་ཆ་ བསྐྱར་སྒྲིག་ཚུ་ ཨེན་ཀོར་ཚུ་དང་གཅིག་ཁར་ དཔེ་སྟོན་འབད་ནི། ནུས་མེད་ཚུ་ བརྟན་ཏོག་ཏོ་སྦེ་སྡོད་ཡོདཔ་ལས་ ཕྲང་ཕྲང་ཨིན་ཀོར་ཚུ་ ངོས་ལེན་མ་འབད་བས།
@@ -394,7 +394,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -426,8 +426,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -458,7 +458,7 @@ await new ToriiClient({ baseUrl: "https://torii" }).submitTransaction(signed);
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 འདི་ཡང་ གཏིང་ཚད་འདི་ ཁས་བླངས་གསརཔ་དང་གཅིག་ཁར་ ཡར་འཕར་འགྱོ་དོ་ཡོདཔ་ད་ བཏོན་གཏང་ནི་འདི་ རྒྱལ་རབས་ཀྱི་ ཀེབ་ཚུ་གི་ཐོ་བཀོད་ཚུ་ བསྒྱུར་བཅོས་འབད་བའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ ཡར་སེང་འགྱོ་དོ་ཡོདཔ་ཨིན་མས། གནས་གོང་འདི་ཚུ་ Grafana གཞུང་སྐྱོང་སྒྲུབ་བྱེད་ཀྱི་སྡེ་ཚན་ཚུ་ལུ་ མཉམ་སྦྲགས་འབད་དེ་ ཕྱིར་འདྲེན་འབད་དགོ།

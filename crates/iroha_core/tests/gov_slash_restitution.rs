@@ -15,7 +15,7 @@ use iroha_data_model::{
     account::AccountId,
     asset::{Asset, AssetDefinition},
     block::BlockHeader,
-    domain::Domain,
+    domain::{Domain, DomainId},
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
 };
@@ -30,18 +30,14 @@ use nonzero_ext::nonzero;
 fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
     let alice_id = ALICE_ID.clone();
     let escrow_id = BOB_ID.clone();
-    let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let wonderland: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
 
     let domain = Domain::new(wonderland.clone()).build(&alice_id);
-    let alice_account =
-        iroha_data_model::account::Account::new(ALICE_ID.clone().to_account_id(wonderland.clone()))
-            .build(&alice_id);
-    let escrow_account =
-        iroha_data_model::account::Account::new(BOB_ID.clone().to_account_id(wonderland.clone()))
-            .build(&alice_id);
+    let alice_account = iroha_data_model::account::Account::new(ALICE_ID.clone()).build(&alice_id);
+    let escrow_account = iroha_data_model::account::Account::new(BOB_ID.clone()).build(&alice_id);
     let receiver_account =
-        iroha_data_model::account::Account::new(receiver_id.clone().to_account_id(wonderland))
-            .build(&alice_id);
+        iroha_data_model::account::Account::new(receiver_id.clone()).build(&alice_id);
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(&alice_id);
     let alice_asset = Asset::new(
         AssetId::new(def_id.clone(), ALICE_ID.clone()),
@@ -157,7 +153,7 @@ fn lock_slash_restitute(
 fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
     let (receiver_id, _) = gen_account_in("wonderland");
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let state = setup_state(&def_id, &receiver_id);

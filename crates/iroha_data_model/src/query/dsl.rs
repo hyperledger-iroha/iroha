@@ -421,7 +421,7 @@ impl<T> CompoundPredicate<T> {
     }
 }
 
-#[derive(Encode, Decode)]
+#[derive(norito::NoritoSerialize, norito::NoritoDeserialize)]
 enum CompoundPredicateWire {
     Pass,
     Json(String),
@@ -433,18 +433,31 @@ enum CompoundPredicateWire {
 impl<T> norito::core::NoritoSerialize for CompoundPredicate<T> {
     fn serialize<W: std::io::Write>(&self, mut writer: W) -> Result<(), norito::core::Error> {
         let wire = self.to_wire();
-        let bytes = norito::codec::Encode::encode(&wire);
-        std::io::Write::write_all(&mut writer, &bytes)?;
-        Ok(())
+        norito::core::NoritoSerialize::serialize(&wire, &mut writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        self.to_wire().encoded_len_hint()
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        self.to_wire().encoded_len_exact()
     }
 }
 
 impl<'de, T> norito::core::NoritoDeserialize<'de> for CompoundPredicate<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("compound predicate wire should deserialize")
+    }
+
+    fn try_deserialize(
+        archived: &'de norito::core::Archived<Self>,
+    ) -> Result<Self, norito::core::Error> {
         let wire_archived = archived.cast::<CompoundPredicateWire>();
-        let wire =
-            <CompoundPredicateWire as norito::core::NoritoDeserialize>::deserialize(wire_archived);
-        Self::from_wire(wire)
+        let wire = <CompoundPredicateWire as norito::core::NoritoDeserialize>::try_deserialize(
+            wire_archived,
+        )?;
+        Ok(Self::from_wire(wire))
     }
 }
 
@@ -908,13 +921,556 @@ mod json_tests {
 }
 
 #[cfg(all(test, feature = "json"))]
+mod codec_tests {
+    use std::time::Duration;
+
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleProof};
+    use norito::NoritoSerialize;
+
+    use super::*;
+    use crate::{
+        account, block,
+        domain::Domain,
+        domain::DomainId,
+        prelude as dm,
+        query::{self, tx_predicate::CommittedTxPredicate as P},
+        transaction,
+        transaction::signed,
+        trigger,
+    };
+
+    fn expect_committed_tx_tree(predicate: CompoundPredicate<query::CommittedTransaction>) -> P {
+        match predicate.to_wire() {
+            CompoundPredicateWire::TxPredicate(tree) => tree,
+            other => panic!(
+                "expected committed tx predicate tree variant, got {:?}",
+                core::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    fn dummy_block_hash() -> HashOf<block::BlockHeader> {
+        HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]))
+    }
+
+    fn dummy_proof_entry() -> MerkleProof<transaction::TransactionEntrypoint> {
+        MerkleProof::from_audit_path(0, vec![])
+    }
+
+    fn dummy_proof_result() -> MerkleProof<transaction::TransactionResult> {
+        MerkleProof::from_audit_path(0, vec![])
+    }
+
+    #[derive(Clone)]
+    struct TestAuthority {
+        id: account::AccountId,
+        private_key: iroha_crypto::PrivateKey,
+    }
+
+    impl TestAuthority {
+        fn new(seed: u8) -> Self {
+            let _domain = DomainId::try_new("wonderland", "universal").expect("domain");
+            let (public_key, private_key) =
+                KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
+            let id = account::AccountId::new(public_key);
+            Self { id, private_key }
+        }
+    }
+
+    fn build_ext_tx(
+        authority: &TestAuthority,
+        ts_ms: u64,
+        ok: bool,
+        metadata: dm::Metadata,
+    ) -> query::CommittedTransaction {
+        let chain: dm::ChainId = "test-chain".parse().expect("chain id");
+        let mut builder = signed::TransactionBuilder::new(chain, authority.id.clone());
+        builder.set_creation_time(Duration::from_millis(ts_ms));
+        let signed: signed::SignedTransaction = builder
+            .with_metadata(metadata)
+            .with_instructions::<dm::InstructionBox>([])
+            .sign(&authority.private_key);
+
+        let entry_hash = signed.hash_as_entrypoint();
+        let entrypoint = transaction::TransactionEntrypoint::External(signed);
+        let result_inner: signed::TransactionResultInner = if ok {
+            Ok(trigger::DataTriggerSequence::default())
+        } else {
+            Err(dm::TransactionRejectionReason::Validation(
+                dm::ValidationFail::InternalError("x".into()),
+            ))
+        };
+        let result = signed::TransactionResult(result_inner);
+        let result_hash = transaction::TransactionResult::hash_from_inner(&result.0);
+
+        query::CommittedTransaction {
+            block_hash: dummy_block_hash(),
+            entrypoint_hash: entry_hash,
+            entrypoint_proof: dummy_proof_entry(),
+            entrypoint,
+            result_hash,
+            result_proof: dummy_proof_result(),
+            result,
+        }
+    }
+
+    #[test]
+    fn compound_predicate_norito_roundtrip_preserves_pass_variant() {
+        let predicate = CompoundPredicate::<Domain>::PASS;
+        let wire = predicate.to_wire();
+        assert!(matches!(wire, CompoundPredicateWire::Pass));
+        assert_eq!(predicate.encoded_len_hint(), wire.encoded_len_hint());
+        assert_eq!(predicate.encoded_len_exact(), wire.encoded_len_exact());
+
+        let bytes = norito::to_bytes(&predicate).expect("encode pass predicate");
+        let decoded: CompoundPredicate<Domain> =
+            norito::decode_from_bytes(&bytes).expect("decode pass predicate");
+
+        assert!(matches!(decoded.to_wire(), CompoundPredicateWire::Pass));
+        assert_eq!(decoded.json_payload(), None);
+    }
+
+    #[test]
+    fn compound_predicate_norito_roundtrip_preserves_json_variant() {
+        let predicate = CompoundPredicate::<Domain>::build(|p| p.exists("id"));
+        let wire = predicate.to_wire();
+        assert!(matches!(wire, CompoundPredicateWire::Json(_)));
+        assert_eq!(predicate.encoded_len_hint(), wire.encoded_len_hint());
+        assert_eq!(predicate.encoded_len_exact(), wire.encoded_len_exact());
+
+        let bytes = norito::to_bytes(&predicate).expect("encode json predicate");
+        let decoded: CompoundPredicate<Domain> =
+            norito::decode_from_bytes(&bytes).expect("decode json predicate");
+
+        assert!(matches!(decoded.to_wire(), CompoundPredicateWire::Json(_)));
+        assert_eq!(decoded.json_payload(), predicate.json_payload());
+    }
+
+    #[test]
+    fn compound_predicate_and_with_pass_keeps_other_payload() {
+        let predicate = CompoundPredicate::<Domain>::build(|p| p.exists("id"));
+
+        let left = CompoundPredicate::<Domain>::PASS.and(predicate.clone());
+        let right = predicate.clone().and(CompoundPredicate::<Domain>::PASS);
+
+        assert_eq!(left.json_payload(), predicate.json_payload());
+        assert_eq!(right.json_payload(), predicate.json_payload());
+    }
+
+    #[test]
+    fn compound_predicate_json_deserialize_treats_null_and_empty_object_as_pass() {
+        let null_predicate: CompoundPredicate<norito::json::Value> =
+            norito::json::from_json("null").expect("null predicate");
+        let empty_predicate: CompoundPredicate<norito::json::Value> =
+            norito::json::from_json("{}").expect("empty predicate");
+
+        assert!(matches!(
+            null_predicate.to_wire(),
+            CompoundPredicateWire::Pass
+        ));
+        assert!(matches!(
+            empty_predicate.to_wire(),
+            CompoundPredicateWire::Pass
+        ));
+        assert_eq!(null_predicate.json_payload(), None);
+        assert_eq!(empty_predicate.json_payload(), None);
+    }
+
+    #[test]
+    fn compound_predicate_json_deserialize_keeps_raw_non_object_payload() {
+        let predicate: CompoundPredicate<norito::json::Value> =
+            norito::json::from_json("[1,2,3]").expect("array predicate");
+
+        assert_eq!(predicate.json_payload(), Some("[1,2,3]"));
+        assert!(predicate.applies(&norito::json!({ "id": 1 })));
+    }
+
+    #[test]
+    fn compound_predicate_invalid_raw_json_defaults_true() {
+        let predicate = CompoundPredicate::<norito::json::Value>::from_wire(
+            CompoundPredicateWire::Json("{".into()),
+        );
+
+        assert_eq!(predicate.json_payload(), Some("{"));
+        assert!(predicate.applies(&norito::json!({ "id": 1 })));
+    }
+
+    #[test]
+    fn committed_tx_compound_predicate_norito_roundtrip_preserves_filters_variant() {
+        let predicate = CompoundPredicate::<query::CommittedTransaction>::from_filters(
+            query::CommittedTxFilters {
+                authority_exists: Some(true),
+                result_ok: Some(true),
+                ..Default::default()
+            },
+        );
+        let wire = predicate.to_wire();
+        assert!(matches!(wire, CompoundPredicateWire::TxFilters(_)));
+        assert_eq!(predicate.encoded_len_hint(), wire.encoded_len_hint());
+        assert_eq!(predicate.encoded_len_exact(), wire.encoded_len_exact());
+
+        let bytes = norito::to_bytes(&predicate).expect("encode filters predicate");
+        let decoded: CompoundPredicate<query::CommittedTransaction> =
+            norito::decode_from_bytes(&bytes).expect("decode filters predicate");
+
+        assert!(matches!(
+            decoded.to_wire(),
+            CompoundPredicateWire::TxFilters(_)
+        ));
+        let payload = decoded.payload_any().expect("filters payload");
+        let filters = payload
+            .downcast_ref::<query::CommittedTxFilters>()
+            .expect("committed tx filters");
+        assert_eq!(filters.authority_exists, Some(true));
+        assert_eq!(filters.result_ok, Some(true));
+        assert!(filters.entry_in.is_empty());
+    }
+
+    #[test]
+    fn committed_tx_compound_predicate_norito_roundtrip_preserves_tree_variant() {
+        let predicate =
+            CompoundPredicate::<query::CommittedTransaction>::from_committed_tx_predicate(P::And(
+                vec![P::ResultEq(true), P::TsGte(10)],
+            ));
+        let wire = predicate.to_wire();
+        assert!(matches!(wire, CompoundPredicateWire::TxPredicate(_)));
+        assert_eq!(predicate.encoded_len_hint(), wire.encoded_len_hint());
+        assert_eq!(predicate.encoded_len_exact(), wire.encoded_len_exact());
+
+        let bytes = norito::to_bytes(&predicate).expect("encode tree predicate");
+        let decoded: CompoundPredicate<query::CommittedTransaction> =
+            norito::decode_from_bytes(&bytes).expect("decode tree predicate");
+
+        assert!(matches!(
+            decoded.to_wire(),
+            CompoundPredicateWire::TxPredicate(_)
+        ));
+        let payload = decoded.payload_any().expect("tree payload");
+        let tree = payload
+            .downcast_ref::<P>()
+            .expect("committed tx predicate tree");
+        assert!(
+            matches!(tree, P::And(children) if matches!(children.as_slice(), [P::ResultEq(true), P::TsGte(10)]))
+        );
+    }
+
+    #[test]
+    fn committed_tx_compound_predicate_and_merges_filter_pairs() {
+        let left = CompoundPredicate::<query::CommittedTransaction>::from_filters(
+            query::CommittedTxFilters::default(),
+        );
+        let right = CompoundPredicate::<query::CommittedTransaction>::from_filters(
+            query::CommittedTxFilters {
+                result_ok: Some(true),
+                ..Default::default()
+            },
+        );
+
+        let tree = expect_committed_tx_tree(left.and(right));
+        assert!(matches!(tree, P::ResultEq(true)));
+    }
+
+    #[test]
+    fn committed_tx_compound_predicate_and_merges_tree_pairs() {
+        let left = CompoundPredicate::<query::CommittedTransaction>::from_committed_tx_predicate(
+            P::And(vec![P::ResultEq(true)]),
+        );
+        let right = CompoundPredicate::<query::CommittedTransaction>::from_committed_tx_predicate(
+            P::And(vec![P::TsGte(10), P::EntryExists(true)]),
+        );
+
+        let tree = expect_committed_tx_tree(left.and(right));
+        assert!(matches!(
+            tree,
+            P::And(children)
+                if matches!(
+                    children.as_slice(),
+                    [P::ResultEq(true), P::TsGte(10), P::EntryExists(true)]
+                )
+        ));
+    }
+
+    #[test]
+    fn committed_tx_compound_predicate_and_merges_filters_with_tree() {
+        let left = CompoundPredicate::<query::CommittedTransaction>::from_filters(
+            query::CommittedTxFilters {
+                authority_exists: Some(true),
+                ..Default::default()
+            },
+        );
+        let right = CompoundPredicate::<query::CommittedTransaction>::from_committed_tx_predicate(
+            P::TsGte(10),
+        );
+
+        let tree = expect_committed_tx_tree(left.and(right));
+        assert!(matches!(
+            tree,
+            P::And(children)
+                if matches!(children.as_slice(), [P::AuthorityExists(true), P::TsGte(10)])
+        ));
+    }
+
+    #[test]
+    fn committed_tx_compound_predicate_and_merges_tree_with_filters() {
+        let left = CompoundPredicate::<query::CommittedTransaction>::from_committed_tx_predicate(
+            P::ResultEq(true),
+        );
+        let right = CompoundPredicate::<query::CommittedTransaction>::from_filters(
+            query::CommittedTxFilters {
+                entry_exists: Some(true),
+                ..Default::default()
+            },
+        );
+
+        let tree = expect_committed_tx_tree(left.and(right));
+        assert!(matches!(
+            tree,
+            P::And(children)
+                if matches!(children.as_slice(), [P::ResultEq(true), P::EntryExists(true)])
+        ));
+    }
+
+    #[test]
+    fn committed_tx_compound_predicate_json_expression_uses_filter_parser_path() {
+        let authority = TestAuthority::new(0x11);
+        let ok_tx = build_ext_tx(&authority, 42, true, dm::Metadata::default());
+        let err_tx = build_ext_tx(&authority, 42, false, dm::Metadata::default());
+        let predicate: CompoundPredicate<query::CommittedTransaction> =
+            norito::json::from_value(norito::json!({
+                "op": "eq",
+                "args": [
+                    {"FieldPath": "result_ok"},
+                    true
+                ]
+            }))
+            .expect("predicate value");
+
+        assert!(predicate.applies(&ok_tx));
+        assert!(!predicate.applies(&err_tx));
+    }
+
+    #[test]
+    fn committed_tx_compound_predicate_json_map_uses_generic_json_fallback() {
+        let authority = TestAuthority::new(0x22);
+        let tx = build_ext_tx(&authority, 55, true, dm::Metadata::default());
+        let tx_json = norito::json::to_value(&tx).expect("transaction json");
+        let result_hash = tx_json
+            .as_object()
+            .and_then(|map| map.get("result_hash"))
+            .cloned()
+            .expect("result_hash field");
+        let predicate: CompoundPredicate<query::CommittedTransaction> =
+            norito::json::from_value(norito::json!({
+                "result_hash": result_hash
+            }))
+            .expect("predicate value");
+
+        assert!(predicate.applies(&tx));
+    }
+
+    #[test]
+    fn committed_tx_compound_predicate_raw_non_object_defaults_true() {
+        let authority = TestAuthority::new(0x33);
+        let tx = build_ext_tx(&authority, 77, true, dm::Metadata::default());
+        let predicate =
+            CompoundPredicate::<query::CommittedTransaction>::from_json_raw("[]".into());
+
+        assert!(predicate.applies(&tx));
+    }
+
+    #[test]
+    fn committed_tx_compound_predicate_invalid_raw_json_defaults_true() {
+        let authority = TestAuthority::new(0x34);
+        let tx = build_ext_tx(&authority, 88, true, dm::Metadata::default());
+        let predicate = CompoundPredicate::<query::CommittedTransaction>::from_wire(
+            CompoundPredicateWire::Json("{".into()),
+        );
+
+        assert!(predicate.applies(&tx));
+    }
+
+    #[test]
+    fn committed_tx_compound_predicate_and_prefers_right_for_mixed_payloads() {
+        let json_predicate = CompoundPredicate::<query::CommittedTransaction>::from_json_raw(
+            "{\"result_hash\":\"placeholder\"}".into(),
+        );
+        let tree_predicate =
+            CompoundPredicate::<query::CommittedTransaction>::from_committed_tx_predicate(
+                P::ResultEq(true),
+            );
+
+        let json_then_tree = json_predicate.clone().and(tree_predicate.clone());
+        let tree_then_json = tree_predicate.and(json_predicate);
+
+        assert!(matches!(
+            json_then_tree.to_wire(),
+            CompoundPredicateWire::TxPredicate(P::ResultEq(true))
+        ));
+        assert!(matches!(
+            tree_then_json.to_wire(),
+            CompoundPredicateWire::Json(_)
+        ));
+    }
+
+    #[test]
+    fn predicate_value_at_path_rejects_empty_and_blank_segments() {
+        let value = norito::json!({
+            "outer": { "inner": 1 },
+            "null_field": null
+        });
+
+        assert!(predicate_value_at_path(&value, "").is_none());
+        assert!(predicate_value_at_path(&value, "outer..inner").is_none());
+        assert!(matches!(
+            predicate_value_at_path(&value, "outer.inner"),
+            Some(norito::json::Value::Number(number)) if number.as_u64() == Some(1)
+        ));
+    }
+
+    #[test]
+    fn predicate_json_from_map_treats_empty_arrays_as_equals_conditions() {
+        let predicate = predicate_json_from_map(norito::json!({
+            "field": []
+        }))
+        .expect("predicate");
+
+        assert_eq!(predicate.equals.len(), 1);
+        assert!(predicate.r#in.is_empty());
+        assert_eq!(predicate.equals[0].field, "field");
+        assert!(matches!(
+            predicate.equals[0].value,
+            norito::json::Value::Array(ref values) if values.is_empty()
+        ));
+    }
+
+    #[test]
+    fn predicate_json_applies_rejects_missing_equals_path() {
+        let predicate = PredicateJson {
+            equals: vec![EqualsCondition::new(
+                "outer.missing",
+                norito::json::Value::from(1_u64),
+            )],
+            ..PredicateJson::default()
+        };
+        let value = norito::json!({
+            "outer": { "inner": 1 }
+        });
+
+        assert!(!predicate_json_applies(&predicate, &value));
+    }
+
+    #[test]
+    fn predicate_json_applies_rejects_missing_membership_and_null_exists() {
+        let membership = PredicateJson {
+            r#in: vec![InCondition::new(
+                "outer.missing",
+                vec![norito::json::Value::from(1_u64)],
+            )],
+            ..PredicateJson::default()
+        };
+        let exists = PredicateJson {
+            exists: vec!["null_field".into()],
+            ..PredicateJson::default()
+        };
+        let value = norito::json!({
+            "outer": { "inner": 1 },
+            "null_field": null
+        });
+
+        assert!(!predicate_json_applies(&membership, &value));
+        assert!(!predicate_json_applies(&exists, &value));
+    }
+
+    #[test]
+    fn committed_tx_and_short_circuits_const_false() {
+        let left = CompoundPredicate::<query::CommittedTransaction>::from_committed_tx_predicate(
+            P::Const(false),
+        );
+        let right = CompoundPredicate::<query::CommittedTransaction>::from_committed_tx_predicate(
+            P::ResultEq(true),
+        );
+
+        let tree = expect_committed_tx_tree(left.and(right));
+        assert!(matches!(tree, P::Const(false)));
+    }
+
+    #[test]
+    fn committed_tx_and_appends_rhs_to_existing_and() {
+        let predicate = and_committed_tx_predicates(
+            P::And(vec![P::AuthorityExists(true), P::TsGte(10)]),
+            P::ResultEq(true),
+        );
+
+        assert!(matches!(
+            predicate,
+            P::And(children)
+                if matches!(
+                    children.as_slice(),
+                    [P::AuthorityExists(true), P::TsGte(10), P::ResultEq(true)]
+                )
+        ));
+    }
+
+    #[test]
+    fn committed_tx_and_prepends_lhs_to_existing_and() {
+        let predicate = and_committed_tx_predicates(
+            P::EntryExists(true),
+            P::And(vec![P::ResultEq(true), P::TsLte(90)]),
+        );
+
+        assert!(matches!(
+            predicate,
+            P::And(children)
+                if matches!(
+                    children.as_slice(),
+                    [P::EntryExists(true), P::ResultEq(true), P::TsLte(90)]
+                )
+        ));
+    }
+
+    #[test]
+    fn committed_tx_predicate_from_filters_preserves_extended_field_order() {
+        let authority = TestAuthority::new(0x44);
+        let tx = build_ext_tx(&authority, 90, true, dm::Metadata::default());
+        let predicate = committed_tx_predicate_from_filters(&query::CommittedTxFilters {
+            authority_ne: Some(authority.id.clone()),
+            ts_le: Some(90),
+            entry_nin: vec![tx.entrypoint_hash],
+            result_ok_ne: Some(true),
+            result_exists: Some(false),
+            ..Default::default()
+        });
+
+        assert!(matches!(
+            predicate,
+            P::And(children)
+                if matches!(
+                    children.as_slice(),
+                    [
+                        P::AuthorityNe(_),
+                        P::TsLte(90),
+                        P::EntryNin(_),
+                        P::ResultNe(true),
+                        P::ResultExists(false)
+                    ]
+                )
+        ));
+    }
+}
+
+#[cfg(all(test, feature = "json"))]
 mod predicate_tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::json::Json;
     use norito::json;
 
     use super::*;
-    use crate::{Registrable, account::AccountId, domain::Domain, query::json::PredicateJson};
+    use crate::{
+        Registrable,
+        account::AccountId,
+        domain::{Domain, DomainId},
+        query::json::PredicateJson,
+    };
 
     fn test_authority() -> AccountId {
         let (public_key, _private_key) =
@@ -923,7 +1479,7 @@ mod predicate_tests {
     }
 
     fn sample_domain() -> Domain {
-        let domain_id = "wonderland".parse().expect("domain id");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = test_authority();
         let mut domain = Domain::new(domain_id).build(&authority);
         domain
@@ -1008,7 +1564,10 @@ mod committed_tx_predicate_tests {
     use crate::prelude::{
         DataTriggerSequence, TransactionEntrypoint, TransactionRejectionReason, TransactionResult,
     };
-    use crate::{account, block, prelude as dm, query, transaction, transaction::signed, trigger};
+    use crate::{
+        account, block, domain::DomainId, prelude as dm, query, transaction, transaction::signed,
+        trigger,
+    };
 
     fn dummy_block_hash() -> HashOf<block::BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]))
@@ -1028,7 +1587,8 @@ mod committed_tx_predicate_tests {
 
     impl TestAuthority {
         fn new(seed: u8) -> Self {
-            let _domain: crate::domain::DomainId = "wonderland".parse().unwrap();
+            let _domain: crate::domain::DomainId =
+                DomainId::try_new("wonderland", "universal").unwrap();
             let (public_key, private_key) =
                 iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
             let id = account::AccountId::new(public_key);
@@ -1218,7 +1778,7 @@ mod committed_tx_predicate_tests {
             MerkleProof::from_audit_path(0, vec![]);
 
         let authority = account::AccountId::parse_encoded(
-            "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+            "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
         )
         .expect("valid authority")
         .into_account_id();
@@ -1586,6 +2146,27 @@ impl EvaluateSelector<crate::nft::Nft> for () {
         batch: impl Iterator<Item = crate::nft::Nft>,
     ) -> Result<crate::query::QueryOutputBatchBox, crate::query::error::QueryExecutionFail> {
         let ids: Vec<crate::nft::NftId> = batch.map(|n| n.id().clone()).collect();
+        Ok(crate::query::QueryOutputBatchBox::from(ids))
+    }
+}
+
+#[cfg(feature = "ids_projection")]
+impl EvaluateSelector<crate::rwa::Rwa> for () {
+    fn project_clone<'a, I>(
+        &self,
+        batch: I,
+    ) -> Result<crate::query::QueryOutputBatchBox, crate::query::error::QueryExecutionFail>
+    where
+        I: Iterator<Item = &'a crate::rwa::Rwa> + 'a,
+    {
+        let ids: Vec<crate::rwa::RwaId> = batch.map(|rwa| rwa.id().clone()).collect();
+        Ok(crate::query::QueryOutputBatchBox::from(ids))
+    }
+    fn project(
+        &self,
+        batch: impl Iterator<Item = crate::rwa::Rwa>,
+    ) -> Result<crate::query::QueryOutputBatchBox, crate::query::error::QueryExecutionFail> {
+        let ids: Vec<crate::rwa::RwaId> = batch.map(|rwa| rwa.id().clone()).collect();
         Ok(crate::query::QueryOutputBatchBox::from(ids))
     }
 }

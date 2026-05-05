@@ -55,18 +55,14 @@ fn main() -> eyre::Result<()> {
 use iroha::client::{Client, ClientConfiguration};
 use iroha_data_model::{
  isi::prelude::*,
- prelude::{AccountId, ChainId, DomainId, Name},
+ prelude::{AccountId, ChainId, Domain, DomainId},
 };
-use iroha_crypto::{KeyPair, PublicKey};
+use iroha_crypto::KeyPair;
 
 fn submit_example() -> eyre::Result<()> {
  let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
- let account_id = AccountId::new(
- Name::from_str("alice")?,
- DomainId::from_str("wonderland")?,
- );
-
  let key_pair = KeyPair::generate_ed25519(); // replace with a persistent key in real apps
+ let account_id = AccountId::new(key_pair.public_key().clone());
 
  let cfg = ClientConfiguration {
  chain: chain_id.clone(),
@@ -77,9 +73,7 @@ fn submit_example() -> eyre::Result<()> {
 
  let client = Client::new(cfg)?;
 
- let instruction = Register {
- object: Domain::new(Name::from_str("research")?, None),
- };
+ let instruction = Register::domain(Domain::new(DomainId::try_new("research", "universal")?));
 
  let tx = client.build_transaction([instruction]);
  let signed = tx.sign(&key_pair)?;
@@ -150,7 +144,7 @@ use iroha::client::{
 fn download_qr() -> eyre::Result<()> {
  let client = Client::new(ClientConfiguration::test())?;
  let snapshot = client.get_explorer_account_qr(
- "i105...",
+ "<i105-account-id>",
  )?;
  println!("Canonical literal: {}", snapshot.literal);
  println!("SVG payload: {}", snapshot.svg);
@@ -160,7 +154,7 @@ fn download_qr() -> eyre::Result<()> {
 
 `ExplorerAccountQrSnapshot`-ը արտացոլում է `/v1/explorer/accounts/{id}/qr` JSON-ը
 մակերես. այն ներառում է կանոնական հաշվի id-ն, բառացի թարգմանվածը
-կանոնական I105 literal, ցանցի նախածանցը/սխալների ուղղման մետատվյալները, QR չափերը և
+կանոնական i105 literal, ցանցի նախածանցը/սխալների ուղղման մետատվյալները, QR չափերը և
 ներկառուցված SVG ծանրաբեռնվածությունը, որը դրամապանակները/հետախույզները կարող են ուղղակիորեն տեղադրել: Բաց թողնել
 
 ## 7. Բաժանորդագրվեք միջոցառումներին

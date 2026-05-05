@@ -16,7 +16,7 @@ translation_last_reviewed: 2026-02-07
 
 - `scripts/address_local_toolkit.sh` comme CLI pour `iroha` :
   - `audit.json` -- خرج منظم من `iroha tools address audit --format json`.
-  - `normalized.txt` -- littéraux I105 (المفضل) / compressés (`sora`) (الخيار الثاني) محولة لكل sélecteur من نطاق Local.
+  - `normalized.txt` -- littéraux i105 (المفضل) / compressés (`sora`) (الخيار الثاني) محولة لكل sélecteur من نطاق Local.
 - استخدم السكربت مع لوحة ingérer للعناوين (`dashboards/grafana/address_ingest.json`)
   Utilisez Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) pour le basculement Local-8 /
   Local-12 ici. راقب لوحات التصادم Local-8 et Local-12 والتنبيهات
@@ -33,7 +33,7 @@ scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_exa
 
 الخيارات:
 
-- `--format I105` pour `sora...` pour I105.
+- `--format i105` pour `sora...` pour i105.
 - `domainless output (default)` لاصدار littéraux بدون نطاق.
 - `--audit-only` pour votre téléphone.
 - `--allow-errors` للاستمرار عند ظهور صفوف تالفة (مطابق لسلوك CLI).

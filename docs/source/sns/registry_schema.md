@@ -118,7 +118,7 @@ Enum AuctionKind {
 | `suffix` | `AsciiString` | e.g., `sora`. |
 | `steward` | `AccountId` | Steward defined in the governance charter. |
 | `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | Default settlement asset identifier (e.g., `xor#sora`). |
+| `payment_asset_id` | `AsciiString` | Default settlement asset-holding identifier (`<base58-asset-definition-id>#<i105-account-id>`). |
 | `pricing` | `Vec<PriceTierV1>` | Tiered pricing coefficients and duration rules. |
 | `min_term_years` | `u8` | Floor for purchased term regardless of tier overrides. |
 | `grace_period_days` | `u16` | Default 30. |
@@ -164,7 +164,7 @@ Struct SuffixFeeSplitV1 {
 | `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Deterministic record of routed payments per settlement epoch (weekly). |
 | `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emitted each time a payment posts (registration, renewal, auction). |
 
-All `TokenValue` fields use Norito’s canonical fixed-point encoding with the currency code declared in the associated `SuffixPolicyV1`.
+All `TokenValue` fields use the settlement asset's native integer units. SNS policies for Nexus XOR use nano-XOR units so sub-XOR lease prices can be represented without floating-point arithmetic.
 
 ### 2.4 Registry Events
 
@@ -231,7 +231,7 @@ State transitions MUST emit the corresponding `RegistryEventKind` so downstream 
 Gateways subscribe to `RegistryEventV1` and synchronise to DNS/SoraFS by:
 
 1. Fetching the latest `NameRecordV1` referenced by the event sequence.
-2. Regenerating resolver templates (preferred I105 addresses, text records).
+2. Regenerating resolver templates (preferred i105 addresses, text records).
 3. Pinning updated zone data via the SoraDNS workflow described in `docs/source/soradns/soradns_registry_rfc.md`.
 
 Event delivery guarantees:
@@ -251,7 +251,7 @@ NameRecordV1 {
     name_hash: 0x5f57...9c2a,
     normalized_label: "makoto",
     display_label: "Makoto",
-    owner: "i105...",
+    owner: "<i105-account-id>",
     controllers: [
         NameControllerV1 {
             controller_type: Account,
@@ -278,11 +278,11 @@ NameRecordV1 {
 SuffixPolicyV1 {
     suffix_id: 0x0001,
     suffix: "sora",
-    steward: "i105...",
+    steward: "<i105-account-id>",
     status: Active,
-    payment_asset_id: "xor#sora",
+    payment_asset_id: "<base58-asset-definition-id>#<i105-account-id>",
     pricing: [
-        PriceTierV1 { tier_id:0, label_regex:"^[a-z0-9]{3,}$", base_price:"120 XOR", auction_kind:VickreyCommitReveal, dutch_floor:None, min_duration_years:1, max_duration_years:5 },
+        PriceTierV1 { tier_id:0, label_regex:"^[a-z0-9]{3,}$", base_price:"500000000 nano-XOR (0.5 XOR)", auction_kind:VickreyCommitReveal, dutch_floor:None, min_duration_years:1, max_duration_years:5 },
         PriceTierV1 { tier_id:1, label_regex:"^[a-z]{1,2}$", base_price:"10_000 XOR", auction_kind:DutchReopen, dutch_floor:Some("1_000 XOR"), min_duration_years:1, max_duration_years:3 }
     ],
     min_term_years: 1,
@@ -291,10 +291,10 @@ SuffixPolicyV1 {
     max_term_years: 5,
     referral_cap_bps: 500,
     reserved_labels: [
-        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("i105..."), release_at:None, note:"Protocol reserved" }
+        ReservedNameV1 { normalized_label:"treasury", assigned_to:Some("<i105-account-id>"), release_at:None, note:"Protocol reserved" }
     ],
     fee_split: SuffixFeeSplitV1 { treasury_bps:7000, steward_bps:3000, referral_max_bps:1000, escrow_bps:500 },
-    fund_splitter_account: "i105...",
+    fund_splitter_account: "<i105-account-id>",
     policy_version: 3,
     metadata: { "kpi_covenant":"bafybeigd..." },
 }

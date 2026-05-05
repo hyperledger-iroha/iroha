@@ -66,15 +66,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -162,84 +162,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Офлайн тэтгэмж ба шийдвэрийн мета өгөгдөл
+## Offline V2 readiness
 
-Офлайн тэтгэмжийн хариултууд нь дэвтэрийн баяжуулсан мета өгөгдлүүдийг урьдаас ил болгодог —
-`expires_at_ms`, `policy_expires_at_ms`, `refresh_at_ms`, `verdict_id_hex`,
-`attestation_nonce_hex`, `remaining_amount`-г түүхий эдтэй хамт буцаана
-Бичлэг хийх тул хяналтын самбарууд суулгагдсан Norito ачааллын кодыг тайлах шаардлагагүй болно. Шинэ
-тоолох туслахууд (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) дараагийн хугацаа нь дуусч байгааг онцол (шинэчлэх → бодлого)
-→ гэрчилгээ) тул UI тэмдэг нь тэтгэмж авах бүрд операторуудад анхааруулах боломжтой
-<24 цаг үлдсэн. SDK
-`/v1/offline/allowances`-д илэрсэн REST шүүлтүүрүүдийг толин тусгал:
-`certificateExpiresBeforeMs/AfterMs`, `policyExpiresBeforeMs/AfterMs`,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` болон
-`requireVerdict` / `onlyMissingVerdict` логик. Буруу хослолууд (for
-жишээ `onlyMissingVerdict` + `verdictIdHex`) нь Torii-ээс өмнө орон нутагт татгалзсан
-гэж нэрлэдэг.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## Офлайн цэнэглэлт (асуудал + бүртгэл)
-
-Сертификат олгохыг хүсвэл нэн даруй цэнэглэх туслахуудыг ашиглаарай
-дэвтэрт бүртгүүлнэ үү. SDK нь олгосон болон бүртгэгдсэн гэрчилгээг баталгаажуулдаг
-Буцахаасаа өмнө ID-ууд таарч, хариу нь ачааллыг хоёуланг нь агуулна. Байна
-цэнэглэх зориулалтын эцсийн цэг байхгүй; туслагч асуудлыг гинжлэх + дуудлага бүртгэх. Хэрэв
-Танд гарын үсэг зурсан гэрчилгээ байгаа бол `registerOfflineAllowance` (эсвэл
-`renewOfflineAllowance`) шууд.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii асуулга ба дамжуулалт (WebSockets)
 
 Асуулгын туслахууд статус, Prometheus хэмжигдэхүүн, телеметрийн агшин зуурын зураг болон үйл явдлыг ил гаргадаг
@@ -274,7 +221,7 @@ Explorer телеметр нь `/v1/explorer/metrics` болон
 `/v1/explorer/accounts/{account_id}/qr` төгсгөлийн цэгүүд нь хяналтын самбаруудыг дахин тоглуулах боломжтой
 порталыг идэвхжүүлдэг ижил хормын хувилбарууд. `getExplorerMetrics()`-г хэвийн болгож байна
 ачаалал ба чиглүүлэлт идэвхгүй болсон үед `null` буцаана. Үүнийг хослуул
-`getExplorerAccountQr()` хэрэгтэй үед I105 (давуу)/sora (хоёр дахь шилдэг) литералууд дээр нэмэх нь шугам
+`getExplorerAccountQr()` хэрэгтэй үед i105 (давуу)/sora (хоёр дахь шилдэг) литералууд дээр нэмэх нь шугам
 Хуваалцах товчлууруудад зориулсан SVG.
 
 ```ts
@@ -289,7 +236,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -297,8 +244,8 @@ console.log(
 );
 ```
 
-`I105`-ийг дамжуулснаар Explorer-ийн өгөгдмөл шахагдсан хувилбарыг тусгана
-сонгогчид; илүүд үздэг I105 гаралт эсвэл `i105_qr` хүсэлтийг дарж бичихийг орхих
+`i105`-ийг дамжуулснаар Explorer-ийн өгөгдмөл шахагдсан хувилбарыг тусгана
+сонгогчид; илүүд үздэг i105 гаралт эсвэл `i105_qr` хүсэлтийг дарж бичихийг орхих
 танд QR-аюулгүй хувилбар хэрэгтэй үед. Шахсан үгийн утга нь хоёрдугаарт ордог
 UX-д зориулсан цорын ганц Sora сонголт. Туслах нь үргэлж каноник танигчийг буцаадаг.
 сонгосон үгийн утга, мета өгөгдөл (сүлжээний угтвар, QR хувилбар/модуль, алдаа
@@ -517,7 +464,7 @@ for await (const event of torii.streamEvents({
   хөрөнгийн эзэмшлийг каноник дансны дугаараар бүлэглэх; шүүлтүүрийг `assetId` дамжуулна
   багцын нэг хөрөнгийн жишээ хүртэл.
 - `getUaidBindings(uaid)` нь өгөгдлийн орон зай ↔ данс бүрийг тоолдог
-  холбох (`I105` `i105` литералуудыг буцаана).
+  холбох (`i105` `i105` литералуудыг буцаана).
 - `getUaidManifests(uaid, { dataspaceId })` чадварын манифест бүрийг буцаана.
   амьдралын мөчлөгийн төлөв, аудитын холбоотой дансууд.Операторын нотолгооны багц, манифест нийтлэх/цуцлах урсгал болон SDK шилжүүлгийн хувьд
 зааварчилгаа, Бүх нийтийн дансны гарын авлагыг дагаарай (`docs/source/universal_accounts_guide.md`)
@@ -560,7 +507,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -570,7 +517,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

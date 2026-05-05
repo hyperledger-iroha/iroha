@@ -6,6 +6,7 @@
 //! flow and a relay bus that bridges app↔wallet connections locally and, when
 //! enabled, propagates frames over the Iroha P2P network between nodes.
 
+use core::future::Future;
 use std::{
     collections::{HashMap, VecDeque},
     net::IpAddr,
@@ -14,7 +15,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::extract::ws::{Message, Utf8Bytes, WebSocket};
@@ -28,7 +29,7 @@ use iroha_data_model::{
     transaction::TransactionEntrypoint,
 };
 use iroha_logger::prelude::*;
-use iroha_torii_shared::connect as proto;
+use iroha_torii_shared::{connect as proto, connect_sdk};
 use tokio::sync::{Mutex, RwLock, mpsc};
 
 // no direct HTTP responses here
@@ -49,6 +50,44 @@ pub(crate) const CLOSE_CODE_HEARTBEAT: u16 = 4003;
 pub(crate) const CLOSE_REASON_HEARTBEAT: &str = "connect_heartbeat_timeout";
 pub(crate) const CLOSE_REASON_ROLE_DIRECTION_MISMATCH: &str = "connect_role_direction_mismatch";
 pub(crate) const CLOSE_REASON_SEQUENCE_VIOLATION: &str = "connect_sequence_violation";
+
+fn spawn_background_task<F>(task: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(task);
+    } else {
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("connect background runtime");
+            runtime.block_on(task);
+        });
+    }
+}
+
+fn token_kind_for_role(role: proto::Role) -> connect_sdk::TokenKind {
+    match role {
+        proto::Role::App => connect_sdk::TokenKind::App,
+        proto::Role::Wallet => connect_sdk::TokenKind::Wallet,
+    }
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn expires_at_ms(ttl: Duration) -> u64 {
+    let ttl_ms = u64::try_from(ttl.as_millis()).unwrap_or(u64::MAX);
+    unix_time_ms().saturating_add(ttl_ms)
+}
 
 #[derive(Clone)]
 pub struct Bus {
@@ -94,6 +133,14 @@ struct BusShared {
     ping_miss_total: AtomicU64,
     p2p_rebroadcasts_total: AtomicU64,
     p2p_rebroadcast_skipped_total: AtomicU64,
+    p2p_auth_failures_total: AtomicU64,
+    p2p_ttl_drops_total: AtomicU64,
+    p2p_unknown_session_drops_total: AtomicU64,
+    p2p_session_claims_in_total: AtomicU64,
+    p2p_session_claims_installed_total: AtomicU64,
+    p2p_session_claim_conflicts_total: AtomicU64,
+    p2p_role_consumed_total: AtomicU64,
+    p2p_session_terminated_total: AtomicU64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -143,9 +190,15 @@ struct Session {
     // Buffered frames when target is offline; tracked with byte budget
     buffer: Mutex<VecDeque<(proto::ConnectFrameV1, usize)>>,
     buffer_bytes: Mutex<usize>,
-    // One-time tokens per role; consumed on first successful WS attach
-    app_token: Mutex<Option<String>>,
-    wallet_token: Mutex<Option<String>>,
+    // One-time token hashes per role; consumed on first successful WS attach.
+    app_token_hash: Mutex<Option<[u8; 32]>>,
+    wallet_token_hash: Mutex<Option<[u8; 32]>>,
+    // Stable bearer token hash for session management operations.
+    management_token_hash: Mutex<Option<[u8; 32]>>,
+    // Relay MAC key derived from the session relay token.
+    relay_key: Mutex<Option<[u8; 32]>>,
+    // Whether this session was created locally or learned from P2P.
+    origin: SessionOrigin,
     // Requested/accepted permissions for diagnostics
     req_perms: Mutex<Option<proto::PermissionsV1>>,
     acc_perms: Mutex<Option<proto::PermissionsV1>>,
@@ -160,6 +213,21 @@ struct Session {
     // Outstanding ping expectations per role
     heartbeat_app: Mutex<HeartbeatQueue>,
     heartbeat_wallet: Mutex<HeartbeatQueue>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionOrigin {
+    Local,
+    PeerClaimed,
+}
+
+impl SessionOrigin {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::PeerClaimed => "peer_claimed",
+        }
+    }
 }
 
 /// Errors raised when registering a session in the Connect bus.
@@ -179,8 +247,11 @@ impl Default for Session {
             last_activity: Mutex::new(Instant::now()),
             buffer: Mutex::new(VecDeque::new()),
             buffer_bytes: Mutex::new(0),
-            app_token: Mutex::new(None),
-            wallet_token: Mutex::new(None),
+            app_token_hash: Mutex::new(None),
+            wallet_token_hash: Mutex::new(None),
+            management_token_hash: Mutex::new(None),
+            relay_key: Mutex::new(None),
+            origin: SessionOrigin::Local,
             req_perms: Mutex::new(None),
             acc_perms: Mutex::new(None),
             approved: Mutex::new(false),
@@ -190,6 +261,15 @@ impl Default for Session {
             server_seq_wallet_to_app: Mutex::new(0),
             heartbeat_app: Mutex::new(HeartbeatQueue::default()),
             heartbeat_wallet: Mutex::new(HeartbeatQueue::default()),
+        }
+    }
+}
+
+impl Session {
+    fn new(origin: SessionOrigin) -> Self {
+        Self {
+            origin,
+            ..Self::default()
         }
     }
 }
@@ -290,6 +370,7 @@ impl Bus {
                 },
                 heartbeat_miss_tolerance: cfg.ping_miss_tolerance.max(1),
                 heartbeat_min_interval: cfg.ping_min_interval,
+                p2p_ttl_hops: cfg.p2p_ttl_hops,
             },
             shared: Arc::new(BusShared::default()),
             per_ip_counts: Arc::new(Mutex::new(HashMap::new())),
@@ -301,7 +382,7 @@ impl Bus {
 
     fn start_cleaner(&self) {
         let me = self.clone();
-        tokio::spawn(async move {
+        spawn_background_task(async move {
             let interval = Duration::from_secs(30);
             loop {
                 tokio::time::sleep(interval).await;
@@ -495,6 +576,8 @@ impl Bus {
         sid: Sid,
         token_app: String,
         token_wallet: String,
+        token_management: String,
+        token_relay: String,
     ) -> Result<(), RegisterSessionError> {
         {
             let map = self.inner.read().await;
@@ -506,13 +589,36 @@ impl Bus {
             }
         }
 
-        let sess = Arc::new(Session::default());
-        *sess.app_token.lock().await = Some(token_app);
-        *sess.wallet_token.lock().await = Some(token_wallet);
+        let app_hash = connect_sdk::token_auth_hash(connect_sdk::TokenKind::App, &sid, &token_app);
+        let wallet_hash =
+            connect_sdk::token_auth_hash(connect_sdk::TokenKind::Wallet, &sid, &token_wallet);
+        let management_hash = connect_sdk::token_auth_hash(
+            connect_sdk::TokenKind::Management,
+            &sid,
+            &token_management,
+        );
+        let relay_key = connect_sdk::derive_relay_mac_key(&sid, &token_relay);
+        let claim = proto::ConnectSessionClaimV1 {
+            sid,
+            token_app_hash: app_hash,
+            token_wallet_hash: wallet_hash,
+            token_management_hash: management_hash,
+            relay_mac_key: relay_key,
+            expires_at_ms: expires_at_ms(self.policy.session_ttl),
+        };
+
+        let sess = Arc::new(Session::new(SessionOrigin::Local));
+        *sess.app_token_hash.lock().await = Some(app_hash);
+        *sess.wallet_token_hash.lock().await = Some(wallet_hash);
+        *sess.management_token_hash.lock().await = Some(management_hash);
+        *sess.relay_key.lock().await = Some(relay_key);
         *sess.last_activity.lock().await = Instant::now();
 
         let mut map = self.inner.write().await;
         map.insert(sid.to_vec(), sess);
+        drop(map);
+        self.broadcast_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
+            .await;
         Ok(())
     }
 
@@ -535,21 +641,27 @@ impl Bus {
         };
         let ok = match role {
             proto::Role::App => {
-                let mut t = sess.app_token.lock().await;
+                let mut t = sess.app_token_hash.lock().await;
+                let supplied = connect_sdk::token_auth_hash(token_kind_for_role(role), &sid, token);
                 t.as_ref()
-                    .is_some_and(|s| s == token)
+                    .is_some_and(|stored| connect_sdk::constant_time_eq(stored, &supplied))
                     .then(|| *t = None)
                     .is_some()
             }
             proto::Role::Wallet => {
-                let mut t = sess.wallet_token.lock().await;
+                let mut t = sess.wallet_token_hash.lock().await;
+                let supplied = connect_sdk::token_auth_hash(token_kind_for_role(role), &sid, token);
                 t.as_ref()
-                    .is_some_and(|s| s == token)
+                    .is_some_and(|stored| connect_sdk::constant_time_eq(stored, &supplied))
                     .then(|| *t = None)
                     .is_some()
             }
         };
         if ok {
+            self.broadcast_p2p_message(proto::ConnectP2pMessageV1::RoleConsumed(
+                proto::ConnectSessionRoleConsumedV1 { sid, role },
+            ))
+            .await;
             Ok(())
         } else {
             iroha_logger::debug!(
@@ -562,6 +674,47 @@ impl Bus {
                 "connect: bad token".into(),
             ))
         }
+    }
+
+    /// Validate a stable session management token.
+    pub async fn authorize_management_token(&self, sid: Sid, token: &str) -> bool {
+        let Some(sess) = self.inner.read().await.get(&sid.to_vec()).cloned() else {
+            return false;
+        };
+        let supplied =
+            connect_sdk::token_auth_hash(connect_sdk::TokenKind::Management, &sid, token);
+        sess.management_token_hash
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|stored| connect_sdk::constant_time_eq(stored, &supplied))
+    }
+
+    /// Return token-gated status for a single Connect session.
+    pub async fn session_status(&self, sid: Sid, token: &str) -> Option<ConnectSessionStatus> {
+        let sess = self.inner.read().await.get(&sid.to_vec()).cloned()?;
+        let supplied =
+            connect_sdk::token_auth_hash(connect_sdk::TokenKind::Management, &sid, token);
+        let authorized = sess
+            .management_token_hash
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|stored| connect_sdk::constant_time_eq(stored, &supplied));
+        if !authorized {
+            return None;
+        }
+        Some(ConnectSessionStatus {
+            sid: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sid),
+            app_attached: sess.app_tx.lock().await.is_some(),
+            wallet_attached: sess.wallet_tx.lock().await.is_some(),
+            approved: *sess.approved.lock().await,
+            buffered_frames: sess.buffer.lock().await.len(),
+            buffered_bytes: *sess.buffer_bytes.lock().await,
+            last_seq_app_to_wallet: *sess.last_seq_app_to_wallet.lock().await,
+            last_seq_wallet_to_app: *sess.last_seq_wallet_to_app.lock().await,
+            origin: sess.origin.as_str(),
+        })
     }
 
     async fn detach_if_empty(&self, sid: &Sid) {
@@ -607,18 +760,33 @@ impl Bus {
     }
 
     pub async fn terminate_session(&self, sid: Sid, reason: &str) -> bool {
+        self.terminate_session_inner(sid, reason, true).await
+    }
+
+    async fn terminate_session_inner(&self, sid: Sid, reason: &str, broadcast: bool) -> bool {
         let sess = {
             let mut map = self.inner.write().await;
             map.remove(&sid.to_vec())
         };
         if let Some(sess) = sess {
             // Clear tokens so new WS joins cannot reuse them.
-            *sess.app_token.lock().await = None;
-            *sess.wallet_token.lock().await = None;
+            *sess.app_token_hash.lock().await = None;
+            *sess.wallet_token_hash.lock().await = None;
+            *sess.management_token_hash.lock().await = None;
+            *sess.relay_key.lock().await = None;
 
             self.notify_close(sess.clone(), sid, proto::Role::Wallet, reason)
                 .await;
             self.notify_close(sess, sid, proto::Role::App, reason).await;
+            if broadcast {
+                self.broadcast_p2p_message(proto::ConnectP2pMessageV1::SessionTerminated(
+                    proto::ConnectSessionTerminatedV1 {
+                        sid,
+                        reason: reason.to_owned(),
+                    },
+                ))
+                .await;
+            }
             true
         } else {
             false
@@ -673,6 +841,11 @@ impl Bus {
     }
 
     async fn relay(&self, frame: proto::ConnectFrameV1) {
+        self.relay_with_p2p_ttl(frame, self.policy.p2p_ttl_hops)
+            .await;
+    }
+
+    async fn relay_with_p2p_ttl(&self, frame: proto::ConnectFrameV1, p2p_ttl: u8) {
         let Some(sess) = self.inner.read().await.get(&frame.sid.to_vec()).cloned() else {
             debug!(sid = ?hex::encode(frame.sid), "connect: dropping frame for unknown session");
             return;
@@ -859,20 +1032,242 @@ impl Bus {
             }
             *sess.last_activity.lock().await = Instant::now();
         }
-        // Re-broadcast to peers (best effort). Multi-hop flood with dedupe.
+        // Re-broadcast authenticated envelopes to peers (best effort).
         if self.policy.relay_enabled && self.policy.relay_strategy == RelayStrategy::Broadcast {
-            if let Some(net) = self.p2p.read().await.as_ref() {
+            if p2p_ttl == 0 {
+                self.shared
+                    .p2p_ttl_drops_total
+                    .fetch_add(1, Ordering::Relaxed);
+            } else if let Some(net) = self.p2p.read().await.as_ref() {
+                let Some(relay_key) = *sess.relay_key.lock().await else {
+                    self.shared
+                        .p2p_rebroadcast_skipped_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    return;
+                };
+                let envelope =
+                    match connect_sdk::seal_relay_envelope(&relay_key, frame.clone(), p2p_ttl) {
+                        Ok(envelope) => envelope,
+                        Err(err) => {
+                            warn!(
+                                sid = ?hex::encode(frame.sid),
+                                ?err,
+                                "connect: failed to authenticate P2P relay envelope"
+                            );
+                            return;
+                        }
+                    };
                 self.shared
                     .p2p_rebroadcasts_total
                     .fetch_add(1, Ordering::Relaxed);
                 net.broadcast(iroha_p2p::Broadcast {
-                    data: corelib::NetworkMessage::Connect(Box::new(frame)),
+                    data: corelib::NetworkMessage::Connect(Box::new(
+                        proto::ConnectP2pMessageV1::RelayEnvelope(envelope),
+                    )),
                     priority: iroha_p2p::Priority::Low,
                 });
             } else {
                 self.shared
                     .p2p_rebroadcast_skipped_total
                     .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    async fn broadcast_p2p_message(&self, message: proto::ConnectP2pMessageV1) {
+        if !self.policy.relay_enabled || self.policy.relay_strategy != RelayStrategy::Broadcast {
+            return;
+        }
+        let Some(net) = self.p2p.read().await.as_ref().cloned() else {
+            return;
+        };
+        net.broadcast(iroha_p2p::Broadcast {
+            data: corelib::NetworkMessage::Connect(Box::new(message)),
+            priority: iroha_p2p::Priority::Low,
+        });
+    }
+
+    async fn handle_p2p_message(&self, message: proto::ConnectP2pMessageV1) {
+        match message {
+            proto::ConnectP2pMessageV1::RelayEnvelope(envelope) => {
+                self.relay_from_p2p(envelope).await;
+            }
+            proto::ConnectP2pMessageV1::SessionClaim(claim) => {
+                self.install_peer_session_claim(claim).await;
+            }
+            proto::ConnectP2pMessageV1::RoleConsumed(event) => {
+                self.apply_role_consumed(event).await;
+            }
+            proto::ConnectP2pMessageV1::SessionTerminated(event) => {
+                self.apply_session_terminated(event).await;
+            }
+        }
+    }
+
+    async fn claim_matches_session(
+        session: &Session,
+        claim: &proto::ConnectSessionClaimV1,
+    ) -> bool {
+        let relay_key = *session.relay_key.lock().await;
+        if relay_key != Some(claim.relay_mac_key) {
+            return false;
+        }
+        let management_hash = *session.management_token_hash.lock().await;
+        if management_hash.is_some_and(|stored| stored != claim.token_management_hash) {
+            return false;
+        }
+        let app_hash = *session.app_token_hash.lock().await;
+        if app_hash.is_some_and(|stored| stored != claim.token_app_hash) {
+            return false;
+        }
+        let wallet_hash = *session.wallet_token_hash.lock().await;
+        !wallet_hash.is_some_and(|stored| stored != claim.token_wallet_hash)
+    }
+
+    async fn install_peer_session_claim(&self, claim: proto::ConnectSessionClaimV1) {
+        self.shared
+            .p2p_session_claims_in_total
+            .fetch_add(1, Ordering::Relaxed);
+        if claim.expires_at_ms <= unix_time_ms() {
+            debug!(
+                sid = ?hex::encode(claim.sid),
+                "connect: dropping expired P2P session claim"
+            );
+            return;
+        }
+        if let Some(existing) = self.inner.read().await.get(&claim.sid.to_vec()).cloned() {
+            if !Self::claim_matches_session(&existing, &claim).await {
+                self.shared
+                    .p2p_session_claim_conflicts_total
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    sid = ?hex::encode(claim.sid),
+                    "connect: ignoring conflicting P2P session claim"
+                );
+            }
+            return;
+        }
+        {
+            let map = self.inner.read().await;
+            if map.len() >= self.policy.ws_max_sessions {
+                self.shared
+                    .p2p_session_claim_conflicts_total
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    sid = ?hex::encode(claim.sid),
+                    "connect: dropping P2P session claim at capacity"
+                );
+                return;
+            }
+        }
+
+        let session = Arc::new(Session::new(SessionOrigin::PeerClaimed));
+        *session.app_token_hash.lock().await = Some(claim.token_app_hash);
+        *session.wallet_token_hash.lock().await = Some(claim.token_wallet_hash);
+        *session.management_token_hash.lock().await = Some(claim.token_management_hash);
+        *session.relay_key.lock().await = Some(claim.relay_mac_key);
+        *session.last_activity.lock().await = Instant::now();
+
+        let mut map = self.inner.write().await;
+        match map.get(&claim.sid.to_vec()).cloned() {
+            Some(existing) => {
+                drop(map);
+                if !Self::claim_matches_session(&existing, &claim).await {
+                    self.shared
+                        .p2p_session_claim_conflicts_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        sid = ?hex::encode(claim.sid),
+                        "connect: ignoring racing conflicting P2P session claim"
+                    );
+                }
+            }
+            None => {
+                if map.len() >= self.policy.ws_max_sessions {
+                    self.shared
+                        .p2p_session_claim_conflicts_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        sid = ?hex::encode(claim.sid),
+                        "connect: dropping racing P2P session claim at capacity"
+                    );
+                    return;
+                }
+                map.insert(claim.sid.to_vec(), session);
+                self.shared
+                    .p2p_session_claims_installed_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    async fn apply_role_consumed(&self, event: proto::ConnectSessionRoleConsumedV1) {
+        let Some(session) = self.inner.read().await.get(&event.sid.to_vec()).cloned() else {
+            return;
+        };
+        match event.role {
+            proto::Role::App => {
+                *session.app_token_hash.lock().await = None;
+            }
+            proto::Role::Wallet => {
+                *session.wallet_token_hash.lock().await = None;
+            }
+        }
+        self.shared
+            .p2p_role_consumed_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    async fn apply_session_terminated(&self, event: proto::ConnectSessionTerminatedV1) {
+        if self
+            .terminate_session_inner(event.sid, &event.reason, false)
+            .await
+        {
+            self.shared
+                .p2p_session_terminated_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    async fn relay_from_p2p(&self, envelope: proto::ConnectRelayEnvelopeV1) {
+        if envelope.ttl == 0 {
+            self.shared
+                .p2p_ttl_drops_total
+                .fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+
+        let sid = envelope.frame.sid;
+        let Some(sess) = self.inner.read().await.get(&sid.to_vec()).cloned() else {
+            self.shared
+                .p2p_unknown_session_drops_total
+                .fetch_add(1, Ordering::Relaxed);
+            debug!(sid = ?hex::encode(sid), "connect: dropping P2P relay for unknown session");
+            return;
+        };
+        let Some(relay_key) = *sess.relay_key.lock().await else {
+            self.shared
+                .p2p_auth_failures_total
+                .fetch_add(1, Ordering::Relaxed);
+            warn!(sid = ?hex::encode(sid), "connect: dropping P2P relay without local relay key");
+            return;
+        };
+        match connect_sdk::verify_relay_envelope(&relay_key, &envelope) {
+            Ok(true) => {
+                let next_ttl = envelope.ttl.saturating_sub(1);
+                self.relay_with_p2p_ttl(envelope.frame, next_ttl).await;
+            }
+            Ok(false) => {
+                self.shared
+                    .p2p_auth_failures_total
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(sid = ?hex::encode(sid), "connect: dropping P2P relay with invalid MAC");
+            }
+            Err(err) => {
+                self.shared
+                    .p2p_auth_failures_total
+                    .fetch_add(1, Ordering::Relaxed);
+                warn!(sid = ?hex::encode(sid), ?err, "connect: failed to verify P2P relay MAC");
             }
         }
     }
@@ -1177,18 +1572,266 @@ mod tests {
 
     use super::*;
 
+    fn test_claim(
+        sid: Sid,
+        app_token: &str,
+        wallet_token: &str,
+        management_token: &str,
+        relay_token: &str,
+    ) -> proto::ConnectSessionClaimV1 {
+        proto::ConnectSessionClaimV1 {
+            sid,
+            token_app_hash: connect_sdk::token_auth_hash(
+                connect_sdk::TokenKind::App,
+                &sid,
+                app_token,
+            ),
+            token_wallet_hash: connect_sdk::token_auth_hash(
+                connect_sdk::TokenKind::Wallet,
+                &sid,
+                wallet_token,
+            ),
+            token_management_hash: connect_sdk::token_auth_hash(
+                connect_sdk::TokenKind::Management,
+                &sid,
+                management_token,
+            ),
+            relay_mac_key: connect_sdk::derive_relay_mac_key(&sid, relay_token),
+            expires_at_ms: expires_at_ms(Duration::from_mins(5)),
+        }
+    }
+
     #[tokio::test]
     async fn register_tokens_rejects_duplicate_sid() {
         let bus = Bus::new();
         let sid = [0x11u8; 32];
-        bus.register_tokens(sid, "t-app".into(), "t-wallet".into())
-            .await
-            .expect("first registration succeeds");
+        bus.register_tokens(
+            sid,
+            "t-app".into(),
+            "t-wallet".into(),
+            "t-management".into(),
+            "t-relay".into(),
+        )
+        .await
+        .expect("first registration succeeds");
         let err = bus
-            .register_tokens(sid, "t-app-2".into(), "t-wallet-2".into())
+            .register_tokens(
+                sid,
+                "t-app-2".into(),
+                "t-wallet-2".into(),
+                "t-management-2".into(),
+                "t-relay-2".into(),
+            )
             .await
             .expect_err("duplicate sid should be rejected");
         assert_eq!(err, RegisterSessionError::Exists);
+    }
+
+    #[tokio::test]
+    async fn register_tokens_stores_token_hashes() {
+        let bus = Bus::new();
+        let sid = [0x51u8; 32];
+        bus.register_tokens(
+            sid,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register session");
+
+        let session = bus
+            .inner
+            .read()
+            .await
+            .get(&sid.to_vec())
+            .cloned()
+            .expect("session registered");
+        assert_eq!(
+            *session.app_token_hash.lock().await,
+            Some(connect_sdk::token_auth_hash(
+                connect_sdk::TokenKind::App,
+                &sid,
+                "app-token"
+            ))
+        );
+        assert_eq!(
+            *session.management_token_hash.lock().await,
+            Some(connect_sdk::token_auth_hash(
+                connect_sdk::TokenKind::Management,
+                &sid,
+                "management-token"
+            ))
+        );
+        assert!(
+            bus.authorize_management_token(sid, "management-token")
+                .await
+        );
+        assert!(!bus.authorize_management_token(sid, "wrong-token").await);
+
+        bus.authorize_token(sid, proto::Role::App, "app-token")
+            .await
+            .expect("app token accepted");
+        assert_eq!(*session.app_token_hash.lock().await, None);
+        assert!(
+            bus.authorize_token(sid, proto::Role::App, "app-token")
+                .await
+                .is_err(),
+            "role token is one-time"
+        );
+    }
+
+    #[tokio::test]
+    async fn p2p_session_claim_installs_shadow_session() {
+        let bus = Bus::new();
+        let sid = [0x52u8; 32];
+        let claim = test_claim(
+            sid,
+            "app-token",
+            "wallet-token",
+            "management-token",
+            "relay-token",
+        );
+
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
+            .await;
+
+        let status = bus
+            .session_status(sid, "management-token")
+            .await
+            .expect("management token works on peer-claimed session");
+        assert_eq!(status.origin, "peer_claimed");
+        assert_eq!(bus.status().await.p2p_session_claims_installed_total, 1);
+        bus.authorize_token(sid, proto::Role::Wallet, "wallet-token")
+            .await
+            .expect("wallet can attach through peer-claimed session");
+    }
+
+    #[tokio::test]
+    async fn p2p_role_consumed_clears_peer_token_hash() {
+        let bus = Bus::new();
+        let sid = [0x53u8; 32];
+        let claim = test_claim(
+            sid,
+            "app-token",
+            "wallet-token",
+            "management-token",
+            "relay-token",
+        );
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
+            .await;
+
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::RoleConsumed(
+            proto::ConnectSessionRoleConsumedV1 {
+                sid,
+                role: proto::Role::App,
+            },
+        ))
+        .await;
+
+        assert!(
+            bus.authorize_token(sid, proto::Role::App, "app-token")
+                .await
+                .is_err(),
+            "consumed role gossip prevents duplicate app attach"
+        );
+        assert_eq!(bus.status().await.p2p_role_consumed_total, 1);
+    }
+
+    #[tokio::test]
+    async fn p2p_session_terminated_removes_peer_session() {
+        let bus = Bus::new();
+        let sid = [0x54u8; 32];
+        let claim = test_claim(
+            sid,
+            "app-token",
+            "wallet-token",
+            "management-token",
+            "relay-token",
+        );
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
+            .await;
+
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionTerminated(
+            proto::ConnectSessionTerminatedV1 {
+                sid,
+                reason: "connect_session_revoked_by_test".into(),
+            },
+        ))
+        .await;
+
+        assert!(bus.session_status(sid, "management-token").await.is_none());
+        assert_eq!(bus.status().await.p2p_session_terminated_total, 1);
+    }
+
+    #[tokio::test]
+    async fn p2p_conflicting_session_claim_is_ignored() {
+        let bus = Bus::new();
+        let sid = [0x55u8; 32];
+        let claim = test_claim(
+            sid,
+            "app-token",
+            "wallet-token",
+            "management-token",
+            "relay-token",
+        );
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
+            .await;
+        let conflict = test_claim(
+            sid,
+            "app-token",
+            "wallet-token",
+            "management-token",
+            "other-relay-token",
+        );
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(conflict))
+            .await;
+
+        let status = bus.status().await;
+        assert_eq!(status.p2p_session_claim_conflicts_total, 1);
+        assert!(
+            bus.authorize_management_token(sid, "management-token")
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn p2p_relay_requires_prior_session_claim() {
+        let bus = Bus::new();
+        let sid = [0x56u8; 32];
+        let relay_token = "relay-token";
+        let relay_key = connect_sdk::derive_relay_mac_key(&sid, relay_token);
+        let frame = proto::ConnectFrameV1 {
+            sid,
+            dir: proto::Dir::AppToWallet,
+            seq: 1,
+            kind: proto::FrameKind::Control(proto::ConnectControlV1::Ping { nonce: 42 }),
+        };
+        let envelope =
+            connect_sdk::seal_relay_envelope(&relay_key, frame.clone(), 1).expect("envelope");
+
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::RelayEnvelope(envelope.clone()))
+            .await;
+        assert_eq!(bus.status().await.p2p_unknown_session_drops_total, 1);
+
+        let claim = test_claim(
+            sid,
+            "app-token",
+            "wallet-token",
+            "management-token",
+            relay_token,
+        );
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::SessionClaim(claim))
+            .await;
+        let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
+        bus.handle_p2p_message(proto::ConnectP2pMessageV1::RelayEnvelope(envelope))
+            .await;
+        let delivered = timeout(Duration::from_millis(100), wallet_inbox.recv())
+            .await
+            .expect("wallet receives relay after claim")
+            .expect("frame delivered");
+        assert_eq!(delivered, frame);
     }
 
     #[tokio::test]
@@ -1238,9 +1881,15 @@ mod tests {
         };
         let bus = Bus::from_config(&cfg);
         let sid = [0xABu8; 32];
-        bus.register_tokens(sid, "t-app".into(), "t-wallet".into())
-            .await
-            .expect("first registration ok");
+        bus.register_tokens(
+            sid,
+            "t-app".into(),
+            "t-wallet".into(),
+            "t-management".into(),
+            "t-relay".into(),
+        )
+        .await
+        .expect("first registration ok");
         let err = bus
             .pre_session_create("203.0.113.1".parse().unwrap())
             .await
@@ -1310,9 +1959,15 @@ mod tests {
     async fn terminate_session_sends_close_frames() {
         let bus = Bus::new();
         let sid = [0x42u8; 32];
-        bus.register_tokens(sid, "app-token".into(), "wallet-token".into())
-            .await
-            .expect("register session tokens");
+        bus.register_tokens(
+            sid,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register session tokens");
 
         let mut app_inbox = bus.attach(sid, proto::Role::App).await;
         let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
@@ -1862,7 +2517,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broadcast_strategy_records_p2p_rebroadcast_when_network_attached() {
+    async fn broadcast_strategy_with_zero_ttl_reports_local_only_when_p2p_attached() {
         let cfg = iroha_config::parameters::actual::Connect {
             enabled: true,
             ws_max_sessions: 1000,
@@ -1885,7 +2540,48 @@ mod tests {
             let mut p2p = bus.p2p.write().await;
             *p2p = Some(corelib::IrohaNetwork::closed_for_tests());
         }
+
+        let status = bus.status().await;
+        assert_eq!(status.policy.relay_strategy, "broadcast");
+        assert!(status.policy.relay_p2p_attached);
+        assert_eq!(status.policy.p2p_ttl_hops, 0);
+        assert_eq!(status.policy.relay_effective_strategy, "local_only");
+    }
+
+    #[tokio::test]
+    async fn broadcast_strategy_records_p2p_rebroadcast_when_network_attached() {
+        let cfg = iroha_config::parameters::actual::Connect {
+            enabled: true,
+            ws_max_sessions: 1000,
+            ws_per_ip_max_sessions: 10,
+            ws_rate_per_ip_per_min: 120,
+            session_ttl: Duration::from_mins(5),
+            frame_max_bytes: 64_000,
+            session_buffer_max_bytes: 262_144,
+            ping_interval: Duration::from_secs(30),
+            ping_miss_tolerance: 3,
+            ping_min_interval: Duration::from_secs(15),
+            dedupe_ttl: Duration::from_mins(2),
+            dedupe_cap: 8192,
+            relay_enabled: true,
+            relay_strategy: "broadcast",
+            p2p_ttl_hops: 1,
+        };
+        let bus = Bus::from_config(&cfg);
+        {
+            let mut p2p = bus.p2p.write().await;
+            *p2p = Some(corelib::IrohaNetwork::closed_for_tests());
+        }
         let sid = [0xB1u8; 32];
+        bus.register_tokens(
+            sid,
+            "app-token".into(),
+            "wallet-token".into(),
+            "management-token".into(),
+            "relay-token".into(),
+        )
+        .await
+        .expect("register session tokens");
         let _app_inbox = bus.attach(sid, proto::Role::App).await;
         let mut wallet_inbox = bus.attach(sid, proto::Role::Wallet).await;
 
@@ -1926,7 +2622,7 @@ mod tests {
             dedupe_cap: 8192,
             relay_enabled: true,
             relay_strategy: "broadcast",
-            p2p_ttl_hops: 0,
+            p2p_ttl_hops: 1,
         };
         let bus = Bus::from_config(&cfg);
         let sid = [0xB4u8; 32];
@@ -2106,7 +2802,7 @@ mod tests {
             seq: 1,
             kind: proto::FrameKind::Control(proto::ConnectControlV1::Approve {
                 wallet_pk: [1u8; 32],
-                account_id: "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw".into(),
+                account_id: "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE".into(),
                 permissions: None,
                 proof: None,
                 sig_wallet: proto::WalletSignatureV1::new(
@@ -2344,7 +3040,7 @@ impl Bus {
         use iroha_p2p::network::{SubscriberFilter, message::Topic};
 
         let me = self.clone();
-        tokio::spawn(async move {
+        spawn_background_task(async move {
             {
                 let mut w = me.p2p.write().await;
                 *w = Some(network.clone());
@@ -2364,8 +3060,8 @@ impl Bus {
             }
             while let Some(msg) = rx.recv().await {
                 let payload = msg.payload;
-                if let corelib::NetworkMessage::Connect(frame) = payload {
-                    me.relay(*frame).await;
+                if let corelib::NetworkMessage::Connect(message) = payload {
+                    me.handle_p2p_message(*message).await;
                 }
             }
         });
@@ -2425,6 +3121,7 @@ impl Bus {
                 relay_strategy: self.policy.relay_strategy.as_str(),
                 relay_effective_strategy,
                 relay_p2p_attached,
+                p2p_ttl_hops: self.policy.p2p_ttl_hops,
                 heartbeat_interval_ms: self.policy.heartbeat_interval.as_millis() as u64,
                 heartbeat_miss_tolerance: self.policy.heartbeat_miss_tolerance,
                 heartbeat_min_interval_ms: self.policy.heartbeat_min_interval.as_millis() as u64,
@@ -2452,6 +3149,29 @@ impl Bus {
             p2p_rebroadcast_skipped_total: self
                 .shared
                 .p2p_rebroadcast_skipped_total
+                .load(Ordering::Relaxed),
+            p2p_auth_failures_total: self.shared.p2p_auth_failures_total.load(Ordering::Relaxed),
+            p2p_ttl_drops_total: self.shared.p2p_ttl_drops_total.load(Ordering::Relaxed),
+            p2p_unknown_session_drops_total: self
+                .shared
+                .p2p_unknown_session_drops_total
+                .load(Ordering::Relaxed),
+            p2p_session_claims_in_total: self
+                .shared
+                .p2p_session_claims_in_total
+                .load(Ordering::Relaxed),
+            p2p_session_claims_installed_total: self
+                .shared
+                .p2p_session_claims_installed_total
+                .load(Ordering::Relaxed),
+            p2p_session_claim_conflicts_total: self
+                .shared
+                .p2p_session_claim_conflicts_total
+                .load(Ordering::Relaxed),
+            p2p_role_consumed_total: self.shared.p2p_role_consumed_total.load(Ordering::Relaxed),
+            p2p_session_terminated_total: self
+                .shared
+                .p2p_session_terminated_total
                 .load(Ordering::Relaxed),
         }
     }
@@ -2558,6 +3278,27 @@ pub struct ConnectStatus {
     pub ping_miss_total: u64,
     pub p2p_rebroadcasts_total: u64,
     pub p2p_rebroadcast_skipped_total: u64,
+    pub p2p_auth_failures_total: u64,
+    pub p2p_ttl_drops_total: u64,
+    pub p2p_unknown_session_drops_total: u64,
+    pub p2p_session_claims_in_total: u64,
+    pub p2p_session_claims_installed_total: u64,
+    pub p2p_session_claim_conflicts_total: u64,
+    pub p2p_role_consumed_total: u64,
+    pub p2p_session_terminated_total: u64,
+}
+
+#[derive(JsonSerialize)]
+pub struct ConnectSessionStatus {
+    pub sid: String,
+    pub app_attached: bool,
+    pub wallet_attached: bool,
+    pub approved: bool,
+    pub buffered_frames: usize,
+    pub buffered_bytes: usize,
+    pub last_seq_app_to_wallet: Option<u64>,
+    pub last_seq_wallet_to_app: Option<u64>,
+    pub origin: &'static str,
 }
 
 #[derive(Clone, Copy, JsonSerialize)]
@@ -2572,6 +3313,7 @@ pub struct ConnectPolicyStatus {
     pub relay_strategy: &'static str,
     pub relay_effective_strategy: &'static str,
     pub relay_p2p_attached: bool,
+    pub p2p_ttl_hops: u8,
     pub heartbeat_interval_ms: u64,
     pub heartbeat_miss_tolerance: u32,
     pub heartbeat_min_interval_ms: u64,
@@ -2606,6 +3348,7 @@ struct Policy {
     heartbeat_interval: Duration,
     heartbeat_miss_tolerance: u32,
     heartbeat_min_interval: Duration,
+    p2p_ttl_hops: u8,
 }
 
 impl Default for Policy {
@@ -2622,6 +3365,7 @@ impl Default for Policy {
             heartbeat_interval: Duration::from_secs(30),
             heartbeat_miss_tolerance: 3,
             heartbeat_min_interval: Duration::from_secs(15),
+            p2p_ttl_hops: iroha_config::parameters::defaults::connect::P2P_TTL_HOPS,
         }
     }
 }
@@ -2632,7 +3376,9 @@ impl Policy {
             return RelayStrategy::LocalOnly;
         }
         match self.relay_strategy {
-            RelayStrategy::Broadcast if relay_p2p_attached => RelayStrategy::Broadcast,
+            RelayStrategy::Broadcast if relay_p2p_attached && self.p2p_ttl_hops > 0 => {
+                RelayStrategy::Broadcast
+            }
             _ => RelayStrategy::LocalOnly,
         }
     }

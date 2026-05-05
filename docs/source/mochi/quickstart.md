@@ -29,7 +29,7 @@ below or available on the PATH:
 From the repository root:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 This command builds both `mochi-core` and the egui frontend. To produce a distributable bundle, run:
@@ -45,21 +45,22 @@ The bundle task assembles the binaries, manifest, and config stubs under `target
 Run the UI directly from cargo:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
-By default MOCHI opens on the **Network** page with a single-peer preset in a temporary data
-directory:
+By default MOCHI opens on the **Network** page with a single-peer preset rooted at the current
+workspace:
 
-- Data root: `$TMPDIR/mochi`.
+- Workspace root: the current working directory.
+- Sandbox root: `<workspace>/.mochi/sandbox/single-peer`.
 - Torii base port: `8080`.
 - P2P base port: `1337`.
 
 Use CLI flags to override the defaults when launching:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
-  --data-root /path/to/workspace \
+cargo run -p mochi-ui -- \
+  --workspace-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
   --p2p-start 13000 \
@@ -67,11 +68,48 @@ cargo run -p mochi-ui-egui -- \
   --irohad /path/to/irohad
 ```
 
-Environment variables mirror the same overrides when CLI flags are omitted: set `MOCHI_DATA_ROOT`,
-`MOCHI_PROFILE`, `MOCHI_CHAIN_ID`, `MOCHI_TORII_START`, `MOCHI_P2P_START`, `MOCHI_RESTART_MODE`,
-`MOCHI_RESTART_MAX`, or `MOCHI_RESTART_BACKOFF_MS` to preseed the supervisor builder; binary paths
-continue to respect `MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI`, and `MOCHI_CONFIG` points at an
-explicit `config/local.toml`.
+Environment variables mirror the same overrides when CLI flags are omitted: set
+`MOCHI_WORKSPACE_ROOT`, `MOCHI_DATA_ROOT`, `MOCHI_PROFILE`, `MOCHI_CHAIN_ID`,
+`MOCHI_TORII_START`, `MOCHI_P2P_START`, `MOCHI_RESTART_MODE`, `MOCHI_RESTART_MAX`, or
+`MOCHI_RESTART_BACKOFF_MS` to preseed the supervisor builder; binary paths continue to respect
+`MOCHI_IROHAD`/`MOCHI_KAGAMI`/`MOCHI_IROHA_CLI`, and `MOCHI_CONFIG` points at an explicit
+`config/local.toml`.
+
+When only a workspace root is provided, Mochi writes app bootstrap files there and keeps runtime
+state under `<workspace>/.mochi/sandbox/<profile>`. Use `--data-root` only when you intentionally
+want runtime logs/storage somewhere else while still treating the workspace as the home for
+`.env.local` and `.mochi/generated/*`.
+
+## Headless local sandbox
+
+For Codex or shell automation, use the helper script instead of clicking through the GUI:
+
+```bash
+scripts/mochi_local_sandbox.sh up
+scripts/mochi_local_sandbox.sh status
+scripts/mochi_local_sandbox.sh env
+scripts/mochi_local_sandbox.sh mcp-add-command
+```
+
+`up` launches `cargo run -p mochi-ui -- sandbox serve` in a detached process group, waits for
+`/status` readiness, runs a local smoke transaction, validates local MCP, writes
+`<workspace>/.mochi/sandbox/<profile>/session.json`, and refreshes `.env.local` plus
+`.mochi/generated/*`. The helper records the actual long-lived Mochi PID in `serve.pid`, so
+`scripts/mochi_local_sandbox.sh status` should remain `ready` after `up` returns and
+`scripts/mochi_local_sandbox.sh down` can stop the sandbox cleanly with SIGTERM. By default the
+helper uses `<workspace>/.mochi/build-target` as its `CARGO_TARGET_DIR`, which keeps Mochi startup
+isolated from other builds happening in the repo; set `MOCHI_CARGO_TARGET_DIR` if you want a
+different cache location. Set `MOCHI_PROFILE=four-peer-bft` for the four-validator rehearsal or
+`MOCHI_WORKSPACE_ROOT=/path/to/app` when you are starting the sandbox for another workspace. The
+repo-shared Codex guidance for this flow lives at
+`skills/mochi-local-sandbox/`; install or symlink it into
+`$CODEX_HOME/skills/mochi-local-sandbox` when you want Codex to use it.
+
+Local validator configs now pin `nexus.enabled = false`, `confidential.enabled = true`, and the
+same `sumeragi.consensus_mode` that Mochi asked Kagami to use for genesis. Enabling Nexus requires
+an NPoS profile; Mochi rejects `nexus.enabled = true` on permissioned presets before peers launch.
+The rendered local Torii config also enables `[torii.mcp]` with the curated writer profile and
+`[torii.transport.norito_rpc]` with `enabled = true`, `require_mtls = false`, and `stage = "ga"`.
 
 After launch, use the **Devnet quickstart** card on the Network page for the normal local-dev flow:
 
@@ -88,7 +126,10 @@ After launch, use the **Devnet quickstart** card on the Network page for the nor
 Open **Advanced settings** from the Network page or the top control bar when you need to adjust the
 full supervisor configuration:
 
-- **Data root** — base directory for peer configs, storage, logs, and snapshots.
+- **Workspace root** — home for `.env.local`, `.mochi/generated/*`, and the default
+  `.mochi/sandbox/<profile>` runtime directory.
+- **Data root override** — optional direct runtime path for peer configs, storage, logs, and
+  snapshots when you do not want Mochi to use the default workspace-relative sandbox root.
 - **Torii / P2P base ports** — starting ports for deterministic allocation.
 - **Profile override / inline TOML** — advanced topology and config tuning.
 - **Nexus / DA** — lane, dataspace, and DA-specific configuration.
@@ -152,9 +193,9 @@ The **State** and **Transactions** views keep the common dev workflow in one app
   prefilled as a filter; failed submissions jump into **Activity → Logs** for the selected peer.
 
 Use the composer toolbar's **Manage signing vault** button to import or edit signing authorities. The
-dialog writes entries to the active network root (`<data_root>/<profile>/signers.json`), and saved
-vault keys are immediately available for transaction previews and submissions. When the vault is
-empty the composer falls back to the bundled development keys so local workflows continue to work.
+dialog writes entries to the active sandbox root (`<sandbox_root>/signers.json`), and saved vault
+keys are immediately available for transaction previews and submissions. When the vault is empty the
+composer falls back to the bundled development keys so local workflows continue to work.
 Forms now cover mint/burn/transfer (including implicit receive), domain/account/asset-definition
 registration, account admission policies, multisig proposals, Space Directory manifests (AXT/AMX),
 SoraFS pin manifests, and governance actions such as granting or revoking roles so common
@@ -163,7 +204,8 @@ roadmap-authoring tasks can be rehearsed without hand-writing Norito payloads.
 ## Cleanup & troubleshooting
 
 - Stop the application to terminate supervised peers.
-- Remove the data root (`rm -rf <data_root>`) to reset all state.
+- Remove the sandbox root (`rm -rf <workspace>/.mochi/sandbox/<profile>`) to reset runtime state, or
+  use `scripts/mochi_local_sandbox.sh reset`.
 - If Kagami or irohad locations change, update the environment variables or re-run MOCHI with the
   appropriate CLI flags; the Settings dialog will persist new paths on the next apply.
 
@@ -180,7 +222,7 @@ crates:
 ./ci/check_mochi.sh
 ```
 
-The helper executes `cargo check`/`cargo test` for `mochi-core`, `mochi-ui-egui`, and
+The helper executes `cargo check`/`cargo test` for `mochi-core`, `mochi-ui`, and
 `mochi-integration`, which catches fixture drift (canonical block/event captures) and egui harness
 regressions in one shot. If the script reports stale fixtures, rerun the ignored regeneration tests,
 for example:

@@ -18,7 +18,7 @@ translator: machine-google-reviewed
 
 - `scripts/address_local_toolkit.sh` мыналарды шығару үшін `iroha` CLI орап алады:
   - `audit.json` — `iroha tools address audit --format json` ішінен құрылымдық шығыс.
-  - `normalized.txt` — әрбір жергілікті домен селекторы үшін түрлендірілген таңдаулы I105 / екінші ең жақсы қысылған (`sora`) литералдар.
+  - `normalized.txt` — әрбір жергілікті домен селекторы үшін түрлендірілген таңдаулы i105 / екінші ең жақсы қысылған (`sora`) литералдар.
 - Скриптті мекенжайды қабылдау бақылау тақтасымен жұптаңыз (`dashboards/grafana/address_ingest.json`)
   және Local-8 / дәлелдеу үшін Alertmanager ережелері (`dashboards/alerts/address_ingest_rules.yml`)
   Жергілікті-12 кесу қауіпсіз. Local-8 және Local-12 соқтығысқан панельдерді, плюс
@@ -39,7 +39,7 @@ scripts/address_local_toolkit.sh \
 
 Опциялар:
 
-- I105 орнына `i105` шығысы үшін `--format i105`.
+- i105 орнына `i105` шығысы үшін `--format i105`.
 - Жалаң литералдарды шығару үшін `domainless output (default)`.
 - түрлендіру қадамын өткізіп жіберу үшін `--audit-only`.
 - `--allow-errors` қате пішімделген жолдар пайда болған кезде сканерлеуді жалғастыру үшін (CLI әрекетіне сәйкес келеді).

@@ -32,7 +32,7 @@ pub use self::model::QueryWithFilter;
 pub use self::model::*;
 use self::{
     account::*, asset::*, block::*, domain::*, dsl::*, executor::*, nft::*, peer::*, permission::*,
-    role::*, transaction::*, trigger::*,
+    role::*, rwa::*, transaction::*, trigger::*,
 };
 #[cfg(feature = "fault_injection")]
 use crate::transaction::ExecutionStep;
@@ -53,6 +53,7 @@ use crate::{
     permission::Permission,
     repo::RepoAgreement,
     role::{Role, RoleId},
+    rwa::{Rwa, RwaId},
     seal,
     trigger::{Trigger, TriggerId},
 };
@@ -121,30 +122,7 @@ impl iroha_version::codec::EncodeVersioned for SignedQuery {
 
 impl iroha_version::codec::DecodeVersioned for SignedQuery {
     fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
-        use iroha_version::error::Error;
-        if let Some(version) = input.first() {
-            if Self::supported_versions().contains(version) {
-                let mut cursor = &input[1..];
-                let decoded = <Self as norito::codec::DecodeAll>::decode_all(&mut cursor)
-                    .map_err(Error::from)?;
-                if cursor.is_empty() {
-                    Ok(decoded)
-                } else {
-                    Err(Error::NoritoCodec(
-                        "SignedQuery payload contains trailing bytes".into(),
-                    ))
-                }
-            } else {
-                Err(Error::UnsupportedVersion(Box::new(
-                    iroha_version::UnsupportedVersion::new(
-                        *version,
-                        iroha_version::RawVersioned::NoritoBytes(input.to_vec()),
-                    ),
-                )))
-            }
-        } else {
-            Err(Error::NotVersioned)
-        }
+        iroha_version::codec::decode_exact_versioned(input)
     }
 }
 
@@ -781,6 +759,10 @@ mod model {
         NftId(Vec<NftId>),
         /// Batch of NFTs.
         Nft(Vec<Nft>),
+        /// Batch of RWA identifiers.
+        RwaId(Vec<RwaId>),
+        /// Batch of RWAs.
+        Rwa(Vec<Rwa>),
         /// Batch of roles.
         Role(Vec<Role>),
         /// Batch of parameters.
@@ -815,14 +797,10 @@ mod model {
         BlockHeaderHash(Vec<HashOf<BlockHeader>>),
         /// Batch of proof records.
         ProofRecord(Vec<crate::proof::ProofRecord>),
-        /// Batch of offline allowance records.
-        OfflineAllowanceRecord(Vec<crate::offline::OfflineAllowanceRecord>),
-        /// Batch of offline-to-online transfer records.
-        OfflineToOnlineTransfer(Vec<crate::offline::OfflineTransferRecord>),
-        /// Batch of offline counter summaries.
-        OfflineCounterSummary(Vec<crate::offline::OfflineCounterSummary>),
-        /// Batch of offline verdict revocations.
-        OfflineVerdictRevocation(Vec<crate::offline::OfflineVerdictRevocation>),
+        /// Batch of native asset escrow records.
+        AssetEscrowRecord(Vec<crate::escrow::AssetEscrowRecord>),
+        /// Batch of native anonymous asset escrow records.
+        AnonymousAssetEscrowRecord(Vec<crate::escrow::AnonymousAssetEscrowRecord>),
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, Constructor, IntoSchema)]
@@ -849,10 +827,14 @@ mod model {
         FindExecutorDataModel(FindExecutorDataModel),
         /// Fetch current global parameters.
         FindParameters(FindParameters),
-        /// Fetch linked domains for an account subject.
-        FindDomainsByAccountId(account::prelude::FindDomainsByAccountId),
-        /// Fetch linked account ids for a domain.
-        FindAccountIdsByDomainId(domain::prelude::FindAccountIdsByDomainId),
+        /// Fetch an account by identifier.
+        FindAccountById(account::prelude::FindAccountById),
+        /// Fetch aliases bound to an account subject.
+        FindAliasesByAccountId(account::prelude::FindAliasesByAccountId),
+        /// Fetch the recovery policy keyed by a stable account alias.
+        FindAccountRecoveryPolicyByAlias(account::prelude::FindAccountRecoveryPolicyByAlias),
+        /// Fetch the recovery request keyed by a stable account alias.
+        FindAccountRecoveryRequestByAlias(account::prelude::FindAccountRecoveryRequestByAlias),
         /// Fetch a proof record by its identifier.
         FindProofRecordById(proof::prelude::FindProofRecordById),
         /// Fetch a contract manifest by its code hash.
@@ -861,6 +843,14 @@ mod model {
         FindAbiVersion(runtime::prelude::FindAbiVersion),
         /// Fetch an asset by identifier.
         FindAssetById(asset::prelude::FindAssetById),
+        /// Fetch an asset definition by identifier.
+        FindAssetDefinitionById(asset::prelude::FindAssetDefinitionById),
+        /// Fetch a native asset escrow by identifier.
+        FindAssetEscrowById(escrow::prelude::FindAssetEscrowById),
+        /// Fetch a native anonymous asset escrow by identifier.
+        FindAnonymousAssetEscrowById(escrow::prelude::FindAnonymousAssetEscrowById),
+        /// Fetch a trigger by identifier.
+        FindTriggerById(trigger::prelude::FindTriggerById),
         /// Fetch a Twitter binding record by hash.
         FindTwitterBindingByHash(oracle::prelude::FindTwitterBindingByHash),
         /// Fetch domain endorsement records.
@@ -877,8 +867,26 @@ mod model {
         FindDaPinIntentByAlias(self::da::prelude::FindDaPinIntentByAlias),
         /// Fetch a DA pin intent by lane/epoch/sequence tuple.
         FindDaPinIntentByLaneEpochSequence(self::da::prelude::FindDaPinIntentByLaneEpochSequence),
+        /// Fetch a verified lane relay record by its canonical relay reference.
+        FindLaneRelayEnvelopeByRef(self::nexus::prelude::FindLaneRelayEnvelopeByRef),
         /// Fetch the registered owner for a `SoraFS` provider.
         FindSorafsProviderOwner(sorafs::prelude::FindSorafsProviderOwner),
+        /// Fetch the active SNS owner for a dataspace alias.
+        FindDataspaceNameOwnerById(sns::prelude::FindDataspaceNameOwnerById),
+        /// Fetch a Musubi release by exact package reference.
+        FindMusubiReleaseByRef(musubi::prelude::FindMusubiReleaseByRef),
+        /// Fetch all registered versions for a Musubi package id.
+        FindMusubiPackageVersions(musubi::prelude::FindMusubiPackageVersions),
+        /// Fetch release summaries for a Musubi package id.
+        FindMusubiPackageReleases(musubi::prelude::FindMusubiPackageReleases),
+        /// Search Musubi packages.
+        SearchMusubiPackages(musubi::prelude::SearchMusubiPackages),
+        /// Fetch a Musubi short alias target package id.
+        FindMusubiShortAliasByName(musubi::prelude::FindMusubiShortAliasByName),
+        /// Fetch an account by stable alias.
+        FindAccountByAlias(account::prelude::FindAccountByAlias),
+        /// Fetch a domain by identifier.
+        FindDomainById(domain::prelude::FindDomainById),
         #[cfg(test)]
         #[doc(hidden)]
         __TestFallback,
@@ -899,6 +907,14 @@ mod model {
         Parameters(Parameters),
         /// Linked domain identifier list.
         DomainIds(Vec<DomainId>),
+        /// Account payload.
+        Account(Account),
+        /// Bound account alias records.
+        AccountAliasBindingRecords(Vec<account::AccountAliasBindingRecord>),
+        /// Account recovery policy payload.
+        AccountRecoveryPolicy(crate::account::AccountRecoveryPolicy),
+        /// Account recovery request payload.
+        AccountRecoveryRequest(crate::account::AccountRecoveryRequest),
         /// Linked account identifier list.
         AccountIds(Vec<AccountId>),
         /// Proof record payload.
@@ -909,6 +925,14 @@ mod model {
         AbiVersion(runtime::AbiVersion),
         /// Asset payload.
         Asset(crate::asset::value::Asset),
+        /// Asset definition payload.
+        AssetDefinition(crate::asset::definition::AssetDefinition),
+        /// Native asset escrow payload.
+        AssetEscrowRecord(crate::escrow::AssetEscrowRecord),
+        /// Native anonymous asset escrow payload.
+        AnonymousAssetEscrowRecord(crate::escrow::AnonymousAssetEscrowRecord),
+        /// Trigger payload.
+        Trigger(crate::trigger::Trigger),
         /// Twitter binding payload.
         TwitterBindingRecord(crate::oracle::TwitterBindingRecord),
         /// Domain endorsements payload.
@@ -919,8 +943,22 @@ mod model {
         DomainCommittee(crate::nexus::DomainCommittee),
         /// DA pin intent payload.
         DaPinIntent(crate::da::pin_intent::DaPinIntentWithLocation),
+        /// Verified lane relay payload.
+        VerifiedLaneRelayRecord(crate::nexus::VerifiedLaneRelayRecord),
+        /// Musubi release payload.
+        MusubiRelease(crate::musubi::MusubiRelease),
+        /// Musubi version list payload.
+        MusubiVersions(Vec<crate::musubi::MusubiVersion>),
+        /// Musubi release summary list payload.
+        MusubiReleaseSummaries(Vec<crate::musubi::MusubiReleaseSummary>),
+        /// Musubi package summary list payload.
+        MusubiPackageSummaries(Vec<crate::musubi::MusubiPackageSummary>),
+        /// Musubi package id payload.
+        MusubiPackageId(crate::musubi::MusubiPackageId),
         /// Account identifier payload.
         AccountId(AccountId),
+        /// Domain payload.
+        Domain(crate::domain::Domain),
     }
 
     /// The results of a single iterable query request.
@@ -966,11 +1004,32 @@ mod model {
 
     impl Clone for QueryWithParams {
         fn clone(&self) -> Self {
-            use norito::codec::{Decode, Encode};
+            #[cfg(feature = "fast_dsl")]
+            {
+                Self {
+                    query: (),
+                    query_payload: self.query_payload.clone(),
+                    item: self.item,
+                    predicate_bytes: self.predicate_bytes.clone(),
+                    selector_bytes: self.selector_bytes.clone(),
+                    params: self.params.clone(),
+                }
+            }
 
-            let encoded = self.encode();
-            let mut cursor: &[u8] = &encoded;
-            Self::decode(&mut cursor).expect("QueryWithParams::clone: decode failed")
+            #[cfg(not(feature = "fast_dsl"))]
+            {
+                let type_name = self.query.type_name_key();
+                let payload = self.query.encode_bytes();
+                let query = query_registry()
+                    .decode(type_name, &payload)
+                    .expect("QueryWithParams::clone: query type is not registered")
+                    .expect("QueryWithParams::clone: failed to decode boxed query");
+
+                Self {
+                    query,
+                    params: self.params.clone(),
+                }
+            }
         }
     }
 
@@ -1010,9 +1069,11 @@ mod model {
                 // Attempt for all supported item kinds
                 try_build!(crate::domain::Domain, Domain);
                 try_build!(crate::account::Account, Account);
+                try_build!(crate::account::AccountId, AccountId);
                 try_build!(crate::asset::value::Asset, Asset);
                 try_build!(crate::asset::definition::AssetDefinition, AssetDefinition);
                 try_build!(crate::nft::Nft, Nft);
+                try_build!(crate::rwa::Rwa, Rwa);
                 try_build!(crate::role::Role, Role);
                 try_build!(crate::role::RoleId, RoleId);
                 try_build!(crate::peer::PeerId, PeerId);
@@ -1023,13 +1084,10 @@ mod model {
                 try_build!(crate::block::BlockHeader, BlockHeader);
                 try_build!(crate::proof::ProofRecord, ProofRecord);
                 try_build!(crate::permission::Permission, Permission);
+                try_build!(crate::escrow::AssetEscrowRecord, AssetEscrowRecord);
                 try_build!(
-                    crate::offline::OfflineAllowanceRecord,
-                    OfflineAllowanceRecord
-                );
-                try_build!(
-                    crate::offline::OfflineTransferRecord,
-                    OfflineToOnlineTransfer
+                    crate::escrow::AnonymousAssetEscrowRecord,
+                    AnonymousAssetEscrowRecord
                 );
 
                 // Fallback: if unknown, leave everything empty/default and rely on server-side validation
@@ -1090,6 +1148,8 @@ mod model {
         Domain,
         /// Account items.
         Account,
+        /// Account identifier items.
+        AccountId,
         /// Asset items.
         Asset,
         /// Asset definition items.
@@ -1098,6 +1158,8 @@ mod model {
         RepoAgreement,
         /// NFT items.
         Nft,
+        /// RWA lot items.
+        Rwa,
         /// Role items.
         Role,
         /// Role identifier items.
@@ -1118,14 +1180,10 @@ mod model {
         ProofRecord,
         /// Permission items.
         Permission,
-        /// Offline allowance records.
-        OfflineAllowanceRecord,
-        /// Offline-to-online transfer records.
-        OfflineToOnlineTransfer,
-        /// Offline counter summary records.
-        OfflineCounterSummary,
-        /// Offline verdict revocation records.
-        OfflineVerdictRevocation,
+        /// Native asset escrow records.
+        AssetEscrowRecord,
+        /// Native anonymous asset escrow records.
+        AnonymousAssetEscrowRecord,
     }
 
     /// Trait mapping item types to a `QueryItemKind` marker.
@@ -1156,6 +1214,12 @@ mod model {
         }
     }
     #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for AccountId {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::AccountId
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for Asset {
         fn kind() -> QueryItemKind {
             QueryItemKind::Asset
@@ -1177,6 +1241,12 @@ mod model {
     impl ItemKindTag for Nft {
         fn kind() -> QueryItemKind {
             QueryItemKind::Nft
+        }
+    }
+    #[cfg(feature = "fast_dsl")]
+    impl ItemKindTag for Rwa {
+        fn kind() -> QueryItemKind {
+            QueryItemKind::Rwa
         }
     }
     #[cfg(feature = "fast_dsl")]
@@ -1240,30 +1310,17 @@ mod model {
         }
     }
     #[cfg(feature = "fast_dsl")]
-    impl ItemKindTag for crate::offline::OfflineAllowanceRecord {
+    impl ItemKindTag for crate::escrow::AssetEscrowRecord {
         fn kind() -> QueryItemKind {
-            QueryItemKind::OfflineAllowanceRecord
+            QueryItemKind::AssetEscrowRecord
         }
     }
     #[cfg(feature = "fast_dsl")]
-    impl ItemKindTag for crate::offline::OfflineTransferRecord {
+    impl ItemKindTag for crate::escrow::AnonymousAssetEscrowRecord {
         fn kind() -> QueryItemKind {
-            QueryItemKind::OfflineToOnlineTransfer
+            QueryItemKind::AnonymousAssetEscrowRecord
         }
     }
-    #[cfg(feature = "fast_dsl")]
-    impl ItemKindTag for crate::offline::OfflineCounterSummary {
-        fn kind() -> QueryItemKind {
-            QueryItemKind::OfflineCounterSummary
-        }
-    }
-    #[cfg(feature = "fast_dsl")]
-    impl ItemKindTag for crate::offline::OfflineVerdictRevocation {
-        fn kind() -> QueryItemKind {
-            QueryItemKind::OfflineVerdictRevocation
-        }
-    }
-
     // Manual schema for QueryWithParams: represent only `params` field.
     impl iroha_schema::TypeId for QueryWithParams {
         fn id() -> String {
@@ -1488,13 +1545,7 @@ impl CommittedTxFilters {
     /// Helper associated with query processing.
     #[allow(clippy::too_many_lines)]
     pub fn applies(&self, tx: &CommittedTransaction) -> bool {
-        // authority presence and equality set checks (External only)
-        let authority_val = match &tx.entrypoint {
-            crate::transaction::signed::TransactionEntrypoint::External(signed) => {
-                Some(signed.authority().clone())
-            }
-            _ => None,
-        };
+        let authority_val = tx.entrypoint.authority_opt().cloned();
         if let Some(required) = self.authority_exists
             && (required != authority_val.is_some())
         {
@@ -1530,31 +1581,14 @@ impl CommittedTxFilters {
         }
         // timestamp lower bound
         if let Some(ge) = self.ts_ge {
-            let created_ms = match &tx.entrypoint {
-                crate::transaction::signed::TransactionEntrypoint::External(s) => {
-                    match u64::try_from(s.creation_time().as_millis()) {
-                        Ok(v) => v,
-                        Err(_) => return false,
-                    }
-                }
-                crate::transaction::signed::TransactionEntrypoint::Time(_) => {
-                    // Time triggers can be considered to have their step time; we approximate using block time here as zero.
-                    // Treat as not matching lower bound by default.
-                    0
-                }
-            };
+            let created_ms = tx.entrypoint.creation_time_ms().unwrap_or(0);
             if created_ms < ge {
                 return false;
             }
         }
         // timestamp upper bound
         if let Some(le) = self.ts_le {
-            let created_ms = match &tx.entrypoint {
-                crate::transaction::signed::TransactionEntrypoint::External(s) => {
-                    u64::try_from(s.creation_time().as_millis()).unwrap_or(u64::MAX)
-                }
-                crate::transaction::signed::TransactionEntrypoint::Time(_) => u64::MAX,
-            };
+            let created_ms = tx.entrypoint.creation_time_ms().unwrap_or(u64::MAX);
             if created_ms > le {
                 return false;
             }
@@ -1779,6 +1813,9 @@ impl CommittedTransaction {
             TransactionEntrypoint::External(entrypoint) => {
                 entrypoint.inject_instructions(additions.clone());
             }
+            TransactionEntrypoint::PrivateKaigi(entrypoint) => {
+                entrypoint.inject_instructions(additions.clone());
+            }
             TransactionEntrypoint::Time(entrypoint) => {
                 let mut modified = entrypoint.instructions.0.clone().into_vec();
                 modified.extend(additions);
@@ -1830,6 +1867,8 @@ impl QueryOutputBatchBox {
             (Self::AssetDefinition(v1), Self::AssetDefinition(v2)) => v1.extend(v2),
             (Self::NftId(v1), Self::NftId(v2)) => v1.extend(v2),
             (Self::Nft(v1), Self::Nft(v2)) => v1.extend(v2),
+            (Self::RwaId(v1), Self::RwaId(v2)) => v1.extend(v2),
+            (Self::Rwa(v1), Self::Rwa(v2)) => v1.extend(v2),
             (Self::Role(v1), Self::Role(v2)) => v1.extend(v2),
             (Self::Parameter(v1), Self::Parameter(v2)) => v1.extend(v2),
             (Self::Permission(v1), Self::Permission(v2)) => v1.extend(v2),
@@ -1849,10 +1888,8 @@ impl QueryOutputBatchBox {
             (Self::BlockHeader(v1), Self::BlockHeader(v2)) => v1.extend(v2),
             (Self::BlockHeaderHash(v1), Self::BlockHeaderHash(v2)) => v1.extend(v2),
             (Self::RepoAgreement(v1), Self::RepoAgreement(v2)) => v1.extend(v2),
-            (Self::OfflineAllowanceRecord(v1), Self::OfflineAllowanceRecord(v2)) => v1.extend(v2),
-            (Self::OfflineToOnlineTransfer(v1), Self::OfflineToOnlineTransfer(v2)) => v1.extend(v2),
-            (Self::OfflineCounterSummary(v1), Self::OfflineCounterSummary(v2)) => v1.extend(v2),
-            (Self::OfflineVerdictRevocation(v1), Self::OfflineVerdictRevocation(v2)) => {
+            (Self::AssetEscrowRecord(v1), Self::AssetEscrowRecord(v2)) => v1.extend(v2),
+            (Self::AnonymousAssetEscrowRecord(v1), Self::AnonymousAssetEscrowRecord(v2)) => {
                 v1.extend(v2)
             }
             _ => panic!("Cannot extend different types of IterableQueryOutputBatchBox"),
@@ -1879,6 +1916,8 @@ impl QueryOutputBatchBox {
             Self::AssetDefinition(v) => v.len(),
             Self::NftId(v) => v.len(),
             Self::Nft(v) => v.len(),
+            Self::RwaId(v) => v.len(),
+            Self::Rwa(v) => v.len(),
             Self::Role(v) => v.len(),
             Self::Parameter(v) => v.len(),
             Self::Permission(v) => v.len(),
@@ -1897,10 +1936,8 @@ impl QueryOutputBatchBox {
             Self::BlockHeaderHash(v) => v.len(),
             Self::ProofRecord(v) => v.len(),
             Self::RepoAgreement(v) => v.len(),
-            Self::OfflineAllowanceRecord(v) => v.len(),
-            Self::OfflineToOnlineTransfer(v) => v.len(),
-            Self::OfflineCounterSummary(v) => v.len(),
-            Self::OfflineVerdictRevocation(v) => v.len(),
+            Self::AssetEscrowRecord(v) => v.len(),
+            Self::AnonymousAssetEscrowRecord(v) => v.len(),
         }
     }
 }
@@ -2079,6 +2116,21 @@ mod candidate {
         }
     }
 
+    impl<'a> norito::core::DecodeFromSlice<'a> for SignedQuery {
+        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+            let _guard = norito::core::PayloadCtxGuard::enter(bytes);
+            let mut cursor = std::io::Cursor::new(bytes);
+            let candidate: SignedQueryCandidate =
+                <SignedQueryCandidate as norito::codec::Decode>::decode(&mut cursor)?;
+            let used = usize::try_from(cursor.position())
+                .map_err(|_| norito::core::Error::LengthMismatch)?;
+            let decoded = candidate
+                .validate()
+                .map_err(|msg| norito::core::Error::Message(msg.to_owned()))?;
+            Ok((decoded, used))
+        }
+    }
+
     impl<'de> norito::core::NoritoDeserialize<'de> for SignedQuery {
         fn deserialize(archived: &'de norito::core::Archived<SignedQuery>) -> Self {
             let candidate = <SignedQueryCandidate as norito::core::NoritoDeserialize>::deserialize(
@@ -2226,7 +2278,8 @@ mod candidate {
 mod json_roundtrip_tests {
     use std::sync::LazyLock;
 
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{KeyPair, Signature, SignatureOf};
+    use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 
     use super::*;
     #[cfg(not(feature = "fast_dsl"))]
@@ -2263,6 +2316,124 @@ mod json_roundtrip_tests {
             QueryRequest::Singular(SingularQueryBox::FindParameters(_)) => {}
             _ => panic!("expected FindParameters singular query"),
         }
+    }
+
+    #[test]
+    fn signed_query_versioned_roundtrip() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+
+        let bytes = signed.encode_versioned();
+        let decoded =
+            SignedQuery::decode_all_versioned(&bytes).expect("versioned signed query must decode");
+
+        assert_eq!(decoded.authority(), signed.authority());
+        assert_eq!(
+            query_request_to_json(decoded.request()),
+            query_request_to_json(signed.request())
+        );
+        assert_eq!(decoded.signature.0.payload(), signed.signature.0.payload());
+    }
+
+    #[test]
+    fn signed_query_versioned_decode_rejects_empty_payload_without_decode_panic() {
+        let err = match SignedQuery::decode_all_versioned(&[]) {
+            Ok(_) => panic!("empty signed query payload must be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, iroha_version::error::Error::NotVersioned));
+        assert!(
+            !err.to_string().contains("panic during decode"),
+            "empty payloads should not surface as decode panics: {err}"
+        );
+    }
+
+    #[test]
+    fn signed_query_versioned_decode_rejects_version_only_payload_without_decode_panic() {
+        let err = match SignedQuery::decode_all_versioned(&[1]) {
+            Ok(_) => panic!("version-only signed query payload must be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+        assert!(
+            !err.to_string().contains("panic during decode"),
+            "truncated payloads should not surface as decode panics: {err}"
+        );
+    }
+
+    #[test]
+    fn signed_query_versioned_decode_rejects_trailing_bytes() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let mut bytes = signed.encode_versioned();
+        bytes.push(0);
+
+        let err = match SignedQuery::decode_all_versioned(&bytes) {
+            Ok(_) => panic!("versioned signed query decoder must reject trailing bytes"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+    }
+
+    #[test]
+    fn signed_query_versioned_decode_rejects_unsupported_version_without_decode_panic() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+        let mut bytes = signed.encode_versioned();
+        bytes[0] = 2;
+
+        let err = match SignedQuery::decode_all_versioned(&bytes) {
+            Ok(_) => panic!("unsupported signed query version must be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            iroha_version::error::Error::UnsupportedVersion(_)
+        ));
+        assert!(
+            !err.to_string().contains("panic during decode"),
+            "unsupported versions should not surface as decode panics: {err}"
+        );
+    }
+
+    #[test]
+    fn signed_query_versioned_decode_rejects_invalid_signature_without_decode_panic() {
+        let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
+            .with_authority(ALICE_ID.clone())
+            .sign(&ALICE_KEYPAIR);
+
+        let mut signature = signed.signature.0.payload().to_vec();
+        let last = signature
+            .last_mut()
+            .expect("test signature payload is non-empty");
+        *last ^= 0xFF;
+        let invalid = SignedQuery {
+            signature: QuerySignature(SignatureOf::from_signature(Signature::from_bytes(
+                &signature,
+            ))),
+            payload: signed.payload,
+        };
+
+        let err = match SignedQuery::decode_all_versioned(&invalid.encode_versioned()) {
+            Ok(_) => panic!("invalid query signature must be rejected"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("Query request signature is not valid"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            !message.contains("panic during decode"),
+            "invalid signatures should not surface as decode panics: {message}"
+        );
     }
 
     #[cfg(not(feature = "fast_dsl"))]
@@ -2303,6 +2474,33 @@ mod json_roundtrip_tests {
         }
     }
 
+    #[cfg(not(feature = "fast_dsl"))]
+    #[test]
+    fn query_with_params_clone_preserves_boxed_query_in_non_fast_dsl() {
+        set_query_registry(crate::query_registry![ErasedIterQuery<Domain>]);
+
+        let qwf: QueryWithFilter<Domain> = QueryWithFilter::new_with_query(
+            Box::new(FindDomains),
+            CompoundPredicate::PASS,
+            SelectorTuple::default(),
+        );
+        let original = QueryWithParams {
+            query: qwf.into(),
+            params: parameters::QueryParams::default(),
+        };
+
+        let cloned = original.clone();
+        let Some(query_box) = cloned.query_box() else {
+            panic!("cloned query must retain boxed query");
+        };
+
+        assert_eq!(
+            (**query_box).type_name_key(),
+            "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>"
+        );
+        assert_eq!(cloned.params, original.params);
+    }
+
     #[cfg(feature = "fast_dsl")]
     #[test]
     fn signed_query_json_roundtrip_start_fastdsl() {
@@ -2331,6 +2529,30 @@ mod json_roundtrip_tests {
             }
             _ => panic!("expected Start request"),
         }
+    }
+
+    #[cfg(feature = "fast_dsl")]
+    #[test]
+    fn query_with_params_clone_preserves_fast_dsl_parts() {
+        use crate::query::QueryItemKind;
+
+        let pred = norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS);
+        let sel = norito::codec::Encode::encode(&SelectorTuple::<Domain>::default());
+        let original = QueryWithParams {
+            query: (),
+            query_payload: vec![1, 2, 3, 4],
+            item: QueryItemKind::Permission,
+            predicate_bytes: pred,
+            selector_bytes: sel,
+            params: parameters::QueryParams::default(),
+        };
+
+        let cloned = original.clone();
+        assert_eq!(cloned.item, QueryItemKind::Permission);
+        assert_eq!(cloned.query_payload, vec![1, 2, 3, 4]);
+        assert_eq!(cloned.predicate_bytes, original.predicate_bytes);
+        assert_eq!(cloned.selector_bytes, original.selector_bytes);
+        assert_eq!(cloned.params, original.params);
     }
 }
 /// Use a custom syntax to implement [`Query`] for applicable types
@@ -2389,23 +2611,25 @@ impl_iter_queries! {
     FindAccounts => crate::account::Account,
     FindAccountIds => crate::account::AccountId,
     FindAssets => crate::asset::value::Asset,
+    asset::prelude::FindAssetsByAccountId => crate::asset::value::Asset,
     FindAssetsDefinitions => crate::asset::definition::AssetDefinition,
     repo::FindRepoAgreements => crate::repo::RepoAgreement,
     FindNfts => crate::nft::Nft,
+    nft::prelude::FindNftsByAccountId => crate::nft::Nft,
+    FindRwas => crate::rwa::Rwa,
     FindDomains => crate::domain::Domain,
+    domain::prelude::FindDomainsByAccountId => crate::domain::Domain,
     FindPeers => crate::peer::PeerId,
     FindActiveTriggerIds => crate::trigger::TriggerId,
     FindTriggers => crate::trigger::Trigger,
-    offline::FindOfflineAllowances => crate::offline::OfflineAllowanceRecord,
-    offline::FindOfflineAllowanceByCertificateId => crate::offline::OfflineAllowanceRecord,
-    offline::FindOfflineCounterSummaries => crate::offline::OfflineCounterSummary,
-    offline::FindOfflineToOnlineTransfers => crate::offline::OfflineTransferRecord,
-    offline::FindOfflineToOnlineTransfersByController => crate::offline::OfflineTransferRecord,
-    offline::FindOfflineToOnlineTransfersByReceiver => crate::offline::OfflineTransferRecord,
-    offline::FindOfflineToOnlineTransfersByStatus => crate::offline::OfflineTransferRecord,
-    offline::FindOfflineToOnlineTransfersByPolicy => crate::offline::OfflineTransferRecord,
-    offline::FindOfflineToOnlineTransferById => crate::offline::OfflineTransferRecord,
-    offline::FindOfflineVerdictRevocations => crate::offline::OfflineVerdictRevocation,
+    escrow::FindAssetEscrows => crate::escrow::AssetEscrowRecord,
+    escrow::FindAssetEscrowsBySeller => crate::escrow::AssetEscrowRecord,
+    escrow::FindAssetEscrowsByBuyer => crate::escrow::AssetEscrowRecord,
+    escrow::FindAssetEscrowsByStatus => crate::escrow::AssetEscrowRecord,
+    escrow::FindAnonymousAssetEscrows => crate::escrow::AnonymousAssetEscrowRecord,
+    escrow::FindAnonymousAssetEscrowsBySeller => crate::escrow::AnonymousAssetEscrowRecord,
+    escrow::FindAnonymousAssetEscrowsByBuyer => crate::escrow::AnonymousAssetEscrowRecord,
+    escrow::FindAnonymousAssetEscrowsByStatus => crate::escrow::AnonymousAssetEscrowRecord,
     FindTransactions => CommittedTransaction,
     FindAccountsWithAsset => crate::account::Account,
     FindBlockHeaders => crate::block::BlockHeader,
@@ -2418,12 +2642,18 @@ impl_iter_queries! {
 impl_singular_queries! {
     FindParameters => crate::parameter::Parameters,
     FindExecutorDataModel => crate::executor::ExecutorDataModel,
-    account::prelude::FindDomainsByAccountId => Vec<crate::domain::DomainId>,
-    domain::prelude::FindAccountIdsByDomainId => Vec<crate::account::AccountId>,
+    account::prelude::FindAccountById => crate::account::Account,
+    account::prelude::FindAliasesByAccountId => Vec<account::AccountAliasBindingRecord>,
+    account::prelude::FindAccountRecoveryPolicyByAlias => crate::account::AccountRecoveryPolicy,
+    account::prelude::FindAccountRecoveryRequestByAlias => crate::account::AccountRecoveryRequest,
     proof::prelude::FindProofRecordById => crate::proof::ProofRecord,
     smart_contract::prelude::FindContractManifestByCodeHash => crate::smart_contract::manifest::ContractManifest,
     runtime::prelude::FindAbiVersion => crate::query::runtime::AbiVersion,
     asset::prelude::FindAssetById => crate::asset::value::Asset,
+    asset::prelude::FindAssetDefinitionById => crate::asset::definition::AssetDefinition,
+    escrow::prelude::FindAssetEscrowById => crate::escrow::AssetEscrowRecord,
+    escrow::prelude::FindAnonymousAssetEscrowById => crate::escrow::AnonymousAssetEscrowRecord,
+    trigger::prelude::FindTriggerById => crate::trigger::Trigger,
     oracle::FindTwitterBindingByHash => crate::oracle::TwitterBindingRecord,
     endorsement::prelude::FindDomainEndorsements => Vec<crate::nexus::DomainEndorsementRecord>,
     endorsement::prelude::FindDomainEndorsementPolicy => crate::nexus::DomainEndorsementPolicy,
@@ -2432,6 +2662,15 @@ impl_singular_queries! {
     da::prelude::FindDaPinIntentByManifest => crate::da::pin_intent::DaPinIntentWithLocation,
     da::prelude::FindDaPinIntentByAlias => crate::da::pin_intent::DaPinIntentWithLocation,
     da::prelude::FindDaPinIntentByLaneEpochSequence => crate::da::pin_intent::DaPinIntentWithLocation,
+    nexus::prelude::FindLaneRelayEnvelopeByRef => crate::nexus::VerifiedLaneRelayRecord,
+    sns::prelude::FindDataspaceNameOwnerById => crate::account::AccountId,
+    musubi::prelude::FindMusubiReleaseByRef => crate::musubi::MusubiRelease,
+    musubi::prelude::FindMusubiPackageVersions => Vec<crate::musubi::MusubiVersion>,
+    musubi::prelude::FindMusubiPackageReleases => Vec<crate::musubi::MusubiReleaseSummary>,
+    musubi::prelude::SearchMusubiPackages => Vec<crate::musubi::MusubiPackageSummary>,
+    musubi::prelude::FindMusubiShortAliasByName => crate::musubi::MusubiPackageId,
+    account::prelude::FindAccountByAlias => crate::account::Account,
+    domain::prelude::FindDomainById => crate::domain::Domain,
 }
 
 // NOTE: Query DSL projection traits are provided generically in dsl module now.
@@ -2515,6 +2754,9 @@ mod trait_object_tests {
 
         assert_predicate::<nft::FindNfts>();
         assert_selector::<nft::FindNfts>();
+
+        assert_predicate::<rwa::FindRwas>();
+        assert_selector::<rwa::FindRwas>();
 
         assert_predicate::<role::FindRoles>();
         assert_selector::<role::FindRoles>();
@@ -2673,11 +2915,64 @@ pub mod account {
     use std::{format, string::String, vec::Vec};
 
     use derive_more::Display;
+    use norito::codec::{Decode, Encode};
 
     // Bring required IDs into scope for queries! items
     use crate::prelude::AssetDefinitionId;
 
+    /// API-facing record describing one alias bound to an account.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, iroha_schema::IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    pub struct AccountAliasBindingRecord {
+        /// Canonical account identifier that owns the binding.
+        pub account_id: crate::account::AccountId,
+        /// Canonical alias literal such as `merchant@banka.centralbank`.
+        pub alias: String,
+        /// Dataspace alias such as `centralbank`.
+        pub dataspace: String,
+        /// Optional domain qualifier such as `banka`.
+        #[norito(default)]
+        pub domain: Option<String>,
+        /// Whether this alias is the account's primary label.
+        #[norito(default)]
+        pub is_primary: bool,
+        /// Effective SNS lifecycle status for the alias.
+        pub status: crate::sns::NameStatus,
+        /// Lease expiry timestamp (unix ms) when the alias ceases to be active.
+        #[norito(default)]
+        pub lease_expiry_ms: Option<u64>,
+        /// End of the grace period (unix ms) after expiry.
+        #[norito(default)]
+        pub grace_until_ms: Option<u64>,
+        /// Timestamp (unix ms) when the current lease term started.
+        #[norito(default)]
+        pub bound_at_ms: u64,
+    }
+
     queries! {
+            /// [`FindAccountById`] Iroha Query finds an `Account` by its identifier.
+            #[derive(Display)]
+            #[display("Find account `{id}`")]
+            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+            pub struct FindAccountById {
+                /// Domainless account identifier to resolve.
+                pub id: crate::account::AccountId,
+            }
+
+            /// [`FindAccountByAlias`] Iroha Query finds an `Account` by its stable alias.
+            #[derive(Display)]
+            #[display("Find account by alias `{alias:?}`")]
+            #[repr(transparent)]
+            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            pub struct FindAccountByAlias {
+                /// Stable account alias whose bound account should be resolved.
+                pub alias: crate::account::AccountAlias,
+            }
+
             /// [`FindAccounts`] Iroha Query finds all `Account`s presented.
             #[derive(Copy, Display)]
             #[display("Find all accounts")]
@@ -2703,15 +2998,39 @@ pub mod account {
                 pub asset_definition: AssetDefinitionId,
             }
 
-            /// [`FindDomainsByAccountId`] query lists domains linked to the account subject.
+            /// [`FindAliasesByAccountId`] query lists aliases bound to the account subject.
             #[derive(Display)]
-            #[display("Find domains linked to account `{id}`")]
-            #[repr(transparent)]
-            // SAFETY: `FindDomainsByAccountId` has no trap representation in `AccountId`
-            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
-            pub struct FindDomainsByAccountId {
-                /// Domainless account identifier whose linked domain memberships should be resolved.
+            #[display("Find aliases bound to account `{id}`")]
+            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+            pub struct FindAliasesByAccountId {
+                /// Domainless account identifier whose alias bindings should be resolved.
                 pub id: crate::account::AccountId,
+                /// Optional dataspace alias filter such as `centralbank`.
+                #[norito(default)]
+                pub dataspace: Option<String>,
+                /// Optional exact domain filter such as `banka`.
+                #[norito(default)]
+                pub domain: Option<String>,
+            }
+
+            /// [`FindAccountRecoveryPolicyByAlias`] query resolves the alias-keyed recovery policy.
+            #[derive(Display)]
+            #[display("Find recovery policy for alias `{alias:?}`")]
+            #[repr(transparent)]
+            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            pub struct FindAccountRecoveryPolicyByAlias {
+                /// Stable account alias whose recovery policy should be loaded.
+                pub alias: crate::account::AccountAlias,
+            }
+
+            /// [`FindAccountRecoveryRequestByAlias`] query resolves the alias-keyed recovery request.
+            #[derive(Display)]
+            #[display("Find recovery request for alias `{alias:?}`")]
+            #[repr(transparent)]
+            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            pub struct FindAccountRecoveryRequestByAlias {
+                /// Stable account alias whose recovery request should be loaded.
+                pub alias: crate::account::AccountAlias,
             }
         }
 
@@ -2722,17 +3041,57 @@ pub mod account {
         }
     }
 
-    impl FindDomainsByAccountId {
+    impl FindAccountById {
         /// Return the queried account identifier.
         pub fn account_id(&self) -> &crate::account::AccountId {
             &self.id
         }
     }
 
+    impl FindAccountByAlias {
+        /// Return the queried stable alias.
+        pub fn alias(&self) -> &crate::account::AccountAlias {
+            &self.alias
+        }
+    }
+
+    impl FindAliasesByAccountId {
+        /// Return the queried account identifier.
+        pub fn account_id(&self) -> &crate::account::AccountId {
+            &self.id
+        }
+
+        /// Return the optional dataspace alias filter.
+        pub fn dataspace(&self) -> Option<&str> {
+            self.dataspace.as_deref()
+        }
+
+        /// Return the optional domain filter.
+        pub fn domain(&self) -> Option<&str> {
+            self.domain.as_deref()
+        }
+    }
+
+    impl FindAccountRecoveryPolicyByAlias {
+        /// Return the queried stable alias.
+        pub fn alias(&self) -> &crate::account::AccountAlias {
+            &self.alias
+        }
+    }
+
+    impl FindAccountRecoveryRequestByAlias {
+        /// Return the queried stable alias.
+        pub fn alias(&self) -> &crate::account::AccountAlias {
+            &self.alias
+        }
+    }
+
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
         pub use super::{
-            FindAccountIds, FindAccounts, FindAccountsWithAsset, FindDomainsByAccountId,
+            AccountAliasBindingRecord, FindAccountByAlias, FindAccountById, FindAccountIds,
+            FindAccountRecoveryPolicyByAlias, FindAccountRecoveryRequestByAlias, FindAccounts,
+            FindAccountsWithAsset, FindAliasesByAccountId,
         };
     }
 }
@@ -2749,7 +3108,7 @@ pub mod asset {
     use derive_more::Display;
 
     // Bring required IDs into scope for queries! items
-    use crate::AssetId;
+    use crate::{AccountId, AssetId, asset::AssetDefinitionId};
 
     queries! {
         /// [`FindAssets`] Iroha Query finds all `Asset`s presented.
@@ -2764,6 +3123,16 @@ pub mod asset {
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindAssetsDefinitions;
 
+        /// [`FindAssetsByAccountId`] Iroha Query finds all `Asset`s owned by an account.
+        #[derive(Display)]
+        #[display("Find assets owned by `{id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindAssetsByAccountId {
+            /// Identifier of the account that owns the assets.
+            pub id: AccountId,
+        }
+
         /// [`FindAssetById`] Iroha Query finds a specific `Asset` by identifier.
         #[derive(Display)]
         #[display("Find asset `{id}`")]
@@ -2772,6 +3141,16 @@ pub mod asset {
         pub struct FindAssetById {
             /// Identifier of the asset to look up.
             pub id: AssetId,
+        }
+
+        /// [`FindAssetDefinitionById`] Iroha Query finds a specific `AssetDefinition` by identifier.
+        #[derive(Display)]
+        #[display("Find asset definition `{id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindAssetDefinitionById {
+            /// Identifier of the asset definition to look up.
+            pub id: AssetDefinitionId,
         }
     }
 
@@ -2782,9 +3161,26 @@ pub mod asset {
         }
     }
 
+    impl FindAssetDefinitionById {
+        /// Return the queried asset definition identifier.
+        pub fn asset_definition_id(&self) -> &AssetDefinitionId {
+            &self.id
+        }
+    }
+
+    impl FindAssetsByAccountId {
+        /// Return the queried account identifier.
+        pub fn account_id(&self) -> &AccountId {
+            &self.id
+        }
+    }
+
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
-        pub use super::{FindAssetById, FindAssets, FindAssetsDefinitions};
+        pub use super::{
+            FindAssetById, FindAssetDefinitionById, FindAssets, FindAssetsByAccountId,
+            FindAssetsDefinitions,
+        };
     }
 }
 
@@ -2809,101 +3205,109 @@ pub mod repo {
     }
 }
 
-pub mod offline {
-    //! Offline allowance and settlement query definitions.
-    use derive_more::Display;
-    use iroha_crypto::Hash;
+pub mod escrow {
+    //! Native asset escrow query definitions.
 
-    use crate::{account::AccountId, offline::OfflineTransferStatus};
+    use derive_more::Display;
+
+    use crate::{
+        account::AccountId,
+        escrow::{AssetEscrowStatus, EscrowId},
+    };
 
     queries! {
-        /// Find all registered offline allowances.
+        /// Find all native asset escrow records.
         #[derive(Copy, Display)]
-        #[display("Find all offline allowances")]
+        #[display("Find all asset escrows")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        pub struct FindOfflineAllowances;
+        pub struct FindAssetEscrows;
 
-        /// Find a specific offline allowance by its certificate id.
+        /// Find a native asset escrow by identifier.
         #[derive(Display)]
-        #[display("Find offline allowance `{certificate_id}`")]
+        #[display("Find asset escrow `{escrow_id:?}`")]
         #[repr(transparent)]
-        pub struct FindOfflineAllowanceByCertificateId {
-            /// Deterministic certificate identifier.
-            pub certificate_id: Hash,
+        pub struct FindAssetEscrowById {
+            /// Escrow identifier.
+            pub escrow_id: EscrowId,
         }
 
-        /// Find all pending offline-to-online transfer bundles.
-        #[derive(Copy, Display)]
-        #[display("Find all offline-to-online transfers")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        pub struct FindOfflineToOnlineTransfers;
-
-        /// Find a specific offline-to-online transfer bundle by id.
+        /// Find native asset escrows opened by a seller.
         #[derive(Display)]
-        #[display("Find offline-to-online transfer `{bundle_id}`")]
+        #[display("Find asset escrows by seller `{seller}`")]
         #[repr(transparent)]
-        pub struct FindOfflineToOnlineTransferById {
-            /// Deterministic bundle identifier.
-            pub bundle_id: Hash,
+        pub struct FindAssetEscrowsBySeller {
+            /// Seller account identifier.
+            pub seller: AccountId,
         }
 
-        /// Find offline-to-online transfers submitted by a specific controller account.
+        /// Find native asset escrows accepted by a buyer.
         #[derive(Display)]
-        #[display("Find offline-to-online transfers by controller `{controller}`")]
+        #[display("Find asset escrows by buyer `{buyer}`")]
         #[repr(transparent)]
-        pub struct FindOfflineToOnlineTransfersByController {
-            /// Controller account identifier.
-            pub controller: AccountId,
+        pub struct FindAssetEscrowsByBuyer {
+            /// Buyer account identifier.
+            pub buyer: AccountId,
         }
 
-        /// Find offline-to-online transfers targeting a specific receiver account.
+        /// Find native asset escrows by lifecycle status.
         #[derive(Display)]
-        #[display("Find offline-to-online transfers by receiver `{receiver}`")]
+        #[display("Find asset escrows by status `{status:?}`")]
         #[repr(transparent)]
-        pub struct FindOfflineToOnlineTransfersByReceiver {
-            /// Receiver account identifier.
-            pub receiver: AccountId,
-        }
-
-        /// Find offline-to-online transfers by lifecycle status.
-        #[derive(Display)]
-        #[display("Find offline-to-online transfers by status `{status:?}`")]
-        #[repr(transparent)]
-        pub struct FindOfflineToOnlineTransfersByStatus {
+        pub struct FindAssetEscrowsByStatus {
             /// Lifecycle status filter.
-            pub status: OfflineTransferStatus,
+            pub status: AssetEscrowStatus,
         }
 
-        /// Find offline-to-online transfers by Android attestation policy.
+        /// Find all native anonymous asset escrow records.
+        #[derive(Copy, Display)]
+        #[display("Find all anonymous asset escrows")]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct FindAnonymousAssetEscrows;
+
+        /// Find a native anonymous asset escrow by identifier.
         #[derive(Display)]
-        #[display("Find offline-to-online transfers by policy `{policy:?}`")]
+        #[display("Find anonymous asset escrow `{escrow_id:?}`")]
         #[repr(transparent)]
-        pub struct FindOfflineToOnlineTransfersByPolicy {
-            /// Attestation policy filter.
-            pub policy: crate::offline::AndroidIntegrityPolicy,
+        pub struct FindAnonymousAssetEscrowById {
+            /// Escrow identifier.
+            pub escrow_id: EscrowId,
         }
 
-        /// Retrieve counter summaries derived from offline allowance records.
-        #[derive(Copy, Display)]
-        #[display("Find offline counter summaries")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        pub struct FindOfflineCounterSummaries;
+        /// Find native anonymous asset escrows opened by a seller.
+        #[derive(Display)]
+        #[display("Find anonymous asset escrows by seller `{seller}`")]
+        #[repr(transparent)]
+        pub struct FindAnonymousAssetEscrowsBySeller {
+            /// Seller account identifier.
+            pub seller: AccountId,
+        }
 
-        /// Retrieve recorded offline verdict revocations.
-        #[derive(Copy, Display)]
-        #[display("Find offline verdict revocations")]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        pub struct FindOfflineVerdictRevocations;
+        /// Find native anonymous asset escrows accepted by a buyer.
+        #[derive(Display)]
+        #[display("Find anonymous asset escrows by buyer `{buyer}`")]
+        #[repr(transparent)]
+        pub struct FindAnonymousAssetEscrowsByBuyer {
+            /// Buyer account identifier.
+            pub buyer: AccountId,
+        }
+
+        /// Find native anonymous asset escrows by lifecycle status.
+        #[derive(Display)]
+        #[display("Find anonymous asset escrows by status `{status:?}`")]
+        #[repr(transparent)]
+        pub struct FindAnonymousAssetEscrowsByStatus {
+            /// Lifecycle status filter.
+            pub status: AssetEscrowStatus,
+        }
     }
 
     pub mod prelude {
-        //! Prelude re-exports for offline queries.
+        //! Prelude re-exports for native asset escrow queries.
         pub use super::{
-            FindOfflineAllowanceByCertificateId, FindOfflineAllowances,
-            FindOfflineCounterSummaries, FindOfflineToOnlineTransferById,
-            FindOfflineToOnlineTransfers, FindOfflineToOnlineTransfersByController,
-            FindOfflineToOnlineTransfersByPolicy, FindOfflineToOnlineTransfersByReceiver,
-            FindOfflineToOnlineTransfersByStatus, FindOfflineVerdictRevocations,
+            FindAnonymousAssetEscrowById, FindAnonymousAssetEscrows,
+            FindAnonymousAssetEscrowsByBuyer, FindAnonymousAssetEscrowsBySeller,
+            FindAnonymousAssetEscrowsByStatus, FindAssetEscrowById, FindAssetEscrows,
+            FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
         };
     }
 }
@@ -2989,6 +3393,26 @@ pub mod da {
     }
 }
 
+pub mod nexus {
+    //! Nexus relay query definitions.
+
+    use crate::nexus::LaneRelayEnvelopeRef;
+
+    queries! {
+        /// Fetch a verified lane relay by its canonical reference.
+        #[repr(transparent)]
+        pub struct FindLaneRelayEnvelopeByRef {
+            /// Canonical relay reference to look up.
+            pub relay_ref: LaneRelayEnvelopeRef,
+        }
+    }
+
+    pub mod prelude {
+        //! Prelude re-exports for Nexus relay queries.
+        pub use super::FindLaneRelayEnvelopeByRef;
+    }
+}
+
 pub mod nft {
     //! NFT-related query definitions.
     //!
@@ -2996,6 +3420,7 @@ pub mod nft {
 
     use std::{format, string::String, vec::Vec};
 
+    use crate::AccountId;
     use derive_more::Display;
 
     queries! {
@@ -3004,11 +3429,51 @@ pub mod nft {
         #[display("Find all NFTs")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindNfts;
+
+        /// [`FindNftsByAccountId`] Iroha Query finds all `Nft`s owned by an account.
+        #[derive(Display)]
+        #[display("Find NFTs owned by `{id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindNftsByAccountId {
+            /// Identifier of the account that owns the NFTs.
+            pub id: AccountId,
+        }
+    }
+
+    impl FindNftsByAccountId {
+        /// Return the queried account identifier.
+        pub fn account_id(&self) -> &AccountId {
+            &self.id
+        }
     }
 
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
-        pub use super::FindNfts;
+        pub use super::{FindNfts, FindNftsByAccountId};
+    }
+}
+
+pub mod rwa {
+    //! RWA-related query definitions.
+    //!
+    //! Queries related to [`crate::rwa`].
+
+    use std::{format, string::String, vec::Vec};
+
+    use derive_more::Display;
+
+    queries! {
+        /// [`FindRwas`] finds all registered RWA lots.
+        #[derive(Copy, Display)]
+        #[display("Find all RWAs")]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct FindRwas;
+    }
+
+    pub mod prelude {
+        //! Prelude re-exports for RWA queries.
+        pub use super::FindRwas;
     }
 }
 
@@ -3021,38 +3486,55 @@ pub mod domain {
 
     use std::{format, string::String, vec::Vec};
 
-    use crate::domain::DomainId;
+    use crate::AccountId;
     use derive_more::Display;
 
     queries! {
+        /// [`FindDomainById`] Iroha Query finds a `Domain` by its identifier.
+        #[derive(Display)]
+        #[display("Find domain `{id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindDomainById {
+            /// Fully qualified domain identifier to resolve.
+            pub id: crate::domain::DomainId,
+        }
+
         /// [`FindDomains`] Iroha Query finds all `Domain`s presented.
         #[derive(Copy, Display)]
         #[display("Find all domains")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindDomains;
 
-        /// [`FindAccountIdsByDomainId`] query lists account identifiers linked to a domain.
+        /// [`FindDomainsByAccountId`] Iroha Query finds all `Domain`s owned by an account.
         #[derive(Display)]
-        #[display("Find account ids linked to domain `{id}`")]
+        #[display("Find domains owned by `{id}`")]
         #[repr(transparent)]
-        // SAFETY: `FindAccountIdsByDomainId` has no trap representation in `DomainId`
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
-        pub struct FindAccountIdsByDomainId {
-            /// Domain identifier whose linked accounts should be resolved.
-            pub id: DomainId,
+        pub struct FindDomainsByAccountId {
+            /// Identifier of the account that owns the domains.
+            pub id: AccountId,
+        }
+
+    }
+
+    impl FindDomainById {
+        /// Return the queried domain identifier.
+        pub fn domain_id(&self) -> &crate::domain::DomainId {
+            &self.id
         }
     }
 
-    impl FindAccountIdsByDomainId {
-        /// Return the queried domain identifier.
-        pub fn domain_id(&self) -> &DomainId {
+    impl FindDomainsByAccountId {
+        /// Return the queried account identifier.
+        pub fn account_id(&self) -> &AccountId {
             &self.id
         }
     }
 
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
-        pub use super::{FindAccountIdsByDomainId, FindDomains};
+        pub use super::{FindDomainById, FindDomains, FindDomainsByAccountId};
     }
 }
 
@@ -3252,7 +3734,7 @@ pub mod sorafs {
     //!
     //! Queries related to `SoraFS` provider metadata.
 
-    use std::fmt;
+    use std::{fmt, string::String};
 
     use hex;
 
@@ -3296,6 +3778,133 @@ impl SingularQuery for sorafs::prelude::FindSorafsProviderOwner {
     }
 }
 
+pub mod sns {
+    //! SNS-related query definitions.
+    //!
+    //! Queries related to authoritative SNS-backed ownership.
+
+    use derive_more::Display;
+
+    use crate::nexus::DataSpaceId;
+
+    queries! {
+        /// Fetch the active SNS owner for a dataspace alias resolved from the current catalog.
+        #[derive(Display)]
+        #[display("Find SNS dataspace owner for `{dataspace_id}`")]
+        #[repr(transparent)]
+        pub struct FindDataspaceNameOwnerById {
+            /// Dataspace identifier whose leased alias owner should be resolved.
+            pub dataspace_id: DataSpaceId,
+        }
+    }
+
+    impl FindDataspaceNameOwnerById {
+        /// Return the queried dataspace identifier.
+        pub fn dataspace_id(&self) -> DataSpaceId {
+            self.dataspace_id
+        }
+    }
+
+    /// Prelude re-exports for SNS queries.
+    pub mod prelude {
+        pub use super::FindDataspaceNameOwnerById;
+    }
+}
+
+pub mod musubi {
+    //! Musubi package registry query definitions.
+
+    use std::fmt;
+
+    use crate::{
+        musubi::{MusubiNamespace, MusubiPackageId, MusubiPackageRef},
+        name::Name,
+    };
+
+    queries! {
+        /// Fetch a Musubi release by exact package reference.
+        #[repr(transparent)]
+        pub struct FindMusubiReleaseByRef {
+            /// Exact release reference.
+            pub package: MusubiPackageRef,
+        }
+
+        /// Fetch all registered versions for a Musubi package id.
+        #[repr(transparent)]
+        pub struct FindMusubiPackageVersions {
+            /// Canonical package identifier.
+            pub package: MusubiPackageId,
+        }
+
+        /// Fetch release summaries for a Musubi package id.
+        pub struct FindMusubiPackageReleases {
+            /// Canonical package identifier.
+            pub package: MusubiPackageId,
+            /// Include yanked releases in the output.
+            pub include_yanked: bool,
+        }
+
+        /// Search Musubi packages by namespace and text prefix.
+        pub struct SearchMusubiPackages {
+            /// Optional namespace filter.
+            pub namespace: Option<MusubiNamespace>,
+            /// Case-sensitive substring query over `namespace/package`.
+            pub query: String,
+            /// Include packages with only yanked releases.
+            pub include_yanked: bool,
+            /// Deterministic offset into the sorted result set.
+            pub offset: u32,
+            /// Maximum number of package summaries to return.
+            pub limit: u32,
+        }
+
+        /// Fetch the canonical target for a curated Musubi short alias.
+        #[repr(transparent)]
+        pub struct FindMusubiShortAliasByName {
+            /// Curated short alias.
+            pub alias: Name,
+        }
+    }
+
+    impl fmt::Display for FindMusubiReleaseByRef {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find Musubi release `{}`", self.package)
+        }
+    }
+
+    impl fmt::Display for FindMusubiPackageVersions {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find Musubi versions for `{}`", self.package)
+        }
+    }
+
+    impl fmt::Display for FindMusubiPackageReleases {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find Musubi releases for `{}`", self.package)
+        }
+    }
+
+    impl fmt::Display for SearchMusubiPackages {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Search Musubi packages matching `{}`", self.query)
+        }
+    }
+
+    impl fmt::Display for FindMusubiShortAliasByName {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find Musubi short alias `{}`", self.alias)
+        }
+    }
+
+    /// Prelude re-exports for Musubi queries.
+    pub mod prelude {
+        pub use super::{
+            FindMusubiPackageReleases, FindMusubiPackageVersions, FindMusubiReleaseByRef,
+            FindMusubiShortAliasByName, SearchMusubiPackages,
+        };
+    }
+}
+
 pub mod trigger {
     //! Trigger-related query definitions.
     //!
@@ -3317,11 +3926,27 @@ pub mod trigger {
         #[display("Find all triggers")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindTriggers;
+
+        /// Find a trigger by identifier.
+        #[derive(Display)]
+        #[display("Find trigger `{id}`")]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct FindTriggerById {
+            /// Trigger identifier to resolve.
+            pub id: crate::trigger::TriggerId,
+        }
+    }
+
+    impl FindTriggerById {
+        /// Return the queried trigger identifier.
+        pub fn trigger_id(&self) -> &crate::trigger::TriggerId {
+            &self.id
+        }
     }
 
     pub mod prelude {
         //! Convenient re-exports for common query types.
-        pub use super::{FindActiveTriggerIds, FindTriggers};
+        pub use super::{FindActiveTriggerIds, FindTriggerById, FindTriggers};
     }
 }
 
@@ -3505,6 +4130,8 @@ pub mod error {
             AssetDefinition(AssetDefinitionId),
             /// Failed to find NFT: `{0}`
             Nft(NftId),
+            /// Failed to find RWA: `{0}`
+            Rwa(RwaId),
             /// Failed to find account: `{0}`
             Account(AccountId),
             /// Failed to find domain: `{0}`
@@ -3527,6 +4154,8 @@ pub mod error {
             PublicKey(PublicKey),
             /// Failed to find twitter binding for keyed hash `{0:?}`
             TwitterBinding(crate::oracle::KeyedHash),
+            /// Failed to find native asset escrow: `{0:?}`
+            AssetEscrow(crate::escrow::EscrowId),
         }
     }
 }
@@ -3537,9 +4166,10 @@ pub mod prelude {
     pub use super::{
         CommittedTransaction, QueryBox, QueryRequest, SingularQueryBox, account::prelude::*,
         asset::prelude::*, block::prelude::*, builder::prelude::*, da::prelude::*,
-        domain::prelude::*, dsl::prelude::*, endorsement::prelude::*, executor::prelude::*,
-        nft::prelude::*, oracle::prelude::*, parameters::prelude::*, peer::prelude::*,
-        permission::prelude::*, role::prelude::*, transaction::prelude::*, trigger::prelude::*,
+        domain::prelude::*, dsl::prelude::*, endorsement::prelude::*, escrow::prelude::*,
+        executor::prelude::*, nft::prelude::*, oracle::prelude::*, parameters::prelude::*,
+        peer::prelude::*, permission::prelude::*, role::prelude::*, rwa::prelude::*,
+        transaction::prelude::*, trigger::prelude::*,
     };
 }
 
@@ -3547,13 +4177,22 @@ pub mod prelude {
 mod fault_injection_tests {
     use std::str::FromStr;
 
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::{Hash, HashOf, MerkleProof};
 
     use super::*;
     use crate::{
-        Level,
+        AssetDefinitionId, Level,
         isi::{InstructionBox, Log},
+        kaigi::{
+            KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
+            KaigiRoomPolicy,
+        },
         prelude::{DataTriggerSequence, TimeTriggerEntrypoint},
+        transaction::{
+            PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
+            PrivateKaigiTemplate, PrivateKaigiTransaction,
+        },
         trigger::TriggerId,
     };
 
@@ -3567,10 +4206,72 @@ mod fault_injection_tests {
             id: TriggerId::from_str("fault_trigger").expect("valid trigger id"),
             instructions: ExecutionStep(Vec::<InstructionBox>::new().into()),
             authority: AccountId::parse_encoded(
-                "6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw",
+                "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
             )
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect("valid authority"),
+        });
+
+        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        CommittedTransaction {
+            block_hash: zero_hash(),
+            entrypoint_hash: entry.hash(),
+            entrypoint_proof: MerkleProof::from_audit_path(0, vec![]),
+            entrypoint: entry,
+            result_hash: result.hash(),
+            result_proof: MerkleProof::from_audit_path(0, vec![]),
+            result,
+        }
+    }
+
+    fn make_private_committed_tx() -> CommittedTransaction {
+        let mut metadata = Metadata::default();
+        metadata.insert(Name::from_str("topic").expect("metadata key"), "private");
+        let entry = TransactionEntrypoint::PrivateKaigi(PrivateKaigiTransaction {
+            chain: "test-chain".parse().expect("chain"),
+            creation_time_ms: 42,
+            nonce: None,
+            metadata,
+            action: PrivateKaigiAction::Create(PrivateCreateKaigi {
+                call: PrivateKaigiTemplate {
+                    id: KaigiId::new(
+                        DomainId::try_new("kaigi", "universal").expect("domain"),
+                        Name::from_str("private-room").expect("call"),
+                    ),
+                    title: Some("Private".to_owned()),
+                    description: None,
+                    max_participants: Some(2),
+                    gas_rate_per_minute: 5,
+                    metadata: Metadata::default(),
+                    scheduled_start_ms: None,
+                    privacy_mode: KaigiPrivacyMode::ZkRosterV1,
+                    room_policy: KaigiRoomPolicy::Authenticated,
+                    relay_manifest: None,
+                },
+            }),
+            artifacts: PrivateKaigiArtifacts {
+                commitment: KaigiParticipantCommitment {
+                    commitment: Hash::new(b"commitment"),
+                    alias_tag: None,
+                },
+                nullifier: KaigiParticipantNullifier {
+                    digest: Hash::new(b"nullifier"),
+                    issued_at_ms: 42,
+                },
+                roster_root: Hash::new(b"root"),
+                proof: vec![1, 2, 3],
+            },
+            fee_spend: PrivateKaigiFeeSpend {
+                asset_definition_id: AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal").expect("domain"),
+                    Name::from_str("xor").expect("name"),
+                ),
+                anchor_root: Hash::new(b"anchor"),
+                nullifiers: vec![[0x11; 32]],
+                output_commitments: vec![[0x22; 32]],
+                encrypted_change_payloads: vec![vec![0x33]],
+                proof: vec![0x44],
+            },
         });
 
         let result = TransactionResult(Ok(DataTriggerSequence::default()));
@@ -3610,15 +4311,129 @@ mod fault_injection_tests {
         assert_eq!(instructions.len(), 1);
         assert_eq!(instructions[0], injected);
     }
+
+    #[test]
+    fn private_kaigi_entrypoint_injection_records_overlay() {
+        let mut tx = make_private_committed_tx();
+        let original_hash = tx.entrypoint_hash;
+        let injected: InstructionBox = Log {
+            level: Level::WARN,
+            msg: "private tamper".into(),
+        }
+        .into();
+
+        tx.inject_instructions([injected.clone()]);
+
+        assert_ne!(
+            tx.entrypoint_hash, original_hash,
+            "entrypoint hash must reflect injected instructions"
+        );
+
+        let overlay = match &tx.entrypoint {
+            TransactionEntrypoint::PrivateKaigi(entry) => {
+                crate::transaction::signed::SignedTransaction::fault_injection_overlay(
+                    &entry.metadata,
+                )
+                .unwrap_or_default()
+            }
+            _ => panic!("expected private Kaigi entrypoint"),
+        };
+        assert_eq!(overlay.len(), 1);
+        assert_eq!(
+            overlay[0],
+            BASE64_STANDARD.encode(norito::to_bytes(&injected).expect("encode overlay payload"))
+        );
+    }
 }
 
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use std::num::NonZeroU64;
+    use std::{num::NonZeroU64, str::FromStr};
 
+    use iroha_crypto::{Hash, HashOf, MerkleProof};
     use norito::json;
 
     use super::*;
+    use crate::{
+        AssetDefinitionId,
+        domain::DomainId,
+        kaigi::{
+            KaigiId, KaigiParticipantCommitment, KaigiParticipantNullifier, KaigiPrivacyMode,
+            KaigiRoomPolicy,
+        },
+        name::Name,
+        transaction::{
+            PrivateCreateKaigi, PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend,
+            PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionEntrypoint,
+            TransactionResult,
+        },
+    };
+
+    fn zero_hash<T>() -> HashOf<T> {
+        let zero = [0u8; 32];
+        HashOf::from_untyped_unchecked(Hash::prehashed(zero))
+    }
+
+    fn private_committed_tx() -> CommittedTransaction {
+        let mut metadata = Metadata::default();
+        metadata.insert(Name::from_str("topic").expect("metadata key"), "private");
+        let entrypoint = TransactionEntrypoint::PrivateKaigi(PrivateKaigiTransaction {
+            chain: "test-chain".parse().expect("chain"),
+            creation_time_ms: 42,
+            nonce: None,
+            metadata,
+            action: PrivateKaigiAction::Create(PrivateCreateKaigi {
+                call: PrivateKaigiTemplate {
+                    id: KaigiId::new(
+                        DomainId::try_new("kaigi", "universal").expect("domain"),
+                        Name::from_str("private-room").expect("call"),
+                    ),
+                    title: Some("Private".to_owned()),
+                    description: None,
+                    max_participants: Some(2),
+                    gas_rate_per_minute: 5,
+                    metadata: Metadata::default(),
+                    scheduled_start_ms: None,
+                    privacy_mode: KaigiPrivacyMode::ZkRosterV1,
+                    room_policy: KaigiRoomPolicy::Authenticated,
+                    relay_manifest: None,
+                },
+            }),
+            artifacts: PrivateKaigiArtifacts {
+                commitment: KaigiParticipantCommitment {
+                    commitment: Hash::new(b"commitment"),
+                    alias_tag: None,
+                },
+                nullifier: KaigiParticipantNullifier {
+                    digest: Hash::new(b"nullifier"),
+                    issued_at_ms: 42,
+                },
+                roster_root: Hash::new(b"root"),
+                proof: vec![1, 2, 3],
+            },
+            fee_spend: PrivateKaigiFeeSpend {
+                asset_definition_id: AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal").expect("domain"),
+                    Name::from_str("xor").expect("name"),
+                ),
+                anchor_root: Hash::new(b"anchor"),
+                nullifiers: vec![[0x11; 32]],
+                output_commitments: vec![[0x22; 32]],
+                encrypted_change_payloads: vec![vec![0x33]],
+                proof: vec![0x44],
+            },
+        });
+        let result = TransactionResult(Ok(crate::trigger::DataTriggerSequence::default()));
+        CommittedTransaction {
+            block_hash: zero_hash(),
+            entrypoint_hash: entrypoint.hash(),
+            entrypoint_proof: MerkleProof::from_audit_path(0, vec![]),
+            entrypoint: entrypoint.clone(),
+            result_hash: result.hash(),
+            result_proof: MerkleProof::from_audit_path(0, vec![]),
+            result,
+        }
+    }
 
     #[test]
     fn query_output_batch_box_json_roundtrip() {
@@ -3663,5 +4478,24 @@ mod tests {
             }
             other => panic!("expected object for iterable response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn committed_tx_filters_treat_private_kaigi_authority_as_absent() {
+        let tx = private_committed_tx();
+
+        let filters = CommittedTxFilters {
+            authority_exists: Some(false),
+            ts_ge: Some(40),
+            ts_le: Some(50),
+            ..CommittedTxFilters::default()
+        };
+        assert!(filters.applies(&tx));
+
+        let authority_required = CommittedTxFilters {
+            authority_exists: Some(true),
+            ..CommittedTxFilters::default()
+        };
+        assert!(!authority_required.applies(&tx));
     }
 }

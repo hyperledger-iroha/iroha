@@ -89,7 +89,7 @@ Swift SDK-ებს ახლა შეუძლიათ გამოუშვ�
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ Swift SDK-ებს ახლა შეუძლიათ გამოუშვ�
 - თითო ანგარიშის გასაღების დერივაციის იერარქია:
   - `sk_spend` → `nk` (გაბათილებელი გასაღები), `ivk` (შემავალი სანახავი გასაღები), `ovk` (გამავალი ნახვის გასაღები), `fvk`.
 - დაშიფრული ნოტების დატვირთვა იყენებს AEAD-ს ECDH-დან მიღებული საერთო გასაღებებით; აუდიტორის არჩევის არჩევითი კლავიშები შეიძლება დაერთოს აქტივების პოლიტიკის შედეგებს.
-- CLI დამატებები: `confidential create-keys`, `confidential send`, `confidential export-view-key`, აუდიტორის ხელსაწყოები შენიშვნების გაშიფვრისთვის და `iroha app zk envelope` დამხმარე Grafana მე-ს გარეშე წარმოების/შემოწმებისთვის. Torii ავლენს იგივე დერივაციულ ნაკადს `POST /v1/confidential/derive-keyset`-ის მეშვეობით, აბრუნებს როგორც თექვსმეტი, ისე base64 ფორმებს, რათა საფულეებმა შეძლონ გასაღების იერარქიების პროგრამულად მიღება.
+- CLI დამატებები: `confidential create-keys`, `confidential send`, `confidential export-view-key`, აუდიტორის ხელსაწყოები შენიშვნების გაშიფვრისთვის და `iroha app zk envelope` დამხმარე Grafana მე-ს გარეშე წარმოების/შემოწმებისთვის.
 
 ## გაზი, ლიმიტები და DoS კონტროლი
 - გაზის განმსაზღვრელი გრაფიკი:
@@ -391,7 +391,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -423,8 +423,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -455,7 +455,7 @@ await new ToriiClient({ baseUrl: "https://torii" }).submitTransaction(signed);
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 დააწყვილეთ ეს `rg 'iroha_confidential_tree_depth'`-თან იმავე ნაკაწრზე, რათა დაადასტუროთ, რომ სიღრმე იზრდება ახალ ვალდებულებებთან ერთად, ხოლო გამოსახლების მრიცხველები იზრდება მხოლოდ მაშინ, როდესაც ისტორია ზღუდავს ჩანაწერებს. ეს მნიშვნელობები უნდა შეესაბამებოდეს Grafana დაფის ექსპორტს, რომელსაც ანიჭებთ მმართველობის მტკიცებულებების პაკეტებს.

@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # builder stage
 FROM rust:slim-bookworm AS builder
 
@@ -8,23 +10,50 @@ RUN apt-get update -y && \
     apt-get install -y build-essential mold
 
 COPY . .
+COPY dist/ /prebuilt-dist/
 ARG PROFILE="deploy"
 ARG RUSTFLAGS=""
 ARG FEATURES=""
 ARG CARGOFLAGS=""
-RUN RUSTFLAGS="${RUSTFLAGS}" mold --run cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}" --bin irohad --bin iroha --bin kagami
+ARG CARGO_BUILD_JOBS=""
+ARG BINARIES="irohad iroha kagami"
+ARG USE_PREBUILT="0"
+ARG IROHA_GIT_COMMIT_HASH=""
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/app/target \
+    set -e; \
+    mkdir -p /outbin; \
+    if [ "${USE_PREBUILT}" = "1" ]; then \
+        for bin in ${BINARIES}; do \
+            cp "/prebuilt-dist/docker-bin/${bin}" "/outbin/${bin}"; \
+            chmod 755 "/outbin/${bin}"; \
+        done; \
+    else \
+        set -- cargo ${CARGOFLAGS} build --profile "${PROFILE}" --features "${FEATURES}"; \
+        for bin in ${BINARIES}; do \
+            set -- "$@" --bin "$bin"; \
+        done; \
+        CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run "$@"; \
+        for bin in ${BINARIES}; do \
+            cp "/app/target/${PROFILE}/${bin}" "/outbin/${bin}"; \
+        done; \
+    fi
 
 # final image
 FROM debian:bookworm-slim
 
 ARG PROFILE="deploy"
 ARG CONFIG_PROFILE="single"
+ARG APP_DIR=/opt/iroha
 ARG  STORAGE=/storage
 ARG  TARGET_DIR=/app/target/${PROFILE}
+ENV  APP_DIR=$APP_DIR
 ENV  BIN_PATH=/usr/local/bin/
 ENV  CONFIG_DIR=/config
 ENV  KURA_STORE_DIR=$STORAGE
 ENV  SNAPSHOT_STORE_DIR=$STORAGE/snapshot
+ENV  IROHA_IMAGE_CONFIG_PROFILE=$CONFIG_PROFILE
 ENV  USER=iroha
 ENV  UID=1001
 ENV  GID=1001
@@ -33,26 +62,33 @@ RUN <<EOT
   set -ex
   apt-get update -y && \
     apt-get install -y curl ca-certificates jq
+  if [ "$CONFIG_PROFILE" = "taira" ]; then
+    apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils e2fsprogs iproute2 iptables
+  fi
   addgroup --gid $GID $USER &&
   adduser \
     --disabled-password \
     --gecos "" \
-    --home /app \
+    --home "$APP_DIR" \
     --ingroup "$USER" \
     --no-create-home \
     --uid "$UID" \
     "$USER"
+  mkdir -p "$APP_DIR"
   mkdir -p $CONFIG_DIR
   mkdir -p $STORAGE
+  mkdir -p "$APP_DIR/configs/soranexus"
   chown $USER:$USER $STORAGE
   chown $USER:$USER $CONFIG_DIR
+  chown -R $USER:$USER "$APP_DIR"
 EOT
 
-COPY --from=builder $TARGET_DIR/irohad $BIN_PATH
-COPY --from=builder $TARGET_DIR/iroha $BIN_PATH
-COPY --from=builder $TARGET_DIR/kagami $BIN_PATH
+COPY --from=builder /outbin/ $BIN_PATH
+COPY scripts/docker_entrypoint.sh $BIN_PATH
+COPY configs/soranexus/taira $APP_DIR/configs/soranexus/taira
+COPY codec/rans/tables $APP_DIR/codec/rans/tables
 COPY defaults /tmp/defaults
-RUN set -euo pipefail; \
+RUN set -eu; \
   case "${CONFIG_PROFILE}" in \
     single) \
       cp /tmp/defaults/genesis.json "${CONFIG_DIR}/genesis.json"; \
@@ -67,11 +103,17 @@ RUN set -euo pipefail; \
       cp /tmp/defaults/nexus/client.toml "${CONFIG_DIR}/client.toml"; \
       cp /tmp/defaults/nexus/config.toml "${CONFIG_DIR}/config.toml"; \
       ;; \
+    taira) \
+      :; \
+      ;; \
     *) \
       echo "Unsupported CONFIG_PROFILE ${CONFIG_PROFILE}" >&2; \
       exit 1; \
       ;; \
   esac; \
+  chown -R "${UID}:${GID}" "${APP_DIR}"; \
+  chmod 755 "${BIN_PATH}/docker_entrypoint.sh"; \
   rm -rf /tmp/defaults
-USER $USER
-CMD ["irohad"]
+WORKDIR $APP_DIR
+USER ${UID}:${GID}
+ENTRYPOINT ["docker_entrypoint.sh"]

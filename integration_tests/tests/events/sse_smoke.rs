@@ -89,10 +89,13 @@ fn sse_smoke_scenarios() -> Result<()> {
 
         let trigger_id: TriggerId = "sse_smoke_trigger_exec".parse()?;
         let asset_id = AssetId::new(
-            AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?),
+            AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal")?,
+                "rose".parse()?,
+            ),
             ALICE_ID.clone(),
         );
-        let asset_id_literal = asset_id.canonical_encoded();
+        let asset_id_literal = asset_id.canonical_literal();
         let register = Register::trigger(Trigger::new(
             trigger_id.clone(),
             Action::new(

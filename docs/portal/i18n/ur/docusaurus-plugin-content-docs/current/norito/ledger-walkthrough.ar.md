@@ -26,8 +26,8 @@ translation_last_reviewed: 2026-02-07
 گائیڈ کے دوران ، `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو اکاؤنٹ IDs کے ساتھ تبدیل کریں جس کا آپ استعمال کرنے کا ارادہ رکھتے ہیں۔ پہلے سے طے شدہ بنڈل میں پہلے ہی ڈسپلے کی چابیاں سے اخذ کردہ دو حساب کتاب شامل ہیں:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 پہلے حساب کتاب کی فہرست دے کر اقدار کی تصدیق کریں:
@@ -46,7 +46,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts داخل wonderland (استبدل --limit بعدد اكبر عند الحاجة)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions الموجودة مسبقا
@@ -61,14 +61,14 @@ iroha --config defaults/client.toml asset definition list all --table
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 سی ایل آئی جمع کروائی گئی ٹرانزیکشن ہیش (جیسے `0x5f…`) پرنٹ کرتی ہے۔ بعد میں حیثیت کے بارے میں پوچھ گچھ کرنے کے لئے اسے محفوظ کریں۔
 
 ## 3. آپریٹر کے اکاؤنٹ میں ٹکسال یونٹ
 
-اثاثوں کی مقدار جوڑی `(asset definition, account)` کے تحت ہے۔ `coffee#wonderland` کے 250 یونٹوں سے `$ADMIN_ACCOUNT` میں پوچھیں:
+اثاثوں کی مقدار جوڑی `(asset definition, account)` کے تحت ہے۔ `7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` کے 250 یونٹوں سے `$ADMIN_ACCOUNT` میں پوچھیں:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

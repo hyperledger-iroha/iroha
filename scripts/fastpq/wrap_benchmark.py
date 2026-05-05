@@ -23,6 +23,7 @@ try:
 except Exception:
     export_prometheus = None
 
+REQUIRED_LABEL_FIELDS = ("device_class", "gpu_kind")
 
 SYSTEM_PROFILER_TIMEOUT = 5  # seconds
 APPLE_CHIP_PATTERN = re.compile(r"apple\s+(m\d)(?:\s+(.*?))?\s*$", re.IGNORECASE)
@@ -812,6 +813,10 @@ def summarize_operations(report: dict) -> Tuple[list[dict], list[dict]]:
             "operation": entry.get("operation"),
             "columns": entry.get("columns"),
             "input_len": entry.get("input_len"),
+            "output_len": entry.get("output_len"),
+            "input_bytes": entry.get("input_bytes"),
+            "output_bytes": entry.get("output_bytes"),
+            "estimated_gpu_transfer_bytes": entry.get("estimated_gpu_transfer_bytes"),
             "cpu_mean_ms": (entry.get("cpu") or {}).get("mean_ms"),
             "gpu_mean_ms": (entry.get("gpu") or {}).get("mean_ms"),
             "speedup_ratio": (entry.get("speedup") or {}).get("ratio"),
@@ -834,6 +839,73 @@ def summarize_operations(report: dict) -> Tuple[list[dict], list[dict]]:
         reverse=True,
     )
     return operations, hotspots
+
+
+def normalize_report(payload: dict[str, Any]) -> dict[str, Any]:
+    nested = payload.get("report")
+    if not isinstance(nested, dict):
+        return payload
+
+    report = dict(nested)
+    benchmarks = payload.get("benchmarks")
+    if isinstance(benchmarks, dict):
+        for field in (
+            "rows",
+            "padded_rows",
+            "iterations",
+            "warmups",
+            "column_count",
+            "execution_mode",
+            "gpu_backend",
+            "gpu_available",
+            "operation_filter",
+            "bn254_warnings",
+        ):
+            if report.get(field) is None and field in benchmarks:
+                report[field] = benchmarks.get(field)
+        benchmark_operations = benchmarks.get("operations")
+        report_operations = report.get("operations")
+        if isinstance(report_operations, list) and isinstance(benchmark_operations, list):
+            benchmark_by_name = {
+                entry.get("operation"): entry
+                for entry in benchmark_operations
+                if isinstance(entry, dict) and entry.get("operation") is not None
+            }
+            merged_operations = []
+            for entry in report_operations:
+                if not isinstance(entry, dict):
+                    merged_operations.append(entry)
+                    continue
+                merged_entry = dict(entry)
+                benchmark_entry = benchmark_by_name.get(entry.get("operation"))
+                if isinstance(benchmark_entry, dict):
+                    for field in (
+                        "columns",
+                        "input_len",
+                        "output_len",
+                        "input_bytes",
+                        "output_bytes",
+                        "estimated_gpu_transfer_bytes",
+                    ):
+                        if merged_entry.get(field) is None and field in benchmark_entry:
+                            merged_entry[field] = benchmark_entry.get(field)
+                merged_operations.append(merged_entry)
+            report["operations"] = merged_operations
+        elif "operations" not in report and "operations" in benchmarks:
+            report["operations"] = benchmark_operations
+
+    metadata = payload.get("metadata")
+    if isinstance(metadata, dict):
+        report_metadata = report.get("metadata")
+        if isinstance(report_metadata, dict):
+            merged_metadata = dict(report_metadata)
+            for field in ("generated_at", "host", "platform", "machine", "command", "notes"):
+                if merged_metadata.get(field) is None and field in metadata:
+                    merged_metadata[field] = metadata.get(field)
+            report["metadata"] = merged_metadata
+        elif "metadata" not in report:
+            report["metadata"] = metadata
+    return report
 
 
 def enforce_zero_fill_hotspots(hotspots: list[dict], threshold_ms: float | None) -> None:
@@ -1047,6 +1119,9 @@ def require_poseidon_telemetry(report: dict) -> None:
     poseidon_present = any(op.get("operation") == POSEIDON_OPERATION for op in operations)
     if not poseidon_present:
         return
+    backend = report.get("gpu_backend")
+    if backend != "metal":
+        return
     queue = report.get("metal_dispatch_queue")
     if not isinstance(queue, dict):
         raise SystemExit(
@@ -1094,7 +1169,7 @@ def sign_output(output_path: Path, gpg_key: str | None) -> None:
 
 def main() -> None:
     args = parse_args()
-    report = json.loads(args.input.read_text())
+    report = normalize_report(json.loads(args.input.read_text()))
     operations, zero_fill_hotspots = summarize_operations(report)
     enforce_zero_fill_hotspots(zero_fill_hotspots, args.require_zero_fill_max_ms)
     trace_meta = summarize_trace_metadata(report)
@@ -1103,14 +1178,16 @@ def main() -> None:
         enforce_lde_threshold(operations, args.require_lde_mean_ms)
     if args.require_poseidon_mean_ms is not None:
         enforce_poseidon_threshold(operations, args.require_poseidon_mean_ms)
+    source_metadata = report.get("metadata") if isinstance(report.get("metadata"), dict) else {}
     metadata = {
         "generated_at": iso_timestamp(report.get("unix_epoch_secs")),
-        "host": args.host or socket.gethostname(),
-        "platform": args.platform or platform.platform(),
-        "machine": args.machine or platform.machine(),
+        "host": args.host or source_metadata.get("host") or socket.gethostname(),
+        "platform": args.platform or source_metadata.get("platform") or platform.platform(),
+        "machine": args.machine or source_metadata.get("machine") or platform.machine(),
         "command": args.command
+        or source_metadata.get("command")
         or f"FASTPQ_GPU=gpu fastpq_metal_bench --rows {report.get('rows')} --iterations {report.get('iterations')}",
-        "notes": args.notes or auto_notes(report),
+        "notes": args.notes or source_metadata.get("notes") or auto_notes(report),
     }
     if args.row_usage:
         metadata["row_usage_snapshot"] = summarize_row_usage_snapshot(args.row_usage)
@@ -1159,6 +1236,7 @@ def main() -> None:
         "execution_mode": report.get("execution_mode"),
         "gpu_backend": report.get("gpu_backend"),
         "gpu_available": report.get("gpu_available"),
+        "operation_filter": report.get("operation_filter"),
         "operations": operations,
     }
     if zero_fill_hotspots:
@@ -1190,6 +1268,9 @@ def main() -> None:
     bn254_metrics = report.get("bn254_metrics")
     if isinstance(bn254_metrics, dict) and bn254_metrics:
         benchmarks["bn254_metrics"] = bn254_metrics
+    bn254_warnings = report.get("bn254_warnings")
+    if isinstance(bn254_warnings, list) and bn254_warnings:
+        benchmarks["bn254_warnings"] = bn254_warnings
     bn254_dispatch = report.get("bn254_dispatch")
     if isinstance(bn254_dispatch, dict) and bn254_dispatch:
         benchmarks["bn254_dispatch"] = bn254_dispatch
@@ -1216,4 +1297,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-REQUIRED_LABEL_FIELDS = ("device_class", "gpu_kind")

@@ -95,7 +95,7 @@ Swift SDK-ууд одоо JSON цавуугүйгээр бамбай заавр�
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -254,7 +254,7 @@ Swift SDK-ууд одоо JSON цавуугүйгээр бамбай заавр�
 - Данс тус бүрийн гарал үүслийн түлхүүрийн шатлал:
   - `sk_spend` → `nk` (тэгдэгч түлхүүр), `ivk` (ирж буй харах түлхүүр), `ovk` (гарч буй харах түлхүүр), `fvk`.
 - Шифрлэгдсэн тэмдэглэлийн ачаалал нь ECDH-аас гаралтай хуваалцсан түлхүүрүүдтэй AEAD ашигладаг; Сонголттой аудиторын харах түлхүүрүүдийг хөрөнгийн бодлого бүрийн гаралтад хавсаргаж болно.
-- CLI нэмэлтүүд: `confidential create-keys`, `confidential send`, `confidential export-view-key`, санамж бичгийн кодыг тайлах аудиторын хэрэгсэл, Kotodama офлайн дугтуйг үйлдвэрлэх/шалгах `iroha app zk envelope` туслах. Torii нь `POST /v1/confidential/derive-keyset`-ээр дамжуулан ижил үүсмэл урсгалыг гаргаж, hex болон base64 хэлбэрийг хоёуланг нь буцаадаг тул түрийвчнүүд түлхүүр шатлалыг программчлан авчрах боломжтой.
+- CLI нэмэлтүүд: `confidential create-keys`, `confidential send`, `confidential export-view-key`, санамж бичгийн кодыг тайлах аудиторын хэрэгсэл, Kotodama офлайн дугтуйг үйлдвэрлэх/шалгах `iroha app zk envelope` туслах.
 
 ## Хий, Хязгаарлалт ба DoS хяналт
 - Тодорхойлох хийн хуваарь:

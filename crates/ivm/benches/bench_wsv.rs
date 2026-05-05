@@ -6,7 +6,7 @@ use dashmap::{DashMap, DashSet};
 use iroha_crypto::KeyPair;
 use iroha_primitives::numeric::Numeric;
 use ivm::{
-    mock_wsv::{AssetDefinitionId, DomainId, Mintable, Name, ScopedAccountId},
+    mock_wsv::{AccountId, AssetDefinitionId, DomainId, Mintable, Name},
     parallel::{Block, Scheduler, StateAccessSet, Transaction, TxResult},
 };
 
@@ -35,9 +35,9 @@ impl AssetDefinition {
 #[derive(Default)]
 struct ConcurrentWSV {
     domains: DashSet<DomainId>,
-    accounts: DashSet<ScopedAccountId>,
+    accounts: DashSet<AccountId>,
     asset_definitions: DashMap<AssetDefinitionId, AssetDefinition>,
-    balances: DashMap<(ScopedAccountId, AssetDefinitionId), Numeric>,
+    balances: DashMap<(AccountId, AssetDefinitionId), Numeric>,
 }
 
 // DashMap and DashSet use interior mutability through `RwLock`, which prevents
@@ -50,10 +50,7 @@ impl ConcurrentWSV {
         self.domains.insert(id)
     }
 
-    fn register_account(&self, id: ScopedAccountId) -> bool {
-        if !self.domains.contains(id.domain()) {
-            return false;
-        }
+    fn register_account(&self, id: AccountId) -> bool {
         self.accounts.insert(id)
     }
 
@@ -66,12 +63,7 @@ impl ConcurrentWSV {
             .is_none()
     }
 
-    fn mint(
-        &self,
-        account_id: ScopedAccountId,
-        asset_id: AssetDefinitionId,
-        amount: Numeric,
-    ) -> bool {
+    fn mint(&self, account_id: AccountId, asset_id: AssetDefinitionId, amount: Numeric) -> bool {
         if !self.accounts.contains(&account_id) {
             return false;
         }
@@ -105,8 +97,8 @@ impl ConcurrentWSV {
 
     fn transfer(
         &self,
-        from: ScopedAccountId,
-        to: ScopedAccountId,
+        from: AccountId,
+        to: AccountId,
         asset_id: AssetDefinitionId,
         amount: Numeric,
     ) -> bool {
@@ -149,12 +141,13 @@ fn bench_massive_wsv(c: &mut Criterion) {
     c.bench_function("create_1m_assets_transfer_multi_account", |b| {
         let cores = num_cpus::get_physical();
         let scheduler = Scheduler::new(cores);
-        let domain: Arc<DomainId> = Arc::new("domain".parse().unwrap());
-        let precomputed_accounts: Arc<Vec<ScopedAccountId>> = Arc::new(
+        let domain: Arc<DomainId> =
+            Arc::new(DomainId::try_new("domain", "universal").expect("benchmark domain id"));
+        let precomputed_accounts: Arc<Vec<AccountId>> = Arc::new(
             (0..10)
                 .map(|_| {
                     let kp = KeyPair::random();
-                    ScopedAccountId::new(domain.as_ref().clone(), kp.public_key().clone())
+                    AccountId::new(kp.public_key().clone())
                 })
                 .collect(),
         );

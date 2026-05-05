@@ -66,7 +66,6 @@ translator: manual
 
 ## CLI וכלים
 - הפקודות: `confidential create-keys`, ‏`confidential send`, ‏`confidential export-view-key`, כלי auditor, ו-`iroha app zk envelope`.
-- Torii: ‏`POST /v1/confidential/derive-keyset` מחזיר היררכיית מפתחות ב-hex/base64.
 - היררכיית מפתח: `sk_spend` → `nk`, ‏`ivk`, ‏`ovk`, ‏`fvk`.
 - Payloadים מוצפנים עם AEAD XChaCha20-Poly1305; ניתן לצרף מפתחות צופים בהתאם למדיניות נכס.
 

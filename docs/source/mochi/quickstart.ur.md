@@ -41,7 +41,7 @@ translator: machine-google-reviewed
 ذخیرہ جڑ سے:
 
 ```bash
-cargo build -p mochi-ui-egui
+cargo build -p mochi-ui
 ```
 
 یہ کمانڈ `mochi-core` اور EGUI فرنٹینڈ دونوں کی تعمیر کرتا ہے۔ تقسیم کرنے والا بنڈل تیار کرنے کے لئے ، چلائیں:
@@ -57,7 +57,7 @@ cargo xtask mochi-bundle
 کارگو سے براہ راست UI چلائیں:
 
 ```bash
-cargo run -p mochi-ui-egui
+cargo run -p mochi-ui
 ```
 
 پہلے سے طے شدہ موچی عارضی ڈیٹا ڈائرکٹری میں ایک ہی پیرس سیٹ تیار کرتا ہے:
@@ -69,7 +69,7 @@ cargo run -p mochi-ui-egui
 لانچ کرتے وقت ڈیفالٹس کو اوور رائڈ کرنے کے لئے سی ایل آئی کے جھنڈوں کا استعمال کریں:
 
 ```bash
-cargo run -p mochi-ui-egui -- \
+cargo run -p mochi-ui -- \
   --data-root /path/to/workspace \
   --profile four-peer-bft \
   --torii-start 12000 \
@@ -160,7 +160,7 @@ SoraFS پن ظاہر ہوتا ہے ، اور حکمرانی کے اقدامات 
 ./ci/check_mochi.sh
 ```
 
-ہیلپر Iroha ، `mochi-ui-egui` ، اور کے لئے `cargo check`/`cargo test` پر عمل کرتا ہے
+ہیلپر Iroha ، `mochi-ui` ، اور کے لئے `cargo check`/`cargo test` پر عمل کرتا ہے
 `mochi-integration` ، جو فکسچر بڑھے (کیننیکل بلاک/ایونٹ کیپچرز) اور ایگوئی کنٹرول کو پکڑتا ہے
 ایک شاٹ میں رجعتیں۔ اگر اسکرپٹ باسی فکسچر کی اطلاع دیتا ہے تو ، نظرانداز شدہ تخلیق نو کے ٹیسٹوں کو دوبارہ جاری کریں ،
 مثال کے طور پر:

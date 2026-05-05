@@ -34,7 +34,7 @@ translator: machine-google-reviewed
 ```bash
 npm install @iroha/iroha-js
 export TORII_URL="https://torii.nexus.example"
-export AUTHORITY="i105..."
+export AUTHORITY="<i105-account-id>"
 export PRIVATE_KEY_HEX="$(cat ~/.iroha/keys/alice.key)"
 export CHAIN_ID="00000000-0000-0000-0000-000000000000"
 # optional lookups for GOV_FETCH
@@ -64,7 +64,7 @@ import {
 
 const TORII_URL = process.env.TORII_URL ?? "http://127.0.0.1:8080";
 const CHAIN_ID = process.env.CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
-const AUTHORITY = process.env.AUTHORITY ?? "i105...";
+const AUTHORITY = process.env.AUTHORITY ?? "<i105-account-id>";
 const PRIVATE_KEY = process.env.PRIVATE_KEY_HEX
   ? Buffer.from(process.env.PRIVATE_KEY_HEX, "hex")
   : Buffer.alloc(32, 0x11);
@@ -379,28 +379,13 @@ main().catch((error) => {
 တိကျမှု၊ မက်တာဒေတာကို ခွဲခြမ်းစိတ်ဖြာခြင်းမရှိဘဲ စီမံထားသော)၊
 
 ```bash
-# List recent allowances and log their integrity policies
+# Check Offline V2 readiness
 TORII_URL=https://torii.nexus.example \
 node -e '
   import { ToriiClient } from "@iroha/iroha-js";
   const client = new ToriiClient(process.env.TORII_URL);
-  const page = await client.listOfflineAllowances({ limit: 5 });
-  for (const entry of page.items) {
-    const policy = entry.integrity_metadata?.policy ?? "<unknown>";
-    console.log(entry.controller_display, policy);
-  }
-'
-
-# Summarize transfers + Provisioned manifest metadata
-TORII_URL=https://torii.nexus.example \
-node -e '
-  import { ToriiClient } from "@iroha/iroha-js";
-  const client = new ToriiClient(process.env.TORII_URL);
-  const page = await client.listOfflineTransfers({ limit: 5 });
-  for (const entry of page.items) {
-    const manifest = entry.integrity_metadata?.provisioned?.manifest_schema ?? "<none>";
-    console.log(entry.bundle_id_hex, entry.integrity_metadata?.policy ?? "<unknown>", manifest);
-  }
+  const readiness = await client.getOfflineV2Readiness();
+  console.log(readiness.offline_note_v2, readiness.offline_recursive_note_proof);
 '
 ```
 

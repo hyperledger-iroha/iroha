@@ -10,7 +10,7 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, ensure, eyre};
-use integration_tests::sandbox;
+use integration_tests::{kagami::resolve_kagami_bin, sandbox};
 use iroha::{
     client::Client,
     config::{Config, LoadPath},
@@ -27,6 +27,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(180);
 const READY_POLL: Duration = Duration::from_millis(200);
 const LOCALNET_BLOCK_TIME_MS: u64 = 2_000;
 const LOCALNET_COMMIT_TIME_MS: u64 = 2_000;
+const LOG_TAIL_LINES: usize = 80;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
@@ -44,7 +45,7 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
         let irohad_bin = Program::Irohad
             .resolve()
             .wrap_err("resolve irohad binary")?;
-        let _localnet = KagamiLocalnet::start(
+        let mut localnet = KagamiLocalnet::start(
             &out_dir,
             &irohad_bin,
             LOCALNET_PEERS,
@@ -52,7 +53,7 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
         )?;
 
         let client = load_localnet_client(&out_dir)?;
-        wait_for_status_ready(&client, READY_TIMEOUT).await?;
+        wait_for_status_ready(&client, &mut localnet, READY_TIMEOUT).await?;
         let baseline = client.get_status()?.blocks_non_empty;
         client.submit_blocking(Log::new(Level::INFO, "kagami localnet smoke".to_string()))?;
         let status =
@@ -155,6 +156,24 @@ impl KagamiLocalnet {
             _port_reservations: port_reservations,
         })
     }
+
+    fn unexpected_exit_report(&mut self) -> Result<Option<String>> {
+        for (idx, child) in self.children.iter_mut().enumerate() {
+            let Some(status) = child
+                .try_wait()
+                .wrap_err_with(|| format!("poll irohad peer {idx}"))?
+            else {
+                continue;
+            };
+            let log_path = self.dir.join(format!("peer{idx}.log"));
+            let tail = log_tail(&log_path, LOG_TAIL_LINES);
+            return Ok(Some(format!(
+                "irohad peer {idx} exited before localnet became ready: status={status}; log tail from {}:\n{tail}",
+                log_path.display()
+            )));
+        }
+        Ok(None)
+    }
 }
 
 impl Drop for KagamiLocalnet {
@@ -224,85 +243,6 @@ fn generate_localnet(out_dir: &Path, base_api_port: u16, base_p2p_port: u16) -> 
     Ok(())
 }
 
-fn resolve_kagami_bin() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("KAGAMI_BIN") {
-        return Ok(PathBuf::from(path));
-    }
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_kagami") {
-        return Ok(PathBuf::from(path));
-    }
-
-    let repo = repo_root();
-    let target_dir = resolve_target_dir(&repo);
-    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-    let bin = bin_name("kagami");
-    let mut candidates = vec![
-        target_dir.join(format!("{profile}/{bin}")),
-        target_dir.join(format!("debug/{bin}")),
-        target_dir.join(format!("release/{bin}")),
-        repo.join(format!("target/{profile}/{bin}")),
-        repo.join(format!("target/debug/{bin}")),
-        repo.join(format!("target/release/{bin}")),
-    ];
-
-    if let Some(found) = try_candidates(&candidates) {
-        return Ok(found);
-    }
-
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let mut command = Command::new(cargo);
-    command
-        .current_dir(&repo)
-        .arg("build")
-        .arg("-p")
-        .arg("iroha_kagami")
-        .arg("--bin")
-        .arg("kagami");
-    if profile != "debug" {
-        command.arg("--profile").arg(&profile);
-    }
-    let output = command.output().wrap_err("build kagami binary")?;
-    ensure!(
-        output.status.success(),
-        "failed to build kagami: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    candidates.insert(0, target_dir.join(format!("{profile}/{bin}")));
-    try_candidates(&candidates).ok_or_else(|| eyre!("kagami binary not found after build"))
-}
-
-fn resolve_target_dir(repo: &Path) -> PathBuf {
-    std::env::var("CARGO_TARGET_DIR").map_or_else(
-        |_| repo.join("target"),
-        |path| {
-            let candidate = PathBuf::from(path);
-            if candidate.is_absolute() {
-                candidate
-            } else {
-                repo.join(candidate)
-            }
-        },
-    )
-}
-
-fn bin_name(raw: &str) -> String {
-    if cfg!(windows) {
-        format!("{raw}.exe")
-    } else {
-        raw.to_owned()
-    }
-}
-
-fn try_candidates(candidates: &[PathBuf]) -> Option<PathBuf> {
-    for candidate in candidates {
-        if let Ok(path) = candidate.canonicalize() {
-            return Some(path);
-        }
-    }
-    None
-}
-
 fn load_localnet_client(out_dir: &Path) -> Result<Client> {
     let client_path = out_dir.join("client.toml");
     let mut config = Config::load(LoadPath::Explicit(client_path.clone())).map_err(|err| {
@@ -315,7 +255,11 @@ fn load_localnet_client(out_dir: &Path) -> Result<Client> {
     Ok(Client::new(config))
 }
 
-async fn wait_for_status_ready(client: &Client, timeout: Duration) -> Result<()> {
+async fn wait_for_status_ready(
+    client: &Client,
+    localnet: &mut KagamiLocalnet,
+    timeout: Duration,
+) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
         if Instant::now() >= deadline {
@@ -324,7 +268,21 @@ async fn wait_for_status_ready(client: &Client, timeout: Duration) -> Result<()>
         if client.get_status().is_ok() {
             return Ok(());
         }
+        if let Some(report) = localnet.unexpected_exit_report()? {
+            return Err(eyre!(report));
+        }
         sleep(READY_POLL).await;
+    }
+}
+
+fn log_tail(path: &Path, lines: usize) -> String {
+    match fs::read_to_string(path) {
+        Ok(contents) => {
+            let mut tail = contents.lines().rev().take(lines).collect::<Vec<_>>();
+            tail.reverse();
+            tail.join("\n")
+        }
+        Err(err) => format!("failed to read log {}: {err}", path.display()),
     }
 }
 

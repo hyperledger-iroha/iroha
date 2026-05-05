@@ -8,95 +8,52 @@ const NATIVE_FILENAME = "iroha_js_host.node";
 const CHECKSUM_FILENAME = "iroha_js_host.checksums.json";
 const VERIFICATION_CACHE = new Map();
 const CHECKSUM_CACHE = new Map();
-const VERIFICATION_WARNINGS = new Set();
-
-function allowUnverifiedNative() {
-  return parseEnvFlag(process.env.IROHA_JS_ALLOW_UNVERIFIED_NATIVE);
-}
-
-function isNativeDisabled() {
-  return parseEnvFlag(process.env.IROHA_JS_DISABLE_NATIVE);
-}
-
-function isNativeForced() {
-  return parseEnvFlag(process.env.IROHA_JS_FORCE_NATIVE);
-}
 
 let cachedBinding;
 let cachedBindingPath;
 
-function parseEnvFlag(value) {
-  if (!value) {
-    return false;
-  }
-  const normalized = String(value).trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
-
-function forceNativeError(reason) {
-  return new Error(
-    `Native binding required because IROHA_JS_FORCE_NATIVE=1; ${reason}`,
-  );
+function nativeBindingError(reason) {
+  return new Error(`Native binding required; ${reason}`);
 }
 
 function formatForceNativeVerificationError(verification, paths) {
   switch (verification.status) {
     case "missing_file":
-      return forceNativeError(
+      return nativeBindingError(
         `binding missing at ${paths.bindingPath}; run \`npm run build:native\`.`,
       );
     case "manifest_error":
-      return forceNativeError(
+      return nativeBindingError(
         `checksum manifest at ${paths.checksumPath} is unreadable: ${
           verification.error?.message ?? verification.error
         }.`,
       );
     case "missing_manifest":
     case "missing_expected_entry":
-      return forceNativeError(
+      return nativeBindingError(
         `checksum manifest missing entries for ${verification.platform}; run \`npm run build:native\`.`,
       );
     case "hash_mismatch":
-      return forceNativeError(
+      return nativeBindingError(
         `checksum mismatch for ${paths.bindingPath}; expected ${verification.expectedSha256}, found ${verification.sha256}.`,
       );
     case "hash_error":
     default:
-      return forceNativeError(
+      return nativeBindingError(
         `verification failed (${verification.status}).`,
       );
   }
 }
 
 /**
- * Attempt to load the native `iroha_js_host` binding.
- * Returns `null` when the compiled module is not present or fails verification.
+ * Load the required native `iroha_js_host` binding.
  */
 export function getNativeBinding() {
   const paths = resolveNativePaths();
-  const forceNative = isNativeForced();
   if (cachedBindingPath !== paths.bindingPath) {
     cachedBinding = undefined;
   }
-  if (cachedBinding !== undefined && !(forceNative && cachedBinding === null)) {
-    return cachedBinding;
-  }
-  if (forceNative && cachedBinding === null) {
-    cachedBinding = undefined;
-  }
-  if (isNativeDisabled()) {
-    if (forceNative) {
-      throw new Error(
-        "IROHA_JS_FORCE_NATIVE=1 cannot be combined with IROHA_JS_DISABLE_NATIVE=1",
-      );
-    }
-    if (shouldWarn()) {
-      console.warn(
-        "[iroha-js] native binding disabled via IROHA_JS_DISABLE_NATIVE; using pure JS implementation.",
-      );
-    }
-    cachedBindingPath = paths.bindingPath;
-    cachedBinding = null;
+  if (cachedBinding !== undefined) {
     return cachedBinding;
   }
 
@@ -104,32 +61,16 @@ export function getNativeBinding() {
     manifestPath: paths.checksumPath,
   });
   if (!verification.ok) {
-    if (forceNative) {
-      throw formatForceNativeVerificationError(verification, paths);
-    }
-    logVerificationFailure(verification, paths);
-    cachedBindingPath = paths.bindingPath;
-    cachedBinding = null;
-    return cachedBinding;
+    throw formatForceNativeVerificationError(verification, paths);
   }
 
   try {
     const require = createRequire(import.meta.url);
     cachedBinding = require(paths.bindingPath);
   } catch (error) {
-    cachedBinding = null;
-    if (forceNative) {
-      throw forceNativeError(
-        `failed to load binding from ${paths.bindingPath}: ${error?.message ?? error}.`,
-      );
-    }
-    if (shouldWarn()) {
-      console.warn(
-        `[iroha-js] Failed to load native binding from ${paths.bindingPath}: ${
-          error?.message ?? error
-        }`,
-      );
-    }
+    throw nativeBindingError(
+      `failed to load binding from ${paths.bindingPath}: ${error?.message ?? error}.`,
+    );
   }
   cachedBindingPath = paths.bindingPath;
   return cachedBinding;
@@ -223,19 +164,6 @@ export function verifyNativeBinding(
   }
 
   if (expectedEntry.sha256 !== hash.sha256) {
-    if (allowUnverifiedNative()) {
-      const result = {
-        ok: true,
-        status: "hash_mismatch_allowed",
-        path: bindingPath,
-        manifestPath,
-        platform,
-        sha256: hash.sha256,
-        expectedSha256: expectedEntry.sha256,
-      };
-      VERIFICATION_CACHE.set(cacheKey, result);
-      return result;
-    }
     const result = {
       ok: false,
       status: "hash_mismatch",
@@ -271,7 +199,6 @@ export function __resetNativeStateForTests() {
   cachedBindingPath = undefined;
   VERIFICATION_CACHE.clear();
   CHECKSUM_CACHE.clear();
-  VERIFICATION_WARNINGS.clear();
 }
 
 function resolveNativePaths() {
@@ -323,48 +250,4 @@ function hashFile(filePath) {
   } catch (error) {
     return { ok: false, error };
   }
-}
-
-function logVerificationFailure(verification, paths) {
-  const key = `${verification.status}:${paths.bindingPath}`;
-  if (!shouldWarn() || VERIFICATION_WARNINGS.has(key)) {
-    return;
-  }
-  VERIFICATION_WARNINGS.add(key);
-
-  switch (verification.status) {
-    case "missing_file":
-      console.warn(
-        `[iroha-js] Native binding missing at ${paths.bindingPath}; falling back to pure JS.`,
-      );
-      break;
-    case "manifest_error":
-      console.warn(
-        `[iroha-js] Native checksum manifest at ${paths.checksumPath} is unreadable: ${
-          verification.error?.message ?? verification.error
-        }; falling back to pure JS.`,
-      );
-      break;
-    case "missing_manifest":
-    case "missing_expected_entry":
-      console.warn(
-        `[iroha-js] Native binding verification skipped (${verification.status}); expected checksums absent for ${verification.platform}. Re-run 'npm run build:native' after installing Rust toolchain if you want native speedups.`,
-      );
-      break;
-    case "hash_mismatch":
-      console.warn(
-        `[iroha-js] Native binding checksum mismatch for ${paths.bindingPath}; expected ${verification.expectedSha256}, found ${verification.sha256}. Rebuild with 'npm run build:native' or set IROHA_JS_ALLOW_UNVERIFIED_NATIVE=1 to accept current binary for local runs.`,
-      );
-      break;
-    case "hash_error":
-    default:
-      console.warn(
-        `[iroha-js] Native binding verification failed (${verification.status}); falling back to pure JS.`,
-      );
-      break;
-  }
-}
-
-function shouldWarn() {
-  return process.env.IROHA_JS_NATIVE_WARN !== "0";
 }

@@ -1,13 +1,8 @@
 import { Buffer } from "node:buffer";
-import { readFileSync } from "node:fs";
-import { dirname, resolve as resolvePath } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   createPrivateKey,
   createPublicKey,
   createHash,
-  hkdfSync,
-  randomBytes,
   sign as signRaw,
   verify as verifyRaw,
 } from "node:crypto";
@@ -21,13 +16,63 @@ export const SM2_PRIVATE_KEY_LENGTH = 32;
 export const SM2_PUBLIC_KEY_LENGTH = 65;
 export const SM2_SIGNATURE_LENGTH = 64;
 
-const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
-const WORKSPACE_SM2_FIXTURE_PATH = resolvePath(
-  MODULE_DIR,
-  "../../../fixtures/sm/sm2_fixture.json",
-);
+export const CRYPTO_ALGORITHMS = Object.freeze({
+  ED25519: "ed25519",
+  SECP256K1: "secp256k1",
+  ML_DSA: "ml-dsa",
+  BLS_NORMAL: "bls_normal",
+  BLS_SMALL: "bls_small",
+  GOST_2012_256_A: "gost3410-2012-256-paramset-a",
+  GOST_2012_256_B: "gost3410-2012-256-paramset-b",
+  GOST_2012_256_C: "gost3410-2012-256-paramset-c",
+  GOST_2012_512_A: "gost3410-2012-512-paramset-a",
+  GOST_2012_512_B: "gost3410-2012-512-paramset-b",
+  SM2: "sm2",
+});
 
-const SM2_FIXTURE_FALLBACK = Object.freeze({
+export const SUPPORTED_CRYPTO_ALGORITHMS = Object.freeze([
+  CRYPTO_ALGORITHMS.ED25519,
+  CRYPTO_ALGORITHMS.SECP256K1,
+  CRYPTO_ALGORITHMS.BLS_NORMAL,
+  CRYPTO_ALGORITHMS.BLS_SMALL,
+  CRYPTO_ALGORITHMS.ML_DSA,
+  CRYPTO_ALGORITHMS.GOST_2012_256_A,
+  CRYPTO_ALGORITHMS.GOST_2012_256_B,
+  CRYPTO_ALGORITHMS.GOST_2012_256_C,
+  CRYPTO_ALGORITHMS.GOST_2012_512_A,
+  CRYPTO_ALGORITHMS.GOST_2012_512_B,
+  CRYPTO_ALGORITHMS.SM2,
+]);
+
+const CRYPTO_ALGORITHM_ALIASES = new Map([
+  ["ed25519", CRYPTO_ALGORITHMS.ED25519],
+  ["ed", CRYPTO_ALGORITHMS.ED25519],
+  ["eddsa", CRYPTO_ALGORITHMS.ED25519],
+  ["secp256k1", CRYPTO_ALGORITHMS.SECP256K1],
+  ["secp", CRYPTO_ALGORITHMS.SECP256K1],
+  ["secpk1", CRYPTO_ALGORITHMS.SECP256K1],
+  ["mldsa", CRYPTO_ALGORITHMS.ML_DSA],
+  ["mldsa65", CRYPTO_ALGORITHMS.ML_DSA],
+  ["mldsa44", CRYPTO_ALGORITHMS.ML_DSA],
+  ["mldsa87", CRYPTO_ALGORITHMS.ML_DSA],
+  ["blsnormal", CRYPTO_ALGORITHMS.BLS_NORMAL],
+  ["bls12381g1", CRYPTO_ALGORITHMS.BLS_NORMAL],
+  ["blssmall", CRYPTO_ALGORITHMS.BLS_SMALL],
+  ["bls12381g2", CRYPTO_ALGORITHMS.BLS_SMALL],
+  ["gost256a", CRYPTO_ALGORITHMS.GOST_2012_256_A],
+  ["gost34102012256paramseta", CRYPTO_ALGORITHMS.GOST_2012_256_A],
+  ["gost256b", CRYPTO_ALGORITHMS.GOST_2012_256_B],
+  ["gost34102012256paramsetb", CRYPTO_ALGORITHMS.GOST_2012_256_B],
+  ["gost256c", CRYPTO_ALGORITHMS.GOST_2012_256_C],
+  ["gost34102012256paramsetc", CRYPTO_ALGORITHMS.GOST_2012_256_C],
+  ["gost512a", CRYPTO_ALGORITHMS.GOST_2012_512_A],
+  ["gost34102012512paramseta", CRYPTO_ALGORITHMS.GOST_2012_512_A],
+  ["gost512b", CRYPTO_ALGORITHMS.GOST_2012_512_B],
+  ["gost34102012512paramsetb", CRYPTO_ALGORITHMS.GOST_2012_512_B],
+  ["sm2", CRYPTO_ALGORITHMS.SM2],
+]);
+
+const SM2_FIXTURE_REFERENCE = Object.freeze({
   distid: "1234567812345678",
   seedHex: "1111111111111111111111111111111111111111111111111111111111111111",
   messageHex: "69726F686120736D2073646B2066697874757265",
@@ -45,27 +90,6 @@ const SM2_FIXTURE_FALLBACK = Object.freeze({
   s: "F72EBF26C29E77AAAB2226EDFBEE2D6D6ABC0D6C9B2C9A2248E2BD9324A12268",
 });
 
-let SM2_FIXTURE_REFERENCE = SM2_FIXTURE_FALLBACK;
-try {
-  const rawFixture = readFileSync(WORKSPACE_SM2_FIXTURE_PATH, "utf8");
-  const parsed = JSON.parse(rawFixture);
-  SM2_FIXTURE_REFERENCE = Object.freeze({
-    distid: String(parsed.distid),
-    seedHex: String(parsed.seed_hex).toUpperCase(),
-    messageHex: String(parsed.message_hex).toUpperCase(),
-    privateKeyHex: String(parsed.private_key_hex).toUpperCase(),
-    publicKeySec1Hex: String(parsed.public_key_sec1_hex).toUpperCase(),
-    publicKeyMultihash: String(parsed.public_key_multihash),
-    publicKeyPrefixed: String(parsed.public_key_prefixed),
-    za: String(parsed.za).toUpperCase(),
-    signature: String(parsed.signature).toUpperCase(),
-    r: String(parsed.r).toUpperCase(),
-    s: String(parsed.s).toUpperCase(),
-  });
-} catch {
-  SM2_FIXTURE_REFERENCE = SM2_FIXTURE_FALLBACK;
-}
-
 const SM2_FIXTURE_SEED = Buffer.from(SM2_FIXTURE_REFERENCE.seedHex, "hex");
 const SM2_FIXTURE_MESSAGE = Buffer.from(SM2_FIXTURE_REFERENCE.messageHex, "hex");
 export const SM2_DEFAULT_DISTINGUISHED_ID = SM2_FIXTURE_REFERENCE.distid;
@@ -77,54 +101,119 @@ const ED25519_SPKI_PREFIX = Buffer.from([
   0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
 ]);
 
-const CONFIDENTIAL_KEY_SALT = Buffer.from("iroha:confidential:key-derivation:v1");
-const CONFIDENTIAL_INFO_NK = Buffer.from("iroha:confidential:nk");
-const CONFIDENTIAL_INFO_IVK = Buffer.from("iroha:confidential:ivk");
-const CONFIDENTIAL_INFO_OVK = Buffer.from("iroha:confidential:ovk");
-const CONFIDENTIAL_INFO_FVK = Buffer.from("iroha:confidential:fvk");
-
 function resolveNativeBinding() {
   return globalThis.__IROHA_NATIVE_BINDING__ ?? getNativeBinding();
 }
 
+function cryptoAlgorithmAliasKey(value) {
+  return String(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+export function supportedCryptoAlgorithms() {
+  const native = resolveNativeBinding();
+  if (typeof native.supportedCryptoAlgorithms === "function") {
+    return native.supportedCryptoAlgorithms().map((algorithm) =>
+      normalizeCryptoAlgorithm(algorithm),
+    );
+  }
+  return [...SUPPORTED_CRYPTO_ALGORITHMS];
+}
+
+export function normalizeCryptoAlgorithm(algorithm = CRYPTO_ALGORITHMS.ED25519) {
+  if (algorithm === undefined || algorithm === null || algorithm === "") {
+    return CRYPTO_ALGORITHMS.ED25519;
+  }
+  const normalized = CRYPTO_ALGORITHM_ALIASES.get(cryptoAlgorithmAliasKey(algorithm));
+  if (!normalized) {
+    throw new Error(`unsupported crypto algorithm: ${algorithm}`);
+  }
+  return normalized;
+}
+
+function ensureGenericCryptoNative(native, operation) {
+  if (!native || typeof native[operation] !== "function") {
+    throw new Error(
+      `${operation} requires the iroha_js_host native binding built with full crypto support`,
+    );
+  }
+  return native;
+}
+
+function normalizeNativeKeyPair(result, algorithm) {
+  return {
+    algorithm: normalizeCryptoAlgorithm(result.algorithm ?? algorithm),
+    publicKey: Buffer.from(result.publicKey),
+    privateKey: Buffer.from(result.privateKey),
+    distid: typeof result.distid === "string" ? result.distid : null,
+  };
+}
+
 /**
- * Generate an Ed25519 key pair. Seed material is hashed to 32 bytes when needed.
- * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer}} [options]
- * @returns {{algorithm: "ed25519", publicKey: Buffer, privateKey: Buffer}}
+ * Generate a key pair. Ed25519 remains available in all Node builds; other algorithms require the native binding.
+ * @param {{seed?: ArrayBufferView | ArrayBuffer | Buffer, algorithm?: string}} [options]
+ * @returns {{algorithm: string, publicKey: Buffer, privateKey: Buffer, distid?: string | null}}
  */
 export function generateKeyPair(options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  if (algorithm !== CRYPTO_ALGORITHMS.ED25519) {
+    const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoKeypair");
+    const seed = options.seed ? toBuffer(options.seed, "seed") : undefined;
+    return normalizeNativeKeyPair(native.cryptoKeypair(algorithm, seed), algorithm);
+  }
   const seed = options.seed ? normalizeSeed(options.seed) : undefined;
   const native = resolveNativeBinding();
-  if (native?.ed25519Keypair) {
-    const result = native.ed25519Keypair(seed);
-    return {
-      algorithm: result.algorithm,
-      publicKey: Buffer.from(result.publicKey),
-      privateKey: Buffer.from(result.privateKey),
-    };
+  if (typeof native.ed25519Keypair !== "function") {
+    throw new Error("Native binding does not expose ed25519Keypair");
   }
-
-  const effectiveSeed = seed ?? randomBytes(ED25519_SEED_LENGTH);
-  const privateKeyObject = privateKeyFromSeed(effectiveSeed);
-  const publicKey = exportPublicKey(privateKeyObject);
-  const privateKey = Buffer.from(effectiveSeed);
-  return { algorithm: "ed25519", publicKey, privateKey };
+  const result = native.ed25519Keypair(seed);
+  return {
+    algorithm: result.algorithm,
+    publicKey: Buffer.from(result.publicKey),
+    privateKey: Buffer.from(result.privateKey),
+  };
 }
 
 /**
  * Derive the public key for a given private key (32-byte seed or 64-byte seed+public concatenation).
  * @param {ArrayBufferView | ArrayBuffer | Buffer} privateKey
+ * @param {{algorithm?: string}} [options]
  * @returns {Buffer}
  */
-export function publicKeyFromPrivate(privateKey) {
+export function publicKeyFromPrivate(privateKey, options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  if (algorithm !== CRYPTO_ALGORITHMS.ED25519) {
+    const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoPublicKeyFromPrivate");
+    return Buffer.from(
+      native.cryptoPublicKeyFromPrivate(algorithm, toBuffer(privateKey, "privateKey")),
+    );
+  }
   const buffer = toBuffer(privateKey, "privateKey");
   const native = resolveNativeBinding();
-  if (native?.ed25519PublicKeyFromPrivate) {
-    return Buffer.from(native.ed25519PublicKeyFromPrivate(buffer));
+  if (typeof native.ed25519PublicKeyFromPrivate !== "function") {
+    throw new Error("Native binding does not expose ed25519PublicKeyFromPrivate");
   }
-  const seed = extractSeed(buffer);
-  const privateKeyObject = privateKeyFromSeed(seed);
-  return exportPublicKey(privateKeyObject);
+  return Buffer.from(native.ed25519PublicKeyFromPrivate(buffer));
+}
+
+export function loadKeyPair(privateKey, options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  if (algorithm === CRYPTO_ALGORITHMS.ED25519) {
+    const privateKeyBuffer = toBuffer(privateKey, "privateKey");
+    return {
+      algorithm,
+      publicKey: publicKeyFromPrivate(privateKeyBuffer),
+      privateKey: extractSeed(privateKeyBuffer),
+      distid: null,
+    };
+  }
+  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoKeypairFromPrivate");
+  return normalizeNativeKeyPair(
+    native.cryptoKeypairFromPrivate(algorithm, toBuffer(privateKey, "privateKey")),
+    algorithm,
+  );
 }
 
 /**
@@ -159,6 +248,49 @@ export function verifyEd25519(message, signature, publicKey) {
   return verifyRaw(null, messageBuffer, publicKeyObject, signatureBuffer);
 }
 
+export function sign(message, privateKey, options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  if (algorithm === CRYPTO_ALGORITHMS.ED25519) {
+    return signEd25519(message, privateKey);
+  }
+  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoSign");
+  return Buffer.from(
+    native.cryptoSign(
+      algorithm,
+      toBuffer(privateKey, "privateKey"),
+      toBuffer(message, "message"),
+    ),
+  );
+}
+
+export function verify(message, signature, publicKey, options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  if (algorithm === CRYPTO_ALGORITHMS.ED25519) {
+    return verifyEd25519(message, signature, publicKey);
+  }
+  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoVerify");
+  return Boolean(
+    native.cryptoVerify(
+      algorithm,
+      toBuffer(publicKey, "publicKey"),
+      toBuffer(message, "message"),
+      toBuffer(signature, "signature"),
+    ),
+  );
+}
+
+export function publicKeyMultihash(publicKey, options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoPublicKeyMultihash");
+  return native.cryptoPublicKeyMultihash(algorithm, toBuffer(publicKey, "publicKey"));
+}
+
+export function privateKeyMultihash(privateKey, options = {}) {
+  const algorithm = normalizeCryptoAlgorithm(options.algorithm);
+  const native = ensureGenericCryptoNative(resolveNativeBinding(), "cryptoPrivateKeyMultihash");
+  return native.cryptoPrivateKeyMultihash(algorithm, toBuffer(privateKey, "privateKey"));
+}
+
 function normalizeSm2Distid(distid, native) {
   if (distid === undefined || distid === null) {
     if (native && typeof native.sm2DefaultDistid === "function") {
@@ -188,6 +320,24 @@ function ensureSm2Native(native) {
   ) {
     throw new Error(
       "SM2 operations require the iroha_js_host native binding built with SM support",
+    );
+  }
+  return native;
+}
+
+function ensureKaigiRosterNative(native) {
+  if (!native || typeof native.buildKaigiRosterJoinProof !== "function") {
+    throw new Error(
+      "Kaigi roster proof helper unavailable; build iroha_js_host with `npm run build:native` before using private Kaigi joins",
+    );
+  }
+  return native;
+}
+
+function ensureConfidentialV2Native(native, operation) {
+  if (!native || typeof native[operation] !== "function") {
+    throw new Error(
+      `confidential v2 helper '${operation}' is unavailable; build iroha_js_host with \`npm run build:native\` before using shielded transfer v2`,
     );
   }
   return native;
@@ -294,6 +444,46 @@ export function verifySm2(message, signature, publicKey, distid) {
 }
 
 /**
+ * Build the proof artefacts required for a `Kaigi::JoinKaigi` `ZkRosterV1` join.
+ * @param {{seed: ArrayBufferView | ArrayBuffer | Buffer, rosterRootHex?: string | null}} options
+ * @returns {{commitment: Buffer, nullifier: Buffer, rosterRoot: Buffer, proof: Buffer, commitmentHex: string, nullifierHex: string, rosterRootHex: string, proofBase64: string}}
+ */
+export function buildKaigiRosterJoinProof(options) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("buildKaigiRosterJoinProof options must be an object");
+  }
+  const seed = toBuffer(options.seed, "seed");
+  if (seed.length === 0) {
+    throw new Error("seed must not be empty");
+  }
+  const native = ensureKaigiRosterNative(resolveNativeBinding());
+  const result = native.buildKaigiRosterJoinProof(
+    seed,
+    options.rosterRootHex ?? options.roster_root_hex ?? null,
+  );
+  const commitment = Buffer.from(result.commitment);
+  const nullifier = Buffer.from(result.nullifier);
+  const rosterRoot = Buffer.from(result.rosterRoot ?? result.roster_root);
+  const proof = Buffer.from(result.proof);
+  if (commitment.length !== 32 || nullifier.length !== 32 || rosterRoot.length !== 32) {
+    throw new Error("native Kaigi roster proof helper returned invalid digest lengths");
+  }
+  if (proof.length === 0) {
+    throw new Error("native Kaigi roster proof helper returned an empty proof");
+  }
+  return {
+    commitment,
+    nullifier,
+    rosterRoot,
+    proof,
+    commitmentHex: commitment.toString("hex"),
+    nullifierHex: nullifier.toString("hex"),
+    rosterRootHex: rosterRoot.toString("hex"),
+    proofBase64: proof.toString("base64"),
+  };
+}
+
+/**
  * Derive the confidential key hierarchy from a 32-byte spend key.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} spendKey
  * @returns {{skSpend: Buffer, nk: Buffer, ivk: Buffer, ovk: Buffer, fvk: Buffer, skSpendHex: string, nkHex: string, ivkHex: string, ovkHex: string, fvkHex: string, asHex(): Record<string, string>}}
@@ -305,12 +495,13 @@ export function deriveConfidentialKeyset(spendKey) {
   }
 
   const native = resolveNativeBinding();
-  const raw =
-    native?.deriveConfidentialKeyset?.(seed) ??
-    deriveConfidentialKeysetFallback(seed);
+  if (typeof native.deriveConfidentialKeyset !== "function") {
+    throw new Error("Native binding does not expose deriveConfidentialKeyset");
+  }
+  const raw = native.deriveConfidentialKeyset(seed);
 
   const keyset = {
-    skSpend: toBufferField(raw, "sk_spend"),
+    skSpend: toBufferField(raw, "sk_spend", "skSpend"),
     nk: toBufferField(raw, "nk"),
     ivk: toBufferField(raw, "ivk"),
     ovk: toBufferField(raw, "ovk"),
@@ -337,6 +528,152 @@ export function deriveConfidentialKeysetFromHex(spendKeyHex) {
     throw new Error("confidential spend key must be valid hex");
   }
   return deriveConfidentialKeyset(seed);
+}
+
+/**
+ * Derive the confidential v2 owner tag from a 32-byte spend key.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} spendKey
+ * @param {{diversifierHex?: string, diversifier?: ArrayBufferView | ArrayBuffer | Buffer}} [options]
+ * @returns {Buffer}
+ */
+export function deriveConfidentialOwnerTagV2(spendKey, options = {}) {
+  const native = ensureConfidentialV2Native(
+    resolveNativeBinding(),
+    "deriveConfidentialOwnerTagV2",
+  );
+  const spendKeyBuffer = toBuffer(spendKey, "spendKey");
+  if (spendKeyBuffer.length !== 32) {
+    throw new Error("confidential spend key must be 32 bytes");
+  }
+  const diversifierHex =
+    options?.diversifierHex !== undefined || options?.diversifier !== undefined
+      ? normalizeFixed32HexInput(
+          options.diversifierHex ?? options.diversifier,
+          "diversifier",
+        )
+      : undefined;
+  return Buffer.from(native.deriveConfidentialOwnerTagV2(spendKeyBuffer, diversifierHex));
+}
+
+/**
+ * Derive a canonical confidential v2 diversifier from seed material.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer | string} seed
+ * @returns {{diversifier: Buffer, diversifierHex: string}}
+ */
+export function deriveConfidentialDiversifierV2(seed) {
+  const native = ensureConfidentialV2Native(
+    resolveNativeBinding(),
+    "deriveConfidentialDiversifierV2",
+  );
+  const seedBuffer = toBuffer(seed, "seed");
+  if (seedBuffer.length === 0) {
+    throw new Error("seed must not be empty");
+  }
+  const diversifier = Buffer.from(native.deriveConfidentialDiversifierV2(seedBuffer));
+  return {
+    diversifier,
+    diversifierHex: diversifier.toString("hex"),
+  };
+}
+
+/**
+ * Derive diversified confidential v2 receive-address material.
+ * @param {{spendKey: ArrayBufferView | ArrayBuffer | Buffer, diversifierSeed: ArrayBufferView | ArrayBuffer | Buffer | string}} input
+ * @returns {{ownerTag: Buffer, ownerTagHex: string, diversifier: Buffer, diversifierHex: string}}
+ */
+export function deriveConfidentialReceiveAddressV2(input) {
+  const native = ensureConfidentialV2Native(
+    resolveNativeBinding(),
+    "deriveConfidentialReceiveAddressV2",
+  );
+  const spendKeyBuffer = toBuffer(input?.spendKey, "spendKey");
+  if (spendKeyBuffer.length !== 32) {
+    throw new Error("confidential spend key must be 32 bytes");
+  }
+  const diversifierSeed = toBuffer(input?.diversifierSeed, "diversifierSeed");
+  if (diversifierSeed.length === 0) {
+    throw new Error("diversifierSeed must not be empty");
+  }
+  const raw = native.deriveConfidentialReceiveAddressV2(spendKeyBuffer, diversifierSeed);
+  const ownerTagHex = String(raw.ownerTagHex ?? raw.owner_tag_hex ?? "").trim();
+  const diversifierHex = String(raw.diversifierHex ?? raw.diversifier_hex ?? "").trim();
+  return {
+    ownerTag: Buffer.from(normalizeFixed32HexInput(ownerTagHex, "ownerTag"), "hex"),
+    ownerTagHex: normalizeFixed32HexInput(ownerTagHex, "ownerTag"),
+    diversifier: Buffer.from(normalizeFixed32HexInput(diversifierHex, "diversifier"), "hex"),
+    diversifierHex: normalizeFixed32HexInput(diversifierHex, "diversifier"),
+  };
+}
+
+/**
+ * Derive a confidential v2 note commitment from note material.
+ * @param {{assetDefinitionId: string, amount: string | number | bigint, rhoHex?: string, rho?: ArrayBufferView | ArrayBuffer | Buffer, ownerTagHex?: string, ownerTag?: ArrayBufferView | ArrayBuffer | Buffer}} input
+ * @returns {{commitment: Buffer, commitmentHex: string}}
+ */
+export function deriveConfidentialNoteV2(input) {
+  const native = ensureConfidentialV2Native(
+    resolveNativeBinding(),
+    "deriveConfidentialNoteV2",
+  );
+  const assetDefinitionId = String(input?.assetDefinitionId ?? "").trim();
+  if (!assetDefinitionId) {
+    throw new Error("assetDefinitionId is required");
+  }
+  const amount = normalizeWholeNumberLiteral(input?.amount, "amount");
+  const rhoHex = normalizeFixed32HexInput(input?.rhoHex ?? input?.rho, "rho");
+  const ownerTagHex = normalizeFixed32HexInput(
+    input?.ownerTagHex ?? input?.ownerTag,
+    "ownerTag",
+  );
+  const commitment = Buffer.from(
+    native.deriveConfidentialNoteV2(
+      assetDefinitionId,
+      amount,
+      rhoHex,
+      ownerTagHex,
+    ),
+  );
+  return {
+    commitment,
+    commitmentHex: commitment.toString("hex"),
+  };
+}
+
+/**
+ * Derive a confidential v2 nullifier from note material.
+ * @param {{chainId: string, assetDefinitionId: string, spendKey: ArrayBufferView | ArrayBuffer | Buffer, rhoHex?: string, rho?: ArrayBufferView | ArrayBuffer | Buffer}} input
+ * @returns {{nullifier: Buffer, nullifierHex: string}}
+ */
+export function deriveConfidentialNullifierV2(input) {
+  const native = ensureConfidentialV2Native(
+    resolveNativeBinding(),
+    "deriveConfidentialNullifierV2",
+  );
+  const chainId = String(input?.chainId ?? "").trim();
+  const assetDefinitionId = String(input?.assetDefinitionId ?? "").trim();
+  const spendKey = toBuffer(input?.spendKey, "spendKey");
+  if (!chainId) {
+    throw new Error("chainId is required");
+  }
+  if (!assetDefinitionId) {
+    throw new Error("assetDefinitionId is required");
+  }
+  if (spendKey.length !== 32) {
+    throw new Error("confidential spend key must be 32 bytes");
+  }
+  const rhoHex = normalizeFixed32HexInput(input?.rhoHex ?? input?.rho, "rho");
+  const nullifier = Buffer.from(
+    native.deriveConfidentialNullifierV2(
+      chainId,
+      assetDefinitionId,
+      spendKey,
+      rhoHex,
+    ),
+  );
+  return {
+    nullifier,
+    nullifierHex: nullifier.toString("hex"),
+  };
 }
 
 /**
@@ -439,12 +776,41 @@ function toBuffer(value, name) {
   throw new TypeError(`${name} must be a Buffer, string, or ArrayBuffer view`);
 }
 
-function toBufferField(payload, snake) {
-  const value = payload && snake ? payload[snake] : null;
-  if (value === null || value === undefined) {
-    throw new Error(`native binding returned missing \`${snake}\``);
+function normalizeFixed32HexInput(value, name) {
+  if (typeof value === "string") {
+    const normalized = value.trim().replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(normalized)) {
+      throw new Error(`${name} must be a 32-byte hex string`);
+    }
+    return normalized;
   }
-  return toBuffer(value, String(snake));
+  const buffer = toBuffer(value, name);
+  if (buffer.length !== 32) {
+    throw new Error(`${name} must be 32 bytes`);
+  }
+  return Buffer.from(buffer).toString("hex");
+}
+
+function normalizeWholeNumberLiteral(value, name) {
+  const normalized = String(value ?? "").trim();
+  if (!/^\d+$/.test(normalized)) {
+    throw new Error(`${name} must be a whole-number string`);
+  }
+  return normalized;
+}
+
+function toBufferField(payload, ...fieldNames) {
+  for (const fieldName of fieldNames) {
+    if (!payload || !fieldName) {
+      continue;
+    }
+    const value = payload[fieldName];
+    if (value !== null && value !== undefined) {
+      return toBuffer(value, String(fieldName));
+    }
+  }
+  const rendered = fieldNames.map((fieldName) => `\`${fieldName}\``).join(" or ");
+  throw new Error(`native binding returned missing ${rendered}`);
 }
 
 function wrapConfidentialKeyset(keys) {
@@ -499,15 +865,4 @@ function wrapConfidentialKeyset(keys) {
   });
 
   return result;
-}
-
-function deriveConfidentialKeysetFallback(seed) {
-  const derive = (info) => hkdfSync("sha3-512", seed, CONFIDENTIAL_KEY_SALT, info, 32);
-  return {
-    sk_spend: Buffer.from(seed),
-    nk: derive(CONFIDENTIAL_INFO_NK),
-    ivk: derive(CONFIDENTIAL_INFO_IVK),
-    ovk: derive(CONFIDENTIAL_INFO_OVK),
-    fvk: derive(CONFIDENTIAL_INFO_FVK),
-  };
 }

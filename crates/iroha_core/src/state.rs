@@ -16,10 +16,10 @@ use std::{
 
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::actual::{ConsensusMode, LaneConfig};
-#[cfg(feature = "sm")]
-use iroha_crypto::sm::Sm2PublicKey;
 #[cfg(feature = "sm-ffi-openssl")]
-use iroha_crypto::sm::{OpenSslProvider, SmIntrinsicPolicy};
+use iroha_crypto::sm::OpenSslProvider;
+#[cfg(feature = "sm")]
+use iroha_crypto::sm::{Sm2PublicKey, SmIntrinsicPolicy};
 use iroha_crypto::{
     Algorithm, Hash, HashOf, MerkleTree as CanonMerkleTree, PublicKey,
     blake2::{Blake2b512, digest::Digest as _},
@@ -27,9 +27,9 @@ use iroha_crypto::{
 use iroha_data_model::{
     IntoKeyValue,
     account::{
-        AccountDomainSelector, AccountEntry, AccountId, AccountValue, OpaqueAccountId,
-        ScopedAccountId,
-        rekey::{AccountLabel, AccountRekeyRecord},
+        AccountDomainSelector, AccountEntry, AccountId, AccountRecoveryPolicy,
+        AccountRecoveryRequest, AccountValue, OpaqueAccountId,
+        rekey::{AccountAlias, AccountRekeyRecord},
     },
     asset::{
         Asset, AssetBalancePolicy, AssetBalanceScope, AssetDefinitionAlias, AssetEntry, AssetValue,
@@ -47,9 +47,11 @@ use iroha_data_model::{
     },
     content::{ContentBundleId, ContentBundleRecord, ContentChunk},
     da::{
-        commitment::DaCommitmentLocation, pin_intent::DaPinIntentWithLocation,
-        types::StorageTicketId,
+        commitment::DaCommitmentLocation,
+        pin_intent::DaPinIntentWithLocation,
+        types::{BlobDigest, StorageTicketId},
     },
+    error::ParseError,
     events::{
         EventBox, SharedDataEvent,
         data::{
@@ -79,10 +81,6 @@ use iroha_data_model::{
         UniversalAccountId,
     },
     nft::{NftEntry, NftValue},
-    offline::{
-        OfflineAllowanceRecord, OfflineTransferRecord, OfflineTransferStatus,
-        OfflineVerdictRevocation,
-    },
     oracle::{
         FeedConfig, FeedId, OracleDispute, OracleDisputeId, OracleProviderKey, OracleProviderStats,
         TwitterBindingRecord,
@@ -92,9 +90,25 @@ use iroha_data_model::{
     permission::{Permission, Permissions},
     prelude::*,
     query::error::{FindError, QueryExecutionFail},
+    ram_lfe::{RamLfeProgramId, RamLfeProgramPolicy},
     repo::{RepoAgreement, RepoAgreementId},
     role::RoleId,
+    rwa::{RwaEntry, RwaId, RwaValue},
     social::{ViralCampaignBudget, ViralDailyCounter, ViralEscrowRecord, ViralRewardBudget},
+    soracloud::{
+        SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraDecryptionRequestRecordV1,
+        SoraDeploymentBundleV1, SoraHfPlacementRecordV1, SoraHfSharedLeaseAuditEventV1,
+        SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSourceRecordV1,
+        SoraInrouHostCapabilityRecordV1, SoraInrouReplicaRuntimeStateV1,
+        SoraInrouServicePlacementRecordV1, SoraModelArtifactAuditEventV1,
+        SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraModelHostViolationEvidenceRecordV1, SoraModelRegistryV1, SoraModelWeightAuditEventV1,
+        SoraModelWeightVersionRecordV1, SoraPrivateCompileProfileV1,
+        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
+        SoraServiceAuditEventV1, SoraServiceDeploymentStateV1, SoraServiceMailboxMessageV1,
+        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraTrainingJobAuditEventV1,
+        SoraTrainingJobRecordV1, SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
+    },
     soradns::{
         DirectoryId, DirectoryRotationPolicyV1, PendingDirectoryDraftV1, ResolverDirectoryRecordV1,
         ResolverId, ResolverRevocationRecordV1,
@@ -178,14 +192,27 @@ use crate::{
     Peers,
     block::{CommittedBlock, ValidBlock},
     compliance::LaneComplianceEngine,
-    executor::Executor,
-    governance::manifest::{LaneManifestRegistry, LaneManifestRegistryHandle},
+    executor::{Executor, parse_contract_call_execution_context},
+    governance::manifest::{
+        LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
+    },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle},
     kura::Kura,
     nexus::space_directory::{
-        SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
+        AccountScopeDirectoryEntry, SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet,
+        UaidDataspaceBindings,
     },
-    query::store::LiveQueryStoreHandle,
+    query::{
+        index_status::{QueryIndexJournal, QueryIndexStatus},
+        projection_checkpoint::{
+            QueryProjectionCheckpoint, QueryProjectionCheckpointPlanError,
+            QueryProjectionCheckpointPublishPlan, QueryProjectionCheckpointShard,
+            QueryProjectionUploadedShardArchive,
+        },
+        projection_checkpoint_journal::QueryProjectionCheckpointJournal,
+        projection_shard::QueryProjectionShardArchive,
+        store::LiveQueryStoreHandle,
+    },
     role::RoleIdWithOwner,
     settlement::SettlementEngine,
     smartcontracts::{
@@ -197,7 +224,7 @@ use crate::{
                 SetReadOnly as TriggerSetReadOnly, SetTransaction as TriggerSetTransaction,
                 SetView as TriggerSetView,
             },
-            specialized::{LoadedAction, LoadedActionTrait},
+            specialized::{LoadedAction, LoadedActionTrait, TimeTriggerRetryState},
         },
     },
     state::storage_transactions::{
@@ -212,7 +239,7 @@ const DEFAULT_TRIGGER_GAS_LIMIT: u64 = 50_000_000;
 const AUTOSCALE_META_MANAGED: &str = "autoscale.managed";
 const AUTOSCALE_META_CREATED_HEIGHT: &str = "autoscale.created_height";
 
-pub(crate) fn account_label_is_pii(label: &AccountLabel) -> bool {
+pub(crate) fn account_label_is_pii(label: &AccountAlias) -> bool {
     let raw = label.label.as_ref();
     if raw.is_empty() {
         return false;
@@ -328,6 +355,7 @@ impl<T: MvValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
 macro_rules! build_world_block {
     ($state:expr, $method:ident) => {
         WorldBlock {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: $state.parameters.$method(),
             peers: $state.peers.$method(),
             consensus_keys: $state.consensus_keys.$method(),
@@ -339,23 +367,29 @@ macro_rules! build_world_block {
             domains: $state.domains.$method(),
             domain_selectors: $state.domain_selectors.$method(),
             accounts: $state.accounts.$method(),
-            account_subject_domains: $state.account_subject_domains.$method(),
-            domain_account_subjects: $state.domain_account_subjects.$method(),
             uaid_accounts: $state.uaid_accounts.$method(),
             account_aliases: $state.account_aliases.$method(),
+            account_aliases_by_account: $state.account_aliases_by_account.$method(),
+            account_scope_directory: $state.account_scope_directory.$method(),
             opaque_uaids: $state.opaque_uaids.$method(),
+            ram_lfe_program_policies: $state.ram_lfe_program_policies.$method(),
             identifier_policies: $state.identifier_policies.$method(),
             identifier_claims: $state.identifier_claims.$method(),
             account_rekey_records: $state.account_rekey_records.$method(),
+            account_recovery_policies: $state.account_recovery_policies.$method(),
+            account_recovery_requests: $state.account_recovery_requests.$method(),
             asset_definitions: $state.asset_definitions.$method(),
             asset_definition_aliases: $state.asset_definition_aliases.$method(),
             asset_definition_alias_bindings: $state.asset_definition_alias_bindings.$method(),
+            contract_aliases: $state.contract_aliases.$method(),
+            contract_alias_bindings: $state.contract_alias_bindings.$method(),
             domain_asset_definitions: $state.domain_asset_definitions.$method(),
             asset_definition_holders: $state.asset_definition_holders.$method(),
             asset_definition_assets: $state.asset_definition_assets.$method(),
             assets: $state.assets.$method(),
             asset_metadata: $state.asset_metadata.$method(),
             nfts: $state.nfts.$method(),
+            rwas: $state.rwas.$method(),
             roles: $state.roles.$method(),
             account_permissions: $state.account_permissions.$method(),
             account_roles: $state.account_roles.$method(),
@@ -373,6 +407,8 @@ macro_rules! build_world_block {
             viral_binding_claims: $state.viral_binding_claims.$method(),
             viral_escrows: $state.viral_escrows.$method(),
             viral_bonus_paid: $state.viral_bonus_paid.$method(),
+            asset_escrows: $state.asset_escrows.$method(),
+            anonymous_asset_escrows: $state.anonymous_asset_escrows.$method(),
             uaid_dataspaces: $state.uaid_dataspaces.$method(),
             space_directory_manifests: $state.space_directory_manifests.$method(),
             axt_policies: $state.axt_policies.$method(),
@@ -395,6 +431,56 @@ macro_rules! build_world_block {
             contract_code: $state.contract_code.$method(),
             contract_instances: $state.contract_instances.$method(),
             smart_contract_state: $state.smart_contract_state.$method(),
+            soracloud_service_revisions: $state.soracloud_service_revisions.$method(),
+            soracloud_service_deployments: $state.soracloud_service_deployments.$method(),
+            soracloud_service_runtime: $state.soracloud_service_runtime.$method(),
+            soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.$method(),
+            soracloud_service_audit_events: $state.soracloud_service_audit_events.$method(),
+            soracloud_service_state_entries: $state.soracloud_service_state_entries.$method(),
+            soracloud_decryption_request_records: $state
+                .soracloud_decryption_request_records
+                .$method(),
+            soracloud_agent_apartments: $state.soracloud_agent_apartments.$method(),
+            soracloud_agent_apartment_audit_events: $state
+                .soracloud_agent_apartment_audit_events
+                .$method(),
+            soracloud_training_jobs: $state.soracloud_training_jobs.$method(),
+            soracloud_training_job_audit_events: $state
+                .soracloud_training_job_audit_events
+                .$method(),
+            soracloud_model_registries: $state.soracloud_model_registries.$method(),
+            soracloud_model_weight_versions: $state.soracloud_model_weight_versions.$method(),
+            soracloud_model_weight_audit_events: $state
+                .soracloud_model_weight_audit_events
+                .$method(),
+            soracloud_model_artifacts: $state.soracloud_model_artifacts.$method(),
+            soracloud_model_artifact_audit_events: $state
+                .soracloud_model_artifact_audit_events
+                .$method(),
+            soracloud_private_compile_profiles: $state.soracloud_private_compile_profiles.$method(),
+            soracloud_uploaded_model_bundles: $state.soracloud_uploaded_model_bundles.$method(),
+            soracloud_uploaded_model_chunks: $state.soracloud_uploaded_model_chunks.$method(),
+            soracloud_private_inference_sessions: $state
+                .soracloud_private_inference_sessions
+                .$method(),
+            soracloud_private_inference_checkpoints: $state
+                .soracloud_private_inference_checkpoints
+                .$method(),
+            soracloud_model_host_capabilities: $state.soracloud_model_host_capabilities.$method(),
+            soracloud_inrou_host_capabilities: $state.soracloud_inrou_host_capabilities.$method(),
+            soracloud_hf_sources: $state.soracloud_hf_sources.$method(),
+            soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.$method(),
+            soracloud_hf_shared_lease_members: $state.soracloud_hf_shared_lease_members.$method(),
+            soracloud_hf_shared_lease_audit_events: $state
+                .soracloud_hf_shared_lease_audit_events
+                .$method(),
+            soracloud_model_host_violation_evidence: $state
+                .soracloud_model_host_violation_evidence
+                .$method(),
+            soracloud_hf_placements: $state.soracloud_hf_placements.$method(),
+            soracloud_inrou_service_placements: $state.soracloud_inrou_service_placements.$method(),
+            soracloud_mailbox_messages: $state.soracloud_mailbox_messages.$method(),
+            soracloud_runtime_receipts: $state.soracloud_runtime_receipts.$method(),
             capacity_declarations: $state.capacity_declarations.$method(),
             capacity_fee_ledger: $state.capacity_fee_ledger.$method(),
             capacity_disputes: $state.capacity_disputes.$method(),
@@ -422,13 +508,7 @@ macro_rules! build_world_block {
             soradns_history_len: $state.soradns_history_len.$method(),
             repo_agreements: $state.repo_agreements.$method(),
             settlement_ledgers: $state.settlement_ledgers.$method(),
-            offline_allowances: $state.offline_allowances.$method(),
-            offline_verdict_revocations: $state.offline_verdict_revocations.$method(),
-            offline_consumed_build_claim_ids: $state.offline_consumed_build_claim_ids.$method(),
-            offline_to_online_transfers: $state.offline_to_online_transfers.$method(),
-            offline_transfer_sender_index: $state.offline_transfer_sender_index.$method(),
-            offline_transfer_receiver_index: $state.offline_transfer_receiver_index.$method(),
-            offline_transfer_status_index: $state.offline_transfer_status_index.$method(),
+            offline_note_v2_replay_keys: $state.offline_note_v2_replay_keys.$method(),
             public_lane_validators: $state.public_lane_validators.$method(),
             public_lane_stake_shares: $state.public_lane_stake_shares.$method(),
             public_lane_rewards: $state.public_lane_rewards.$method(),
@@ -437,6 +517,7 @@ macro_rules! build_world_block {
             zk_assets: $state.zk_assets.$method(),
             elections: $state.elections.$method(),
             citizens: $state.citizens.$method(),
+            ministry_agenda_proposals: $state.ministry_agenda_proposals.$method(),
             governance_proposals: $state.governance_proposals.$method(),
             governance_referenda: $state.governance_referenda.$method(),
             governance_stage_approvals: $state.governance_stage_approvals.$method(),
@@ -458,6 +539,7 @@ macro_rules! build_world_block {
 macro_rules! build_world_transaction {
     ($state:expr, $telemetry:expr, $axt_lane_config:expr, $axt_current_slot:expr) => {
         WorldTransaction {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: $state.parameters.transaction(),
             peers: $state.peers.transaction(),
             consensus_keys: $state.consensus_keys.transaction(),
@@ -469,23 +551,29 @@ macro_rules! build_world_transaction {
             domains: $state.domains.transaction(),
             domain_selectors: $state.domain_selectors.transaction(),
             accounts: $state.accounts.transaction(),
-            account_subject_domains: $state.account_subject_domains.transaction(),
-            domain_account_subjects: $state.domain_account_subjects.transaction(),
             uaid_accounts: $state.uaid_accounts.transaction(),
             account_aliases: $state.account_aliases.transaction(),
+            account_aliases_by_account: $state.account_aliases_by_account.transaction(),
+            account_scope_directory: $state.account_scope_directory.transaction(),
             opaque_uaids: $state.opaque_uaids.transaction(),
+            ram_lfe_program_policies: $state.ram_lfe_program_policies.transaction(),
             identifier_policies: $state.identifier_policies.transaction(),
             identifier_claims: $state.identifier_claims.transaction(),
             account_rekey_records: $state.account_rekey_records.transaction(),
+            account_recovery_policies: $state.account_recovery_policies.transaction(),
+            account_recovery_requests: $state.account_recovery_requests.transaction(),
             asset_definitions: $state.asset_definitions.transaction(),
             asset_definition_aliases: $state.asset_definition_aliases.transaction(),
             asset_definition_alias_bindings: $state.asset_definition_alias_bindings.transaction(),
+            contract_aliases: $state.contract_aliases.transaction(),
+            contract_alias_bindings: $state.contract_alias_bindings.transaction(),
             domain_asset_definitions: $state.domain_asset_definitions.transaction(),
             asset_definition_holders: $state.asset_definition_holders.transaction(),
             asset_definition_assets: $state.asset_definition_assets.transaction(),
             assets: $state.assets.transaction(),
             asset_metadata: $state.asset_metadata.transaction(),
             nfts: $state.nfts.transaction(),
+            rwas: $state.rwas.transaction(),
             roles: $state.roles.transaction(),
             account_permissions: $state.account_permissions.transaction(),
             account_roles: $state.account_roles.transaction(),
@@ -503,6 +591,8 @@ macro_rules! build_world_transaction {
             viral_binding_claims: $state.viral_binding_claims.transaction(),
             viral_escrows: $state.viral_escrows.transaction(),
             viral_bonus_paid: $state.viral_bonus_paid.transaction(),
+            asset_escrows: $state.asset_escrows.transaction(),
+            anonymous_asset_escrows: $state.anonymous_asset_escrows.transaction(),
             uaid_dataspaces: $state.uaid_dataspaces.transaction(),
             space_directory_manifests: $state.space_directory_manifests.transaction(),
             axt_policies: $state.axt_policies.transaction(),
@@ -525,6 +615,66 @@ macro_rules! build_world_transaction {
             contract_code: $state.contract_code.transaction(),
             contract_instances: $state.contract_instances.transaction(),
             smart_contract_state: $state.smart_contract_state.transaction(),
+            soracloud_service_revisions: $state.soracloud_service_revisions.transaction(),
+            soracloud_service_deployments: $state.soracloud_service_deployments.transaction(),
+            soracloud_service_runtime: $state.soracloud_service_runtime.transaction(),
+            soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.transaction(),
+            soracloud_service_audit_events: $state.soracloud_service_audit_events.transaction(),
+            soracloud_service_state_entries: $state.soracloud_service_state_entries.transaction(),
+            soracloud_decryption_request_records: $state
+                .soracloud_decryption_request_records
+                .transaction(),
+            soracloud_agent_apartments: $state.soracloud_agent_apartments.transaction(),
+            soracloud_agent_apartment_audit_events: $state
+                .soracloud_agent_apartment_audit_events
+                .transaction(),
+            soracloud_training_jobs: $state.soracloud_training_jobs.transaction(),
+            soracloud_training_job_audit_events: $state
+                .soracloud_training_job_audit_events
+                .transaction(),
+            soracloud_model_registries: $state.soracloud_model_registries.transaction(),
+            soracloud_model_weight_versions: $state.soracloud_model_weight_versions.transaction(),
+            soracloud_model_weight_audit_events: $state
+                .soracloud_model_weight_audit_events
+                .transaction(),
+            soracloud_model_artifacts: $state.soracloud_model_artifacts.transaction(),
+            soracloud_model_artifact_audit_events: $state
+                .soracloud_model_artifact_audit_events
+                .transaction(),
+            soracloud_private_compile_profiles: $state
+                .soracloud_private_compile_profiles
+                .transaction(),
+            soracloud_uploaded_model_bundles: $state.soracloud_uploaded_model_bundles.transaction(),
+            soracloud_uploaded_model_chunks: $state.soracloud_uploaded_model_chunks.transaction(),
+            soracloud_private_inference_sessions: $state
+                .soracloud_private_inference_sessions
+                .transaction(),
+            soracloud_private_inference_checkpoints: $state
+                .soracloud_private_inference_checkpoints
+                .transaction(),
+            soracloud_model_host_capabilities: $state
+                .soracloud_model_host_capabilities
+                .transaction(),
+            soracloud_inrou_host_capabilities: $state
+                .soracloud_inrou_host_capabilities
+                .transaction(),
+            soracloud_hf_sources: $state.soracloud_hf_sources.transaction(),
+            soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.transaction(),
+            soracloud_hf_shared_lease_members: $state
+                .soracloud_hf_shared_lease_members
+                .transaction(),
+            soracloud_hf_shared_lease_audit_events: $state
+                .soracloud_hf_shared_lease_audit_events
+                .transaction(),
+            soracloud_model_host_violation_evidence: $state
+                .soracloud_model_host_violation_evidence
+                .transaction(),
+            soracloud_hf_placements: $state.soracloud_hf_placements.transaction(),
+            soracloud_inrou_service_placements: $state
+                .soracloud_inrou_service_placements
+                .transaction(),
+            soracloud_mailbox_messages: $state.soracloud_mailbox_messages.transaction(),
+            soracloud_runtime_receipts: $state.soracloud_runtime_receipts.transaction(),
             capacity_declarations: $state.capacity_declarations.transaction(),
             capacity_fee_ledger: $state.capacity_fee_ledger.transaction(),
             capacity_disputes: $state.capacity_disputes.transaction(),
@@ -552,13 +702,7 @@ macro_rules! build_world_transaction {
             soradns_history_len: $state.soradns_history_len.transaction(),
             repo_agreements: $state.repo_agreements.transaction(),
             settlement_ledgers: $state.settlement_ledgers.transaction(),
-            offline_allowances: $state.offline_allowances.transaction(),
-            offline_verdict_revocations: $state.offline_verdict_revocations.transaction(),
-            offline_consumed_build_claim_ids: $state.offline_consumed_build_claim_ids.transaction(),
-            offline_to_online_transfers: $state.offline_to_online_transfers.transaction(),
-            offline_transfer_sender_index: $state.offline_transfer_sender_index.transaction(),
-            offline_transfer_receiver_index: $state.offline_transfer_receiver_index.transaction(),
-            offline_transfer_status_index: $state.offline_transfer_status_index.transaction(),
+            offline_note_v2_replay_keys: $state.offline_note_v2_replay_keys.transaction(),
             public_lane_validators: $state.public_lane_validators.transaction(),
             public_lane_stake_shares: $state.public_lane_stake_shares.transaction(),
             public_lane_rewards: $state.public_lane_rewards.transaction(),
@@ -567,6 +711,7 @@ macro_rules! build_world_transaction {
             zk_assets: $state.zk_assets.transaction(),
             elections: $state.elections.transaction(),
             citizens: $state.citizens.transaction(),
+            ministry_agenda_proposals: $state.ministry_agenda_proposals.transaction(),
             governance_proposals: $state.governance_proposals.transaction(),
             governance_referenda: $state.governance_referenda.transaction(),
             governance_stage_approvals: $state.governance_stage_approvals.transaction(),
@@ -789,8 +934,9 @@ struct AccountPermissionSummary {
     fee_sponsors: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
 }
 
-fn parse_permission_account_field(
+pub(crate) fn parse_permission_account_field(
     world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     payload: &iroha_primitives::json::Json,
     field: &str,
 ) -> Option<iroha_data_model::account::AccountId> {
@@ -804,7 +950,35 @@ fn parse_permission_account_field(
         norito::json::Value::String(value) => value.as_str(),
         _ => return None,
     };
-    crate::block::parse_account_literal_with_world(world, literal).map(Into::into)
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+        .map(Into::into)
+}
+
+pub(crate) fn fee_sponsor_from_permission(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    permission: &Permission,
+) -> Option<iroha_data_model::account::AccountId> {
+    (permission.name() == "CanUseFeeSponsor")
+        .then(|| {
+            parse_permission_account_field(
+                world,
+                dataspace_catalog,
+                permission.payload(),
+                "sponsor",
+            )
+        })
+        .flatten()
+}
+
+pub(crate) fn permission_allows_fee_sponsor(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    permission: &Permission,
+    sponsor: &iroha_data_model::account::AccountId,
+) -> bool {
+    fee_sponsor_from_permission(world, dataspace_catalog, permission)
+        .is_some_and(|allowed| allowed.subject_id() == sponsor.subject_id())
 }
 
 impl AccountPermissionSummary {
@@ -815,12 +989,20 @@ impl AccountPermissionSummary {
         self.fee_sponsors.clear();
     }
 
-    fn apply_grant(&mut self, world: &impl WorldReadOnly, permission: &Permission) {
+    fn apply_grant(
+        &mut self,
+        world: &impl WorldReadOnly,
+        dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+        permission: &Permission,
+    ) {
         match permission.name() {
             "CanRegisterTrigger" => {
-                if let Some(authority) =
-                    parse_permission_account_field(world, permission.payload(), "authority")
-                {
+                if let Some(authority) = parse_permission_account_field(
+                    world,
+                    dataspace_catalog,
+                    permission.payload(),
+                    "authority",
+                ) {
                     self.reg_trigger_authorities.insert(authority);
                 }
             }
@@ -834,7 +1016,7 @@ impl AccountPermissionSummary {
             }
             "CanUseFeeSponsor" => {
                 if let Some(sponsor) =
-                    parse_permission_account_field(world, permission.payload(), "sponsor")
+                    fee_sponsor_from_permission(world, dataspace_catalog, permission)
                 {
                     self.fee_sponsors.insert(sponsor);
                 }
@@ -912,6 +1094,21 @@ pub struct LaneRelayStore {
 }
 
 impl LaneRelayStore {
+    fn conflicting_existing(&self, envelope: &LaneRelayEnvelope) -> Option<LaneRelayError> {
+        let lane = envelope.lane_id;
+        let height = envelope.block_height;
+        let key = (lane, envelope.dataspace_id, height);
+        self.entries.get(&key).and_then(|existing| {
+            if existing.settlement_hash != envelope.settlement_hash
+                || existing.block_header.hash() != envelope.block_header.hash()
+            {
+                Some(LaneRelayError::ConflictingRelay { lane, height })
+            } else {
+                None
+            }
+        })
+    }
+
     /// Insert or replace a lane relay envelope.
     ///
     /// # Errors
@@ -1268,34 +1465,45 @@ pub struct World {
     pub(crate) domain_selectors: Storage<AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: Storage<AccountId, AccountValue>,
-    /// Domain memberships keyed by domainless account subject.
-    pub(crate) account_subject_domains: Storage<AccountId, BTreeSet<DomainId>>,
-    /// Subject memberships keyed by domain.
-    pub(crate) domain_account_subjects: Storage<DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     #[norito(skip)]
     pub(crate) uaid_accounts: Storage<UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical account id.
+    /// Index from account alias to canonical I105 account id.
+    pub(crate) account_aliases: Storage<AccountAlias, AccountId>,
+    /// Reverse index from canonical I105 account id to bound aliases.
     #[norito(skip)]
-    pub(crate) account_aliases: Storage<AccountLabel, AccountId>,
+    pub(crate) account_aliases_by_account: Storage<AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    #[norito(skip)]
+    pub(crate) account_scope_directory: Storage<AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     #[norito(skip)]
     pub(crate) opaque_uaids: Storage<OpaqueAccountId, UniversalAccountId>,
+    /// Global RAM-LFE program policy registry keyed by program identifier.
+    pub(crate) ram_lfe_program_policies: Storage<RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry keyed by `(kind, business_rule)`.
     pub(crate) identifier_policies: Storage<IdentifierPolicyId, IdentifierPolicy>,
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims: Storage<OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
-    pub(crate) account_rekey_records: Storage<AccountLabel, AccountRekeyRecord>,
+    pub(crate) account_rekey_records: Storage<AccountAlias, AccountRekeyRecord>,
+    /// Alias-keyed account recovery policies.
+    pub(crate) account_recovery_policies: Storage<AccountAlias, AccountRecoveryPolicy>,
+    /// Alias-keyed account recovery requests.
+    pub(crate) account_recovery_requests: Storage<AccountAlias, AccountRecoveryRequest>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: Storage<AssetDefinitionId, AssetDefinition>,
     /// Index mapping asset alias literals to canonical asset definition ids.
     #[norito(skip)]
     pub(crate) asset_definition_aliases: Storage<AssetDefinitionAlias, AssetDefinitionId>,
     /// Alias lease metadata keyed by canonical asset definition id.
-    #[norito(skip)]
     pub(crate) asset_definition_alias_bindings:
         Storage<AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Index mapping contract alias literals to canonical contract addresses.
+    #[norito(skip)]
+    pub(crate) contract_aliases: Storage<ContractAlias, ContractAddress>,
+    /// Alias lease metadata keyed by canonical contract address.
+    pub(crate) contract_alias_bindings: Storage<ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     #[norito(skip)]
     pub(crate) domain_asset_definitions: Storage<DomainId, BTreeSet<AssetDefinitionId>>,
@@ -1311,6 +1519,8 @@ pub struct World {
     pub(crate) asset_metadata: Storage<AssetId, Metadata>,
     /// Non fungible assets.
     pub(crate) nfts: Storage<NftId, NftValue>,
+    /// Registered real-world asset lots.
+    pub(crate) rwas: Storage<RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: Storage<RoleId, Role>,
     /// Permission tokens of an account.
@@ -1353,6 +1563,10 @@ pub struct World {
     pub(crate) viral_escrows: Storage<Hash, ViralEscrowRecord>,
     /// Bindings that have already paid a sender bonus.
     pub(crate) viral_bonus_paid: Storage<Hash, bool>,
+    /// Native asset escrows keyed by escrow identifier.
+    pub(crate) asset_escrows: Storage<EscrowId, AssetEscrowRecord>,
+    /// Native anonymous asset escrows keyed by escrow identifier.
+    pub(crate) anonymous_asset_escrows: Storage<EscrowId, AnonymousAssetEscrowRecord>,
     /// UAID dataspace bindings maintained by the Space Directory.
     #[norito(skip)]
     pub(crate) uaid_dataspaces: Storage<UniversalAccountId, UaidDataspaceBindings>,
@@ -1434,10 +1648,87 @@ pub struct World {
         Storage<iroha_crypto::Hash, iroha_data_model::smart_contract::manifest::ContractManifest>,
     /// On-chain storage of compiled contract code bytes keyed by code hash.
     pub(crate) contract_code: Storage<iroha_crypto::Hash, Vec<u8>>,
-    /// Active contract instances bound to (namespace, `contract_id`)
-    pub(crate) contract_instances: Storage<(String, String), iroha_crypto::Hash>,
+    /// Active contract instances bound to canonical contract addresses.
+    pub(crate) contract_instances:
+        Storage<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: Storage<Name, Vec<u8>>,
+    /// Admitted Soracloud service revisions keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_service_revisions: Storage<(String, String), SoraDeploymentBundleV1>,
+    /// Current Soracloud deployment state keyed by service name.
+    pub(crate) soracloud_service_deployments: Storage<Name, SoraServiceDeploymentStateV1>,
+    /// Active Soracloud runtime state keyed by service name.
+    pub(crate) soracloud_service_runtime: Storage<Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime:
+        Storage<(String, String, String), SoraInrouReplicaRuntimeStateV1>,
+    /// Soracloud lifecycle audit events keyed by deterministic sequence.
+    pub(crate) soracloud_service_audit_events: Storage<u64, SoraServiceAuditEventV1>,
+    /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
+    pub(crate) soracloud_service_state_entries:
+        Storage<(String, String, String), SoraServiceStateEntryV1>,
+    /// Recorded decryption requests keyed by `(service_name, request_id)`.
+    pub(crate) soracloud_decryption_request_records:
+        Storage<(String, String), SoraDecryptionRequestRecordV1>,
+    /// Authoritative agent apartments keyed by apartment name.
+    pub(crate) soracloud_agent_apartments: Storage<String, SoraAgentApartmentRecordV1>,
+    /// Agent-apartment audit events keyed by deterministic sequence.
+    pub(crate) soracloud_agent_apartment_audit_events: Storage<u64, SoraAgentApartmentAuditEventV1>,
+    /// Authoritative training jobs keyed by `(service_name, job_id)`.
+    pub(crate) soracloud_training_jobs: Storage<(String, String), SoraTrainingJobRecordV1>,
+    /// Training-job audit events keyed by deterministic sequence.
+    pub(crate) soracloud_training_job_audit_events: Storage<u64, SoraTrainingJobAuditEventV1>,
+    /// Model registries keyed by `(service_name, model_name)`.
+    pub(crate) soracloud_model_registries: Storage<(String, String), SoraModelRegistryV1>,
+    /// Model-weight versions keyed by `(service_name, model_name, weight_version)`.
+    pub(crate) soracloud_model_weight_versions:
+        Storage<(String, String, String), SoraModelWeightVersionRecordV1>,
+    /// Model-weight audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_weight_audit_events: Storage<u64, SoraModelWeightAuditEventV1>,
+    /// Model artifacts keyed by `(service_name, training_job_id)`.
+    pub(crate) soracloud_model_artifacts: Storage<(String, String), SoraModelArtifactRecordV1>,
+    /// Model-artifact audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_artifact_audit_events: Storage<u64, SoraModelArtifactAuditEventV1>,
+    /// Private compile profiles keyed by compile-profile hash.
+    pub(crate) soracloud_private_compile_profiles: Storage<Hash, SoraPrivateCompileProfileV1>,
+    /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
+    pub(crate) soracloud_uploaded_model_bundles:
+        Storage<(String, String, String), SoraUploadedModelBundleV1>,
+    /// Uploaded-model chunks keyed by canonical `<service>:<model>:<version>:<ordinal>` literal.
+    pub(crate) soracloud_uploaded_model_chunks: Storage<String, SoraUploadedModelChunkV1>,
+    /// Private inference sessions keyed by `(apartment, session_id)`.
+    pub(crate) soracloud_private_inference_sessions:
+        Storage<(String, String), SoraPrivateInferenceSessionV1>,
+    /// Private inference checkpoints keyed by `(session_id, step)`.
+    pub(crate) soracloud_private_inference_checkpoints:
+        Storage<(String, u32), SoraPrivateInferenceCheckpointV1>,
+    /// Active validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_model_host_capabilities:
+        Storage<AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        Storage<AccountId, SoraInrouHostCapabilityRecordV1>,
+    /// Canonical Hugging Face sources keyed by source identifier.
+    pub(crate) soracloud_hf_sources: Storage<Hash, SoraHfSourceRecordV1>,
+    /// Shared lease pools keyed by canonical pool identifier.
+    pub(crate) soracloud_hf_shared_lease_pools: Storage<Hash, SoraHfSharedLeasePoolV1>,
+    /// Shared lease memberships keyed by `(pool_id, account_id)` string literals.
+    pub(crate) soracloud_hf_shared_lease_members:
+        Storage<(String, String), SoraHfSharedLeaseMemberV1>,
+    /// Shared lease audit events keyed by deterministic sequence.
+    pub(crate) soracloud_hf_shared_lease_audit_events: Storage<u64, SoraHfSharedLeaseAuditEventV1>,
+    /// Host-violation evidence keyed by deterministic evidence identifier.
+    pub(crate) soracloud_model_host_violation_evidence:
+        Storage<Hash, SoraModelHostViolationEvidenceRecordV1>,
+    /// Active HF placement records keyed by shared-lease pool identifier.
+    pub(crate) soracloud_hf_placements: Storage<Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        Storage<(String, String), SoraInrouServicePlacementRecordV1>,
+    /// Ordered Soracloud mailbox messages keyed by deterministic message id.
+    pub(crate) soracloud_mailbox_messages: Storage<Hash, SoraServiceMailboxMessageV1>,
+    /// Soracloud runtime receipts keyed by deterministic receipt id.
+    pub(crate) soracloud_runtime_receipts: Storage<Hash, SoraRuntimeReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     #[norito(skip)]
     pub(crate) capacity_declarations: Storage<ProviderId, CapacityDeclarationRecord>,
@@ -1515,23 +1806,8 @@ pub struct World {
     pub(crate) repo_agreements: Storage<RepoAgreementId, RepoAgreement>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: Storage<SettlementId, SettlementLedger>,
-    /// Registered offline allowances keyed by certificate id.
-    pub(crate) offline_allowances: Storage<Hash, OfflineAllowanceRecord>,
-    /// Recorded verdict revocations keyed by attestation verdict id.
-    pub(crate) offline_verdict_revocations: Storage<Hash, OfflineVerdictRevocation>,
-    /// Consumed build-claim identifiers used for replay protection across pruning.
-    pub(crate) offline_consumed_build_claim_ids: Storage<Hash, ()>,
-    /// Pending offline-to-online transfer bundles keyed by bundle id.
-    pub(crate) offline_to_online_transfers: Storage<Hash, OfflineTransferRecord>,
-    /// Offline transfer bundles indexed by controller account id.
-    #[norito(skip)]
-    pub(crate) offline_transfer_sender_index: Storage<AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by receiver account id.
-    #[norito(skip)]
-    pub(crate) offline_transfer_receiver_index: Storage<AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by lifecycle status.
-    #[norito(skip)]
-    pub(crate) offline_transfer_status_index: Storage<OfflineTransferStatus, BTreeSet<Hash>>,
+    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_v2_replay_keys: Storage<Hash, ()>,
     /// Public-lane validators keyed by `(lane_id, validator account id)`.
     #[norito(skip)]
     pub(crate) public_lane_validators: Storage<(LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -1545,15 +1821,17 @@ pub struct World {
     /// Last claimed reward epoch per `(lane_id, account, asset_id)` tuple.
     #[norito(skip)]
     pub(crate) public_lane_reward_claims: Storage<(LaneId, AccountId, AssetId), u64>,
-    /// Emergency validator overrides for lane relay quorum recovery (per dataspace).
-    pub(crate) lane_relay_emergency_validators:
-        Storage<DataSpaceId, LaneRelayEmergencyValidatorSet>,
+    /// Emergency validator overrides for lane relay quorum recovery (per lane).
+    pub(crate) lane_relay_emergency_validators: Storage<LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: Storage<AssetDefinitionId, ZkAssetState>,
     /// Anonymous elections state keyed by election id.
     pub(crate) elections: Storage<String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: Storage<AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals:
+        Storage<String, iroha_data_model::ministry::AgendaProposalRecordV1>,
     /// Governance proposals keyed by deterministic id.
     pub(crate) governance_proposals: Storage<[u8; 32], GovernanceProposalRecord>,
     /// Governance referenda keyed by referendum id.
@@ -1580,6 +1858,8 @@ pub struct World {
 
 /// Struct for block's aggregated changes
 pub struct WorldBlock<'world> {
+    /// Dataspace alias catalog used to qualify domain-backed aliases.
+    pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub parameters: CellBlock<'world, Parameters>,
     /// Identifications of discovered peers.
@@ -1604,22 +1884,29 @@ pub struct WorldBlock<'world> {
     pub(crate) domain_selectors: StorageBlock<'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageBlock<'world, AccountId, AccountValue>,
-    /// Domain memberships keyed by domainless account subject.
-    pub(crate) account_subject_domains: StorageBlock<'world, AccountId, BTreeSet<DomainId>>,
-    /// Subject memberships keyed by domain.
-    pub(crate) domain_account_subjects: StorageBlock<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageBlock<'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical account id.
-    pub(crate) account_aliases: StorageBlock<'world, AccountLabel, AccountId>,
+    /// Index from account alias to canonical I105 account id.
+    pub(crate) account_aliases: StorageBlock<'world, AccountAlias, AccountId>,
+    /// Reverse index from canonical I105 account id to bound aliases.
+    pub(crate) account_aliases_by_account: StorageBlock<'world, AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    pub(crate) account_scope_directory: StorageBlock<'world, AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
+    /// Global RAM-LFE program policy registry.
+    pub(crate) ram_lfe_program_policies: StorageBlock<'world, RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry.
     pub(crate) identifier_policies: StorageBlock<'world, IdentifierPolicyId, IdentifierPolicy>,
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims: StorageBlock<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
-    pub(crate) account_rekey_records: StorageBlock<'world, AccountLabel, AccountRekeyRecord>,
+    pub(crate) account_rekey_records: StorageBlock<'world, AccountAlias, AccountRekeyRecord>,
+    /// Alias-keyed account recovery policies.
+    pub(crate) account_recovery_policies: StorageBlock<'world, AccountAlias, AccountRecoveryPolicy>,
+    /// Alias-keyed account recovery requests.
+    pub(crate) account_recovery_requests:
+        StorageBlock<'world, AccountAlias, AccountRecoveryRequest>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageBlock<'world, AssetDefinitionId, AssetDefinition>,
     /// Index mapping asset alias literals to canonical asset definition ids.
@@ -1628,6 +1915,11 @@ pub struct WorldBlock<'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageBlock<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Index mapping contract alias literals to canonical contract addresses.
+    pub(crate) contract_aliases: StorageBlock<'world, ContractAlias, ContractAddress>,
+    /// Alias lease metadata keyed by canonical contract address.
+    pub(crate) contract_alias_bindings:
+        StorageBlock<'world, ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions:
         StorageBlock<'world, DomainId, BTreeSet<AssetDefinitionId>>,
@@ -1642,6 +1934,8 @@ pub struct WorldBlock<'world> {
     pub(crate) asset_metadata: StorageBlock<'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageBlock<'world, NftId, NftValue>,
+    /// Registered RWA lots.
+    pub(crate) rwas: StorageBlock<'world, RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageBlock<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -1690,6 +1984,10 @@ pub struct WorldBlock<'world> {
     pub(crate) viral_escrows: StorageBlock<'world, Hash, ViralEscrowRecord>,
     /// Bindings that have already paid a sender bonus.
     pub(crate) viral_bonus_paid: StorageBlock<'world, Hash, bool>,
+    /// Native asset escrows keyed by escrow identifier.
+    pub(crate) asset_escrows: StorageBlock<'world, EscrowId, AssetEscrowRecord>,
+    /// Native anonymous asset escrows keyed by escrow identifier.
+    pub(crate) anonymous_asset_escrows: StorageBlock<'world, EscrowId, AnonymousAssetEscrowRecord>,
     /// UAID dataspace bindings for this block scope.
     pub(crate) uaid_dataspaces: StorageBlock<'world, UniversalAccountId, UaidDataspaceBindings>,
     /// UAID manifest records maintained by the Space Directory.
@@ -1756,10 +2054,99 @@ pub struct WorldBlock<'world> {
     >,
     /// Contract code bytes keyed by hash
     pub(crate) contract_code: StorageBlock<'world, iroha_crypto::Hash, Vec<u8>>,
-    /// Active contract instances
-    pub(crate) contract_instances: StorageBlock<'world, (String, String), iroha_crypto::Hash>,
+    /// Active contract instances.
+    pub(crate) contract_instances:
+        StorageBlock<'world, iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageBlock<'world, Name, Vec<u8>>,
+    /// Admitted Soracloud service revisions.
+    pub(crate) soracloud_service_revisions:
+        StorageBlock<'world, (String, String), SoraDeploymentBundleV1>,
+    /// Current Soracloud deployment state keyed by service name.
+    pub(crate) soracloud_service_deployments:
+        StorageBlock<'world, Name, SoraServiceDeploymentStateV1>,
+    /// Active Soracloud runtime state keyed by service name.
+    pub(crate) soracloud_service_runtime: StorageBlock<'world, Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime:
+        StorageBlock<'world, (String, String, String), SoraInrouReplicaRuntimeStateV1>,
+    /// Soracloud lifecycle audit events keyed by deterministic sequence.
+    pub(crate) soracloud_service_audit_events: StorageBlock<'world, u64, SoraServiceAuditEventV1>,
+    /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
+    pub(crate) soracloud_service_state_entries:
+        StorageBlock<'world, (String, String, String), SoraServiceStateEntryV1>,
+    /// Recorded decryption requests keyed by `(service_name, request_id)`.
+    pub(crate) soracloud_decryption_request_records:
+        StorageBlock<'world, (String, String), SoraDecryptionRequestRecordV1>,
+    /// Authoritative agent apartments keyed by apartment name.
+    pub(crate) soracloud_agent_apartments: StorageBlock<'world, String, SoraAgentApartmentRecordV1>,
+    /// Agent-apartment audit events keyed by deterministic sequence.
+    pub(crate) soracloud_agent_apartment_audit_events:
+        StorageBlock<'world, u64, SoraAgentApartmentAuditEventV1>,
+    /// Authoritative training jobs keyed by `(service_name, job_id)`.
+    pub(crate) soracloud_training_jobs:
+        StorageBlock<'world, (String, String), SoraTrainingJobRecordV1>,
+    /// Training-job audit events keyed by deterministic sequence.
+    pub(crate) soracloud_training_job_audit_events:
+        StorageBlock<'world, u64, SoraTrainingJobAuditEventV1>,
+    /// Model registries keyed by `(service_name, model_name)`.
+    pub(crate) soracloud_model_registries:
+        StorageBlock<'world, (String, String), SoraModelRegistryV1>,
+    /// Model-weight versions keyed by `(service_name, model_name, weight_version)`.
+    pub(crate) soracloud_model_weight_versions:
+        StorageBlock<'world, (String, String, String), SoraModelWeightVersionRecordV1>,
+    /// Model-weight audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_weight_audit_events:
+        StorageBlock<'world, u64, SoraModelWeightAuditEventV1>,
+    /// Model artifacts keyed by `(service_name, training_job_id)`.
+    pub(crate) soracloud_model_artifacts:
+        StorageBlock<'world, (String, String), SoraModelArtifactRecordV1>,
+    /// Model-artifact audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_artifact_audit_events:
+        StorageBlock<'world, u64, SoraModelArtifactAuditEventV1>,
+    /// Private compile profiles keyed by compile-profile hash.
+    pub(crate) soracloud_private_compile_profiles:
+        StorageBlock<'world, Hash, SoraPrivateCompileProfileV1>,
+    /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
+    pub(crate) soracloud_uploaded_model_bundles:
+        StorageBlock<'world, (String, String, String), SoraUploadedModelBundleV1>,
+    /// Uploaded-model chunks keyed by `(service_name, model_id, weight_version, ordinal)`.
+    pub(crate) soracloud_uploaded_model_chunks:
+        StorageBlock<'world, String, SoraUploadedModelChunkV1>,
+    /// Private inference sessions keyed by `(apartment, session_id)`.
+    pub(crate) soracloud_private_inference_sessions:
+        StorageBlock<'world, (String, String), SoraPrivateInferenceSessionV1>,
+    /// Private inference checkpoints keyed by `(session_id, step)`.
+    pub(crate) soracloud_private_inference_checkpoints:
+        StorageBlock<'world, (String, u32), SoraPrivateInferenceCheckpointV1>,
+    /// Active validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_model_host_capabilities:
+        StorageBlock<'world, AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        StorageBlock<'world, AccountId, SoraInrouHostCapabilityRecordV1>,
+    /// Canonical Hugging Face sources keyed by source identifier.
+    pub(crate) soracloud_hf_sources: StorageBlock<'world, Hash, SoraHfSourceRecordV1>,
+    /// Shared lease pools keyed by canonical pool identifier.
+    pub(crate) soracloud_hf_shared_lease_pools: StorageBlock<'world, Hash, SoraHfSharedLeasePoolV1>,
+    /// Shared lease memberships keyed by `(pool_id, account_id)` string literals.
+    pub(crate) soracloud_hf_shared_lease_members:
+        StorageBlock<'world, (String, String), SoraHfSharedLeaseMemberV1>,
+    /// Shared lease audit events keyed by deterministic sequence.
+    pub(crate) soracloud_hf_shared_lease_audit_events:
+        StorageBlock<'world, u64, SoraHfSharedLeaseAuditEventV1>,
+    /// Host-violation evidence keyed by deterministic evidence identifier.
+    pub(crate) soracloud_model_host_violation_evidence:
+        StorageBlock<'world, Hash, SoraModelHostViolationEvidenceRecordV1>,
+    /// Active HF placement records keyed by shared-lease pool identifier.
+    pub(crate) soracloud_hf_placements: StorageBlock<'world, Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        StorageBlock<'world, (String, String), SoraInrouServicePlacementRecordV1>,
+    /// Ordered Soracloud mailbox messages keyed by message id.
+    pub(crate) soracloud_mailbox_messages: StorageBlock<'world, Hash, SoraServiceMailboxMessageV1>,
+    /// Soracloud runtime receipts keyed by receipt id.
+    pub(crate) soracloud_runtime_receipts: StorageBlock<'world, Hash, SoraRuntimeReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations: StorageBlock<'world, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
@@ -1819,21 +2206,8 @@ pub struct WorldBlock<'world> {
     pub(crate) repo_agreements: StorageBlock<'world, RepoAgreementId, RepoAgreement>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageBlock<'world, SettlementId, SettlementLedger>,
-    /// Registered offline allowances keyed by certificate id.
-    pub(crate) offline_allowances: StorageBlock<'world, Hash, OfflineAllowanceRecord>,
-    /// Recorded verdict revocations keyed by attestation verdict id.
-    pub(crate) offline_verdict_revocations: StorageBlock<'world, Hash, OfflineVerdictRevocation>,
-    /// Consumed build-claim identifiers used for replay protection across pruning.
-    pub(crate) offline_consumed_build_claim_ids: StorageBlock<'world, Hash, ()>,
-    /// Pending offline-to-online transfer bundles keyed by bundle id.
-    pub(crate) offline_to_online_transfers: StorageBlock<'world, Hash, OfflineTransferRecord>,
-    /// Offline transfer bundles indexed by controller account id.
-    pub(crate) offline_transfer_sender_index: StorageBlock<'world, AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by receiver account id.
-    pub(crate) offline_transfer_receiver_index: StorageBlock<'world, AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by lifecycle status.
-    pub(crate) offline_transfer_status_index:
-        StorageBlock<'world, OfflineTransferStatus, BTreeSet<Hash>>,
+    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_v2_replay_keys: StorageBlock<'world, Hash, ()>,
     /// Public lane validator registry.
     pub(crate) public_lane_validators:
         StorageBlock<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
@@ -1844,15 +2218,18 @@ pub struct WorldBlock<'world> {
     pub(crate) public_lane_rewards: StorageBlock<'world, (LaneId, u64), PublicLaneRewardRecord>,
     /// Last claimed reward epoch per `(lane_id, account, asset_id)` tuple.
     pub(crate) public_lane_reward_claims: StorageBlock<'world, (LaneId, AccountId, AssetId), u64>,
-    /// Emergency validator overrides for lane relay quorum recovery (per dataspace).
+    /// Emergency validator overrides for lane relay quorum recovery (per lane).
     pub(crate) lane_relay_emergency_validators:
-        StorageBlock<'world, DataSpaceId, LaneRelayEmergencyValidatorSet>,
+        StorageBlock<'world, LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: StorageBlock<'world, AssetDefinitionId, ZkAssetState>,
     /// Anonymous elections state keyed by election id.
     pub(crate) elections: StorageBlock<'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: StorageBlock<'world, AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals:
+        StorageBlock<'world, String, iroha_data_model::ministry::AgendaProposalRecordV1>,
     /// Governance proposals
     pub(crate) governance_proposals: StorageBlock<'world, [u8; 32], GovernanceProposalRecord>,
     /// Governance referenda
@@ -1925,10 +2302,13 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.domains, Domain);
         collect_reverts!(self.accounts, Account);
         collect_reverts!(self.account_rekey_records, AccountRekey);
+        collect_reverts!(self.account_recovery_policies, AccountRecoveryPolicy);
+        collect_reverts!(self.account_recovery_requests, AccountRecoveryRequest);
         collect_reverts!(self.asset_definitions, AssetDefinition);
         collect_reverts!(self.assets, Asset);
         collect_reverts!(self.asset_metadata, AssetMetadata);
         collect_reverts!(self.nfts, Nft);
+        collect_reverts!(self.rwas, Rwa);
         collect_reverts!(self.roles, Role);
         collect_reverts!(self.account_permissions, AccountPermission);
         collect_reverts!(self.account_roles, AccountRole);
@@ -1945,19 +2325,14 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.smart_contract_state, SmartContractState);
         collect_reverts!(self.zk_assets, ZkAsset);
         collect_reverts!(self.elections, Election);
+        collect_reverts!(self.ministry_agenda_proposals, MinistryAgendaProposal);
         collect_reverts!(self.governance_proposals, GovernanceProposal);
         collect_reverts!(self.governance_referenda, GovernanceReferendum);
         collect_reverts!(self.governance_locks, GovernanceLock);
         collect_reverts!(self.governance_slashes, GovernanceSlash);
         collect_reverts!(self.council, Council);
         collect_reverts!(self.parliament_bodies, ParliamentBodies);
-        collect_reverts!(self.offline_allowances, OfflineAllowance);
-        collect_reverts!(self.offline_verdict_revocations, OfflineVerdictRevocation);
-        collect_reverts!(
-            self.offline_consumed_build_claim_ids,
-            OfflineConsumedBuildClaimId
-        );
-        collect_reverts!(self.offline_to_online_transfers, OfflineTransfer);
+        collect_reverts!(self.offline_note_v2_replay_keys, OfflineNoteV2ReplayKey);
 
         diff
     }
@@ -1977,10 +2352,13 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.domains, Domain);
         collect_payload!(self.accounts, Account);
         collect_payload!(self.account_rekey_records, AccountRekey);
+        collect_payload!(self.account_recovery_policies, AccountRecoveryPolicy);
+        collect_payload!(self.account_recovery_requests, AccountRecoveryRequest);
         collect_payload!(self.asset_definitions, AssetDefinition);
         collect_payload!(self.assets, Asset);
         collect_payload!(self.asset_metadata, AssetMetadata);
         collect_payload!(self.nfts, Nft);
+        collect_payload!(self.rwas, Rwa);
         collect_payload!(self.roles, Role);
         collect_payload!(self.account_permissions, AccountPermission);
         collect_payload!(self.account_roles, AccountRole);
@@ -1997,19 +2375,14 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.smart_contract_state, SmartContractState);
         collect_payload!(self.zk_assets, ZkAsset);
         collect_payload!(self.elections, Election);
+        collect_payload!(self.ministry_agenda_proposals, MinistryAgendaProposal);
         collect_payload!(self.governance_proposals, GovernanceProposal);
         collect_payload!(self.governance_referenda, GovernanceReferendum);
         collect_payload!(self.governance_locks, GovernanceLock);
         collect_payload!(self.governance_slashes, GovernanceSlash);
         collect_payload!(self.council, Council);
         collect_payload!(self.parliament_bodies, ParliamentBodies);
-        collect_payload!(self.offline_allowances, OfflineAllowance);
-        collect_payload!(self.offline_verdict_revocations, OfflineVerdictRevocation);
-        collect_payload!(
-            self.offline_consumed_build_claim_ids,
-            OfflineConsumedBuildClaimId
-        );
-        collect_payload!(self.offline_to_online_transfers, OfflineTransfer);
+        collect_payload!(self.offline_note_v2_replay_keys, OfflineNoteV2ReplayKey);
 
         payload
     }
@@ -2017,6 +2390,8 @@ impl<'world> WorldBlock<'world> {
 
 /// Struct for single transaction's aggregated changes
 pub struct WorldTransaction<'block, 'world> {
+    /// Dataspace alias catalog used to qualify domain-backed aliases.
+    pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub(crate) parameters: CellTransaction<'block, 'world, Parameters>,
     /// Identifications of discovered peers.
@@ -2045,19 +2420,22 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageTransaction<'block, 'world, AccountId, AccountValue>,
-    /// Domain memberships keyed by domainless account subject.
-    pub(crate) account_subject_domains:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<DomainId>>,
-    /// Subject memberships keyed by domain.
-    pub(crate) domain_account_subjects:
-        StorageTransaction<'block, 'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageTransaction<'block, 'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical account id.
-    pub(crate) account_aliases: StorageTransaction<'block, 'world, AccountLabel, AccountId>,
+    /// Index from account alias to canonical I105 account id.
+    pub(crate) account_aliases: StorageTransaction<'block, 'world, AccountAlias, AccountId>,
+    /// Reverse index from canonical I105 account id to bound aliases.
+    pub(crate) account_aliases_by_account:
+        StorageTransaction<'block, 'world, AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    pub(crate) account_scope_directory:
+        StorageTransaction<'block, 'world, AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
         StorageTransaction<'block, 'world, OpaqueAccountId, UniversalAccountId>,
+    /// Global RAM-LFE program policy registry.
+    pub(crate) ram_lfe_program_policies:
+        StorageTransaction<'block, 'world, RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry.
     pub(crate) identifier_policies:
         StorageTransaction<'block, 'world, IdentifierPolicyId, IdentifierPolicy>,
@@ -2066,7 +2444,13 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records:
-        StorageTransaction<'block, 'world, AccountLabel, AccountRekeyRecord>,
+        StorageTransaction<'block, 'world, AccountAlias, AccountRekeyRecord>,
+    /// Alias-keyed account recovery policies.
+    pub(crate) account_recovery_policies:
+        StorageTransaction<'block, 'world, AccountAlias, AccountRecoveryPolicy>,
+    /// Alias-keyed account recovery requests.
+    pub(crate) account_recovery_requests:
+        StorageTransaction<'block, 'world, AccountAlias, AccountRecoveryRequest>,
     /// Registered asset definitions.
     pub(crate) asset_definitions:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinition>,
@@ -2076,6 +2460,11 @@ pub struct WorldTransaction<'block, 'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Index mapping contract alias literals to canonical contract addresses.
+    pub(crate) contract_aliases: StorageTransaction<'block, 'world, ContractAlias, ContractAddress>,
+    /// Alias lease metadata keyed by canonical contract address.
+    pub(crate) contract_alias_bindings:
+        StorageTransaction<'block, 'world, ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions:
         StorageTransaction<'block, 'world, DomainId, BTreeSet<AssetDefinitionId>>,
@@ -2091,6 +2480,8 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) asset_metadata: StorageTransaction<'block, 'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageTransaction<'block, 'world, NftId, NftValue>,
+    /// Registered RWA lots.
+    pub(crate) rwas: StorageTransaction<'block, 'world, RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageTransaction<'block, 'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -2153,6 +2544,11 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) viral_escrows: StorageTransaction<'block, 'world, Hash, ViralEscrowRecord>,
     /// Bindings that have already paid a sender bonus.
     pub(crate) viral_bonus_paid: StorageTransaction<'block, 'world, Hash, bool>,
+    /// Native asset escrows keyed by escrow identifier.
+    pub(crate) asset_escrows: StorageTransaction<'block, 'world, EscrowId, AssetEscrowRecord>,
+    /// Native anonymous asset escrows keyed by escrow identifier.
+    pub(crate) anonymous_asset_escrows:
+        StorageTransaction<'block, 'world, EscrowId, AnonymousAssetEscrowRecord>,
     /// UAID dataspace bindings maintained by the Space Directory.
     pub(crate) uaid_dataspaces:
         StorageTransaction<'block, 'world, UniversalAccountId, UaidDataspaceBindings>,
@@ -2228,10 +2624,117 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::smart_contract::manifest::ContractManifest,
     >,
     pub(crate) contract_code: StorageTransaction<'block, 'world, iroha_crypto::Hash, Vec<u8>>,
-    pub(crate) contract_instances:
-        StorageTransaction<'block, 'world, (String, String), iroha_crypto::Hash>,
+    pub(crate) contract_instances: StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::smart_contract::ContractAddress,
+        iroha_crypto::Hash,
+    >,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageTransaction<'block, 'world, Name, Vec<u8>>,
+    /// Admitted Soracloud service revisions.
+    pub(crate) soracloud_service_revisions:
+        StorageTransaction<'block, 'world, (String, String), SoraDeploymentBundleV1>,
+    /// Current Soracloud deployment state keyed by service name.
+    pub(crate) soracloud_service_deployments:
+        StorageTransaction<'block, 'world, Name, SoraServiceDeploymentStateV1>,
+    /// Active Soracloud runtime state keyed by service name.
+    pub(crate) soracloud_service_runtime:
+        StorageTransaction<'block, 'world, Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime: StorageTransaction<
+        'block,
+        'world,
+        (String, String, String),
+        SoraInrouReplicaRuntimeStateV1,
+    >,
+    /// Soracloud lifecycle audit events keyed by deterministic sequence.
+    pub(crate) soracloud_service_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraServiceAuditEventV1>,
+    /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
+    pub(crate) soracloud_service_state_entries:
+        StorageTransaction<'block, 'world, (String, String, String), SoraServiceStateEntryV1>,
+    /// Recorded decryption requests keyed by `(service_name, request_id)`.
+    pub(crate) soracloud_decryption_request_records:
+        StorageTransaction<'block, 'world, (String, String), SoraDecryptionRequestRecordV1>,
+    /// Authoritative agent apartments keyed by apartment name.
+    pub(crate) soracloud_agent_apartments:
+        StorageTransaction<'block, 'world, String, SoraAgentApartmentRecordV1>,
+    /// Agent-apartment audit events keyed by deterministic sequence.
+    pub(crate) soracloud_agent_apartment_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraAgentApartmentAuditEventV1>,
+    /// Authoritative training jobs keyed by `(service_name, job_id)`.
+    pub(crate) soracloud_training_jobs:
+        StorageTransaction<'block, 'world, (String, String), SoraTrainingJobRecordV1>,
+    /// Training-job audit events keyed by deterministic sequence.
+    pub(crate) soracloud_training_job_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraTrainingJobAuditEventV1>,
+    /// Model registries keyed by `(service_name, model_name)`.
+    pub(crate) soracloud_model_registries:
+        StorageTransaction<'block, 'world, (String, String), SoraModelRegistryV1>,
+    /// Model-weight versions keyed by `(service_name, model_name, weight_version)`.
+    pub(crate) soracloud_model_weight_versions: StorageTransaction<
+        'block,
+        'world,
+        (String, String, String),
+        SoraModelWeightVersionRecordV1,
+    >,
+    /// Model-weight audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_weight_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraModelWeightAuditEventV1>,
+    /// Model artifacts keyed by `(service_name, training_job_id)`.
+    pub(crate) soracloud_model_artifacts:
+        StorageTransaction<'block, 'world, (String, String), SoraModelArtifactRecordV1>,
+    /// Model-artifact audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_artifact_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraModelArtifactAuditEventV1>,
+    /// Private compile profiles keyed by compile-profile hash.
+    pub(crate) soracloud_private_compile_profiles:
+        StorageTransaction<'block, 'world, Hash, SoraPrivateCompileProfileV1>,
+    /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
+    pub(crate) soracloud_uploaded_model_bundles:
+        StorageTransaction<'block, 'world, (String, String, String), SoraUploadedModelBundleV1>,
+    /// Uploaded-model chunks keyed by `(service_name, model_id, weight_version, ordinal)`.
+    pub(crate) soracloud_uploaded_model_chunks:
+        StorageTransaction<'block, 'world, String, SoraUploadedModelChunkV1>,
+    /// Private inference sessions keyed by `(apartment, session_id)`.
+    pub(crate) soracloud_private_inference_sessions:
+        StorageTransaction<'block, 'world, (String, String), SoraPrivateInferenceSessionV1>,
+    /// Private inference checkpoints keyed by `(session_id, step)`.
+    pub(crate) soracloud_private_inference_checkpoints:
+        StorageTransaction<'block, 'world, (String, u32), SoraPrivateInferenceCheckpointV1>,
+    /// Active validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_model_host_capabilities:
+        StorageTransaction<'block, 'world, AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        StorageTransaction<'block, 'world, AccountId, SoraInrouHostCapabilityRecordV1>,
+    /// Canonical Hugging Face sources keyed by source identifier.
+    pub(crate) soracloud_hf_sources: StorageTransaction<'block, 'world, Hash, SoraHfSourceRecordV1>,
+    /// Shared lease pools keyed by canonical pool identifier.
+    pub(crate) soracloud_hf_shared_lease_pools:
+        StorageTransaction<'block, 'world, Hash, SoraHfSharedLeasePoolV1>,
+    /// Shared lease memberships keyed by `(pool_id, account_id)` string literals.
+    pub(crate) soracloud_hf_shared_lease_members:
+        StorageTransaction<'block, 'world, (String, String), SoraHfSharedLeaseMemberV1>,
+    /// Shared lease audit events keyed by deterministic sequence.
+    pub(crate) soracloud_hf_shared_lease_audit_events:
+        StorageTransaction<'block, 'world, u64, SoraHfSharedLeaseAuditEventV1>,
+    /// Host-violation evidence keyed by deterministic evidence identifier.
+    pub(crate) soracloud_model_host_violation_evidence:
+        StorageTransaction<'block, 'world, Hash, SoraModelHostViolationEvidenceRecordV1>,
+    /// Active HF placement records keyed by shared-lease pool identifier.
+    pub(crate) soracloud_hf_placements:
+        StorageTransaction<'block, 'world, Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        StorageTransaction<'block, 'world, (String, String), SoraInrouServicePlacementRecordV1>,
+    /// Ordered Soracloud mailbox messages keyed by message id.
+    pub(crate) soracloud_mailbox_messages:
+        StorageTransaction<'block, 'world, Hash, SoraServiceMailboxMessageV1>,
+    /// Soracloud runtime receipts keyed by receipt id.
+    pub(crate) soracloud_runtime_receipts:
+        StorageTransaction<'block, 'world, Hash, SoraRuntimeReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations:
         StorageTransaction<'block, 'world, ProviderId, CapacityDeclarationRecord>,
@@ -2301,25 +2804,8 @@ pub struct WorldTransaction<'block, 'world> {
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers:
         StorageTransaction<'block, 'world, SettlementId, SettlementLedger>,
-    /// Registered offline allowances keyed by certificate id.
-    pub(crate) offline_allowances: StorageTransaction<'block, 'world, Hash, OfflineAllowanceRecord>,
-    /// Recorded verdict revocations keyed by attestation verdict id.
-    pub(crate) offline_verdict_revocations:
-        StorageTransaction<'block, 'world, Hash, OfflineVerdictRevocation>,
-    /// Consumed build-claim identifiers used for replay protection across pruning.
-    pub(crate) offline_consumed_build_claim_ids: StorageTransaction<'block, 'world, Hash, ()>,
-    /// Pending offline-to-online transfer bundles keyed by bundle id.
-    pub(crate) offline_to_online_transfers:
-        StorageTransaction<'block, 'world, Hash, OfflineTransferRecord>,
-    /// Offline transfer bundles indexed by controller account id.
-    pub(crate) offline_transfer_sender_index:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by receiver account id.
-    pub(crate) offline_transfer_receiver_index:
-        StorageTransaction<'block, 'world, AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by lifecycle status.
-    pub(crate) offline_transfer_status_index:
-        StorageTransaction<'block, 'world, OfflineTransferStatus, BTreeSet<Hash>>,
+    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_v2_replay_keys: StorageTransaction<'block, 'world, Hash, ()>,
     pub(crate) public_lane_validators:
         StorageTransaction<'block, 'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
@@ -2328,15 +2814,22 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, (LaneId, u64), PublicLaneRewardRecord>,
     pub(crate) public_lane_reward_claims:
         StorageTransaction<'block, 'world, (LaneId, AccountId, AssetId), u64>,
-    /// Emergency validator overrides for lane relay quorum recovery (per dataspace).
+    /// Emergency validator overrides for lane relay quorum recovery (per lane).
     pub(crate) lane_relay_emergency_validators:
-        StorageTransaction<'block, 'world, DataSpaceId, LaneRelayEmergencyValidatorSet>,
+        StorageTransaction<'block, 'world, LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: StorageTransaction<'block, 'world, AssetDefinitionId, ZkAssetState>,
     /// Elections state
     pub(crate) elections: StorageTransaction<'block, 'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: StorageTransaction<'block, 'world, AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals: StorageTransaction<
+        'block,
+        'world,
+        String,
+        iroha_data_model::ministry::AgendaProposalRecordV1,
+    >,
     pub(crate) governance_proposals:
         StorageTransaction<'block, 'world, [u8; 32], GovernanceProposalRecord>,
     /// Governance referenda
@@ -2380,40 +2873,82 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) internal_event_buf: Vec<Arc<DataEvent>>,
 }
 
-impl WorldTransaction<'_, '_> {
+#[allow(single_use_lifetimes)]
+impl<'block, 'world> WorldTransaction<'block, 'world> {
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to durable smart-contract state for tests and API scaffolding.
+    pub fn smart_contract_state_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<'block, 'world, Name, Vec<u8>> {
+        &mut self.smart_contract_state
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to account-alias bindings for tests and API scaffolding.
+    pub fn account_aliases_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::account::rekey::AccountAlias,
+        iroha_data_model::account::AccountId,
+    > {
+        &mut self.account_aliases
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to reverse account-alias bindings for tests and API scaffolding.
+    pub fn account_aliases_by_account_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::account::AccountId,
+        BTreeSet<iroha_data_model::account::rekey::AccountAlias>,
+    > {
+        &mut self.account_aliases_by_account
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to account rekey records for tests and API scaffolding.
+    pub fn account_rekey_records_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::account::rekey::AccountAlias,
+        iroha_data_model::account::rekey::AccountRekeyRecord,
+    > {
+        &mut self.account_rekey_records
+    }
+
     /// Record that the given asset definition belongs to its domain.
     pub(crate) fn track_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
-        if definition_id.is_opaque_canonical() {
+        let Some(domain_id) = definition_id.try_domain() else {
             return;
-        }
-        if let Some(definitions) = self
-            .domain_asset_definitions
-            .get_mut(definition_id.domain())
-        {
+        };
+        if let Some(definitions) = self.domain_asset_definitions.get_mut(domain_id) {
             definitions.insert(definition_id.clone());
         } else {
-            self.domain_asset_definitions.insert(
-                definition_id.domain().clone(),
-                BTreeSet::from([definition_id.clone()]),
-            );
+            self.domain_asset_definitions
+                .insert(domain_id.clone(), BTreeSet::from([definition_id.clone()]));
         }
     }
 
     /// Drop the domain linkage when the asset definition no longer exists.
     pub(crate) fn untrack_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
-        if definition_id.is_opaque_canonical() {
+        let Some(domain_id) = definition_id.try_domain() else {
             return;
-        }
+        };
         let remove_domain_index_entry = self
             .domain_asset_definitions
-            .get_mut(definition_id.domain())
+            .get_mut(domain_id)
             .is_some_and(|definitions| {
                 definitions.remove(definition_id);
                 definitions.is_empty()
             });
         if remove_domain_index_entry {
-            self.domain_asset_definitions
-                .remove(definition_id.domain().clone());
+            self.domain_asset_definitions.remove(domain_id.clone());
         }
     }
 
@@ -2545,9 +3080,6 @@ impl WorldTransaction<'_, '_> {
                 bound_at_ms,
             },
         );
-        if let Some(definition) = self.asset_definitions.get_mut(definition_id) {
-            definition.alias = Some(alias);
-        }
         Ok(())
     }
 
@@ -2558,9 +3090,6 @@ impl WorldTransaction<'_, '_> {
             .remove(definition_id.clone())
         {
             self.asset_definition_aliases.remove(existing.alias);
-        }
-        if let Some(definition) = self.asset_definitions.get_mut(definition_id) {
-            definition.alias = None;
         }
     }
 
@@ -2587,10 +3116,83 @@ impl WorldTransaction<'_, '_> {
 
         expired
     }
+
+    /// Bind or update a contract alias record and keep both alias indexes consistent.
+    ///
+    /// # Errors
+    /// Returns an error when the requested alias is already bound to a different contract.
+    pub fn bind_contract_alias(
+        &mut self,
+        contract_address: &ContractAddress,
+        alias: ContractAlias,
+        lease_expiry_ms: Option<u64>,
+        grace_until_ms: Option<u64>,
+        bound_at_ms: u64,
+    ) -> Result<(), Error> {
+        if let Some(existing_contract) = self.contract_aliases.get(&alias).cloned()
+            && existing_contract != *contract_address
+        {
+            return Err(Error::InvariantViolation(
+                format!("contract alias `{alias}` is already bound").into(),
+            ));
+        }
+
+        if let Some(existing_binding) = self.contract_alias_bindings.get(contract_address).cloned()
+            && existing_binding.alias != alias
+        {
+            self.contract_aliases.remove(existing_binding.alias.clone());
+        }
+
+        self.contract_aliases
+            .insert(alias.clone(), contract_address.clone());
+        self.contract_alias_bindings.insert(
+            contract_address.clone(),
+            ContractAliasBindingRecord {
+                alias,
+                lease_expiry_ms,
+                grace_until_ms,
+                bound_at_ms,
+            },
+        );
+        Ok(())
+    }
+
+    /// Remove the alias binding for a contract and keep indexes consistent.
+    pub fn clear_contract_alias(&mut self, contract_address: &ContractAddress) {
+        if let Some(existing) = self
+            .contract_alias_bindings
+            .remove(contract_address.clone())
+        {
+            self.contract_aliases.remove(existing.alias);
+        }
+    }
+
+    /// Remove contract aliases whose grace window has elapsed.
+    ///
+    /// Returns canonical contract addresses that were unbound.
+    pub fn sweep_expired_contract_aliases(&mut self, now_ms: u64) -> Vec<ContractAddress> {
+        let expired: Vec<ContractAddress> = self
+            .contract_alias_bindings
+            .iter()
+            .filter_map(|(contract_address, binding)| {
+                binding
+                    .is_grace_expired_at(now_ms)
+                    .then_some(contract_address.clone())
+            })
+            .collect();
+
+        for contract_address in &expired {
+            self.clear_contract_alias(contract_address);
+        }
+
+        expired
+    }
 }
 
 /// Consistent point in time view of the [`World`]
 pub struct WorldView<'world> {
+    /// Dataspace alias catalog used to qualify domain-backed aliases.
+    pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub(crate) parameters: CellView<'world, Parameters>,
     /// Identifications of discovered peers.
@@ -2601,22 +3203,28 @@ pub struct WorldView<'world> {
     pub(crate) domain_selectors: StorageView<'world, AccountDomainSelector, DomainId>,
     /// Registered accounts.
     pub(crate) accounts: StorageView<'world, AccountId, AccountValue>,
-    /// Domain memberships keyed by domainless account subject.
-    pub(crate) account_subject_domains: StorageView<'world, AccountId, BTreeSet<DomainId>>,
-    /// Subject memberships keyed by domain.
-    pub(crate) domain_account_subjects: StorageView<'world, DomainId, BTreeSet<AccountId>>,
     /// Index from UAID to bound account (1:1).
     pub(crate) uaid_accounts: StorageView<'world, UniversalAccountId, AccountId>,
-    /// Index from account alias to canonical account id.
-    pub(crate) account_aliases: StorageView<'world, AccountLabel, AccountId>,
+    /// Index from account alias to canonical I105 account id.
+    pub(crate) account_aliases: StorageView<'world, AccountAlias, AccountId>,
+    /// Reverse index from canonical I105 account id to bound aliases.
+    pub(crate) account_aliases_by_account: StorageView<'world, AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    pub(crate) account_scope_directory: StorageView<'world, AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
+    /// Global RAM-LFE program policy registry.
+    pub(crate) ram_lfe_program_policies: StorageView<'world, RamLfeProgramId, RamLfeProgramPolicy>,
     /// Global identifier policy registry.
     pub(crate) identifier_policies: StorageView<'world, IdentifierPolicyId, IdentifierPolicy>,
     /// Active identifier claims keyed by opaque identifier.
     pub(crate) identifier_claims: StorageView<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
-    pub(crate) account_rekey_records: StorageView<'world, AccountLabel, AccountRekeyRecord>,
+    pub(crate) account_rekey_records: StorageView<'world, AccountAlias, AccountRekeyRecord>,
+    /// Alias-keyed account recovery policies.
+    pub(crate) account_recovery_policies: StorageView<'world, AccountAlias, AccountRecoveryPolicy>,
+    /// Alias-keyed account recovery requests.
+    pub(crate) account_recovery_requests: StorageView<'world, AccountAlias, AccountRecoveryRequest>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageView<'world, AssetDefinitionId, AssetDefinition>,
     /// Index mapping asset alias literals to canonical asset definition ids.
@@ -2625,6 +3233,11 @@ pub struct WorldView<'world> {
     /// Alias lease metadata keyed by canonical asset definition id.
     pub(crate) asset_definition_alias_bindings:
         StorageView<'world, AssetDefinitionId, AssetDefinitionAliasBindingRecord>,
+    /// Index mapping contract alias literals to canonical contract addresses.
+    pub(crate) contract_aliases: StorageView<'world, ContractAlias, ContractAddress>,
+    /// Alias lease metadata keyed by canonical contract address.
+    pub(crate) contract_alias_bindings:
+        StorageView<'world, ContractAddress, ContractAliasBindingRecord>,
     /// Asset-definition index keyed by definition domain.
     pub(crate) domain_asset_definitions: StorageView<'world, DomainId, BTreeSet<AssetDefinitionId>>,
     /// Holder index keyed by asset definition id.
@@ -2638,6 +3251,8 @@ pub struct WorldView<'world> {
     pub(crate) asset_metadata: StorageView<'world, AssetId, Metadata>,
     /// Registered NFTs.
     pub(crate) nfts: StorageView<'world, NftId, NftValue>,
+    /// Registered RWA lots.
+    pub(crate) rwas: StorageView<'world, RwaId, RwaValue>,
     /// Roles. [`Role`] pairs.
     pub(crate) roles: StorageView<'world, RoleId, Role>,
     /// Permission tokens of an account.
@@ -2683,6 +3298,10 @@ pub struct WorldView<'world> {
     pub(crate) viral_escrows: StorageView<'world, Hash, ViralEscrowRecord>,
     /// Bindings that have already paid a sender bonus.
     pub(crate) viral_bonus_paid: StorageView<'world, Hash, bool>,
+    /// Native asset escrows keyed by escrow identifier.
+    pub(crate) asset_escrows: StorageView<'world, EscrowId, AssetEscrowRecord>,
+    /// Native anonymous asset escrows keyed by escrow identifier.
+    pub(crate) anonymous_asset_escrows: StorageView<'world, EscrowId, AnonymousAssetEscrowRecord>,
     /// UAID dataspace bindings derived from the Space Directory.
     pub(crate) uaid_dataspaces: StorageView<'world, UniversalAccountId, UaidDataspaceBindings>,
     /// UAID manifest records derived from the Space Directory host.
@@ -2768,9 +3387,98 @@ pub struct WorldView<'world> {
         iroha_data_model::smart_contract::manifest::ContractManifest,
     >,
     pub(crate) contract_code: StorageView<'world, iroha_crypto::Hash, Vec<u8>>,
-    pub(crate) contract_instances: StorageView<'world, (String, String), iroha_crypto::Hash>,
+    pub(crate) contract_instances:
+        StorageView<'world, iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageView<'world, Name, Vec<u8>>,
+    /// Admitted Soracloud service revisions.
+    pub(crate) soracloud_service_revisions:
+        StorageView<'world, (String, String), SoraDeploymentBundleV1>,
+    /// Current Soracloud deployment state keyed by service name.
+    pub(crate) soracloud_service_deployments:
+        StorageView<'world, Name, SoraServiceDeploymentStateV1>,
+    /// Active Soracloud runtime state keyed by service name.
+    pub(crate) soracloud_service_runtime: StorageView<'world, Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime:
+        StorageView<'world, (String, String, String), SoraInrouReplicaRuntimeStateV1>,
+    /// Soracloud lifecycle audit events keyed by deterministic sequence.
+    pub(crate) soracloud_service_audit_events: StorageView<'world, u64, SoraServiceAuditEventV1>,
+    /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
+    pub(crate) soracloud_service_state_entries:
+        StorageView<'world, (String, String, String), SoraServiceStateEntryV1>,
+    /// Recorded decryption requests keyed by `(service_name, request_id)`.
+    pub(crate) soracloud_decryption_request_records:
+        StorageView<'world, (String, String), SoraDecryptionRequestRecordV1>,
+    /// Authoritative agent apartments keyed by apartment name.
+    pub(crate) soracloud_agent_apartments: StorageView<'world, String, SoraAgentApartmentRecordV1>,
+    /// Agent-apartment audit events keyed by deterministic sequence.
+    pub(crate) soracloud_agent_apartment_audit_events:
+        StorageView<'world, u64, SoraAgentApartmentAuditEventV1>,
+    /// Authoritative training jobs keyed by `(service_name, job_id)`.
+    pub(crate) soracloud_training_jobs:
+        StorageView<'world, (String, String), SoraTrainingJobRecordV1>,
+    /// Training-job audit events keyed by deterministic sequence.
+    pub(crate) soracloud_training_job_audit_events:
+        StorageView<'world, u64, SoraTrainingJobAuditEventV1>,
+    /// Model registries keyed by `(service_name, model_name)`.
+    pub(crate) soracloud_model_registries:
+        StorageView<'world, (String, String), SoraModelRegistryV1>,
+    /// Model-weight versions keyed by `(service_name, model_name, weight_version)`.
+    pub(crate) soracloud_model_weight_versions:
+        StorageView<'world, (String, String, String), SoraModelWeightVersionRecordV1>,
+    /// Model-weight audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_weight_audit_events:
+        StorageView<'world, u64, SoraModelWeightAuditEventV1>,
+    /// Model artifacts keyed by `(service_name, training_job_id)`.
+    pub(crate) soracloud_model_artifacts:
+        StorageView<'world, (String, String), SoraModelArtifactRecordV1>,
+    /// Model-artifact audit events keyed by deterministic sequence.
+    pub(crate) soracloud_model_artifact_audit_events:
+        StorageView<'world, u64, SoraModelArtifactAuditEventV1>,
+    /// Private compile profiles keyed by compile-profile hash.
+    pub(crate) soracloud_private_compile_profiles:
+        StorageView<'world, Hash, SoraPrivateCompileProfileV1>,
+    /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)`.
+    pub(crate) soracloud_uploaded_model_bundles:
+        StorageView<'world, (String, String, String), SoraUploadedModelBundleV1>,
+    /// Uploaded-model chunks keyed by `(service_name, model_id, weight_version, ordinal)`.
+    pub(crate) soracloud_uploaded_model_chunks:
+        StorageView<'world, String, SoraUploadedModelChunkV1>,
+    /// Private inference sessions keyed by `(apartment, session_id)`.
+    pub(crate) soracloud_private_inference_sessions:
+        StorageView<'world, (String, String), SoraPrivateInferenceSessionV1>,
+    /// Private inference checkpoints keyed by `(session_id, step)`.
+    pub(crate) soracloud_private_inference_checkpoints:
+        StorageView<'world, (String, u32), SoraPrivateInferenceCheckpointV1>,
+    /// Active validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_model_host_capabilities:
+        StorageView<'world, AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        StorageView<'world, AccountId, SoraInrouHostCapabilityRecordV1>,
+    /// Canonical Hugging Face sources keyed by source identifier.
+    pub(crate) soracloud_hf_sources: StorageView<'world, Hash, SoraHfSourceRecordV1>,
+    /// Shared lease pools keyed by canonical pool identifier.
+    pub(crate) soracloud_hf_shared_lease_pools: StorageView<'world, Hash, SoraHfSharedLeasePoolV1>,
+    /// Shared lease memberships keyed by `(pool_id, account_id)` string literals.
+    pub(crate) soracloud_hf_shared_lease_members:
+        StorageView<'world, (String, String), SoraHfSharedLeaseMemberV1>,
+    /// Shared lease audit events keyed by deterministic sequence.
+    pub(crate) soracloud_hf_shared_lease_audit_events:
+        StorageView<'world, u64, SoraHfSharedLeaseAuditEventV1>,
+    /// Host-violation evidence keyed by deterministic evidence identifier.
+    pub(crate) soracloud_model_host_violation_evidence:
+        StorageView<'world, Hash, SoraModelHostViolationEvidenceRecordV1>,
+    /// Active HF placement records keyed by shared-lease pool identifier.
+    pub(crate) soracloud_hf_placements: StorageView<'world, Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        StorageView<'world, (String, String), SoraInrouServicePlacementRecordV1>,
+    /// Ordered Soracloud mailbox messages keyed by message id.
+    pub(crate) soracloud_mailbox_messages: StorageView<'world, Hash, SoraServiceMailboxMessageV1>,
+    /// Soracloud runtime receipts keyed by receipt id.
+    pub(crate) soracloud_runtime_receipts: StorageView<'world, Hash, SoraRuntimeReceiptV1>,
     /// Capacity declarations keyed by provider identifier.
     pub(crate) capacity_declarations: StorageView<'world, ProviderId, CapacityDeclarationRecord>,
     /// Capacity fee ledger entries per provider.
@@ -2839,36 +3547,26 @@ pub struct WorldView<'world> {
     pub(crate) repo_agreements: StorageView<'world, RepoAgreementId, RepoAgreement>,
     /// Settlement audit trails keyed by settlement identifier.
     pub(crate) settlement_ledgers: StorageView<'world, SettlementId, SettlementLedger>,
-    /// Registered offline allowances keyed by certificate id.
-    pub(crate) offline_allowances: StorageView<'world, Hash, OfflineAllowanceRecord>,
-    /// Recorded verdict revocations keyed by attestation verdict id.
-    pub(crate) offline_verdict_revocations: StorageView<'world, Hash, OfflineVerdictRevocation>,
-    /// Consumed build-claim identifiers used for replay protection across pruning.
-    pub(crate) offline_consumed_build_claim_ids: StorageView<'world, Hash, ()>,
-    /// Pending offline-to-online transfer bundles keyed by bundle id.
-    pub(crate) offline_to_online_transfers: StorageView<'world, Hash, OfflineTransferRecord>,
-    /// Offline transfer bundles indexed by controller account id.
-    pub(crate) offline_transfer_sender_index: StorageView<'world, AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by receiver account id.
-    pub(crate) offline_transfer_receiver_index: StorageView<'world, AccountId, BTreeSet<Hash>>,
-    /// Offline transfer bundles indexed by lifecycle status.
-    pub(crate) offline_transfer_status_index:
-        StorageView<'world, OfflineTransferStatus, BTreeSet<Hash>>,
+    /// Offline V2 replay keys used for issued notes, certificates, nullifiers, and audit tokens.
+    pub(crate) offline_note_v2_replay_keys: StorageView<'world, Hash, ()>,
     pub(crate) public_lane_validators:
         StorageView<'world, (LaneId, AccountId), PublicLaneValidatorRecord>,
     pub(crate) public_lane_stake_shares:
         StorageView<'world, (LaneId, AccountId, AccountId), PublicLaneStakeShare>,
     pub(crate) public_lane_rewards: StorageView<'world, (LaneId, u64), PublicLaneRewardRecord>,
     pub(crate) public_lane_reward_claims: StorageView<'world, (LaneId, AccountId, AssetId), u64>,
-    /// Emergency validator overrides for lane relay quorum recovery (per dataspace).
+    /// Emergency validator overrides for lane relay quorum recovery (per lane).
     pub(crate) lane_relay_emergency_validators:
-        StorageView<'world, DataSpaceId, LaneRelayEmergencyValidatorSet>,
+        StorageView<'world, LaneId, LaneRelayEmergencyValidatorSet>,
     /// ZK shielded ledger state per asset definition (policy, roots, nullifiers).
     pub(crate) zk_assets: StorageView<'world, AssetDefinitionId, ZkAssetState>,
     /// Elections state view (read-only)
     pub(crate) elections: StorageView<'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: StorageView<'world, AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals:
+        StorageView<'world, String, iroha_data_model::ministry::AgendaProposalRecordV1>,
     pub(crate) governance_proposals: StorageView<'world, [u8; 32], GovernanceProposalRecord>,
     pub(crate) governance_referenda: StorageView<'world, String, GovernanceReferendumRecord>,
     pub(crate) governance_stage_approvals: StorageView<'world, String, GovernanceStageApprovals>,
@@ -3046,9 +3744,14 @@ impl ZkAssetState {
         frontier_evictions: u64,
     ) -> ConfidentialTreeStats {
         let last_checkpoint = self.frontier_checkpoints.last().copied();
+        let tree_depth = if self.commitments.is_empty() {
+            0
+        } else {
+            u64::from(self.tree.depth()).saturating_add(1)
+        };
         ConfidentialTreeStats {
             commitments: saturating_len_to_u64(self.commitments.len()),
-            tree_depth: u64::from(self.tree.depth()),
+            tree_depth,
             root_history: saturating_len_to_u64(self.root_history.len()),
             frontier_checkpoints: saturating_len_to_u64(self.frontier_checkpoints.len()),
             last_checkpoint_height: last_checkpoint.as_ref().map_or(0, |cp| cp.height),
@@ -4375,12 +5078,25 @@ pub struct GovernanceLocksForReferendum {
         std::collections::BTreeMap<iroha_data_model::account::AccountId, GovernanceLockRecord>,
 }
 
+/// Public status of an asset-definition alias lease at a specific observation time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AssetDefinitionAliasLeaseStatus {
+    /// Alias has no expiry and resolves permanently until explicitly cleared.
+    Permanent,
+    /// Alias lease has not reached its expiry timestamp yet.
+    LeasedActive,
+    /// Alias lease expired, but the alias still resolves during the grace window.
+    LeasedGrace,
+    /// Alias lease and grace both elapsed, but the sweep has not removed the binding yet.
+    ExpiredPendingCleanup,
+}
+
 /// On-chain alias lease metadata for an asset definition.
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
 pub struct AssetDefinitionAliasBindingRecord {
-    /// Bound alias literal (`<name>#<domain>@<dataspace>` or `<name>#<dataspace>`).
+    /// Bound alias literal (`<name>#<domain>.<dataspace>` or `<name>#<dataspace>`).
     pub alias: AssetDefinitionAlias,
     /// Lease expiry timestamp (unix ms). `None` means non-expiring binding.
     #[norito(default)]
@@ -4397,6 +5113,87 @@ pub struct AssetDefinitionAliasBindingRecord {
 }
 
 impl AssetDefinitionAliasBindingRecord {
+    /// Classify the binding at `now_ms`.
+    #[must_use]
+    pub fn status_at(&self, now_ms: u64) -> AssetDefinitionAliasLeaseStatus {
+        match self.lease_expiry_ms {
+            None => AssetDefinitionAliasLeaseStatus::Permanent,
+            Some(lease_expiry_ms) if now_ms < lease_expiry_ms => {
+                AssetDefinitionAliasLeaseStatus::LeasedActive
+            }
+            Some(_)
+                if self
+                    .grace_until_ms
+                    .is_some_and(|grace_until| now_ms <= grace_until) =>
+            {
+                AssetDefinitionAliasLeaseStatus::LeasedGrace
+            }
+            Some(_) => AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup,
+        }
+    }
+
+    /// Return `true` when the alias should be unbound at `now_ms`.
+    #[must_use]
+    pub fn is_grace_expired_at(&self, now_ms: u64) -> bool {
+        self.grace_until_ms
+            .is_some_and(|grace_until| now_ms > grace_until)
+    }
+}
+
+/// Public status of a contract alias lease at a specific observation time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContractAliasLeaseStatus {
+    /// Alias has no expiry and resolves permanently until explicitly cleared.
+    Permanent,
+    /// Alias lease has not reached its expiry timestamp yet.
+    LeasedActive,
+    /// Alias lease expired, but the alias still resolves during the grace window.
+    LeasedGrace,
+    /// Alias lease and grace both elapsed, but the sweep has not removed the binding yet.
+    ExpiredPendingCleanup,
+}
+
+/// On-chain alias lease metadata for a contract address.
+#[derive(
+    Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
+)]
+pub struct ContractAliasBindingRecord {
+    /// Bound alias literal (`<name>::<domain>.<dataspace>` or `<name>::<dataspace>`).
+    pub alias: ContractAlias,
+    /// Lease expiry timestamp (unix ms). `None` means non-expiring binding.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub lease_expiry_ms: Option<u64>,
+    /// End of the grace period (unix ms). Alias is removed once `now_ms > grace_until_ms`.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub grace_until_ms: Option<u64>,
+    /// Timestamp when the binding was recorded.
+    #[norito(default)]
+    #[cfg_attr(feature = "json", norito(default))]
+    pub bound_at_ms: u64,
+}
+
+impl ContractAliasBindingRecord {
+    /// Classify the binding at `now_ms`.
+    #[must_use]
+    pub fn status_at(&self, now_ms: u64) -> ContractAliasLeaseStatus {
+        match self.lease_expiry_ms {
+            None => ContractAliasLeaseStatus::Permanent,
+            Some(lease_expiry_ms) if now_ms < lease_expiry_ms => {
+                ContractAliasLeaseStatus::LeasedActive
+            }
+            Some(_)
+                if self
+                    .grace_until_ms
+                    .is_some_and(|grace_until| now_ms <= grace_until) =>
+            {
+                ContractAliasLeaseStatus::LeasedGrace
+            }
+            Some(_) => ContractAliasLeaseStatus::ExpiredPendingCleanup,
+        }
+    }
+
     /// Return `true` when the alias should be unbound at `now_ms`.
     #[must_use]
     pub fn is_grace_expired_at(&self, now_ms: u64) -> bool {
@@ -5105,6 +5902,10 @@ pub struct State {
     da_shard_cursor_persistor: DaShardCursorJournalPersistor,
     /// Durable commit-roster journal reconstructed at startup for block sync.
     pub commit_roster_journal: parking_lot::RwLock<CommitRosterJournal>,
+    /// Durable latest query-index snapshot marker reconstructed at startup.
+    query_index_journal: parking_lot::RwLock<QueryIndexJournal>,
+    /// Durable latest query projection checkpoint descriptor reconstructed at startup.
+    query_projection_checkpoint_journal: parking_lot::RwLock<QueryProjectionCheckpointJournal>,
     /// In-memory DA pin intent index mirrored from the on-chain registry.
     pub da_pin_intents: parking_lot::RwLock<DaPinStore>,
     /// In-memory lane relay envelope cache used for merge/telemetry.
@@ -5128,6 +5929,9 @@ pub struct State {
     pub pipeline: iroha_config::parameters::actual::Pipeline,
     /// Shared pipeline worker pool snapshot (derived from pipeline config).
     pipeline_parallelism: PipelineParallelism,
+    /// Optional shared Soracloud runtime handle used for replicated mailbox execution.
+    soracloud_runtime:
+        parking_lot::RwLock<Option<crate::soracloud_runtime::SharedSoracloudRuntime>>,
     /// Stateless validation cache shared across blocks.
     stateless_validation_cache: parking_lot::Mutex<StatelessValidationCache>,
     /// Cached confidential feature digest for proposal assembly.
@@ -5199,6 +6003,8 @@ pub struct StateBlock<'state> {
     kura: &'state Kura,
     /// Handle to the [`LiveQueryStore`](crate::query::store::LiveQueryStore).
     pub query_handle: &'state LiveQueryStoreHandle,
+    /// Optional shared Soracloud runtime handle used for ordered mailbox execution.
+    pub soracloud_runtime: Option<crate::soracloud_runtime::SharedSoracloudRuntime>,
     /// Cached snapshot of account identifiers for this block.
     accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
     /// Pipeline execution preferences for this block.
@@ -5292,6 +6098,8 @@ pub struct StateBlock<'state> {
         Option<std::sync::Arc<std::collections::BTreeMap<[u8; 32], bool>>>,
     /// Successful overlays (transactions, triggers, deterministic updates) committed in this block.
     committed_fragments: usize,
+    /// True while rebuilding state from already committed Kura blocks.
+    pub(crate) replay_compatibility: bool,
 }
 
 impl<'state> StateBlock<'state> {
@@ -5599,9 +6407,9 @@ pub struct StateTransaction<'block, 'state> {
         BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingSettlement>,
     /// Charged Nexus fee event staged until the transaction is committed.
     pending_nexus_fee_event: Option<crate::sumeragi::status::NexusFeeEvent>,
-    /// Block fee units staged until the transaction is committed.
+    /// Block fee amount staged until the transaction is committed.
     #[cfg(feature = "telemetry")]
-    pending_block_fee_units: u64,
+    pending_block_fee_amount: Numeric,
     /// Confidential operations executed so far within this transaction.
     pub zk_confidential_ops_in_tx: u32,
     /// Confidential proof verifications executed so far within this transaction.
@@ -5618,6 +6426,8 @@ pub struct StateTransaction<'block, 'state> {
     pub zk_nullifiers_in_tx: u32,
     /// Total confidential commitments created so far in this transaction.
     pub zk_commitments_in_tx: u32,
+    /// Native anonymous escrow ISI nesting depth for shielded transfer execution.
+    pub(crate) native_anonymous_escrow_transfer_depth: u32,
     /// Implicit accounts created so far within this transaction.
     pub implicit_account_creations_in_tx: u32,
     /// Implicit accounts already accumulated in the block before this transaction began.
@@ -5641,6 +6451,13 @@ pub struct StateTransaction<'block, 'state> {
     /// Hash of the current transaction entrypoint (`call_hash`), when executing a transaction.
     /// Not set for ad-hoc instruction execution in tests.
     pub tx_call_hash: Option<iroha_crypto::Hash>,
+    /// Canonical hash of the current signed transaction, when executing a transaction.
+    pub current_tx_hash:
+        Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
+    /// True while rebuilding state from already committed Kura blocks.
+    pub(crate) replay_compatibility: bool,
+    /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
+    pub(crate) rwa_generated_id_ordinal: u64,
     /// Remaining executor fuel budget for runtime executor validation in this transaction.
     pub(crate) executor_fuel_remaining: Option<u64>,
     /// Optional view of block-level preverified proofs (`proof_hash` -> ok)
@@ -5783,13 +6600,18 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         self.pending_nexus_fee_event = Some(event);
     }
 
-    /// Stage block fee units so telemetry only reflects committed transactions.
+    /// Stage block fee amount so telemetry only reflects committed transactions.
     #[cfg(feature = "telemetry")]
-    pub(crate) fn stage_block_fee_units(&mut self, delta_units: u64) {
-        if delta_units == 0 {
+    pub(crate) fn stage_block_fee_amount(&mut self, delta_amount: Numeric) {
+        if delta_amount <= Numeric::zero() {
             return;
         }
-        self.pending_block_fee_units = self.pending_block_fee_units.saturating_add(delta_units);
+        self.pending_block_fee_amount = self
+            .pending_block_fee_amount
+            .clone()
+            .checked_add(delta_amount)
+            .expect("block fee amount exceeds supported numeric bounds")
+            .trim_trailing_zeros();
     }
 }
 
@@ -6158,6 +6980,40 @@ pub(crate) fn consensus_key_pop_for_public_key(
     })
 }
 
+/// Resolve every lane id currently associated with the provided validator peers.
+pub(crate) fn validator_lane_ids_for_peers<I, P>(
+    snapshot: &impl WorldReadOnly,
+    peers: I,
+) -> BTreeSet<LaneId>
+where
+    I: IntoIterator<Item = P>,
+    P: std::borrow::Borrow<PeerId>,
+{
+    let peer_ids: BTreeSet<PeerId> = peers
+        .into_iter()
+        .map(|peer| peer.borrow().clone())
+        .collect();
+    if peer_ids.is_empty() {
+        return BTreeSet::new();
+    }
+
+    snapshot
+        .public_lane_validators()
+        .iter()
+        .filter_map(|((_lane_id, _validator_id), record)| {
+            peer_ids.contains(&record.peer_id).then_some(record.lane_id)
+        })
+        .collect()
+}
+
+/// Resolve every lane id currently associated with a single validator peer.
+pub(crate) fn validator_lane_ids_for_peer(
+    snapshot: &impl WorldReadOnly,
+    peer: &PeerId,
+) -> BTreeSet<LaneId> {
+    validator_lane_ids_for_peers(snapshot, core::iter::once(peer))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConsensusKeyGate {
     Live,
@@ -6233,6 +7089,61 @@ pub(crate) fn peer_has_live_consensus_key(
     )
 }
 
+/// Fetch the stored BLS proof-of-possession for a peer's live consensus key.
+pub(crate) fn live_consensus_key_pop_for_peer(
+    snapshot: &impl WorldReadOnly,
+    peer_id: &PeerId,
+    block_height: u64,
+) -> Option<Vec<u8>> {
+    let pk = peer_id.public_key();
+    let ids = snapshot.consensus_keys_by_pk().get(&pk.to_string())?;
+    for id in ids {
+        let Some(record) = snapshot.consensus_keys().get(id) else {
+            continue;
+        };
+        if record.public_key != *pk {
+            continue;
+        }
+        let not_yet_active = block_height < record.activation_height;
+        let expired = record
+            .expiry_height
+            .is_some_and(|expiry| block_height >= expiry);
+        match record.status {
+            ConsensusKeyStatus::Active | ConsensusKeyStatus::Retiring
+                if !not_yet_active && !expired =>
+            {
+                if let Some(pop) = record.pop.as_ref() {
+                    return Some(pop.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Filter lane-relay emergency peers to those that are currently usable for QC verification.
+pub(crate) fn eligible_lane_relay_emergency_peers(
+    snapshot: &impl WorldReadOnly,
+    peers: &[PeerId],
+    commit_topology: &[PeerId],
+    block_height: u64,
+) -> Vec<PeerId> {
+    let present_peers: BTreeSet<PeerId> = snapshot.peers().iter().cloned().collect();
+    let topology_peers: BTreeSet<PeerId> = commit_topology.iter().cloned().collect();
+    let enforce_topology_membership = !topology_peers.is_empty();
+
+    let mut eligible = peers.to_vec();
+    eligible.retain(|peer| {
+        present_peers.contains(peer)
+            && (!enforce_topology_membership || topology_peers.contains(peer))
+            && live_consensus_key_pop_for_peer(snapshot, peer, block_height).is_some()
+    });
+    eligible.sort();
+    eligible.dedup();
+    eligible
+}
+
 /// Stake-snapshot trait: provides an epoch-specific validator roster snapshot.
 ///
 /// Implementations should return the ordered validator `PeerIds` that form the roster
@@ -6258,10 +7169,55 @@ where
     let mut topology_peers: std::collections::BTreeSet<PeerId> =
         commit_topology.into_iter().collect();
     let enforce_topology_membership = !topology_peers.is_empty();
+    let topology_lane_ids = if enforce_topology_membership {
+        validator_lane_ids_for_peers(world, topology_peers.iter())
+    } else {
+        BTreeSet::new()
+    };
+    let validator_peer_ids_by_account: BTreeMap<AccountId, PeerId> = world
+        .public_lane_validators()
+        .iter()
+        .filter(|(_, record)| {
+            topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
+        })
+        .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
+        .filter(|(_, record)| {
+            matches!(
+                nexus
+                    .staking
+                    .validator_mode(record.lane_id, &nexus.lane_catalog),
+                iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+            )
+        })
+        .filter_map(|(_, record)| {
+            let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                &record.self_stake,
+                nexus.staking.min_validator_stake,
+            ) else {
+                return None;
+            };
+            if !meets_min {
+                return None;
+            }
+            if !present_peers.contains(&record.peer_id) {
+                return None;
+            }
+            if enforce_topology_membership && !topology_peers.contains(&record.peer_id) {
+                return None;
+            }
+            if !peer_has_live_consensus_key(world, &record.peer_id, block_height) {
+                return None;
+            }
+            Some((record.validator.clone(), record.peer_id.clone()))
+        })
+        .collect();
     if enforce_topology_membership {
         let mut active_candidates: std::collections::BTreeSet<PeerId> =
             std::collections::BTreeSet::new();
         for ((_lane_id, _validator_id), record) in world.public_lane_validators().iter() {
+            if !topology_lane_ids.is_empty() && !topology_lane_ids.contains(&record.lane_id) {
+                continue;
+            }
             if !matches!(record.status, PublicLaneValidatorStatus::Active) {
                 continue;
             }
@@ -6282,10 +7238,7 @@ where
             if !meets_min {
                 continue;
             }
-            let Some(pk) = record.validator.try_signatory() else {
-                continue;
-            };
-            let pid = PeerId::from(pk.clone());
+            let pid = record.peer_id.clone();
             if !present_peers.contains(&pid) {
                 continue;
             }
@@ -6314,17 +7267,26 @@ where
     }
     // Preferred path: council-derived roster for the epoch.
     if let Some(c) = world.council().get(&epoch).cloned() {
-        // Build PeerIds from council members' signatories.
-        let mut ids: Vec<PeerId> = c
+        let ids: Vec<PeerId> = c
             .members
             .into_iter()
-            .map(|acct| PeerId::from(acct.signatory().clone()))
+            .filter_map(|acct| {
+                if let Some(peer_id) = validator_peer_ids_by_account.get(&acct) {
+                    return Some(peer_id.clone());
+                }
+                let peer_id = PeerId::from(acct.signatory().clone());
+                if !present_peers.contains(&peer_id) {
+                    return None;
+                }
+                if enforce_topology_membership && !topology_peers.contains(&peer_id) {
+                    return None;
+                }
+                if !peer_has_live_consensus_key(world, &peer_id, block_height) {
+                    return None;
+                }
+                Some(peer_id)
+            })
             .collect();
-        // Filter to peers known in WSV and preserve order.
-        ids.retain(|pid| present_peers.contains(pid));
-        if enforce_topology_membership {
-            ids.retain(|pid| topology_peers.contains(pid));
-        }
         if !ids.is_empty() {
             return Some(ids);
         }
@@ -6332,6 +7294,9 @@ where
     let mut candidates: Vec<(PeerId, Numeric, AccountId)> = world
         .public_lane_validators()
         .iter()
+        .filter(|(_, record)| {
+            topology_lane_ids.is_empty() || topology_lane_ids.contains(&record.lane_id)
+        })
         .filter(|(_, record)| matches!(record.status, PublicLaneValidatorStatus::Active))
         .filter(|(_, record)| {
             matches!(
@@ -6351,8 +7316,7 @@ where
             if !meets_min {
                 return None;
             }
-            let pk = record.validator.try_signatory()?;
-            let pid = PeerId::from(pk.clone());
+            let pid = record.peer_id.clone();
             if !present_peers.contains(&pid) {
                 return None;
             }
@@ -6593,6 +7557,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: active_validator.clone(),
+                peer_id: PeerId::from(active_validator.signatory().clone()),
                 stake_account: active_validator.clone(),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
@@ -6608,6 +7573,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: jailed_validator.clone(),
+                peer_id: PeerId::from(jailed_validator.signatory().clone()),
                 stake_account: jailed_validator.clone(),
                 total_stake: Numeric::new(10_000, 0),
                 self_stake: Numeric::new(10_000, 0),
@@ -6655,6 +7621,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: present_validator.clone(),
+                peer_id: PeerId::from(present_validator.signatory().clone()),
                 stake_account: present_validator.clone(),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
@@ -6670,6 +7637,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: missing_validator.clone(),
+                peer_id: PeerId::from(missing_validator.signatory().clone()),
                 stake_account: missing_validator,
                 total_stake: Numeric::new(2_000, 0),
                 self_stake: Numeric::new(2_000, 0),
@@ -6719,6 +7687,7 @@ mod stake_snapshot_tests {
                 PublicLaneValidatorRecord {
                     lane_id: LaneId::SINGLE,
                     validator: validator.clone(),
+                    peer_id: PeerId::from(kp.public_key().clone()),
                     stake_account: validator.clone(),
                     total_stake: Numeric::new(1_000, 0),
                     self_stake: Numeric::new(1_000, 0),
@@ -6745,6 +7714,118 @@ mod stake_snapshot_tests {
         for peer in peers {
             assert!(roster.contains(&peer));
         }
+    }
+
+    #[test]
+    fn public_lane_snapshot_keeps_widening_scoped_to_commit_topology_lanes() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut state = State::new(World::default(), std::sync::Arc::clone(&kura), query);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.staking.min_validator_stake = 100;
+        }
+
+        let lane_catalog = LaneCatalog::new(
+            NonZeroU32::new(2).expect("nonzero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: LaneId::new(1),
+                    alias: "restricted".to_string(),
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config = DerivedLaneConfig::from_catalog(&lane_catalog);
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.restricted_validator_mode = LaneValidatorMode::StakeElected;
+        }
+
+        let public_keypairs: Vec<KeyPair> = (0..2).map(|_| KeyPair::random()).collect();
+        let restricted_keypairs: Vec<KeyPair> = (0..2).map(|_| KeyPair::random()).collect();
+
+        let mut wb = state.world.block();
+        {
+            let peers = wb.peers.get_mut();
+            for kp in public_keypairs.iter().chain(restricted_keypairs.iter()) {
+                let _ = peers.push(PeerId::from(kp.public_key().clone()));
+            }
+        }
+        let peers: Vec<_> = wb.peers.clone().into_iter().collect();
+        for peer in &peers {
+            seed_consensus_key(&mut wb, peer, ConsensusKeyStatus::Active, 0);
+        }
+        for kp in &public_keypairs {
+            let validator = DMAccountId::of(kp.public_key().clone());
+            wb.public_lane_validators.insert(
+                (LaneId::SINGLE, validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::SINGLE,
+                    validator: validator.clone(),
+                    peer_id: PeerId::from(kp.public_key().clone()),
+                    stake_account: validator,
+                    total_stake: Numeric::new(1_000, 0),
+                    self_stake: Numeric::new(1_000, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+        }
+        for kp in &restricted_keypairs {
+            let validator = DMAccountId::of(kp.public_key().clone());
+            wb.public_lane_validators.insert(
+                (LaneId::new(1), validator.clone()),
+                PublicLaneValidatorRecord {
+                    lane_id: LaneId::new(1),
+                    validator: validator.clone(),
+                    peer_id: PeerId::from(kp.public_key().clone()),
+                    stake_account: validator,
+                    total_stake: Numeric::new(2_000, 0),
+                    self_stake: Numeric::new(2_000, 0),
+                    metadata: Metadata::default(),
+                    status: PublicLaneValidatorStatus::Active,
+                    activation_epoch: None,
+                    activation_height: None,
+                    last_reward_epoch: None,
+                },
+            );
+        }
+        wb.commit();
+
+        {
+            let mut topo_block = state.commit_topology.block();
+            topo_block.mutate_vec(|vec| {
+                *vec = public_keypairs
+                    .iter()
+                    .take(1)
+                    .map(|kp| PeerId::from(kp.public_key().clone()))
+                    .collect();
+            });
+            topo_block.commit();
+        }
+
+        let sv = state.view();
+        let roster =
+            <StateView as StakeSnapshot>::epoch_validator_peer_ids(&sv, 0).expect("roster");
+        let expected: Vec<_> = public_keypairs
+            .iter()
+            .map(|kp| PeerId::from(kp.public_key().clone()))
+            .collect();
+        let mut expected = expected;
+        expected.sort();
+        assert_eq!(
+            roster, expected,
+            "epoch roster widening must stay inside the commit topology lane"
+        );
     }
 
     #[test]
@@ -6794,6 +7875,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: live_validator.clone(),
+                peer_id: live_peer.clone(),
                 stake_account: live_validator.clone(),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
@@ -6809,6 +7891,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: expired_validator.clone(),
+                peer_id: expired_peer.clone(),
                 stake_account: expired_validator,
                 total_stake: Numeric::new(2_000, 0),
                 self_stake: Numeric::new(2_000, 0),
@@ -6853,6 +7936,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator,
+                peer_id: peer.clone(),
                 stake_account: DMAccountId::of(kp.public_key().clone()),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
@@ -6924,6 +8008,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: stake_validator,
+                peer_id: stake_peer.clone(),
                 stake_account: DMAccountId::of(stake_kp.public_key().clone()),
                 total_stake: Numeric::new(1_000, 0),
                 self_stake: Numeric::new(1_000, 0),
@@ -6939,6 +8024,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::new(1),
                 validator: admin_validator,
+                peer_id: admin_peer.clone(),
                 stake_account: DMAccountId::of(admin_kp.public_key().clone()),
                 total_stake: Numeric::new(2_000, 0),
                 self_stake: Numeric::new(2_000, 0),
@@ -6999,6 +8085,7 @@ mod stake_snapshot_tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator_id.clone(),
+                peer_id: peer_a.clone(),
                 stake_account: validator_id,
                 total_stake: Numeric::new(500, 0),
                 self_stake: Numeric::new(500, 0),
@@ -7167,17 +8254,29 @@ mod state_lock_order_tests {
 
 #[cfg(test)]
 mod storage_migration_tests {
-    use std::sync::Arc;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+    };
 
     use iroha_crypto::{Hash, KeyPair};
     use iroha_data_model::{
-        account::{AccountDetails, AccountId},
+        account::{AccountAlias, AccountAliasDomain, AccountDetails, AccountId},
         domain::DomainId,
         metadata::Metadata,
+        name::Name,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
     };
 
     use super::*;
+
+    fn alias_in_domain(domain_id: &DomainId, label: Name) -> AccountAlias {
+        AccountAlias::new(
+            label,
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            DataSpaceId::UNIVERSAL,
+        )
+    }
 
     #[test]
     fn uaid_bindings_rebuilt_from_manifests_on_startup() {
@@ -7243,6 +8342,94 @@ mod storage_migration_tests {
             "only one dataspace expected"
         );
         assert!(iter.next().is_none(), "only one UAID entry expected");
+    }
+
+    #[test]
+    fn account_scope_directory_rebuilt_from_aliases_and_uaid_bindings_on_startup() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut world = World::default();
+
+        let uaid = UniversalAccountId::from_hash(Hash::new("account-scope-migration"));
+        let dataspace = DataSpaceId::new(7);
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+        world.uaid_accounts.insert(uaid, account_id.clone());
+
+        let global_domain = DomainId::try_new("treasury", "universal").expect("global domain id");
+        let global_alias = alias_in_domain(&global_domain, "public".parse().expect("alias label"));
+        let private_alias = AccountAlias::new(
+            "private".parse().expect("private alias label"),
+            Some(AccountAliasDomain::new(
+                "treasury".parse::<Name>().expect("private domain name"),
+            )),
+            dataspace,
+        );
+        world
+            .account_aliases
+            .insert(global_alias.clone(), account_id.clone());
+        world
+            .account_aliases
+            .insert(private_alias.clone(), account_id.clone());
+        world.account_aliases_by_account.insert(
+            account_id.clone(),
+            BTreeSet::from([global_alias.clone(), private_alias.clone()]),
+        );
+
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
+        set.upsert(record);
+        world.space_directory_manifests.insert(uaid, set);
+
+        assert!(
+            world.account_scope_directory.view().iter().next().is_none(),
+            "pre-migration world should not contain account scope entries",
+        );
+
+        let state = State::new_for_testing(world, Arc::clone(&kura), query);
+        let entry = state
+            .world
+            .account_scope_directory
+            .view()
+            .get(&account_id)
+            .cloned()
+            .expect("account scope entry should be rebuilt on startup");
+        let scopes = entry
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            scopes,
+            BTreeMap::from([
+                (
+                    DataSpaceId::UNIVERSAL,
+                    BTreeSet::from([AccountAliasDomain::new(
+                        "treasury".parse::<Name>().expect("global domain name"),
+                    )]),
+                ),
+                (
+                    dataspace,
+                    BTreeSet::from([AccountAliasDomain::new(
+                        "treasury".parse::<Name>().expect("private domain name"),
+                    )]),
+                ),
+            ]),
+            "startup rebuild should merge alias domains with UAID-derived dataspace bindings",
+        );
     }
 
     #[test]
@@ -7349,10 +8536,13 @@ mod storage_migration_tests {
     fn domain_selector_index_tracks_default_and_local_domains() {
         let mut world = World::default();
         let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let default_domain: DomainId = iroha_data_model::account::address::DEFAULT_DOMAIN_NAME
-            .parse()
-            .expect("default domain id");
-        let local_domain: DomainId = "wonderland".parse().expect("local domain id");
+        let default_domain = DomainId::try_new(
+            iroha_data_model::account::address::DEFAULT_DOMAIN_NAME,
+            "universal",
+        )
+        .expect("default domain id");
+        let local_domain: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("local domain id");
 
         world.domains.insert(
             default_domain.clone(),
@@ -7400,11 +8590,8 @@ mod storage_migration_tests {
     fn account_alias_index_rejects_duplicates() {
         let mut world = World::default();
 
-        let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let label = AccountLabel::new(
-            domain_id.clone(),
-            "primary".parse::<Name>().expect("label name"),
-        );
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
+        let label = alias_in_domain(&domain_id, "primary".parse::<Name>().expect("label name"));
         let first = AccountId::new(KeyPair::random().public_key().clone());
         let second = AccountId::new(KeyPair::random().public_key().clone());
 
@@ -7432,9 +8619,9 @@ mod storage_migration_tests {
     fn account_alias_index_rejects_phone_like_labels() {
         let mut world = World::default();
 
-        let domain_id: DomainId = "alias.world".parse().expect("domain id");
-        let label = AccountLabel::new(
-            domain_id.clone(),
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
+        let label = alias_in_domain(
+            &domain_id,
             "+819398553445".parse::<Name>().expect("label name"),
         );
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
@@ -7450,6 +8637,146 @@ mod storage_migration_tests {
         assert!(
             err.contains("raw PII"),
             "error should mention raw PII: {err}"
+        );
+    }
+
+    #[test]
+    fn account_alias_index_preserves_bound_aliases_from_storage() {
+        let mut world = World::default();
+
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
+        let primary_label = alias_in_domain(
+            &domain_id,
+            "banking".parse::<Name>().expect("primary label name"),
+        );
+        let bound_label = alias_in_domain(
+            &domain_id,
+            "issuance".parse::<Name>().expect("bound label name"),
+        );
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        let details = AccountDetails::new(
+            Metadata::default(),
+            Some(primary_label.clone()),
+            None,
+            Vec::new(),
+        );
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+        world
+            .account_aliases
+            .insert(bound_label.clone(), account_id.clone());
+
+        world
+            .rebuild_account_alias_index()
+            .expect("stored bound alias should survive rebuild");
+
+        assert_eq!(
+            world.account_aliases.view().get(&primary_label),
+            Some(&account_id),
+            "primary label should remain indexed"
+        );
+        assert_eq!(
+            world.account_aliases.view().get(&bound_label),
+            Some(&account_id),
+            "additional bound alias should survive rebuild"
+        );
+        let reverse = world
+            .account_aliases_by_account
+            .view()
+            .get(&account_id)
+            .cloned()
+            .expect("reverse alias index should exist");
+        assert_eq!(
+            reverse,
+            BTreeSet::from([bound_label, primary_label]),
+            "reverse alias index should include both primary and bound aliases"
+        );
+    }
+
+    #[test]
+    fn account_rekey_rebuild_backfills_alias_bound_multisig_accounts() {
+        let mut world = World::default();
+
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
+        let label = alias_in_domain(&domain_id, "cbdc".parse::<Name>().expect("label name"));
+        let member_a = iroha_data_model::account::MultisigMember::new(
+            KeyPair::random().public_key().clone(),
+            1,
+        )
+        .expect("multisig member");
+        let member_b = iroha_data_model::account::MultisigMember::new(
+            KeyPair::random().public_key().clone(),
+            1,
+        )
+        .expect("multisig member");
+        let policy = iroha_data_model::account::MultisigPolicy::new(2, vec![member_a, member_b])
+            .expect("multisig policy");
+        let account_id = AccountId::new_multisig(policy);
+        let details =
+            AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+
+        world
+            .rebuild_account_alias_index()
+            .expect("alias index rebuild should succeed");
+        world
+            .rebuild_account_rekey_records()
+            .expect("rekey record rebuild should backfill multisig aliases");
+
+        let records = world.account_rekey_records.view();
+        let record = records
+            .get(&label)
+            .expect("rekey record should be backfilled");
+        assert_eq!(record.active_account_id, account_id);
+        assert!(record.active_signatory.is_none());
+        assert!(record.previous_account_ids.is_empty());
+        assert!(record.previous_signatories.is_empty());
+    }
+
+    #[test]
+    fn account_rekey_rebuild_repoints_stale_records_to_current_alias_binding() {
+        let mut world = World::default();
+
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
+        let label = alias_in_domain(&domain_id, "treasury".parse::<Name>().expect("label name"));
+        let first_id = AccountId::new(KeyPair::random().public_key().clone());
+        let second_key = KeyPair::random();
+        let second_id = AccountId::new(second_key.public_key().clone());
+
+        let first_details = AccountDetails::new(Metadata::default(), None, None, Vec::new());
+        let second_details =
+            AccountDetails::new(Metadata::default(), Some(label.clone()), None, Vec::new());
+        world
+            .accounts
+            .insert(first_id.clone(), AccountValue::new(first_details));
+        world
+            .accounts
+            .insert(second_id.clone(), AccountValue::new(second_details));
+        world.account_rekey_records.insert(
+            label.clone(),
+            AccountRekeyRecord::new(label.clone(), first_id.clone()),
+        );
+
+        world
+            .rebuild_account_alias_index()
+            .expect("alias index rebuild should succeed");
+        world
+            .rebuild_account_rekey_records()
+            .expect("rekey record rebuild should repoint stale records");
+
+        let records = world.account_rekey_records.view();
+        let record = records
+            .get(&label)
+            .expect("rekey record should survive rebuild");
+        assert_eq!(record.active_account_id, second_id);
+        assert_eq!(record.previous_account_ids, vec![first_id]);
+        assert_eq!(
+            record.active_signatory,
+            Some(second_key.public_key().clone())
         );
     }
 
@@ -8400,7 +9727,13 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
-        for domain_id in world.domains_for_subject(account_id) {
+        for alias in world.bound_account_aliases(account_id) {
+            let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
+                ValidationFail::InstructionFailed(Error::InvariantViolation(err.to_string().into()))
+            })?
+            else {
+                continue;
+            };
             let domain_owner = match self.domain_owner_transfer.get(&domain_id) {
                 Some((_, to)) => to.clone(),
                 None => world
@@ -8487,7 +9820,13 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
-        for domain_id in world.domains_for_subject(transfer.source()) {
+        for alias in world.bound_account_aliases(transfer.source()) {
+            let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
+                ValidationFail::InstructionFailed(Error::InvariantViolation(err.to_string().into()))
+            })?
+            else {
+                continue;
+            };
             let source_domain_owner = match self.domain_owner_transfer.get(&domain_id) {
                 Some((_, to)) => to.clone(),
                 None => world
@@ -9439,11 +10778,245 @@ impl World {
         &mut self.uaid_dataspaces
     }
 
+    /// Provides mutable access to account permissions for tests and API scaffolding.
+    pub fn account_permissions_mut_for_testing(&mut self) -> &mut Storage<AccountId, Permissions> {
+        &mut self.account_permissions
+    }
+
     /// Provides mutable access to the Space Directory manifest registry for tests and API scaffolding.
     pub fn space_directory_manifests_mut_for_testing(
         &mut self,
     ) -> &mut Storage<UniversalAccountId, SpaceDirectoryManifestSet> {
         &mut self.space_directory_manifests
+    }
+
+    /// Provides mutable access to durable smart-contract state for tests and API scaffolding.
+    pub fn smart_contract_state_mut_for_testing(&mut self) -> &mut Storage<Name, Vec<u8>> {
+        &mut self.smart_contract_state
+    }
+
+    /// Provides mutable access to Soracloud service revisions for tests and API scaffolding.
+    pub fn soracloud_service_revisions_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraDeploymentBundleV1> {
+        &mut self.soracloud_service_revisions
+    }
+
+    /// Provides mutable access to Soracloud deployment state for tests and API scaffolding.
+    pub fn soracloud_service_deployments_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Name, SoraServiceDeploymentStateV1> {
+        &mut self.soracloud_service_deployments
+    }
+
+    /// Provides mutable access to Soracloud runtime state for tests and API scaffolding.
+    pub fn soracloud_service_runtime_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Name, SoraServiceRuntimeStateV1> {
+        &mut self.soracloud_service_runtime
+    }
+
+    /// Provides mutable access to placed Inrou replica runtime state for tests and API scaffolding.
+    pub fn soracloud_inrou_replica_runtime_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String, String), SoraInrouReplicaRuntimeStateV1> {
+        &mut self.soracloud_inrou_replica_runtime
+    }
+
+    /// Provides mutable access to Soracloud audit events for tests and API scaffolding.
+    pub fn soracloud_service_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraServiceAuditEventV1> {
+        &mut self.soracloud_service_audit_events
+    }
+
+    /// Provides mutable access to authoritative Soracloud ciphertext state for tests and API scaffolding.
+    pub fn soracloud_service_state_entries_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String, String), SoraServiceStateEntryV1> {
+        &mut self.soracloud_service_state_entries
+    }
+
+    /// Provides mutable access to Soracloud decryption request records for tests and API scaffolding.
+    pub fn soracloud_decryption_request_records_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraDecryptionRequestRecordV1> {
+        &mut self.soracloud_decryption_request_records
+    }
+
+    /// Provides mutable access to Soracloud agent apartments for tests and API scaffolding.
+    pub fn soracloud_agent_apartments_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<String, SoraAgentApartmentRecordV1> {
+        &mut self.soracloud_agent_apartments
+    }
+
+    /// Provides mutable access to Soracloud agent-apartment audit events for tests and API scaffolding.
+    pub fn soracloud_agent_apartment_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraAgentApartmentAuditEventV1> {
+        &mut self.soracloud_agent_apartment_audit_events
+    }
+
+    /// Provides mutable access to Soracloud training jobs for tests and API scaffolding.
+    pub fn soracloud_training_jobs_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraTrainingJobRecordV1> {
+        &mut self.soracloud_training_jobs
+    }
+
+    /// Provides mutable access to Soracloud training-job audit events for tests and API scaffolding.
+    pub fn soracloud_training_job_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraTrainingJobAuditEventV1> {
+        &mut self.soracloud_training_job_audit_events
+    }
+
+    /// Provides mutable access to Soracloud model registries for tests and API scaffolding.
+    pub fn soracloud_model_registries_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraModelRegistryV1> {
+        &mut self.soracloud_model_registries
+    }
+
+    /// Provides mutable access to Soracloud model-weight versions for tests and API scaffolding.
+    pub fn soracloud_model_weight_versions_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String, String), SoraModelWeightVersionRecordV1> {
+        &mut self.soracloud_model_weight_versions
+    }
+
+    /// Provides mutable access to Soracloud model-weight audit events for tests and API scaffolding.
+    pub fn soracloud_model_weight_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraModelWeightAuditEventV1> {
+        &mut self.soracloud_model_weight_audit_events
+    }
+
+    /// Provides mutable access to Soracloud model artifacts for tests and API scaffolding.
+    pub fn soracloud_model_artifacts_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraModelArtifactRecordV1> {
+        &mut self.soracloud_model_artifacts
+    }
+
+    /// Provides mutable access to Soracloud model-artifact audit events for tests and API scaffolding.
+    pub fn soracloud_model_artifact_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraModelArtifactAuditEventV1> {
+        &mut self.soracloud_model_artifact_audit_events
+    }
+
+    /// Returns mutable access to private compile profiles for testing.
+    pub fn soracloud_private_compile_profiles_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraPrivateCompileProfileV1> {
+        &mut self.soracloud_private_compile_profiles
+    }
+
+    /// Returns mutable access to uploaded-model bundles for testing.
+    pub fn soracloud_uploaded_model_bundles_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String, String), SoraUploadedModelBundleV1> {
+        &mut self.soracloud_uploaded_model_bundles
+    }
+
+    /// Returns mutable access to uploaded-model chunks for testing.
+    pub fn soracloud_uploaded_model_chunks_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<String, SoraUploadedModelChunkV1> {
+        &mut self.soracloud_uploaded_model_chunks
+    }
+
+    /// Returns mutable access to private inference sessions for testing.
+    pub fn soracloud_private_inference_sessions_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraPrivateInferenceSessionV1> {
+        &mut self.soracloud_private_inference_sessions
+    }
+
+    /// Returns mutable access to private inference checkpoints for testing.
+    pub fn soracloud_private_inference_checkpoints_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, u32), SoraPrivateInferenceCheckpointV1> {
+        &mut self.soracloud_private_inference_checkpoints
+    }
+
+    /// Provides mutable access to canonical Hugging Face sources for tests and API scaffolding.
+    pub fn soracloud_hf_sources_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraHfSourceRecordV1> {
+        &mut self.soracloud_hf_sources
+    }
+
+    /// Provides mutable access to authoritative model-host adverts for tests and API scaffolding.
+    pub fn soracloud_model_host_capabilities_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<AccountId, SoraModelHostCapabilityRecordV1> {
+        &mut self.soracloud_model_host_capabilities
+    }
+
+    /// Provides mutable access to authoritative Inrou host adverts for tests and API scaffolding.
+    pub fn soracloud_inrou_host_capabilities_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<AccountId, SoraInrouHostCapabilityRecordV1> {
+        &mut self.soracloud_inrou_host_capabilities
+    }
+
+    /// Provides mutable access to HF shared-lease pools for tests and API scaffolding.
+    pub fn soracloud_hf_shared_lease_pools_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraHfSharedLeasePoolV1> {
+        &mut self.soracloud_hf_shared_lease_pools
+    }
+
+    /// Provides mutable access to active HF placement records for tests and API scaffolding.
+    pub fn soracloud_hf_placements_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraHfPlacementRecordV1> {
+        &mut self.soracloud_hf_placements
+    }
+
+    /// Provides mutable access to active Inrou placement records for tests and API scaffolding.
+    pub fn soracloud_inrou_service_placements_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraInrouServicePlacementRecordV1> {
+        &mut self.soracloud_inrou_service_placements
+    }
+
+    /// Provides mutable access to HF shared-lease memberships for tests and API scaffolding.
+    pub fn soracloud_hf_shared_lease_members_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraHfSharedLeaseMemberV1> {
+        &mut self.soracloud_hf_shared_lease_members
+    }
+
+    /// Provides mutable access to HF shared-lease audit events for tests and API scaffolding.
+    pub fn soracloud_hf_shared_lease_audit_events_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<u64, SoraHfSharedLeaseAuditEventV1> {
+        &mut self.soracloud_hf_shared_lease_audit_events
+    }
+
+    /// Provides mutable access to model-host violation evidence for tests and API scaffolding.
+    pub fn soracloud_model_host_violation_evidence_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraModelHostViolationEvidenceRecordV1> {
+        &mut self.soracloud_model_host_violation_evidence
+    }
+
+    /// Provides mutable access to Soracloud mailbox messages for tests and API scaffolding.
+    pub fn soracloud_mailbox_messages_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraServiceMailboxMessageV1> {
+        &mut self.soracloud_mailbox_messages
+    }
+
+    /// Provides mutable access to Soracloud runtime receipts for tests and API scaffolding.
+    pub fn soracloud_runtime_receipts_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<Hash, SoraRuntimeReceiptV1> {
+        &mut self.soracloud_runtime_receipts
     }
 
     /// Creates a [`World`] with these [`Domain`]s and [`Peer`]s.
@@ -9482,16 +11055,7 @@ impl World {
                 rekey_pairs.push((record.label.clone(), record));
             }
             let (account_id, account_value) = account.into_key_value();
-            if let Some(previous) = account_pairs.remove(&account_id) {
-                // Preserve the most recent account payload while keeping all linked-domain hints.
-                let mut details = account_value.into_inner();
-                details
-                    .linked_domains
-                    .extend(previous.as_ref().linked_domains().iter().cloned());
-                account_pairs.insert(account_id, AccountValue::new(details));
-            } else {
-                account_pairs.insert(account_id, account_value);
-            }
+            account_pairs.insert(account_id, account_value);
         }
         let accounts = account_pairs.into_iter().collect();
         let account_rekey_records = rekey_pairs.into_iter().collect();
@@ -9509,15 +11073,20 @@ impl World {
             accounts,
             uaid_accounts: Storage::default(),
             account_rekey_records,
+            account_recovery_policies: Storage::default(),
+            account_recovery_requests: Storage::default(),
             asset_definitions,
             asset_definition_aliases: Storage::default(),
             asset_definition_alias_bindings: Storage::default(),
+            contract_aliases: Storage::default(),
+            contract_alias_bindings: Storage::default(),
             domain_asset_definitions: Storage::default(),
             asset_definition_holders: Storage::default(),
             asset_definition_assets: Storage::default(),
             assets,
             asset_metadata: Storage::default(),
             nfts,
+            rwas: Storage::default(),
             proofs: Storage::default(),
             contract_manifests: Storage::default(),
             contract_code: Storage::default(),
@@ -9538,7 +11107,7 @@ impl World {
             replication_orders: Storage::default(),
             repo_agreements: Storage::default(),
             settlement_ledgers: Storage::default(),
-            offline_to_online_transfers: Storage::default(),
+            ministry_agenda_proposals: Storage::default(),
             governance_proposals: Storage::default(),
             governance_referenda: Storage::default(),
             governance_stage_approvals: Storage::default(),
@@ -9552,7 +11121,6 @@ impl World {
         world
             .rebuild_domain_selector_index()
             .expect("duplicate domain selector in world constructor");
-        world.rebuild_account_subject_domain_indexes();
         world
             .rebuild_uaid_account_index()
             .expect("duplicate UAID in world constructor");
@@ -9560,8 +11128,17 @@ impl World {
             .rebuild_account_alias_index()
             .expect("duplicate account alias in world constructor");
         world
+            .rebuild_account_scope_directory()
+            .expect("invalid account scope directory in world constructor");
+        world
+            .rebuild_account_rekey_records()
+            .expect("invalid account rekey state in world constructor");
+        world
             .rebuild_asset_definition_alias_indexes()
             .expect("duplicate asset definition alias in world constructor");
+        world
+            .rebuild_contract_alias_indexes()
+            .expect("duplicate contract alias in world constructor");
         world.rebuild_asset_definition_indexes();
         world
             .rebuild_opaque_uaid_index()
@@ -9625,58 +11202,6 @@ impl World {
         Ok(())
     }
 
-    fn rebuild_account_subject_domain_indexes(&mut self) {
-        let mut subject_domains = BTreeMap::<AccountId, BTreeSet<DomainId>>::new();
-        let accounts = self.accounts.view();
-        let domains = self.domains.view();
-
-        for (subject, linked_domains) in self.account_subject_domains.view().iter() {
-            let filtered: BTreeSet<_> = linked_domains
-                .iter()
-                .filter(|domain| domains.get(*domain).is_some())
-                .cloned()
-                .collect();
-            subject_domains.insert(subject.clone(), filtered);
-        }
-
-        for (subject, account_value) in accounts.iter() {
-            let entry = subject_domains.entry(subject.clone()).or_default();
-            entry.extend(
-                account_value
-                    .as_ref()
-                    .linked_domains()
-                    .iter()
-                    .filter(|domain| domains.get(*domain).is_some())
-                    .cloned(),
-            );
-            if entry.is_empty() {
-                entry.extend(domains.iter().filter_map(|(domain_id, domain)| {
-                    (domain.owned_by() == subject).then_some(domain_id.clone())
-                }));
-            }
-        }
-
-        self.account_subject_domains = subject_domains.into_iter().collect();
-        self.rebuild_domain_account_subject_index();
-    }
-
-    fn rebuild_domain_account_subject_index(&mut self) {
-        let mut domain_subjects = BTreeMap::<DomainId, BTreeSet<AccountId>>::new();
-        let domains = self.domains.view();
-        for (subject, linked_domains) in self.account_subject_domains.view().iter() {
-            for domain in linked_domains
-                .iter()
-                .filter(|domain| domains.get(*domain).is_some())
-            {
-                domain_subjects
-                    .entry(domain.clone())
-                    .or_default()
-                    .insert(subject.clone());
-            }
-        }
-        self.domain_account_subjects = domain_subjects.into_iter().collect();
-    }
-
     fn rebuild_domain_selector_index(&mut self) -> Result<(), String> {
         let mut index = BTreeMap::new();
         let view = self.domains.view();
@@ -9699,7 +11224,39 @@ impl World {
 
     fn rebuild_account_alias_index(&mut self) -> Result<(), String> {
         let mut index = BTreeMap::new();
+        let mut reverse = BTreeMap::<AccountId, BTreeSet<AccountAlias>>::new();
+        let existing_bindings: Vec<_> = self
+            .account_aliases
+            .view()
+            .iter()
+            .map(|(label, account_id)| (label.clone(), account_id.clone()))
+            .collect();
         let view = self.accounts.view();
+        for (label, account_id) in existing_bindings {
+            if account_label_is_pii(&label) {
+                return Err(format!(
+                    "Account alias {label:?} looks like raw PII; use UAID/opaque identifiers"
+                ));
+            }
+            let Some(_account_value) = view.get(&account_id) else {
+                return Err(format!(
+                    "Account alias {label:?} references missing account {account_id}"
+                ));
+            };
+            if let Some(existing) = index.get(&label) {
+                if existing != &account_id {
+                    return Err(format!(
+                        "Account alias {label:?} already bound to account {existing}"
+                    ));
+                }
+                continue;
+            }
+            reverse
+                .entry(account_id.clone())
+                .or_default()
+                .insert(label.clone());
+            index.insert(label, account_id);
+        }
         for (account_id, value) in view.iter() {
             let Some(label) = value.as_ref().label() else {
                 continue;
@@ -9717,52 +11274,180 @@ impl World {
                 }
                 continue;
             }
+            reverse
+                .entry(account_id.clone())
+                .or_default()
+                .insert(label.clone());
             index.insert(label.clone(), account_id.clone());
         }
         self.account_aliases = index.into_iter().collect();
+        self.account_aliases_by_account = reverse.into_iter().collect();
+        Ok(())
+    }
+
+    fn rebuild_account_scope_directory(&mut self) -> Result<(), String> {
+        let rebuilt = {
+            let view = self.view();
+            let account_ids: Vec<_> = view.accounts().iter().map(|(id, _)| id.clone()).collect();
+            let mut rebuilt = BTreeMap::new();
+            for account_id in account_ids {
+                let Some(entry) = derive_account_scope_directory_entry(&view, &account_id)
+                    .map_err(|error| {
+                        format!("failed to derive account scope for {account_id}: {error}")
+                    })?
+                else {
+                    continue;
+                };
+                rebuilt.insert(account_id, entry);
+            }
+            rebuilt
+        };
+
+        self.account_scope_directory = rebuilt.into_iter().collect();
+        Ok(())
+    }
+
+    fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
+        let mut records = BTreeMap::new();
+        let existing_records: Vec<_> = self
+            .account_rekey_records
+            .view()
+            .iter()
+            .map(|(label, record)| (label.clone(), record.clone()))
+            .collect();
+        let existing_bindings: Vec<_> = self
+            .account_aliases
+            .view()
+            .iter()
+            .map(|(label, account_id)| (label.clone(), account_id.clone()))
+            .collect();
+        let view = self.accounts.view();
+
+        for (label, record) in existing_records {
+            if record.label != label {
+                return Err(format!(
+                    "Account rekey record {label:?} stores mismatched label {:?}",
+                    record.label
+                ));
+            }
+            if account_label_is_pii(&label) {
+                return Err(format!(
+                    "Account rekey record {label:?} looks like raw PII; use UAID/opaque identifiers"
+                ));
+            }
+            if let Some(existing) = records.get(&label) {
+                if existing != &record {
+                    return Err(format!(
+                        "Account rekey record {label:?} already bound to a different record"
+                    ));
+                }
+                continue;
+            }
+            records.insert(label, record);
+        }
+
+        for (label, account_id) in existing_bindings {
+            if view.get(&account_id).is_none() {
+                return Err(format!(
+                    "Account rekey record {label:?} references missing account {account_id}"
+                ));
+            }
+            let record = match records.remove(&label) {
+                Some(record) if record.active_account_id == account_id => record,
+                Some(record) => record.repoint_to_account(account_id.clone()),
+                None => AccountRekeyRecord::new(label.clone(), account_id.clone()),
+            };
+            records.insert(label, record);
+        }
+
+        for (label, record) in &records {
+            let Some(_account_value) = view.get(&record.active_account_id) else {
+                return Err(format!(
+                    "Account rekey record {label:?} references missing account {}",
+                    record.active_account_id
+                ));
+            };
+        }
+
+        self.account_rekey_records = records.into_iter().collect();
         Ok(())
     }
 
     fn rebuild_asset_definition_alias_indexes(&mut self) -> Result<(), String> {
         let mut by_alias = BTreeMap::new();
-        let mut by_definition = BTreeMap::new();
-        let view = self.asset_definitions.view();
-        for (definition_id, definition) in view.iter() {
-            let Some(alias) = definition.alias().as_ref().cloned() else {
-                continue;
-            };
-            if let Some(existing) = by_alias.get(&alias) {
-                if existing != definition_id {
-                    return Err(format!(
-                        "Asset alias `{alias}` already bound to asset definition {existing}"
-                    ));
-                }
-                continue;
+        let mut by_definition =
+            BTreeMap::<AssetDefinitionId, AssetDefinitionAliasBindingRecord>::new();
+        let definitions = self.asset_definitions.view();
+
+        for (definition_id, binding) in self.asset_definition_alias_bindings.view().iter() {
+            if definitions.get(definition_id).is_none() {
+                return Err(format!(
+                    "Asset alias binding `{}` references missing asset definition {definition_id}",
+                    binding.alias
+                ));
             }
-            by_alias.insert(alias.clone(), definition_id.clone());
-            by_definition.insert(
-                definition_id.clone(),
-                AssetDefinitionAliasBindingRecord {
-                    alias,
-                    lease_expiry_ms: None,
-                    grace_until_ms: None,
-                    bound_at_ms: 0,
-                },
-            );
+            if let Some(existing) = by_alias.get(&binding.alias)
+                && existing != definition_id
+            {
+                return Err(format!(
+                    "Asset alias `{}` already bound to asset definition {existing}",
+                    binding.alias
+                ));
+            }
+            by_alias.insert(binding.alias.clone(), definition_id.clone());
+            by_definition.insert(definition_id.clone(), binding.clone());
+        }
+
+        for (definition_id, definition) in definitions.iter() {
+            if let Some(alias) = definition.alias().as_ref() {
+                return Err(format!(
+                    "Asset definition {definition_id} stores inline alias `{alias}`; persist aliases only in asset_definition_alias_bindings"
+                ));
+            }
         }
         self.asset_definition_aliases = by_alias.into_iter().collect();
+        let normalized_definitions: BTreeMap<AssetDefinitionId, AssetDefinition> = definitions
+            .iter()
+            .map(|(definition_id, definition)| (definition_id.clone(), definition.clone()))
+            .collect();
+        if normalized_definitions.len() != definitions.iter().count() {
+            return Err("asset definition rebuild lost entries".to_owned());
+        }
         self.asset_definition_alias_bindings = by_definition.into_iter().collect();
+        self.asset_definitions = normalized_definitions.into_iter().collect();
+        Ok(())
+    }
+
+    fn rebuild_contract_alias_indexes(&mut self) -> Result<(), String> {
+        let mut by_alias = BTreeMap::new();
+        let mut by_contract = BTreeMap::<ContractAddress, ContractAliasBindingRecord>::new();
+
+        for (contract_address, binding) in self.contract_alias_bindings.view().iter() {
+            if let Some(existing) = by_alias.get(&binding.alias)
+                && existing != contract_address
+            {
+                return Err(format!(
+                    "Contract alias `{}` already bound to contract {existing}",
+                    binding.alias
+                ));
+            }
+            by_alias.insert(binding.alias.clone(), contract_address.clone());
+            by_contract.insert(contract_address.clone(), binding.clone());
+        }
+
+        self.contract_aliases = by_alias.into_iter().collect();
+        self.contract_alias_bindings = by_contract.into_iter().collect();
         Ok(())
     }
 
     fn rebuild_asset_definition_indexes(&mut self) {
         let mut domain_definitions = BTreeMap::<DomainId, BTreeSet<AssetDefinitionId>>::new();
         for definition_id in self.asset_definitions.view().iter().map(|(id, _)| id) {
-            if definition_id.is_opaque_canonical() {
+            let Some(domain_id) = definition_id.try_domain() else {
                 continue;
-            }
+            };
             domain_definitions
-                .entry(definition_id.domain().clone())
+                .entry(domain_id.clone())
                 .or_default()
                 .insert(definition_id.clone());
         }
@@ -9831,6 +11516,11 @@ impl World {
                     claim.opaque_id
                 ));
             }
+            if claim.receipt_hash == Hash::prehashed([0; Hash::LENGTH]) {
+                return Err(format!(
+                    "Identifier claim {opaque_id} carries an all-zero receipt hash"
+                ));
+            }
             let Some(bound_uaid) = opaque_uaids.get(opaque_id) else {
                 return Err(format!(
                     "Identifier claim {opaque_id} is missing from the opaque UAID index"
@@ -9870,67 +11560,6 @@ impl World {
         Ok(())
     }
 
-    fn rebuild_offline_transfer_indexes(&mut self) {
-        let mut sender_index = BTreeMap::new();
-        let mut receiver_index = BTreeMap::new();
-        let mut status_index = BTreeMap::new();
-        for (bundle_id, record) in self.offline_to_online_transfers.view().iter() {
-            Self::insert_account_bundle(&mut sender_index, record.controller.clone(), *bundle_id);
-            Self::insert_account_bundle(
-                &mut receiver_index,
-                record.transfer.receiver.clone(),
-                *bundle_id,
-            );
-            Self::insert_status_bundle(&mut status_index, record.status, *bundle_id);
-        }
-        self.offline_transfer_sender_index = sender_index.into_iter().collect();
-        self.offline_transfer_receiver_index = receiver_index.into_iter().collect();
-        self.offline_transfer_status_index = status_index.into_iter().collect();
-    }
-
-    fn rebuild_offline_consumed_build_claim_ids(&mut self) {
-        let mut consumed = BTreeSet::new();
-        for (_, record) in self.offline_to_online_transfers.view().iter() {
-            if record.status == OfflineTransferStatus::Rejected {
-                continue;
-            }
-            for receipt in &record.transfer.receipts {
-                if let Some(claim) = &receipt.build_claim {
-                    consumed.insert(claim.claim_id);
-                }
-            }
-        }
-        self.offline_consumed_build_claim_ids = consumed.into_iter().map(|id| (id, ())).collect();
-    }
-
-    fn insert_account_bundle(
-        index: &mut BTreeMap<AccountId, BTreeSet<Hash>>,
-        account: AccountId,
-        bundle_id: Hash,
-    ) {
-        if let Some(set) = index.get_mut(&account) {
-            set.insert(bundle_id);
-        } else {
-            let mut set = BTreeSet::new();
-            set.insert(bundle_id);
-            index.insert(account, set);
-        }
-    }
-
-    fn insert_status_bundle(
-        index: &mut BTreeMap<OfflineTransferStatus, BTreeSet<Hash>>,
-        status: OfflineTransferStatus,
-        bundle_id: Hash,
-    ) {
-        if let Some(set) = index.get_mut(&status) {
-            set.insert(bundle_id);
-        } else {
-            let mut set = BTreeSet::new();
-            set.insert(bundle_id);
-            index.insert(status, set);
-        }
-    }
-
     /// Create struct to apply block's changes
     pub fn block(&self) -> WorldBlock<'_> {
         build_world_block!(self, block)
@@ -9945,6 +11574,7 @@ impl World {
     #[allow(clippy::too_many_lines)]
     pub fn view(&self) -> WorldView<'_> {
         WorldView {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: self.parameters.view(),
             peers: self.peers.view(),
             consensus_keys: self.consensus_keys.view(),
@@ -9956,23 +11586,29 @@ impl World {
             domains: self.domains.view(),
             domain_selectors: self.domain_selectors.view(),
             accounts: self.accounts.view(),
-            account_subject_domains: self.account_subject_domains.view(),
-            domain_account_subjects: self.domain_account_subjects.view(),
             uaid_accounts: self.uaid_accounts.view(),
             account_aliases: self.account_aliases.view(),
+            account_aliases_by_account: self.account_aliases_by_account.view(),
+            account_scope_directory: self.account_scope_directory.view(),
             opaque_uaids: self.opaque_uaids.view(),
+            ram_lfe_program_policies: self.ram_lfe_program_policies.view(),
             identifier_policies: self.identifier_policies.view(),
             identifier_claims: self.identifier_claims.view(),
             account_rekey_records: self.account_rekey_records.view(),
+            account_recovery_policies: self.account_recovery_policies.view(),
+            account_recovery_requests: self.account_recovery_requests.view(),
             asset_definitions: self.asset_definitions.view(),
             asset_definition_aliases: self.asset_definition_aliases.view(),
             asset_definition_alias_bindings: self.asset_definition_alias_bindings.view(),
+            contract_aliases: self.contract_aliases.view(),
+            contract_alias_bindings: self.contract_alias_bindings.view(),
             domain_asset_definitions: self.domain_asset_definitions.view(),
             asset_definition_holders: self.asset_definition_holders.view(),
             asset_definition_assets: self.asset_definition_assets.view(),
             assets: self.assets.view(),
             asset_metadata: self.asset_metadata.view(),
             nfts: self.nfts.view(),
+            rwas: self.rwas.view(),
             roles: self.roles.view(),
             account_permissions: self.account_permissions.view(),
             account_roles: self.account_roles.view(),
@@ -9990,6 +11626,8 @@ impl World {
             viral_binding_claims: self.viral_binding_claims.view(),
             viral_escrows: self.viral_escrows.view(),
             viral_bonus_paid: self.viral_bonus_paid.view(),
+            asset_escrows: self.asset_escrows.view(),
+            anonymous_asset_escrows: self.anonymous_asset_escrows.view(),
             uaid_dataspaces: self.uaid_dataspaces.view(),
             space_directory_manifests: self.space_directory_manifests.view(),
             axt_policies: self.axt_policies.view(),
@@ -10012,6 +11650,48 @@ impl World {
             contract_code: self.contract_code.view(),
             contract_instances: self.contract_instances.view(),
             smart_contract_state: self.smart_contract_state.view(),
+            soracloud_service_revisions: self.soracloud_service_revisions.view(),
+            soracloud_service_deployments: self.soracloud_service_deployments.view(),
+            soracloud_service_runtime: self.soracloud_service_runtime.view(),
+            soracloud_inrou_replica_runtime: self.soracloud_inrou_replica_runtime.view(),
+            soracloud_service_audit_events: self.soracloud_service_audit_events.view(),
+            soracloud_service_state_entries: self.soracloud_service_state_entries.view(),
+            soracloud_decryption_request_records: self.soracloud_decryption_request_records.view(),
+            soracloud_agent_apartments: self.soracloud_agent_apartments.view(),
+            soracloud_agent_apartment_audit_events: self
+                .soracloud_agent_apartment_audit_events
+                .view(),
+            soracloud_training_jobs: self.soracloud_training_jobs.view(),
+            soracloud_training_job_audit_events: self.soracloud_training_job_audit_events.view(),
+            soracloud_model_registries: self.soracloud_model_registries.view(),
+            soracloud_model_weight_versions: self.soracloud_model_weight_versions.view(),
+            soracloud_model_weight_audit_events: self.soracloud_model_weight_audit_events.view(),
+            soracloud_model_artifacts: self.soracloud_model_artifacts.view(),
+            soracloud_model_artifact_audit_events: self
+                .soracloud_model_artifact_audit_events
+                .view(),
+            soracloud_private_compile_profiles: self.soracloud_private_compile_profiles.view(),
+            soracloud_uploaded_model_bundles: self.soracloud_uploaded_model_bundles.view(),
+            soracloud_uploaded_model_chunks: self.soracloud_uploaded_model_chunks.view(),
+            soracloud_private_inference_sessions: self.soracloud_private_inference_sessions.view(),
+            soracloud_private_inference_checkpoints: self
+                .soracloud_private_inference_checkpoints
+                .view(),
+            soracloud_model_host_capabilities: self.soracloud_model_host_capabilities.view(),
+            soracloud_inrou_host_capabilities: self.soracloud_inrou_host_capabilities.view(),
+            soracloud_hf_sources: self.soracloud_hf_sources.view(),
+            soracloud_hf_shared_lease_pools: self.soracloud_hf_shared_lease_pools.view(),
+            soracloud_hf_shared_lease_members: self.soracloud_hf_shared_lease_members.view(),
+            soracloud_hf_shared_lease_audit_events: self
+                .soracloud_hf_shared_lease_audit_events
+                .view(),
+            soracloud_model_host_violation_evidence: self
+                .soracloud_model_host_violation_evidence
+                .view(),
+            soracloud_hf_placements: self.soracloud_hf_placements.view(),
+            soracloud_inrou_service_placements: self.soracloud_inrou_service_placements.view(),
+            soracloud_mailbox_messages: self.soracloud_mailbox_messages.view(),
+            soracloud_runtime_receipts: self.soracloud_runtime_receipts.view(),
             capacity_declarations: self.capacity_declarations.view(),
             capacity_fee_ledger: self.capacity_fee_ledger.view(),
             capacity_disputes: self.capacity_disputes.view(),
@@ -10039,13 +11719,7 @@ impl World {
             soradns_history_len: self.soradns_history_len.view(),
             repo_agreements: self.repo_agreements.view(),
             settlement_ledgers: self.settlement_ledgers.view(),
-            offline_allowances: self.offline_allowances.view(),
-            offline_verdict_revocations: self.offline_verdict_revocations.view(),
-            offline_consumed_build_claim_ids: self.offline_consumed_build_claim_ids.view(),
-            offline_to_online_transfers: self.offline_to_online_transfers.view(),
-            offline_transfer_sender_index: self.offline_transfer_sender_index.view(),
-            offline_transfer_receiver_index: self.offline_transfer_receiver_index.view(),
-            offline_transfer_status_index: self.offline_transfer_status_index.view(),
+            offline_note_v2_replay_keys: self.offline_note_v2_replay_keys.view(),
             public_lane_validators: self.public_lane_validators.view(),
             public_lane_stake_shares: self.public_lane_stake_shares.view(),
             public_lane_rewards: self.public_lane_rewards.view(),
@@ -10054,6 +11728,7 @@ impl World {
             zk_assets: self.zk_assets.view(),
             elections: self.elections.view(),
             citizens: self.citizens.view(),
+            ministry_agenda_proposals: self.ministry_agenda_proposals.view(),
             governance_proposals: self.governance_proposals.view(),
             governance_referenda: self.governance_referenda.view(),
             governance_stage_approvals: self.governance_stage_approvals.view(),
@@ -10069,6 +11744,47 @@ impl World {
     }
 }
 
+fn derive_account_scope_directory_entry(
+    world: &(impl WorldReadOnly + ?Sized),
+    account_id: &AccountId,
+) -> Result<Option<AccountScopeDirectoryEntry>, ParseError> {
+    let Some(account) = world.accounts().get(account_id) else {
+        return Ok(None);
+    };
+
+    let mut entry = AccountScopeDirectoryEntry::default();
+    let primary_label_dataspace = account.as_ref().label().map(|label| {
+        entry.ensure_dataspace(label.dataspace);
+        if let Some(domain) = label.domain.clone() {
+            entry.bind_domain(label.dataspace, domain);
+        }
+        label.dataspace
+    });
+
+    if let Some(uaid) = account.as_ref().uaid().copied()
+        && let Some(bindings) = world.uaid_dataspaces().get(&uaid)
+    {
+        for (dataspace, accounts) in bindings.iter() {
+            if accounts.contains(account_id) {
+                entry.ensure_dataspace(*dataspace);
+            }
+        }
+    }
+
+    for alias in world.bound_account_aliases(account_id) {
+        entry.ensure_dataspace(alias.dataspace);
+        if let Some(domain) = alias.domain.clone() {
+            entry.bind_domain(alias.dataspace, domain);
+        }
+    }
+
+    if primary_label_dataspace.is_none_or(|dataspace| dataspace == DataSpaceId::UNIVERSAL) {
+        entry.ensure_dataspace(DataSpaceId::UNIVERSAL);
+    }
+
+    Ok(Some(entry))
+}
+
 /// Read-only view over world-level resources.
 ///
 /// Provides accessors to parameters, peers, domains, accounts, assets,
@@ -10076,6 +11792,8 @@ impl World {
 pub trait WorldReadOnly {
     /// Global parameters registry.
     fn parameters(&self) -> &Parameters;
+    /// Dataspace alias catalog used to qualify domain-scoped aliases.
+    fn dataspace_catalog(&self) -> &iroha_data_model::nexus::DataSpaceCatalog;
     /// Decode the `sumeragi_npos_parameters` custom payload when present.
     fn sumeragi_npos_parameters(&self) -> Option<SumeragiNposParameters> {
         sumeragi_npos_parameters_from_parameters(self.parameters())
@@ -10102,20 +11820,36 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<DomainId, Vec<HashOf<DomainEndorsement>>>;
     /// Account storage (read-only).
     fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue>;
-    /// Domain memberships keyed by account subject (read-only).
-    fn account_subject_domains(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<DomainId>>;
-    /// Account-subject memberships keyed by domain (read-only).
-    fn domain_account_subjects(&self) -> &impl StorageReadOnly<DomainId, BTreeSet<AccountId>>;
     /// UAID to account index (read-only).
     fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId>;
     /// Account alias index (read-only).
-    fn account_aliases(&self) -> &impl StorageReadOnly<AccountLabel, AccountId>;
+    fn account_aliases(&self) -> &impl StorageReadOnly<AccountAlias, AccountId>;
+    /// Reverse account alias index (read-only).
+    fn account_aliases_by_account(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountAlias>>;
+    /// Read-side account scope directory (read-only).
+    fn account_scope_directory(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, AccountScopeDirectoryEntry>;
     /// Opaque identifier to UAID index (read-only).
     fn opaque_uaids(&self) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId>;
+    /// Global RAM-LFE program policy registry (read-only).
+    fn ram_lfe_program_policies(
+        &self,
+    ) -> &impl StorageReadOnly<RamLfeProgramId, RamLfeProgramPolicy>;
     /// Global identifier policy registry (read-only).
     fn identifier_policies(&self) -> &impl StorageReadOnly<IdentifierPolicyId, IdentifierPolicy>;
     /// Active identifier claims keyed by opaque identifier (read-only).
     fn identifier_claims(&self) -> &impl StorageReadOnly<OpaqueAccountId, IdentifierClaimRecord>;
+
+    /// Iterate registered identifier policies.
+    #[inline]
+    fn ram_lfe_program_policies_iter(&self) -> impl Iterator<Item = &RamLfeProgramPolicy> {
+        self.ram_lfe_program_policies()
+            .iter()
+            .map(|(_, policy)| policy)
+    }
 
     /// Iterate registered identifier policies.
     #[inline]
@@ -10134,11 +11868,29 @@ pub trait WorldReadOnly {
             .filter(|claim| &claim.policy_id == policy_id)
             .cloned()
     }
+
+    /// Resolve an identifier claim by the deterministic hidden-function receipt hash.
+    fn resolve_identifier_claim_by_receipt_hash(
+        &self,
+        receipt_hash: &Hash,
+    ) -> Option<IdentifierClaimRecord> {
+        self.identifier_claims()
+            .iter()
+            .find_map(|(_, claim)| (claim.receipt_hash == *receipt_hash).then(|| claim.clone()))
+    }
     /// Account label/signatory registry (read-only).
-    fn account_rekey_records(&self) -> &impl StorageReadOnly<AccountLabel, AccountRekeyRecord>;
+    fn account_rekey_records(&self) -> &impl StorageReadOnly<AccountAlias, AccountRekeyRecord>;
+    /// Alias-keyed account recovery policy registry (read-only).
+    fn account_recovery_policies(
+        &self,
+    ) -> &impl StorageReadOnly<AccountAlias, AccountRecoveryPolicy>;
+    /// Alias-keyed account recovery request registry (read-only).
+    fn account_recovery_requests(
+        &self,
+    ) -> &impl StorageReadOnly<AccountAlias, AccountRecoveryRequest>;
     /// Asset definition storage (read-only).
     fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition>;
-    /// Alias index mapping `<name>#<domain>@<dataspace>` or `<name>#<dataspace>` to canonical
+    /// Alias index mapping `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` to canonical
     /// aid.
     fn asset_definition_aliases(
         &self,
@@ -10147,6 +11899,13 @@ pub trait WorldReadOnly {
     fn asset_definition_alias_bindings(
         &self,
     ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord>;
+    /// Alias index mapping `<name>::<domain>.<dataspace>` or `<name>::<dataspace>` to canonical
+    /// contract addresses.
+    fn contract_aliases(&self) -> &impl StorageReadOnly<ContractAlias, ContractAddress>;
+    /// Alias lease metadata keyed by canonical contract address.
+    fn contract_alias_bindings(
+        &self,
+    ) -> &impl StorageReadOnly<ContractAddress, ContractAliasBindingRecord>;
     /// Asset-definition ids grouped by domain.
     fn domain_asset_definitions(
         &self,
@@ -10165,6 +11924,8 @@ pub trait WorldReadOnly {
     fn asset_metadata(&self) -> &impl StorageReadOnly<AssetId, Metadata>;
     /// NFT storage (read-only).
     fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue>;
+    /// RWA storage (read-only).
+    fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue>;
     /// Role storage (read-only).
     fn roles(&self) -> &impl StorageReadOnly<RoleId, Role>;
     /// Account permissions mapping (read-only).
@@ -10210,6 +11971,12 @@ pub trait WorldReadOnly {
     fn viral_escrows(&self) -> &impl StorageReadOnly<Hash, ViralEscrowRecord>;
     /// Bindings that have already paid a sender bonus.
     fn viral_bonus_paid(&self) -> &impl StorageReadOnly<Hash, bool>;
+    /// Native asset escrow records keyed by escrow identifier.
+    fn asset_escrows(&self) -> &impl StorageReadOnly<EscrowId, AssetEscrowRecord>;
+    /// Native anonymous asset escrow records keyed by escrow identifier.
+    fn anonymous_asset_escrows(
+        &self,
+    ) -> &impl StorageReadOnly<EscrowId, AnonymousAssetEscrowRecord>;
     /// UAID dataspace bindings managed by the Space Directory.
     fn uaid_dataspaces(&self) -> &impl StorageReadOnly<UniversalAccountId, UaidDataspaceBindings>;
     /// UAID capability manifests maintained by the Space Directory.
@@ -10305,30 +12072,137 @@ pub trait WorldReadOnly {
     >;
     /// Get stored contract code bytes by hash (read-only)
     fn contract_code(&self) -> &impl StorageReadOnly<iroha_crypto::Hash, Vec<u8>>;
-    /// Contract instances mapping (`namespace`, `contract_id`) -> `code_hash` (read-only)
-    fn contract_instances(&self) -> &impl StorageReadOnly<(String, String), iroha_crypto::Hash>;
+    /// Contract instances mapping `contract_address -> code_hash` (read-only)
+    fn contract_instances(
+        &self,
+    ) -> &impl StorageReadOnly<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>;
     /// Durable smart-contract state keyed by logical path (read-only).
     fn smart_contract_state(&self) -> &impl StorageReadOnly<Name, Vec<u8>>;
+    /// Admitted Soracloud service revisions keyed by `(service_name, service_version)` (read-only).
+    fn soracloud_service_revisions(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraDeploymentBundleV1>;
+    /// Current Soracloud deployment state keyed by service name (read-only).
+    fn soracloud_service_deployments(
+        &self,
+    ) -> &impl StorageReadOnly<Name, SoraServiceDeploymentStateV1>;
+    /// Active Soracloud runtime state keyed by service name (read-only).
+    fn soracloud_service_runtime(&self) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1>;
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)` (read-only).
+    fn soracloud_inrou_replica_runtime(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String, String), SoraInrouReplicaRuntimeStateV1>;
+    /// Soracloud lifecycle audit events keyed by deterministic sequence (read-only).
+    fn soracloud_service_audit_events(&self)
+    -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1>;
+    /// Authoritative service state keyed by `(service_name, binding_name, state_key)` (read-only).
+    fn soracloud_service_state_entries(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String, String), SoraServiceStateEntryV1>;
+    /// Recorded decryption requests keyed by `(service_name, request_id)` (read-only).
+    fn soracloud_decryption_request_records(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraDecryptionRequestRecordV1>;
+    /// Authoritative agent apartments keyed by apartment name (read-only).
+    fn soracloud_agent_apartments(
+        &self,
+    ) -> &impl StorageReadOnly<String, SoraAgentApartmentRecordV1>;
+    /// Agent-apartment audit events keyed by deterministic sequence (read-only).
+    fn soracloud_agent_apartment_audit_events(
+        &self,
+    ) -> &impl StorageReadOnly<u64, SoraAgentApartmentAuditEventV1>;
+    /// Authoritative training jobs keyed by `(service_name, job_id)` (read-only).
+    fn soracloud_training_jobs(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraTrainingJobRecordV1>;
+    /// Training-job audit events keyed by deterministic sequence (read-only).
+    fn soracloud_training_job_audit_events(
+        &self,
+    ) -> &impl StorageReadOnly<u64, SoraTrainingJobAuditEventV1>;
+    /// Model registries keyed by `(service_name, model_name)` (read-only).
+    fn soracloud_model_registries(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraModelRegistryV1>;
+    /// Model-weight versions keyed by `(service_name, model_name, weight_version)` (read-only).
+    fn soracloud_model_weight_versions(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String, String), SoraModelWeightVersionRecordV1>;
+    /// Model-weight audit events keyed by deterministic sequence (read-only).
+    fn soracloud_model_weight_audit_events(
+        &self,
+    ) -> &impl StorageReadOnly<u64, SoraModelWeightAuditEventV1>;
+    /// Model artifacts keyed by `(service_name, training_job_id)` (read-only).
+    fn soracloud_model_artifacts(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraModelArtifactRecordV1>;
+    /// Model-artifact audit events keyed by deterministic sequence (read-only).
+    fn soracloud_model_artifact_audit_events(
+        &self,
+    ) -> &impl StorageReadOnly<u64, SoraModelArtifactAuditEventV1>;
+    /// Private compile profiles keyed by compile-profile hash (read-only).
+    fn soracloud_private_compile_profiles(
+        &self,
+    ) -> &impl StorageReadOnly<Hash, SoraPrivateCompileProfileV1>;
+    /// Uploaded-model bundle roots keyed by `(service_name, model_id, weight_version)` (read-only).
+    fn soracloud_uploaded_model_bundles(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String, String), SoraUploadedModelBundleV1>;
+    /// Uploaded-model chunks keyed by canonical `<service>:<model>:<version>:<ordinal>` literal (read-only).
+    fn soracloud_uploaded_model_chunks(
+        &self,
+    ) -> &impl StorageReadOnly<String, SoraUploadedModelChunkV1>;
+    /// Private inference sessions keyed by `(apartment, session_id)` (read-only).
+    fn soracloud_private_inference_sessions(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraPrivateInferenceSessionV1>;
+    /// Private inference checkpoints keyed by `(session_id, step)` (read-only).
+    fn soracloud_private_inference_checkpoints(
+        &self,
+    ) -> &impl StorageReadOnly<(String, u32), SoraPrivateInferenceCheckpointV1>;
+    /// Active validator-host capability adverts keyed by validator account id (read-only).
+    fn soracloud_model_host_capabilities(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, SoraModelHostCapabilityRecordV1>;
+    /// Active Inrou validator-host capability adverts keyed by validator account id (read-only).
+    fn soracloud_inrou_host_capabilities(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, SoraInrouHostCapabilityRecordV1>;
+    /// Canonical Hugging Face sources keyed by source identifier (read-only).
+    fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1>;
+    /// HF shared-lease pools keyed by canonical pool identifier (read-only).
+    fn soracloud_hf_shared_lease_pools(
+        &self,
+    ) -> &impl StorageReadOnly<Hash, SoraHfSharedLeasePoolV1>;
+    /// HF shared-lease memberships keyed by `(pool_id, account_id)` (read-only).
+    fn soracloud_hf_shared_lease_members(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraHfSharedLeaseMemberV1>;
+    /// HF shared-lease audit events keyed by deterministic sequence (read-only).
+    fn soracloud_hf_shared_lease_audit_events(
+        &self,
+    ) -> &impl StorageReadOnly<u64, SoraHfSharedLeaseAuditEventV1>;
+    /// Model-host violation evidence keyed by deterministic evidence identifier (read-only).
+    fn soracloud_model_host_violation_evidence(
+        &self,
+    ) -> &impl StorageReadOnly<Hash, SoraModelHostViolationEvidenceRecordV1>;
+    /// Active HF placement records keyed by shared-lease pool identifier (read-only).
+    fn soracloud_hf_placements(&self) -> &impl StorageReadOnly<Hash, SoraHfPlacementRecordV1>;
+    /// Active Inrou placement records keyed by `(service_name, service_version)` (read-only).
+    fn soracloud_inrou_service_placements(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraInrouServicePlacementRecordV1>;
+    /// Ordered Soracloud mailbox messages keyed by message id (read-only).
+    fn soracloud_mailbox_messages(
+        &self,
+    ) -> &impl StorageReadOnly<Hash, SoraServiceMailboxMessageV1>;
+    /// Soracloud runtime receipts keyed by receipt id (read-only).
+    fn soracloud_runtime_receipts(&self) -> &impl StorageReadOnly<Hash, SoraRuntimeReceiptV1>;
     /// Repo agreement registry (read-only).
     fn repo_agreements(&self) -> &impl StorageReadOnly<RepoAgreementId, RepoAgreement>;
     /// Settlement audit trails (read-only).
     fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger>;
-    /// Registered offline allowances (read-only).
-    fn offline_allowances(&self) -> &impl StorageReadOnly<Hash, OfflineAllowanceRecord>;
-    /// Recorded verdict revocations (read-only).
-    fn offline_verdict_revocations(&self) -> &impl StorageReadOnly<Hash, OfflineVerdictRevocation>;
-    /// Consumed build-claim identifiers (read-only).
-    fn offline_consumed_build_claim_ids(&self) -> &impl StorageReadOnly<Hash, ()>;
-    /// Pending offline-to-online bundles (read-only).
-    fn offline_to_online_transfers(&self) -> &impl StorageReadOnly<Hash, OfflineTransferRecord>;
-    /// Offline transfer bundles indexed by controller account (read-only).
-    fn offline_transfer_sender_index(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<Hash>>;
-    /// Offline transfer bundles indexed by receiver account (read-only).
-    fn offline_transfer_receiver_index(&self) -> &impl StorageReadOnly<AccountId, BTreeSet<Hash>>;
-    /// Offline transfer bundles indexed by lifecycle status (read-only).
-    fn offline_transfer_status_index(
-        &self,
-    ) -> &impl StorageReadOnly<OfflineTransferStatus, BTreeSet<Hash>>;
+    /// Offline V2 replay keys (read-only).
+    fn offline_note_v2_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()>;
     /// Public lane validators keyed by `(lane_id, validator)` (read-only).
     fn public_lane_validators(
         &self,
@@ -10342,10 +12216,10 @@ pub trait WorldReadOnly {
     /// Last claimed reward epoch keyed by `(lane_id, account, asset_id)` (read-only).
     fn public_lane_reward_claims(&self)
     -> &impl StorageReadOnly<(LaneId, AccountId, AssetId), u64>;
-    /// Emergency lane relay validator overrides keyed by dataspace (read-only).
+    /// Emergency lane relay validator overrides keyed by lane (read-only).
     fn lane_relay_emergency_validators(
         &self,
-    ) -> &impl StorageReadOnly<DataSpaceId, LaneRelayEmergencyValidatorSet>;
+    ) -> &impl StorageReadOnly<LaneId, LaneRelayEmergencyValidatorSet>;
     /// Capacity declarations (read-only).
     fn capacity_declarations(&self)
     -> &impl StorageReadOnly<ProviderId, CapacityDeclarationRecord>;
@@ -10416,6 +12290,10 @@ pub trait WorldReadOnly {
     fn elections(&self) -> &impl StorageReadOnly<String, ElectionState>;
     /// Registered citizens keyed by account id (read-only).
     fn citizens(&self) -> &impl StorageReadOnly<AccountId, CitizenshipRecord>;
+    /// Submitted Ministry agenda proposals keyed by `proposal_id` (read-only).
+    fn ministry_agenda_proposals(
+        &self,
+    ) -> &impl StorageReadOnly<String, iroha_data_model::ministry::AgendaProposalRecordV1>;
     /// Governance proposals (read-only) keyed by deterministic id.
     fn governance_proposals(&self) -> &impl StorageReadOnly<[u8; 32], GovernanceProposalRecord>;
     /// Parliament approvals recorded per referendum id (read-only).
@@ -10478,15 +12356,70 @@ pub trait WorldReadOnly {
         self.domains().iter().map(|(_, domain)| domain)
     }
 
-    /// Iterate subjects linked to the specified domain.
-    fn account_subjects_in_domain_iter<'a>(
-        &'a self,
-        id: &'a DomainId,
-    ) -> impl Iterator<Item = &'a AccountId> {
-        self.domain_account_subjects()
-            .get(id)
-            .into_iter()
-            .flat_map(BTreeSet::iter)
+    /// Collect the account's dataspace -> domain hierarchy from primary label
+    /// materialization, Space Directory bindings, and bound aliases.
+    ///
+    /// Accounts materialized with a non-universal primary label inherit that label's dataspace/domain
+    /// immediately. Unlabeled or universal-labeled accounts keep the universal dataspace as their
+    /// fallback materialization scope. Additional dataspaces come from UAID bindings and bound
+    /// aliases. Domains remain optional within each dataspace, so a dataspace entry may contain an
+    /// empty domain set.
+    fn account_scope_entry(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Option<AccountScopeDirectoryEntry>, ParseError> {
+        if let Some(entry) = self.account_scope_directory().get(account_id) {
+            return Ok(Some(entry.clone()));
+        }
+        derive_account_scope_directory_entry(self, account_id)
+    }
+
+    /// Collect the account's dataspace -> domain hierarchy from the maintained account-scope
+    /// directory.
+    fn account_scope_hierarchy(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<BTreeMap<DataSpaceId, BTreeSet<DomainId>>, ParseError> {
+        match self.account_scope_entry(account_id)? {
+            Some(entry) => entry.hierarchy(self.dataspace_catalog()),
+            None => Ok(BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())])),
+        }
+    }
+
+    /// Collect the dataspaces linked to the account.
+    fn account_dataspaces(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<BTreeSet<DataSpaceId>, ParseError> {
+        Ok(self
+            .account_scope_hierarchy(account_id)?
+            .into_keys()
+            .collect())
+    }
+
+    /// Collect the qualified domains linked to the account across every dataspace.
+    fn account_domains(&self, account_id: &AccountId) -> Result<BTreeSet<DomainId>, ParseError> {
+        Ok(self
+            .account_scope_hierarchy(account_id)?
+            .into_values()
+            .flatten()
+            .collect())
+    }
+
+    /// Return `true` when the account has any alias whose alias-domain matches `id`.
+    fn account_has_alias_domain(&self, account_id: &AccountId, id: &DomainId) -> bool {
+        match self.account_domains(account_id) {
+            Ok(domains) => domains.contains(id),
+            Err(error) => {
+                warn!(
+                    account = %account_id,
+                    domain = %id,
+                    ?error,
+                    "account scope hierarchy could not be resolved"
+                );
+                false
+            }
+        }
     }
 
     /// Iterate accounts in domain.
@@ -10495,12 +12428,8 @@ pub trait WorldReadOnly {
         &'a self,
         id: &'a DomainId,
     ) -> impl Iterator<Item = AccountEntry<'a>> {
-        self.account_subjects_in_domain_iter(id)
-            .filter_map(move |subject| {
-                self.accounts()
-                    .get_key_value(subject)
-                    .map(|(account_id, value)| AccountEntry::new(account_id, value))
-            })
+        self.accounts_iter()
+            .filter(move |account| self.account_has_alias_domain(account.id(), id))
     }
 
     /// Returns reference for accounts map
@@ -10511,7 +12440,7 @@ pub trait WorldReadOnly {
             .map(|(id, value)| AccountEntry::new(id, value))
     }
 
-    /// Iterate scoped accounts that belong to a domainless account subject.
+    /// Iterate stored account entries for a canonical domainless account subject.
     fn accounts_for_subject_iter<'a>(
         &'a self,
         subject: &'a AccountId,
@@ -10522,17 +12451,28 @@ pub trait WorldReadOnly {
             .map(move |value| AccountEntry::new(subject, value))
     }
 
-    /// List linked domains for a domainless account subject.
-    fn domains_for_subject(&self, subject: &AccountId) -> Vec<DomainId> {
-        self.account_subject_domains()
-            .get(subject)
-            .map(|linked_domains| linked_domains.iter().cloned().collect())
-            .unwrap_or_default()
+    /// Collect all aliases currently bound to the account, including the primary label.
+    fn bound_account_aliases(&self, account_id: &AccountId) -> Vec<AccountAlias> {
+        let mut aliases = self
+            .account_aliases_by_account()
+            .get(account_id)
+            .map_or_else(Vec::new, |aliases| aliases.iter().cloned().collect());
+        if let Some(alias) = self
+            .accounts()
+            .get(account_id)
+            .and_then(|value| value.as_ref().label())
+            && !aliases.iter().any(|bound| bound == alias)
+        {
+            aliases.push(alias.clone());
+        }
+        aliases
     }
 
     /// List account subjects linked to a specific domain.
     fn account_subjects_in_domain(&self, id: &DomainId) -> Vec<AccountId> {
-        self.account_subjects_in_domain_iter(id).cloned().collect()
+        self.accounts_in_domain_iter(id)
+            .map(|account| account.id().clone())
+            .collect()
     }
 
     /// Iterate asset definitions in domain
@@ -10560,6 +12500,54 @@ pub trait WorldReadOnly {
         alias: &AssetDefinitionAlias,
     ) -> Option<AssetDefinitionId> {
         self.asset_definition_aliases().get(alias).cloned()
+    }
+
+    /// Resolve an asset alias to canonical aid at a specific observation time.
+    ///
+    /// Expired aliases stop resolving once their grace window has elapsed, even if
+    /// the sweep has not removed the stale binding yet.
+    #[inline]
+    fn asset_definition_id_by_alias_at(
+        &self,
+        alias: &AssetDefinitionAlias,
+        now_ms: u64,
+    ) -> Option<AssetDefinitionId> {
+        let definition_id = self.asset_definition_aliases().get(alias)?.clone();
+        let binding = self.asset_definition_alias_bindings().get(&definition_id);
+        match binding {
+            Some(binding) if binding.alias == *alias && !binding.is_grace_expired_at(now_ms) => {
+                Some(definition_id)
+            }
+            Some(_) => None,
+            None => Some(definition_id),
+        }
+    }
+
+    /// Resolve a contract alias to a canonical contract address using the world-state alias index.
+    #[inline]
+    fn contract_address_by_alias(&self, alias: &ContractAlias) -> Option<ContractAddress> {
+        self.contract_aliases().get(alias).cloned()
+    }
+
+    /// Resolve a contract alias to a canonical contract address at a specific observation time.
+    ///
+    /// Expired aliases stop resolving once their grace window has elapsed, even if the sweep has
+    /// not removed the stale binding yet.
+    #[inline]
+    fn contract_address_by_alias_at(
+        &self,
+        alias: &ContractAlias,
+        now_ms: u64,
+    ) -> Option<ContractAddress> {
+        let contract_address = self.contract_aliases().get(alias)?.clone();
+        let binding = self.contract_alias_bindings().get(&contract_address);
+        match binding {
+            Some(binding) if binding.alias == *alias && !binding.is_grace_expired_at(now_ms) => {
+                Some(contract_address)
+            }
+            Some(_) => None,
+            None => Some(contract_address),
+        }
     }
 
     /// Iterate holders tracked for an asset definition.
@@ -10613,9 +12601,11 @@ pub trait WorldReadOnly {
         &'a self,
         id: &'a DomainId,
     ) -> impl Iterator<Item = AssetEntry<'a>> {
-        self.account_subjects_in_domain_iter(id)
-            .filter(move |subject| self.accounts().get(*subject).is_some())
-            .flat_map(move |subject| self.assets_in_account_iter(subject))
+        let mut assets = Vec::new();
+        for account in self.accounts_in_domain_iter(id) {
+            assets.extend(self.assets_in_account_iter(account.id()));
+        }
+        assets.into_iter()
     }
 
     /// Iterate assets matching a specific definition.
@@ -10669,6 +12659,19 @@ pub trait WorldReadOnly {
     ) -> Result<T, QueryExecutionFail> {
         let account = self.account(id)?;
         Ok(f(account))
+    }
+
+    /// Resolve one dataspace binding for a concrete account when a UAID-backed
+    /// Space Directory entry exists.
+    ///
+    /// Prefer [`WorldReadOnly::account_scope_hierarchy`] when the caller needs the full
+    /// `1..many` dataspace and `0..many` domain view for the account.
+    fn dataspace_for_account(&self, account_id: &AccountId) -> Option<DataSpaceId> {
+        let account = self.account(account_id).ok()?;
+        let uaid = account.value().uaid().copied()?;
+        self.uaid_dataspaces()
+            .get(&uaid)
+            .and_then(|bindings| bindings.dataspace_for_account(account_id))
     }
 
     /// Get [`Account`]'s [`RoleId`]s
@@ -10750,10 +12753,16 @@ pub trait WorldReadOnly {
     /// # Errors
     /// - Asset definition entry not found
     fn asset_definition(&self, asset_id: &AssetDefinitionId) -> Result<AssetDefinition, FindError> {
-        self.asset_definitions()
+        let mut definition = self
+            .asset_definitions()
             .get(asset_id)
             .ok_or_else(|| FindError::AssetDefinition(asset_id.clone()))
-            .cloned()
+            .cloned()?;
+        definition.alias = self
+            .asset_definition_alias_bindings()
+            .get(asset_id)
+            .map(|binding| binding.alias.clone());
+        Ok(definition)
     }
 
     /// Get total amount of [`Asset`].
@@ -10796,6 +12805,31 @@ pub trait WorldReadOnly {
             .map(|(id, value)| NftEntry::new(id, value))
     }
 
+    /// Get `Rwa` immutable view.
+    ///
+    /// # Errors
+    /// - RWA entry not found
+    fn rwa<'a>(&'a self, rwa_id: &'a RwaId) -> Result<RwaEntry<'a>, FindError> {
+        self.rwas()
+            .get(rwa_id)
+            .map(|value| RwaEntry::new(rwa_id, value))
+            .ok_or_else(|| FindError::Rwa(rwa_id.clone()))
+    }
+
+    /// Returns reference for RWAs map.
+    #[inline]
+    fn rwas_iter(&self) -> impl Iterator<Item = RwaEntry<'_>> {
+        self.rwas()
+            .iter()
+            .map(|(id, value)| RwaEntry::new(id, value))
+    }
+
+    /// Iterate RWAs in domain.
+    fn rwas_in_domain_iter<'a>(&'a self, id: &'a DomainId) -> impl Iterator<Item = RwaEntry<'a>> {
+        self.rwas_iter()
+            .filter(move |entry| entry.id().domain() == id)
+    }
+
     // Role-related methods
 
     /// Get `Role` and return reference to it.
@@ -10814,6 +12848,9 @@ macro_rules! impl_world_ro {
         impl WorldReadOnly for $ident {
             fn parameters(&self) -> &Parameters {
                 &self.parameters
+            }
+            fn dataspace_catalog(&self) -> &iroha_data_model::nexus::DataSpaceCatalog {
+                &self.dataspace_catalog
             }
             fn peers(&self) -> &Peers {
                 &self.peers
@@ -10845,26 +12882,31 @@ macro_rules! impl_world_ro {
             fn accounts(&self) -> &impl StorageReadOnly<AccountId, AccountValue> {
                 &self.accounts
             }
-            fn account_subject_domains(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<DomainId>> {
-                &self.account_subject_domains
-            }
-            fn domain_account_subjects(
-                &self,
-            ) -> &impl StorageReadOnly<DomainId, BTreeSet<AccountId>> {
-                &self.domain_account_subjects
-            }
             fn uaid_accounts(&self) -> &impl StorageReadOnly<UniversalAccountId, AccountId> {
                 &self.uaid_accounts
             }
-            fn account_aliases(&self) -> &impl StorageReadOnly<AccountLabel, AccountId> {
+            fn account_aliases(&self) -> &impl StorageReadOnly<AccountAlias, AccountId> {
                 &self.account_aliases
+            }
+            fn account_aliases_by_account(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountAlias>> {
+                &self.account_aliases_by_account
+            }
+            fn account_scope_directory(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, AccountScopeDirectoryEntry> {
+                &self.account_scope_directory
             }
             fn opaque_uaids(
                 &self,
             ) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId> {
                 &self.opaque_uaids
+            }
+            fn ram_lfe_program_policies(
+                &self,
+            ) -> &impl StorageReadOnly<RamLfeProgramId, RamLfeProgramPolicy> {
+                &self.ram_lfe_program_policies
             }
             fn identifier_policies(
                 &self,
@@ -10878,8 +12920,18 @@ macro_rules! impl_world_ro {
             }
             fn account_rekey_records(
                 &self,
-            ) -> &impl StorageReadOnly<AccountLabel, AccountRekeyRecord> {
+            ) -> &impl StorageReadOnly<AccountAlias, AccountRekeyRecord> {
                 &self.account_rekey_records
+            }
+            fn account_recovery_policies(
+                &self,
+            ) -> &impl StorageReadOnly<AccountAlias, AccountRecoveryPolicy> {
+                &self.account_recovery_policies
+            }
+            fn account_recovery_requests(
+                &self,
+            ) -> &impl StorageReadOnly<AccountAlias, AccountRecoveryRequest> {
+                &self.account_recovery_requests
             }
             fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition> {
                 &self.asset_definitions
@@ -10893,6 +12945,14 @@ macro_rules! impl_world_ro {
                 &self,
             ) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinitionAliasBindingRecord> {
                 &self.asset_definition_alias_bindings
+            }
+            fn contract_aliases(&self) -> &impl StorageReadOnly<ContractAlias, ContractAddress> {
+                &self.contract_aliases
+            }
+            fn contract_alias_bindings(
+                &self,
+            ) -> &impl StorageReadOnly<ContractAddress, ContractAliasBindingRecord> {
+                &self.contract_alias_bindings
             }
             fn domain_asset_definitions(
                 &self,
@@ -10917,6 +12977,9 @@ macro_rules! impl_world_ro {
             }
             fn nfts(&self) -> &impl StorageReadOnly<NftId, NftValue> {
                 &self.nfts
+            }
+            fn rwas(&self) -> &impl StorageReadOnly<RwaId, RwaValue> {
+                &self.rwas
             }
             fn roles(&self) -> &impl StorageReadOnly<RoleId, Role> {
                 &self.roles
@@ -10993,6 +13056,14 @@ macro_rules! impl_world_ro {
             }
             fn viral_bonus_paid(&self) -> &impl StorageReadOnly<Hash, bool> {
                 &self.viral_bonus_paid
+            }
+            fn asset_escrows(&self) -> &impl StorageReadOnly<EscrowId, AssetEscrowRecord> {
+                &self.asset_escrows
+            }
+            fn anonymous_asset_escrows(
+                &self,
+            ) -> &impl StorageReadOnly<EscrowId, AnonymousAssetEscrowRecord> {
+                &self.anonymous_asset_escrows
             }
             fn uaid_dataspaces(
                 &self,
@@ -11091,11 +13162,173 @@ macro_rules! impl_world_ro {
             fn contract_code(&self) -> &impl StorageReadOnly<iroha_crypto::Hash, Vec<u8>> {
                 &self.contract_code
             }
-            fn contract_instances(&self) -> &impl StorageReadOnly<(String, String), iroha_crypto::Hash> {
+            fn contract_instances(
+                &self,
+            ) -> &impl StorageReadOnly<
+                iroha_data_model::smart_contract::ContractAddress,
+                iroha_crypto::Hash,
+            > {
                 &self.contract_instances
             }
             fn smart_contract_state(&self) -> &impl StorageReadOnly<Name, Vec<u8>> {
                 &self.smart_contract_state
+            }
+            fn soracloud_service_revisions(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraDeploymentBundleV1> {
+                &self.soracloud_service_revisions
+            }
+            fn soracloud_service_deployments(
+                &self,
+            ) -> &impl StorageReadOnly<Name, SoraServiceDeploymentStateV1> {
+                &self.soracloud_service_deployments
+            }
+            fn soracloud_service_runtime(
+                &self,
+            ) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1> {
+                &self.soracloud_service_runtime
+            }
+            fn soracloud_inrou_replica_runtime(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String, String), SoraInrouReplicaRuntimeStateV1> {
+                &self.soracloud_inrou_replica_runtime
+            }
+            fn soracloud_service_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1> {
+                &self.soracloud_service_audit_events
+            }
+            fn soracloud_service_state_entries(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String, String), SoraServiceStateEntryV1> {
+                &self.soracloud_service_state_entries
+            }
+            fn soracloud_decryption_request_records(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraDecryptionRequestRecordV1> {
+                &self.soracloud_decryption_request_records
+            }
+            fn soracloud_agent_apartments(
+                &self,
+            ) -> &impl StorageReadOnly<String, SoraAgentApartmentRecordV1> {
+                &self.soracloud_agent_apartments
+            }
+            fn soracloud_agent_apartment_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraAgentApartmentAuditEventV1> {
+                &self.soracloud_agent_apartment_audit_events
+            }
+            fn soracloud_training_jobs(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraTrainingJobRecordV1> {
+                &self.soracloud_training_jobs
+            }
+            fn soracloud_training_job_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraTrainingJobAuditEventV1> {
+                &self.soracloud_training_job_audit_events
+            }
+            fn soracloud_model_registries(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraModelRegistryV1> {
+                &self.soracloud_model_registries
+            }
+            fn soracloud_model_weight_versions(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String, String), SoraModelWeightVersionRecordV1>
+            {
+                &self.soracloud_model_weight_versions
+            }
+            fn soracloud_model_weight_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraModelWeightAuditEventV1> {
+                &self.soracloud_model_weight_audit_events
+            }
+            fn soracloud_model_artifacts(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraModelArtifactRecordV1> {
+                &self.soracloud_model_artifacts
+            }
+            fn soracloud_model_artifact_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraModelArtifactAuditEventV1> {
+                &self.soracloud_model_artifact_audit_events
+            }
+            fn soracloud_private_compile_profiles(
+                &self,
+            ) -> &impl StorageReadOnly<Hash, SoraPrivateCompileProfileV1> {
+                &self.soracloud_private_compile_profiles
+            }
+            fn soracloud_uploaded_model_bundles(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String, String), SoraUploadedModelBundleV1> {
+                &self.soracloud_uploaded_model_bundles
+            }
+            fn soracloud_uploaded_model_chunks(
+                &self,
+            ) -> &impl StorageReadOnly<String, SoraUploadedModelChunkV1> {
+                &self.soracloud_uploaded_model_chunks
+            }
+            fn soracloud_private_inference_sessions(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraPrivateInferenceSessionV1> {
+                &self.soracloud_private_inference_sessions
+            }
+            fn soracloud_private_inference_checkpoints(
+                &self,
+            ) -> &impl StorageReadOnly<(String, u32), SoraPrivateInferenceCheckpointV1> {
+                &self.soracloud_private_inference_checkpoints
+            }
+            fn soracloud_model_host_capabilities(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, SoraModelHostCapabilityRecordV1> {
+                &self.soracloud_model_host_capabilities
+            }
+            fn soracloud_inrou_host_capabilities(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, SoraInrouHostCapabilityRecordV1> {
+                &self.soracloud_inrou_host_capabilities
+            }
+            fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1> {
+                &self.soracloud_hf_sources
+            }
+            fn soracloud_hf_shared_lease_pools(
+                &self,
+            ) -> &impl StorageReadOnly<Hash, SoraHfSharedLeasePoolV1> {
+                &self.soracloud_hf_shared_lease_pools
+            }
+            fn soracloud_hf_shared_lease_members(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraHfSharedLeaseMemberV1> {
+                &self.soracloud_hf_shared_lease_members
+            }
+            fn soracloud_hf_shared_lease_audit_events(
+                &self,
+            ) -> &impl StorageReadOnly<u64, SoraHfSharedLeaseAuditEventV1> {
+                &self.soracloud_hf_shared_lease_audit_events
+            }
+            fn soracloud_model_host_violation_evidence(
+                &self,
+            ) -> &impl StorageReadOnly<Hash, SoraModelHostViolationEvidenceRecordV1> {
+                &self.soracloud_model_host_violation_evidence
+            }
+            fn soracloud_hf_placements(&self) -> &impl StorageReadOnly<Hash, SoraHfPlacementRecordV1> {
+                &self.soracloud_hf_placements
+            }
+            fn soracloud_inrou_service_placements(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraInrouServicePlacementRecordV1> {
+                &self.soracloud_inrou_service_placements
+            }
+            fn soracloud_mailbox_messages(
+                &self,
+            ) -> &impl StorageReadOnly<Hash, SoraServiceMailboxMessageV1> {
+                &self.soracloud_mailbox_messages
+            }
+            fn soracloud_runtime_receipts(
+                &self,
+            ) -> &impl StorageReadOnly<Hash, SoraRuntimeReceiptV1> {
+                &self.soracloud_runtime_receipts
             }
             fn repo_agreements(&self) -> &impl StorageReadOnly<RepoAgreementId, RepoAgreement> {
                 &self.repo_agreements
@@ -11103,36 +13336,8 @@ macro_rules! impl_world_ro {
             fn settlement_ledgers(&self) -> &impl StorageReadOnly<SettlementId, SettlementLedger> {
                 &self.settlement_ledgers
             }
-            fn offline_allowances(&self) -> &impl StorageReadOnly<Hash, OfflineAllowanceRecord> {
-                &self.offline_allowances
-            }
-            fn offline_verdict_revocations(
-                &self,
-            ) -> &impl StorageReadOnly<Hash, OfflineVerdictRevocation> {
-                &self.offline_verdict_revocations
-            }
-            fn offline_consumed_build_claim_ids(&self) -> &impl StorageReadOnly<Hash, ()> {
-                &self.offline_consumed_build_claim_ids
-            }
-            fn offline_to_online_transfers(
-                &self,
-            ) -> &impl StorageReadOnly<Hash, OfflineTransferRecord> {
-                &self.offline_to_online_transfers
-            }
-            fn offline_transfer_sender_index(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<Hash>> {
-                &self.offline_transfer_sender_index
-            }
-            fn offline_transfer_receiver_index(
-                &self,
-            ) -> &impl StorageReadOnly<AccountId, BTreeSet<Hash>> {
-                &self.offline_transfer_receiver_index
-            }
-            fn offline_transfer_status_index(
-                &self,
-            ) -> &impl StorageReadOnly<OfflineTransferStatus, BTreeSet<Hash>> {
-                &self.offline_transfer_status_index
+            fn offline_note_v2_replay_keys(&self) -> &impl StorageReadOnly<Hash, ()> {
+                &self.offline_note_v2_replay_keys
             }
             fn public_lane_validators(
                 &self,
@@ -11156,7 +13361,7 @@ macro_rules! impl_world_ro {
             }
             fn lane_relay_emergency_validators(
                 &self,
-            ) -> &impl StorageReadOnly<DataSpaceId, LaneRelayEmergencyValidatorSet> {
+            ) -> &impl StorageReadOnly<LaneId, LaneRelayEmergencyValidatorSet> {
                 &self.lane_relay_emergency_validators
             }
             fn capacity_declarations(&self) -> &impl StorageReadOnly<ProviderId, CapacityDeclarationRecord> {
@@ -11283,6 +13488,12 @@ macro_rules! impl_world_ro {
             fn citizens(&self) -> &impl StorageReadOnly<AccountId, CitizenshipRecord> {
                 &self.citizens
             }
+            fn ministry_agenda_proposals(
+                &self,
+            ) -> &impl StorageReadOnly<String, iroha_data_model::ministry::AgendaProposalRecordV1>
+            {
+                &self.ministry_agenda_proposals
+            }
             fn governance_proposals(
                 &self,
             ) -> &impl StorageReadOnly<[u8; 32], GovernanceProposalRecord> {
@@ -11362,6 +13573,22 @@ impl<'world> WorldBlock<'world> {
         &mut self.commit_qcs
     }
 
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Mutable pin-manifest registry accessor used by tests that need committed SoraFS state.
+    pub fn pin_manifests_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageBlock<'world, ManifestDigest, PinManifestRecord> {
+        &mut self.pin_manifests
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Mutable replication-order registry accessor used by tests that need committed SoraFS state.
+    pub fn replication_orders_mut_for_testing(
+        &mut self,
+    ) -> &mut StorageBlock<'world, ReplicationOrderId, ReplicationOrderRecord> {
+        &mut self.replication_orders
+    }
+
     #[cfg(any(test, feature = "app_api", feature = "iroha-core-tests"))]
     /// Mutable verifying-key registry accessor used exclusively by tests and API scaffolding.
     pub fn verifying_keys_mut_for_testing(
@@ -11425,23 +13652,29 @@ impl<'world> WorldBlock<'world> {
             domains,
             domain_selectors,
             accounts,
-            account_subject_domains,
-            domain_account_subjects,
             uaid_accounts,
             account_aliases,
+            account_aliases_by_account,
+            account_scope_directory,
             opaque_uaids,
+            ram_lfe_program_policies,
             identifier_policies,
             identifier_claims,
             account_rekey_records,
+            account_recovery_policies,
+            account_recovery_requests,
             asset_definitions,
             asset_definition_aliases,
             asset_definition_alias_bindings,
+            contract_aliases,
+            contract_alias_bindings,
             domain_asset_definitions,
             asset_definition_holders,
             asset_definition_assets,
             assets,
             asset_metadata,
             nfts,
+            rwas,
             roles,
             account_permissions,
             account_roles,
@@ -11459,6 +13692,8 @@ impl<'world> WorldBlock<'world> {
             viral_binding_claims,
             viral_escrows,
             viral_bonus_paid,
+            asset_escrows,
+            anonymous_asset_escrows,
             uaid_dataspaces,
             axt_policies,
             axt_replay_ledger,
@@ -11483,6 +13718,38 @@ impl<'world> WorldBlock<'world> {
             contract_code,
             contract_instances,
             smart_contract_state,
+            soracloud_service_revisions,
+            soracloud_service_deployments,
+            soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
+            soracloud_service_audit_events,
+            soracloud_service_state_entries,
+            soracloud_decryption_request_records,
+            soracloud_agent_apartments,
+            soracloud_agent_apartment_audit_events,
+            soracloud_training_jobs,
+            soracloud_training_job_audit_events,
+            soracloud_model_registries,
+            soracloud_model_weight_versions,
+            soracloud_model_weight_audit_events,
+            soracloud_model_artifacts,
+            soracloud_model_artifact_audit_events,
+            soracloud_private_compile_profiles,
+            soracloud_uploaded_model_bundles,
+            soracloud_uploaded_model_chunks,
+            soracloud_private_inference_sessions,
+            soracloud_private_inference_checkpoints,
+            soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
+            soracloud_hf_sources,
+            soracloud_hf_shared_lease_pools,
+            soracloud_hf_shared_lease_members,
+            soracloud_hf_shared_lease_audit_events,
+            soracloud_model_host_violation_evidence,
+            soracloud_hf_placements,
+            soracloud_inrou_service_placements,
+            soracloud_mailbox_messages,
+            soracloud_runtime_receipts,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -11510,13 +13777,7 @@ impl<'world> WorldBlock<'world> {
             soradns_history_len,
             repo_agreements,
             settlement_ledgers,
-            offline_allowances,
-            offline_verdict_revocations,
-            offline_consumed_build_claim_ids,
-            offline_to_online_transfers,
-            offline_transfer_sender_index,
-            offline_transfer_receiver_index,
-            offline_transfer_status_index,
+            offline_note_v2_replay_keys,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -11525,6 +13786,7 @@ impl<'world> WorldBlock<'world> {
             zk_assets,
             elections,
             citizens,
+            ministry_agenda_proposals,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,
@@ -11560,6 +13822,38 @@ impl<'world> WorldBlock<'world> {
         contract_code.commit();
         contract_instances.commit();
         smart_contract_state.commit();
+        soracloud_service_revisions.commit();
+        soracloud_service_deployments.commit();
+        soracloud_service_runtime.commit();
+        soracloud_inrou_replica_runtime.commit();
+        soracloud_service_audit_events.commit();
+        soracloud_service_state_entries.commit();
+        soracloud_decryption_request_records.commit();
+        soracloud_agent_apartments.commit();
+        soracloud_agent_apartment_audit_events.commit();
+        soracloud_training_jobs.commit();
+        soracloud_training_job_audit_events.commit();
+        soracloud_model_registries.commit();
+        soracloud_model_weight_versions.commit();
+        soracloud_model_weight_audit_events.commit();
+        soracloud_model_artifacts.commit();
+        soracloud_model_artifact_audit_events.commit();
+        soracloud_private_compile_profiles.commit();
+        soracloud_uploaded_model_bundles.commit();
+        soracloud_uploaded_model_chunks.commit();
+        soracloud_private_inference_sessions.commit();
+        soracloud_private_inference_checkpoints.commit();
+        soracloud_model_host_capabilities.commit();
+        soracloud_inrou_host_capabilities.commit();
+        soracloud_hf_sources.commit();
+        soracloud_hf_shared_lease_pools.commit();
+        soracloud_hf_shared_lease_members.commit();
+        soracloud_hf_shared_lease_audit_events.commit();
+        soracloud_model_host_violation_evidence.commit();
+        soracloud_hf_placements.commit();
+        soracloud_inrou_service_placements.commit();
+        soracloud_mailbox_messages.commit();
+        soracloud_runtime_receipts.commit();
         capacity_disputes.commit();
         capacity_fee_ledger.commit();
         capacity_declarations.commit();
@@ -11587,13 +13881,7 @@ impl<'world> WorldBlock<'world> {
         soradns_history_len.commit();
         repo_agreements.commit();
         settlement_ledgers.commit();
-        offline_allowances.commit();
-        offline_verdict_revocations.commit();
-        offline_consumed_build_claim_ids.commit();
-        offline_to_online_transfers.commit();
-        offline_transfer_sender_index.commit();
-        offline_transfer_receiver_index.commit();
-        offline_transfer_status_index.commit();
+        offline_note_v2_replay_keys.commit();
         domain_committees.commit();
         domain_endorsement_policies.commit();
         domain_endorsements.commit();
@@ -11606,6 +13894,7 @@ impl<'world> WorldBlock<'world> {
         zk_assets.commit();
         elections.commit();
         citizens.commit();
+        ministry_agenda_proposals.commit();
         governance_proposals.commit();
         governance_referenda.commit();
         governance_stage_approvals.commit();
@@ -11627,6 +13916,8 @@ impl<'world> WorldBlock<'world> {
         twitter_bindings.commit();
         viral_bonus_paid.commit();
         viral_escrows.commit();
+        asset_escrows.commit();
+        anonymous_asset_escrows.commit();
         viral_binding_claims.commit();
         viral_daily_counters.commit();
         viral_campaign_budget.commit();
@@ -11639,23 +13930,29 @@ impl<'world> WorldBlock<'world> {
         account_permissions.commit();
         tx_sequences.commit();
         roles.commit();
+        rwas.commit();
         nfts.commit();
         assets.commit();
         identifier_claims.commit();
         identifier_policies.commit();
+        ram_lfe_program_policies.commit();
+        account_recovery_requests.commit();
+        account_recovery_policies.commit();
         account_rekey_records.commit();
         asset_metadata.commit();
         asset_definition_alias_bindings.commit();
         asset_definition_aliases.commit();
+        contract_alias_bindings.commit();
+        contract_aliases.commit();
         asset_definition_assets.commit();
         asset_definition_holders.commit();
         domain_asset_definitions.commit();
         asset_definitions.commit();
         accounts.commit();
-        account_subject_domains.commit();
-        domain_account_subjects.commit();
         uaid_accounts.commit();
         account_aliases.commit();
+        account_aliases_by_account.commit();
+        account_scope_directory.commit();
         opaque_uaids.commit();
         domains.commit();
         domain_selectors.commit();
@@ -11681,6 +13978,94 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         iroha_data_model::runtime::RuntimeUpgradeRecord,
     > {
         &mut self.runtime_upgrades
+    }
+
+    fn add_account_alias_to_reverse_index(&mut self, account_id: &AccountId, label: &AccountAlias) {
+        if self.account_aliases_by_account.get(account_id).is_none() {
+            self.account_aliases_by_account
+                .insert(account_id.clone(), BTreeSet::new());
+        }
+        if let Some(labels) = self.account_aliases_by_account.get_mut(account_id) {
+            labels.insert(label.clone());
+        }
+    }
+
+    fn remove_account_alias_from_reverse_index(
+        &mut self,
+        account_id: &AccountId,
+        label: &AccountAlias,
+    ) {
+        let mut remove_entry = false;
+        if let Some(labels) = self.account_aliases_by_account.get_mut(account_id) {
+            labels.remove(label);
+            remove_entry = labels.is_empty();
+        }
+        if remove_entry {
+            self.account_aliases_by_account.remove(account_id.clone());
+        }
+    }
+
+    fn refresh_account_scope_directory_entry(&mut self, account_id: &AccountId) {
+        match derive_account_scope_directory_entry(self, account_id) {
+            Ok(Some(entry)) => {
+                self.account_scope_directory
+                    .insert(account_id.clone(), entry);
+            }
+            Ok(None) => {
+                self.account_scope_directory.remove(account_id.clone());
+            }
+            Err(error) => {
+                warn!(
+                    account_id = %account_id,
+                    ?error,
+                    "failed to refresh account scope directory entry"
+                );
+            }
+        }
+    }
+
+    pub(crate) fn insert_account_alias_binding(
+        &mut self,
+        label: AccountAlias,
+        account_id: AccountId,
+    ) -> Option<AccountId> {
+        let previous = self
+            .account_aliases
+            .insert(label.clone(), account_id.clone());
+        if let Some(previous_account) = previous.as_ref() {
+            self.remove_account_alias_from_reverse_index(previous_account, &label);
+            self.refresh_account_scope_directory_entry(previous_account);
+        }
+        self.add_account_alias_to_reverse_index(&account_id, &label);
+        self.refresh_account_scope_directory_entry(&account_id);
+        previous
+    }
+
+    pub(crate) fn remove_account_alias_binding(
+        &mut self,
+        label: &AccountAlias,
+    ) -> Option<AccountId> {
+        let removed = self.account_aliases.remove(label.clone());
+        if let Some(account_id) = removed.as_ref() {
+            self.remove_account_alias_from_reverse_index(account_id, label);
+            self.refresh_account_scope_directory_entry(account_id);
+        }
+        removed
+    }
+
+    pub(crate) fn remove_account_alias_bindings_for_account(
+        &mut self,
+        account_id: &AccountId,
+    ) -> BTreeSet<AccountAlias> {
+        let labels = self
+            .account_aliases_by_account
+            .remove(account_id.clone())
+            .unwrap_or_default();
+        for label in &labels {
+            self.account_aliases.remove(label.clone());
+        }
+        self.refresh_account_scope_directory_entry(account_id);
+        labels
     }
 
     fn update_parameters_from_executor(&mut self, prev_executor_data_model: &ExecutorDataModel) {
@@ -11843,6 +14228,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         } else {
             self.uaid_dataspaces.insert(uaid, bindings);
         }
+        self.refresh_account_scope_directory_entry(&account_id);
     }
 
     /// Recompute the per-dataspace AXT policy map from Space Directory manifests and bindings.
@@ -12199,6 +14585,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Insert or replace an account directly for deterministic test setup.
+    pub fn insert_account_for_testing(
+        &mut self,
+        account_id: AccountId,
+        account_value: AccountValue,
+    ) -> Option<AccountValue> {
+        self.accounts.insert(account_id, account_value)
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     /// Provides mutable access to the pin-manifest registry for test scaffolding.
     pub fn pin_manifests_mut_for_testing(
         &mut self,
@@ -12413,23 +14809,29 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             domains,
             domain_selectors,
             accounts,
-            account_subject_domains,
-            domain_account_subjects,
             uaid_accounts,
             account_aliases,
+            account_aliases_by_account,
+            account_scope_directory,
             opaque_uaids,
+            ram_lfe_program_policies,
             identifier_policies,
             identifier_claims,
             account_rekey_records,
+            account_recovery_policies,
+            account_recovery_requests,
             asset_definitions,
             asset_definition_aliases,
             asset_definition_alias_bindings,
+            contract_aliases,
+            contract_alias_bindings,
             domain_asset_definitions,
             asset_definition_holders,
             asset_definition_assets,
             assets,
             asset_metadata,
             nfts,
+            rwas,
             roles,
             account_permissions,
             account_roles,
@@ -12447,6 +14849,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             viral_binding_claims,
             viral_escrows,
             viral_bonus_paid,
+            asset_escrows,
+            anonymous_asset_escrows,
             uaid_dataspaces,
             axt_policies,
             axt_replay_ledger,
@@ -12470,6 +14874,38 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             contract_code,
             contract_instances,
             smart_contract_state,
+            soracloud_service_revisions,
+            soracloud_service_deployments,
+            soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
+            soracloud_service_audit_events,
+            soracloud_service_state_entries,
+            soracloud_decryption_request_records,
+            soracloud_agent_apartments,
+            soracloud_agent_apartment_audit_events,
+            soracloud_training_jobs,
+            soracloud_training_job_audit_events,
+            soracloud_model_registries,
+            soracloud_model_weight_versions,
+            soracloud_model_weight_audit_events,
+            soracloud_model_artifacts,
+            soracloud_model_artifact_audit_events,
+            soracloud_private_compile_profiles,
+            soracloud_uploaded_model_bundles,
+            soracloud_uploaded_model_chunks,
+            soracloud_private_inference_sessions,
+            soracloud_private_inference_checkpoints,
+            soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
+            soracloud_hf_sources,
+            soracloud_hf_shared_lease_pools,
+            soracloud_hf_shared_lease_members,
+            soracloud_hf_shared_lease_audit_events,
+            soracloud_model_host_violation_evidence,
+            soracloud_hf_placements,
+            soracloud_inrou_service_placements,
+            soracloud_mailbox_messages,
+            soracloud_runtime_receipts,
             capacity_declarations,
             capacity_fee_ledger,
             capacity_disputes,
@@ -12477,13 +14913,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             manifest_aliases,
             replication_orders,
             settlement_ledgers,
-            offline_allowances,
-            offline_verdict_revocations,
-            offline_consumed_build_claim_ids,
-            offline_to_online_transfers,
-            offline_transfer_sender_index,
-            offline_transfer_receiver_index,
-            offline_transfer_status_index,
+            offline_note_v2_replay_keys,
             public_lane_validators,
             public_lane_stake_shares,
             public_lane_rewards,
@@ -12493,6 +14923,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             zk_assets,
             elections,
             citizens,
+            ministry_agenda_proposals,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,
@@ -12533,6 +14964,38 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         contract_code.apply();
         contract_instances.apply();
         smart_contract_state.apply();
+        soracloud_service_revisions.apply();
+        soracloud_service_deployments.apply();
+        soracloud_service_runtime.apply();
+        soracloud_inrou_replica_runtime.apply();
+        soracloud_service_audit_events.apply();
+        soracloud_service_state_entries.apply();
+        soracloud_decryption_request_records.apply();
+        soracloud_agent_apartments.apply();
+        soracloud_agent_apartment_audit_events.apply();
+        soracloud_training_jobs.apply();
+        soracloud_training_job_audit_events.apply();
+        soracloud_model_registries.apply();
+        soracloud_model_weight_versions.apply();
+        soracloud_model_weight_audit_events.apply();
+        soracloud_model_artifacts.apply();
+        soracloud_model_artifact_audit_events.apply();
+        soracloud_private_compile_profiles.apply();
+        soracloud_uploaded_model_bundles.apply();
+        soracloud_uploaded_model_chunks.apply();
+        soracloud_private_inference_sessions.apply();
+        soracloud_private_inference_checkpoints.apply();
+        soracloud_model_host_capabilities.apply();
+        soracloud_inrou_host_capabilities.apply();
+        soracloud_hf_sources.apply();
+        soracloud_hf_shared_lease_pools.apply();
+        soracloud_hf_shared_lease_members.apply();
+        soracloud_hf_shared_lease_audit_events.apply();
+        soracloud_model_host_violation_evidence.apply();
+        soracloud_hf_placements.apply();
+        soracloud_inrou_service_placements.apply();
+        soracloud_mailbox_messages.apply();
+        soracloud_runtime_receipts.apply();
         capacity_disputes.apply();
         capacity_fee_ledger.apply();
         capacity_declarations.apply();
@@ -12552,13 +15015,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.soradns_last_publish_ms.apply();
         self.soradns_history_len.apply();
         settlement_ledgers.apply();
-        offline_allowances.apply();
-        offline_verdict_revocations.apply();
-        offline_consumed_build_claim_ids.apply();
-        offline_to_online_transfers.apply();
-        offline_transfer_sender_index.apply();
-        offline_transfer_receiver_index.apply();
-        offline_transfer_status_index.apply();
+        offline_note_v2_replay_keys.apply();
         domain_committees.apply();
         domain_endorsement_policies.apply();
         domain_endorsements.apply();
@@ -12572,6 +15029,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         zk_assets.apply();
         elections.apply();
         citizens.apply();
+        ministry_agenda_proposals.apply();
         governance_proposals.apply();
         governance_referenda.apply();
         governance_stage_approvals.apply();
@@ -12592,6 +15050,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         twitter_bindings.apply();
         viral_bonus_paid.apply();
         viral_escrows.apply();
+        asset_escrows.apply();
+        anonymous_asset_escrows.apply();
         viral_binding_claims.apply();
         viral_daily_counters.apply();
         viral_campaign_budget.apply();
@@ -12603,23 +15063,29 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         space_directory_manifests.apply();
         account_permissions.apply();
         roles.apply();
+        rwas.apply();
         nfts.apply();
         identifier_claims.apply();
         identifier_policies.apply();
+        ram_lfe_program_policies.apply();
+        account_recovery_requests.apply();
+        account_recovery_policies.apply();
         account_rekey_records.apply();
         asset_metadata.apply();
         assets.apply();
         asset_definition_alias_bindings.apply();
         asset_definition_aliases.apply();
+        contract_alias_bindings.apply();
+        contract_aliases.apply();
         asset_definition_assets.apply();
         asset_definition_holders.apply();
         domain_asset_definitions.apply();
         asset_definitions.apply();
         accounts.apply();
-        account_subject_domains.apply();
-        domain_account_subjects.apply();
         uaid_accounts.apply();
         account_aliases.apply();
+        account_aliases_by_account.apply();
+        account_scope_directory.apply();
         opaque_uaids.apply();
         domains.apply();
         domain_selectors.apply();
@@ -12647,116 +15113,6 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         self.accounts
             .get_mut(id)
             .ok_or_else(|| FindError::Account(id.clone()))
-    }
-
-    fn rebuild_domain_account_subject_index(&mut self) {
-        let mut domain_subjects = BTreeMap::<DomainId, BTreeSet<AccountId>>::new();
-        let domains = self.domains.view();
-        for (subject, linked_domains) in self.account_subject_domains.view().iter() {
-            for domain in linked_domains
-                .iter()
-                .filter(|domain| domains.get(*domain).is_some())
-            {
-                domain_subjects
-                    .entry(domain.clone())
-                    .or_default()
-                    .insert(subject.clone());
-            }
-        }
-        let existing_domains: Vec<_> = self
-            .domain_account_subjects
-            .view()
-            .iter()
-            .map(|(domain, _)| domain.clone())
-            .collect();
-        for domain in existing_domains {
-            self.domain_account_subjects.remove(domain);
-        }
-        for (domain, subjects) in domain_subjects {
-            self.domain_account_subjects.insert(domain, subjects);
-        }
-    }
-
-    /// Insert or replace an account and synchronize subject/domain membership indexes.
-    pub fn insert_account_with_links(
-        &mut self,
-        account_id: AccountId,
-        account_value: AccountValue,
-    ) -> Option<AccountValue> {
-        let subject = account_id.subject_id();
-        let replaced = self.accounts.insert(account_id, account_value);
-        let mut linked_domains = self
-            .account_subject_domains
-            .get(&subject)
-            .cloned()
-            .unwrap_or_default();
-        if let Some(details) = self.accounts.get(&subject) {
-            linked_domains.extend(
-                details
-                    .linked_domains()
-                    .iter()
-                    .filter(|domain| self.domains.get(*domain).is_some())
-                    .cloned(),
-            );
-        }
-        self.account_subject_domains
-            .insert(subject.clone(), linked_domains.clone());
-        self.rebuild_domain_account_subject_index();
-
-        replaced
-    }
-
-    /// Remove an account and synchronize subject/domain membership indexes.
-    pub fn remove_account_with_links(&mut self, account_id: &AccountId) -> Option<AccountValue> {
-        let removed = self.accounts.remove(account_id.clone());
-        if removed.is_some() {
-            let subject = account_id.subject_id();
-            let mut linked_domains = self
-                .account_subject_domains
-                .get(&subject)
-                .cloned()
-                .unwrap_or_default();
-            if let Some(removed_value) = &removed {
-                for domain in removed_value
-                    .linked_domains()
-                    .iter()
-                    .filter(|domain| self.domains.get(*domain).is_some())
-                {
-                    linked_domains.remove(domain);
-                }
-            }
-            self.account_subject_domains.insert(subject, linked_domains);
-            self.rebuild_domain_account_subject_index();
-        }
-        removed
-    }
-
-    /// Link a domain-scoped account subject to its domain membership indexes.
-    pub fn link_account_subject_domain(&mut self, account_id: &ScopedAccountId) {
-        let subject = account_id.subject_id();
-        let domain = account_id.domain().clone();
-        let mut domains = self
-            .account_subject_domains
-            .get(&subject)
-            .cloned()
-            .unwrap_or_default();
-        domains.insert(domain);
-        self.account_subject_domains.insert(subject, domains);
-        self.rebuild_domain_account_subject_index();
-    }
-
-    /// Unlink a domain-scoped account subject from its domain membership indexes.
-    pub fn unlink_account_subject_domain(&mut self, account_id: &ScopedAccountId) {
-        let subject = account_id.subject_id();
-        let domain = account_id.domain().clone();
-        let mut domains = self
-            .account_subject_domains
-            .get(&subject)
-            .cloned()
-            .unwrap_or_default();
-        domains.remove(&domain);
-        self.account_subject_domains.insert(subject, domains);
-        self.rebuild_domain_account_subject_index();
     }
 
     /// Add [`permission`](Permission) to the [`Account`] if the account does not have this permission yet.
@@ -12838,13 +15194,37 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
     }
 
-    /// Canonicalize an [`AssetId`] into the current execution scope.
+    /// Canonicalize an [`AssetId`] into the effective execution scope.
+    ///
+    /// When `dataspace_hint` is provided for a dataspace-restricted asset, it
+    /// overrides the ambient execution dataspace. This is used for transfers
+    /// whose destination account is bound to a different dataspace than the
+    /// caller's current execution scope.
     ///
     /// # Errors
-    /// Returns an error when the requested id contradicts the active scope policy
-    /// (for example, cross-dataspace access for restricted assets).
-    pub fn resolve_asset_id_for_current_scope(&self, id: &AssetId) -> Result<AssetId, Error> {
-        let expected_scope = self.resolve_asset_balance_scope(id.definition())?;
+    /// Returns an error when the requested id contradicts the effective scope
+    /// policy (for example, cross-dataspace access for restricted assets).
+    pub fn resolve_asset_id_for_scope_hint(
+        &self,
+        id: &AssetId,
+        dataspace_hint: Option<DataSpaceId>,
+    ) -> Result<AssetId, Error> {
+        let definition = self
+            .asset_definition(id.definition())
+            .map_err(Error::from)?;
+        let expected_scope = match definition.balance_scope_policy() {
+            AssetBalancePolicy::Global => AssetBalanceScope::Global,
+            AssetBalancePolicy::DataspaceRestricted => dataspace_hint
+                .or(self.current_dataspace_id)
+                .map(AssetBalanceScope::Dataspace)
+                .ok_or_else(|| {
+                    Error::InvariantViolation(
+                        "dataspace-restricted asset access requires transaction dataspace context"
+                            .into(),
+                    )
+                })?,
+        };
+
         match (id.scope(), &expected_scope) {
             (AssetBalanceScope::Global, AssetBalanceScope::Global) => {}
             (AssetBalanceScope::Global, AssetBalanceScope::Dataspace(_)) => {}
@@ -12869,6 +15249,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         ))
     }
 
+    /// Canonicalize an [`AssetId`] into the current execution scope.
+    ///
+    /// # Errors
+    /// Returns an error when the requested id contradicts the active scope policy
+    /// (for example, cross-dataspace access for restricted assets).
+    pub fn resolve_asset_id_for_current_scope(&self, id: &AssetId) -> Result<AssetId, Error> {
+        self.resolve_asset_id_for_scope_hint(id, None)
+    }
+
     /// Get asset or inserts new with `default_asset_value`.
     ///
     /// # Errors
@@ -12880,6 +15269,24 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         default_asset_value: impl Into<Numeric>,
     ) -> Result<&mut AssetValue, Error> {
         let resolved_id = self.resolve_asset_id_for_current_scope(asset_id)?;
+        self.asset_or_insert_exact(&resolved_id, default_asset_value)
+    }
+
+    /// Get asset or inserts new with `default_asset_value` using the exact provided [`AssetId`].
+    ///
+    /// Callers must only use this with a balance id that has already been canonicalized for the
+    /// intended scope. This is required for transfer destinations whose bound account dataspace
+    /// differs from the current execution dataspace.
+    ///
+    /// # Errors
+    /// - There is no account with such name.
+    #[allow(clippy::missing_panics_doc)]
+    pub fn asset_or_insert_exact(
+        &mut self,
+        asset_id: &AssetId,
+        default_asset_value: impl Into<Numeric>,
+    ) -> Result<&mut AssetValue, Error> {
+        let resolved_id = asset_id.clone();
         self.asset_definition(resolved_id.definition())?;
         self.account(resolved_id.account())?;
 
@@ -13017,6 +15424,16 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .ok_or_else(|| FindError::Nft(id.clone()))
     }
 
+    /// Get mutable reference to [`Rwa`].
+    ///
+    /// # Errors
+    /// If RWA not found
+    pub fn rwa_mut(&mut self, id: &RwaId) -> Result<&mut RwaValue, FindError> {
+        self.rwas
+            .get_mut(id)
+            .ok_or_else(|| FindError::Rwa(id.clone()))
+    }
+
     /// Set executor data model.
     pub fn set_executor_data_model(&mut self, executor_data_model: ExecutorDataModel) {
         let prev_executor_data_model =
@@ -13120,6 +15537,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                         self.rebuild_space_directory_bindings(*uaid);
                         axt_policy_dirty = true;
                     }
+                    self.refresh_account_scope_directory_entry(account.account.id());
+                }
+                DataEvent::Domain(data_pre::DomainEvent::Account(
+                    data_pre::AccountEvent::Deleted(account_id),
+                )) => {
+                    self.account_scope_directory.remove(account_id.clone());
                 }
                 _ => {}
             }
@@ -13263,6 +15686,20 @@ impl State {
         self.nexus.read().clone()
     }
 
+    /// Install or clear the shared Soracloud runtime handle used by core execution paths.
+    pub fn set_soracloud_runtime(
+        &self,
+        runtime: Option<crate::soracloud_runtime::SharedSoracloudRuntime>,
+    ) {
+        *self.soracloud_runtime.write() = runtime;
+    }
+
+    /// Return the shared Soracloud runtime handle when the execution plane is available.
+    #[must_use]
+    pub fn soracloud_runtime(&self) -> Option<crate::soracloud_runtime::SharedSoracloudRuntime> {
+        self.soracloud_runtime.read().clone()
+    }
+
     fn da_shard_cursor_journal_path(&self) -> PathBuf {
         let root = self.kura.store_root();
         if root.as_os_str().is_empty() {
@@ -13344,6 +15781,191 @@ impl State {
         CommitRosterJournal::journal_path(&root)
     }
 
+    fn query_index_journal_path(&self) -> PathBuf {
+        let root = self.kura.store_root();
+        if root.as_os_str().is_empty() {
+            return PathBuf::new();
+        }
+        QueryIndexJournal::journal_path(&root)
+    }
+
+    fn query_projection_checkpoint_journal_path(&self) -> PathBuf {
+        let root = self.kura.store_root();
+        if root.as_os_str().is_empty() {
+            return PathBuf::new();
+        }
+        QueryProjectionCheckpointJournal::journal_path(&root)
+    }
+
+    fn persist_query_index_status(
+        &self,
+        indexed_height: u64,
+        indexed_block_hash: Option<HashOf<BlockHeader>>,
+    ) {
+        let path = self.query_index_journal_path();
+        let mut journal = self.query_index_journal.write();
+        journal.set_latest(indexed_height, indexed_block_hash);
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let tmp_path = path.with_extension("norito.tmp");
+        let measure_bytes = |path: &Path| -> Option<u64> {
+            match std::fs::metadata(path) {
+                Ok(meta) => Some(meta.len()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(0),
+                Err(err) => {
+                    warn!(?err, path = %path.display(), "failed to stat query index journal");
+                    None
+                }
+            }
+        };
+        let before_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
+            (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
+            _ => None,
+        };
+        if let Err(err) = journal.persist() {
+            warn!(
+                ?err,
+                path = %path.display(),
+                "failed to persist query index journal"
+            );
+        }
+        let after_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
+            (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
+            _ => None,
+        };
+        if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
+            self.kura.update_disk_usage_delta(before_bytes, after_bytes);
+        }
+    }
+
+    /// Fetch the latest durable query-index snapshot marker.
+    #[must_use]
+    pub fn query_index_status_snapshot(&self) -> QueryIndexStatus {
+        self.query_index_journal.read().snapshot()
+    }
+
+    /// Fetch the latest durable query projection checkpoint descriptor, if any.
+    #[must_use]
+    pub fn query_projection_checkpoint_snapshot(&self) -> Option<QueryProjectionCheckpoint> {
+        self.query_projection_checkpoint_journal.read().snapshot()
+    }
+
+    /// Persist the latest durable query projection checkpoint descriptor.
+    pub fn persist_query_projection_checkpoint(
+        &self,
+        checkpoint: Option<QueryProjectionCheckpoint>,
+    ) {
+        let path = self.query_projection_checkpoint_journal_path();
+        let mut journal = self.query_projection_checkpoint_journal.write();
+        journal.set_latest(checkpoint);
+        if path.as_os_str().is_empty() {
+            return;
+        }
+        let tmp_path = path.with_extension("norito.tmp");
+        let measure_bytes = |path: &Path| -> Option<u64> {
+            match std::fs::metadata(path) {
+                Ok(meta) => Some(meta.len()),
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(0),
+                Err(err) => {
+                    warn!(
+                        ?err,
+                        path = %path.display(),
+                        "failed to stat query projection checkpoint journal"
+                    );
+                    None
+                }
+            }
+        };
+        let before_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
+            (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
+            _ => None,
+        };
+        if let Err(err) = journal.persist() {
+            warn!(
+                ?err,
+                path = %path.display(),
+                "failed to persist query projection checkpoint journal"
+            );
+        }
+        let after_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
+            (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
+            _ => None,
+        };
+        if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
+            self.kura.update_disk_usage_delta(before_bytes, after_bytes);
+        }
+    }
+
+    /// Build and persist a query projection checkpoint from the current index snapshot.
+    pub fn publish_query_projection_checkpoint(
+        &self,
+        emitted_at_unix: u64,
+        shards: Vec<QueryProjectionCheckpointShard>,
+    ) -> QueryProjectionCheckpoint {
+        let checkpoint = QueryProjectionCheckpoint::from_index_status(
+            self.query_index_status_snapshot(),
+            emitted_at_unix,
+            shards,
+        );
+        self.persist_query_projection_checkpoint(Some(checkpoint.clone()));
+        checkpoint
+    }
+
+    /// Validate uploaded shard archives against the current query-index snapshot and
+    /// build a checkpoint publication plan without mutating state yet.
+    ///
+    /// This lets a future DA worker preflight a large batch of uploaded projection
+    /// shards before it persists the checkpoint descriptor that points at them.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryProjectionCheckpointPlanError`] when the uploaded shards do not
+    /// form a coherent immutable checkpoint for the current query-index snapshot.
+    pub fn plan_query_projection_checkpoint_from_archives<I>(
+        &self,
+        emitted_at_unix: u64,
+        uploads: I,
+    ) -> Result<QueryProjectionCheckpointPublishPlan, QueryProjectionCheckpointPlanError>
+    where
+        I: IntoIterator<Item = QueryProjectionUploadedShardArchive>,
+    {
+        QueryProjectionCheckpointPublishPlan::from_uploaded_archives(
+            self.query_index_status_snapshot(),
+            emitted_at_unix,
+            uploads,
+        )
+    }
+
+    /// Build and persist a query projection checkpoint from uploaded shard archives.
+    ///
+    /// This is the intended handoff point for the future DA projection worker: once
+    /// archive blobs have been uploaded and resolved to `(manifest_digest, storage_ticket)`,
+    /// the worker can atomically persist the corresponding checkpoint descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryProjectionCheckpointPlanError`] when the uploaded shards do not
+    /// form a coherent immutable checkpoint for the current query-index snapshot.
+    pub fn publish_query_projection_checkpoint_from_archives<I>(
+        &self,
+        emitted_at_unix: u64,
+        uploads: I,
+    ) -> Result<QueryProjectionCheckpoint, QueryProjectionCheckpointPlanError>
+    where
+        I: IntoIterator<Item = (QueryProjectionShardArchive, BlobDigest, StorageTicketId)>,
+    {
+        let plan = self.plan_query_projection_checkpoint_from_archives(
+            emitted_at_unix,
+            uploads
+                .into_iter()
+                .map(QueryProjectionUploadedShardArchive::from),
+        )?;
+        let checkpoint = plan.into_checkpoint();
+        self.persist_query_projection_checkpoint(Some(checkpoint.clone()));
+        Ok(checkpoint)
+    }
+
     fn persist_commit_roster_journal(
         &self,
         commit_qc: &Qc,
@@ -13351,6 +15973,8 @@ impl State {
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
         let path = self.commit_roster_journal_path();
+        let mut journal = self.commit_roster_journal.write();
+        journal.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot);
         if path.as_os_str().is_empty() {
             return;
         }
@@ -13369,8 +15993,6 @@ impl State {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
-        let mut journal = self.commit_roster_journal.write();
-        journal.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot);
         if let Err(err) = journal.persist() {
             warn!(
                 ?err,
@@ -13431,6 +16053,8 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
         update_world: bool,
+        update_status: bool,
+        write_sidecar: bool,
     ) -> bool {
         if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             warn!(
@@ -13514,22 +16138,26 @@ impl State {
         if update_world {
             self.upsert_commit_qc_in_world(commit_qc);
         }
-        status::record_commit_qc(commit_qc.clone());
-        status::record_validator_checkpoint(checkpoint.clone());
+        if update_status {
+            status::record_commit_qc(commit_qc.clone());
+            status::record_validator_checkpoint(checkpoint.clone());
+        }
         let sidecar_snapshot = stake_snapshot.clone();
         self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot);
-        let sidecar = crate::kura::RosterSidecar::new(
-            commit_qc.height,
-            commit_qc.subject_block_hash,
-            Some(commit_qc.clone()),
-            Some(checkpoint.clone()),
-            sidecar_snapshot,
-        );
-        self.kura.write_roster_metadata(&sidecar);
+        if write_sidecar {
+            let sidecar = crate::kura::RosterSidecar::new(
+                commit_qc.height,
+                commit_qc.subject_block_hash,
+                Some(commit_qc.clone()),
+                Some(checkpoint.clone()),
+                sidecar_snapshot,
+            );
+            self.kura.write_roster_metadata(&sidecar);
+        }
         true
     }
 
-    /// Record commit-roster artifacts in status caches, world storage, journal, and sidecar.
+    /// Record commit-roster artifacts in status caches, world storage, and the journal.
     ///
     /// Returns `true` when the roster entry is accepted or `false` when skipped.
     pub(crate) fn record_commit_roster(
@@ -13538,7 +16166,16 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true)
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true, false)
+    }
+
+    pub(crate) fn record_commit_roster_with_sidecar(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> bool {
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true, true)
     }
 
     fn record_commit_roster_without_world(
@@ -13547,7 +16184,23 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false)
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false, true, true)
+    }
+
+    fn record_commit_roster_without_world_or_status(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> bool {
+        self.record_commit_roster_internal(
+            commit_qc,
+            checkpoint,
+            stake_snapshot,
+            false,
+            false,
+            true,
+        )
     }
 
     fn restore_commit_roster_history(&self) {
@@ -14018,18 +16671,8 @@ impl State {
     /// otherwise projecting from the Space Directory + lane catalog.
     #[must_use]
     pub fn axt_policy_snapshot(&self) -> iroha_data_model::nexus::AxtPolicySnapshot {
-        let world = self.world_view();
-        let mut entries: Vec<iroha_data_model::nexus::AxtPolicyBinding> = world
-            .axt_policies()
-            .iter()
-            .map(|(dsid, policy)| iroha_data_model::nexus::AxtPolicyBinding {
-                dsid: *dsid,
-                policy: *policy,
-            })
-            .collect();
-        entries.sort_by_key(|binding| binding.dsid);
-        let version = iroha_data_model::nexus::AxtPolicySnapshot::compute_version(&entries);
-        iroha_data_model::nexus::AxtPolicySnapshot { version, entries }
+        let view = self.view();
+        StateReadOnly::axt_policy_snapshot(&view)
     }
 
     /// Install or update a dataspace AXT policy entry.
@@ -14199,13 +16842,16 @@ impl State {
         &self.telemetry
     }
 
-    fn run_storage_migrations(&mut self) {
+    pub(crate) fn run_storage_migrations(&mut self) {
         if let Some(rebuilt) = self.migrate_space_directory_bindings() {
             iroha_logger::info!(
                 rebuilt_uaids = rebuilt,
                 "storage migration refreshed UAID dataspace bindings from manifest records"
             );
         }
+        self.world
+            .rebuild_account_scope_directory()
+            .expect("account scope directory should rebuild during storage migration");
         // Defer AXT policy refresh until the runtime lane catalog is applied.
     }
 
@@ -14294,6 +16940,90 @@ impl State {
         Some(rebuilt)
     }
 
+    fn seed_reserved_universal_dataspace_name_record(world: &mut World) {
+        let owner = {
+            let world_view = world.view();
+            world_view
+                .domain(&iroha_genesis::GENESIS_DOMAIN_ID)
+                .ok()
+                .map(|domain| domain.owned_by.clone())
+        };
+        let Some(owner) = owner else {
+            return;
+        };
+
+        let selector = crate::sns::selector_for_dataspace_alias(
+            crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+        )
+        .expect("reserved dataspace alias must stay canonical");
+        let storage_key = crate::sns::record_storage_key(&selector);
+        if world
+            .smart_contract_state
+            .view()
+            .get(&storage_key)
+            .is_some()
+        {
+            return;
+        }
+
+        let address = iroha_data_model::account::AccountAddress::from_account_id(&owner)
+            .expect("account id should convert to account address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector,
+            owner,
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world
+            .smart_contract_state
+            .insert(storage_key, norito::codec::Encode::encode(&record));
+    }
+
+    fn seed_existing_domain_name_records(world: &mut World) {
+        let domains: Vec<_> = world
+            .domains
+            .view()
+            .iter()
+            .map(|(domain_id, domain)| (domain_id.clone(), domain.owned_by().clone()))
+            .collect();
+
+        for (domain_id, owner) in domains {
+            let selector = crate::sns::selector_for_domain(&domain_id)
+                .expect("stored domain ids are canonical");
+            let storage_key = crate::sns::record_storage_key(&selector);
+            if world
+                .smart_contract_state
+                .view()
+                .get(&storage_key)
+                .is_some()
+            {
+                continue;
+            }
+
+            let address = iroha_data_model::account::AccountAddress::from_account_id(&owner)
+                .expect("account id should convert to account address");
+            let record = iroha_data_model::sns::NameRecordV1::new(
+                selector,
+                owner,
+                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                Metadata::default(),
+            );
+            world
+                .smart_contract_state
+                .insert(storage_key, norito::codec::Encode::encode(&record));
+        }
+    }
+
     #[must_use]
     #[inline]
     #[allow(clippy::too_many_lines)]
@@ -14303,7 +17033,9 @@ impl State {
         query_handle: LiveQueryStoreHandle,
         #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     ) -> Self {
-        world.rebuild_account_subject_domain_indexes();
+        crate::sns::seed_default_namespace_policies(&mut world);
+        Self::seed_reserved_universal_dataspace_name_record(&mut world);
+        Self::seed_existing_domain_name_records(&mut world);
         #[cfg(feature = "telemetry")]
         let telemetry_seed = telemetry.clone();
         let initial_crypto = iroha_config::parameters::actual::Crypto::default();
@@ -14340,6 +17072,33 @@ impl State {
                     CommitRosterJournal::new(commit_roster_journal_path, roster_retention)
                 }
             };
+        let query_index_journal_path = QueryIndexJournal::journal_path(&store_root);
+        let query_index_journal = match QueryIndexJournal::load(query_index_journal_path.clone()) {
+            Ok(journal) => journal,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %query_index_journal_path.display(),
+                    "failed to load query index journal; starting empty"
+                );
+                QueryIndexJournal::new(query_index_journal_path)
+            }
+        };
+        let query_projection_checkpoint_journal_path =
+            QueryProjectionCheckpointJournal::journal_path(&store_root);
+        let query_projection_checkpoint_journal = match QueryProjectionCheckpointJournal::load(
+            query_projection_checkpoint_journal_path.clone(),
+        ) {
+            Ok(journal) => journal,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %query_projection_checkpoint_journal_path.display(),
+                    "failed to load query projection checkpoint journal; starting empty"
+                );
+                QueryProjectionCheckpointJournal::new(query_projection_checkpoint_journal_path)
+            }
+        };
         let pipeline = iroha_config::parameters::actual::Pipeline {
             ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
                 enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
@@ -14438,6 +17197,10 @@ impl State {
             da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
             da_receipt_cursors: parking_lot::RwLock::new(DaReceiptCursorIndex::default()),
             commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
+            query_index_journal: parking_lot::RwLock::new(query_index_journal),
+            query_projection_checkpoint_journal: parking_lot::RwLock::new(
+                query_projection_checkpoint_journal,
+            ),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
             lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
@@ -14447,6 +17210,7 @@ impl State {
             chain_id: iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
             pipeline,
             pipeline_parallelism,
+            soracloud_runtime: parking_lot::RwLock::new(None),
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
                 stateless_cache_cap,
             )),
@@ -14723,6 +17487,9 @@ impl State {
             let view = s.world.governance_proposals.view();
             let records: Vec<_> = view.iter().map(|(id, rec)| (*id, rec.status)).collect();
             telemetry_seed.seed_governance_proposals(records);
+            let citizens_total =
+                u64::try_from(s.world.citizens.view().iter().count()).unwrap_or(u64::MAX);
+            telemetry_seed.record_citizens_total(citizens_total);
             {
                 let nexus = s.nexus.read();
                 telemetry_seed.set_nexus_catalogs(&nexus.lane_catalog, &nexus.dataspace_catalog);
@@ -14965,9 +17732,11 @@ impl State {
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
+        let nexus_snapshot = self.nexus_snapshot();
         // Determine pre-block consensus seed and per-block gas limit before taking block locks.
         let (gas_limit_per_block, pre_block_npos_seed) = {
-            let world_view = self.world.view();
+            let mut world_view = self.world.view();
+            world_view.dataspace_catalog = nexus_snapshot.dataspace_catalog.clone();
             let gas_limit_per_block = gas_limit_from_parameters(world_view.parameters());
             let pre_block_npos_seed = crate::sumeragi::npos_seed_for_height_from_world(
                 &world_view,
@@ -14982,10 +17751,12 @@ impl State {
             self.telemetry.reset_block_fee_units();
         }
         // Acquire block hashes before the world lock to match `State::view` and avoid deadlocks.
+        let mut world = self.world.block();
+        world.dataspace_catalog = nexus_snapshot.dataspace_catalog.clone();
         let mut sb = StateBlock {
             state_ref: self,
             block_hashes: self.block_hashes.block(),
-            world: self.world.block(),
+            world,
             merge_ledger: &self.merge_ledger,
             transactions: self.transactions.block(),
             commit_topology: self.commit_topology.block(),
@@ -14993,6 +17764,7 @@ impl State {
             ivm: &self.ivm,
             kura: &self.kura,
             query_handle: &self.query_handle,
+            soracloud_runtime: self.soracloud_runtime(),
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
@@ -15041,6 +17813,7 @@ impl State {
             // No preverified batch at block start; may be set later by pipeline
             preverified_batch: None,
             committed_fragments: 0,
+            replay_compatibility: false,
         };
         // Activate any pending public-lane validators whose scheduled epoch has begun.
         let epoch_length = sb
@@ -15470,6 +18243,7 @@ impl State {
             ivm: &self.ivm,
             kura: &self.kura,
             query_handle: &self.query_handle,
+            soracloud_runtime: self.soracloud_runtime(),
             accounts_snapshot_cache: SyncOnceCell::new(),
             pipeline: self.pipeline.clone(),
             oracle: self.oracle.clone(),
@@ -15518,6 +18292,7 @@ impl State {
             // No preverified batch at block start; may be set later by pipeline
             preverified_batch: None,
             committed_fragments: 0,
+            replay_compatibility: false,
         }
     }
 
@@ -15527,7 +18302,9 @@ impl State {
     /// consensus paths that only need access to parameters/consensus keys.
     #[track_caller]
     pub fn world_view(&self) -> WorldView<'_> {
-        self.world.view()
+        let mut world = self.world.view();
+        world.dataspace_catalog = self.nexus_snapshot().dataspace_catalog;
+        world
     }
 
     /// Create a point-in-time snapshot tuned for query/IVM execution.
@@ -15634,6 +18411,15 @@ impl State {
         self.block_hashes.committed_height()
     }
 
+    /// Number of committed blocks durably indexed by Kura.
+    ///
+    /// This avoids acquiring a full [`StateView`] when callers only need to
+    /// verify that the state height is backed by durable block storage.
+    #[track_caller]
+    pub fn durable_block_count(&self) -> usize {
+        self.kura.durable_blocks_count()
+    }
+
     /// Snapshot committed block hashes from the block-hash journal.
     ///
     /// This is cheaper than acquiring a full [`StateView`] when only the committed
@@ -15649,6 +18435,15 @@ impl State {
     #[track_caller]
     pub fn block_by_height(&self, height: NonZeroUsize) -> Option<Arc<SignedBlock>> {
         self.kura.get_block(height)
+    }
+
+    /// Load a committed block hash by height from Kura's durable index.
+    ///
+    /// This avoids loading the whole block when callers only need to verify
+    /// that state and Kura agree on the latest durable block.
+    #[track_caller]
+    pub fn durable_block_hash(&self, height: NonZeroUsize) -> Option<HashOf<BlockHeader>> {
+        self.kura.get_durable_block_hash(height)
     }
 
     /// Resolve a committed block height by block hash using Kura's index.
@@ -15860,8 +18655,12 @@ impl State {
         let block_hashes: Vec<HashOf<BlockHeader>> =
             self.block_hashes.view().iter().copied().collect();
         let block_hashes_wait = block_hashes_start.elapsed();
+        let nexus_start = Instant::now();
+        let nexus = self.nexus_snapshot();
+        let nexus_wait = nexus_start.elapsed();
         let world_start = Instant::now();
-        let world = self.world.view();
+        let mut world = self.world.view();
+        world.dataspace_catalog = nexus.dataspace_catalog.clone();
         let world_wait = world_start.elapsed();
         let transactions_start = Instant::now();
         let transactions = self.transactions.view();
@@ -15872,9 +18671,6 @@ impl State {
         let prev_commit_topology_start = Instant::now();
         let prev_commit_topology = self.prev_commit_topology.view();
         let prev_commit_topology_wait = prev_commit_topology_start.elapsed();
-        let nexus_start = Instant::now();
-        let nexus = self.nexus_snapshot();
-        let nexus_wait = nexus_start.elapsed();
         let _view_lock = self.view_lock.try_read().map_or_else(
             || {
                 self.note_view_lock_contention(caller);
@@ -15987,6 +18783,60 @@ impl State {
         self.lane_compliance.read().clone()
     }
 
+    /// Resolve the authoritative validator accounts for a lane from manifests or staking state.
+    pub fn authoritative_lane_validator_accounts(&self, lane_id: LaneId) -> Vec<AccountId> {
+        let manifest_registry = self.lane_manifests.read().clone();
+        let nexus = self.nexus_snapshot();
+        let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
+        Self::authoritative_lane_validator_accounts_from_sources(
+            &self.world.view(),
+            lane_id,
+            validator_mode,
+            manifest_registry.as_ref(),
+            &nexus,
+        )
+    }
+
+    /// Resolve the authoritative validator peer ids for a lane from manifests or staking state.
+    pub fn authoritative_lane_peer_ids(&self, lane_id: LaneId) -> Vec<PeerId> {
+        let manifest_registry = self.lane_manifests.read().clone();
+        let nexus = self.nexus_snapshot();
+        let validator_mode = nexus.staking.validator_mode(lane_id, &nexus.lane_catalog);
+        let block_height = self
+            .latest_block_header_fast()
+            .map(|header| header.height().get())
+            .unwrap_or_else(|| {
+                self.world
+                    .view()
+                    .consensus_keys()
+                    .iter()
+                    .map(|(_, record)| record.activation_height)
+                    .max()
+                    .unwrap_or(0)
+            });
+        let commit_topology = self.commit_topology_snapshot();
+        Self::authoritative_lane_peer_ids_from_sources(
+            &self.world.view(),
+            lane_id,
+            validator_mode,
+            manifest_registry.as_ref(),
+            &nexus,
+            &commit_topology,
+            block_height,
+        )
+    }
+
+    /// Return the explicit manifest validator bindings configured for a lane, if any.
+    pub fn manifest_lane_validator_bindings(
+        &self,
+        lane_id: LaneId,
+    ) -> Vec<ManifestValidatorBinding> {
+        self.lane_manifests
+            .read()
+            .lane_validator_bindings(lane_id)
+            .unwrap_or_default()
+    }
+
     fn lane_relay_committee_seed(
         &self,
         dataspace_id: DataSpaceId,
@@ -16008,30 +18858,47 @@ impl State {
     }
 
     fn lane_relay_committee_from_pool(
-        pool: &[AccountId],
+        pool: &[PeerId],
         committee_size: usize,
         seed: [u8; 32],
-    ) -> Result<Vec<AccountId>, LaneRelayError> {
+    ) -> Result<Vec<PeerId>, LaneRelayError> {
         let mut scored = Vec::with_capacity(pool.len());
-        for validator in pool {
+        for peer in pool {
             let mut buffer = Vec::with_capacity(LANE_RELAY_MEMBER_DOMAIN.len() + seed.len());
             buffer.extend_from_slice(LANE_RELAY_MEMBER_DOMAIN);
             buffer.extend_from_slice(&seed);
-            let encoded = norito::to_bytes(validator)?;
+            let encoded = norito::to_bytes(peer)?;
             buffer.extend_from_slice(&encoded);
-            scored.push((Hash::new(buffer), validator.clone()));
+            scored.push((Hash::new(buffer), peer.clone()));
         }
         scored.sort_by(|lhs, rhs| lhs.0.cmp(&rhs.0).then_with(|| lhs.1.cmp(&rhs.1)));
         scored.dedup_by(|lhs, rhs| lhs.1 == rhs.1);
         Ok(scored
             .into_iter()
             .take(committee_size)
-            .map(|(_, account)| account)
+            .map(|(_, peer)| peer)
             .collect())
     }
 
+    #[cfg(test)]
     fn lane_relay_validator_pool(
         &self,
+        lane_id: LaneId,
+        validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
+        manifest_registry: &LaneManifestRegistry,
+        nexus: &iroha_config::parameters::actual::Nexus,
+    ) -> Vec<AccountId> {
+        Self::authoritative_lane_validator_accounts_from_sources(
+            &self.world.view(),
+            lane_id,
+            validator_mode,
+            manifest_registry,
+            nexus,
+        )
+    }
+
+    fn authoritative_lane_validator_accounts_from_sources(
+        world: &impl WorldReadOnly,
         lane_id: LaneId,
         validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
         manifest_registry: &LaneManifestRegistry,
@@ -16050,10 +18917,8 @@ impl State {
             return Vec::new();
         }
 
-        let mut candidates: Vec<(AccountId, Numeric)> = self
-            .world
-            .public_lane_validators
-            .view()
+        let mut candidates: Vec<(AccountId, Numeric)> = world
+            .public_lane_validators()
             .iter()
             .filter(|((lane, _), record)| {
                 *lane == lane_id && matches!(record.status, PublicLaneValidatorStatus::Active)
@@ -16084,10 +18949,98 @@ impl State {
             .collect()
     }
 
+    fn authoritative_lane_peer_ids_from_sources(
+        world: &impl WorldReadOnly,
+        lane_id: LaneId,
+        validator_mode: iroha_config::parameters::actual::LaneValidatorMode,
+        manifest_registry: &LaneManifestRegistry,
+        nexus: &iroha_config::parameters::actual::Nexus,
+        _commit_topology: &[PeerId],
+        block_height: u64,
+    ) -> Vec<PeerId> {
+        if let Some(mut bindings) = manifest_registry.lane_validator_bindings(lane_id) {
+            if !bindings.is_empty() {
+                bindings.retain(|binding| {
+                    peer_has_live_consensus_key(world, &binding.peer_id, block_height)
+                });
+                bindings.sort_by(|lhs, rhs| {
+                    lhs.validator
+                        .cmp(&rhs.validator)
+                        .then_with(|| lhs.peer_id.cmp(&rhs.peer_id))
+                });
+                bindings.dedup_by(|lhs, rhs| lhs.peer_id == rhs.peer_id);
+                return bindings
+                    .into_iter()
+                    .map(|binding| binding.peer_id)
+                    .collect();
+            }
+        }
+
+        if let Some(mut validators) = manifest_registry.lane_validators(lane_id) {
+            validators.sort();
+            validators.dedup();
+            return validators
+                .into_iter()
+                .filter_map(|validator| {
+                    let peer = PeerId::new(validator.try_signatory()?.clone());
+                    peer_has_live_consensus_key(world, &peer, block_height).then_some(peer)
+                })
+                .collect();
+        }
+
+        if !matches!(
+            validator_mode,
+            iroha_config::parameters::actual::LaneValidatorMode::StakeElected
+        ) {
+            return Vec::new();
+        }
+
+        let mut candidates: Vec<(AccountId, PeerId, Numeric)> = world
+            .public_lane_validators()
+            .iter()
+            .filter(|((lane, _), record)| {
+                *lane == lane_id && matches!(record.status, PublicLaneValidatorStatus::Active)
+            })
+            .filter_map(|(_, record)| {
+                let Ok(meets_min) = crate::smartcontracts::isi::staking::meets_min_stake(
+                    &record.self_stake,
+                    nexus.staking.min_validator_stake,
+                ) else {
+                    return None;
+                };
+                if !meets_min {
+                    return None;
+                }
+                Some((
+                    record.validator.clone(),
+                    record.peer_id.clone(),
+                    record.total_stake.clone(),
+                ))
+            })
+            .collect();
+        candidates.sort_by(|lhs, rhs| {
+            rhs.2
+                .cmp(&lhs.2)
+                .then_with(|| lhs.0.cmp(&rhs.0))
+                .then_with(|| lhs.1.cmp(&rhs.1))
+        });
+        candidates.dedup_by(|lhs, rhs| lhs.1 == rhs.1);
+
+        let max = usize::try_from(nexus.staking.max_validators.get())
+            .unwrap_or(usize::MAX)
+            .min(candidates.len());
+        candidates
+            .into_iter()
+            .take(max)
+            .map(|(_, peer_id, _)| peer_id)
+            .collect()
+    }
+
     fn lane_relay_qc_signers(
         world: &impl WorldReadOnly,
-        committee: &[AccountId],
+        committee: &[PeerId],
         signers_bitmap: &[u8],
+        block_height: u64,
     ) -> Result<(Vec<PublicKey>, Vec<Vec<u8>>), LaneRelayError> {
         let expected_len = committee.len().div_ceil(8);
         if signers_bitmap.len() != expected_len {
@@ -16115,17 +19068,14 @@ impl State {
                         validator_count,
                     });
                 }
-                let Some(signatory) = committee[signer_index].try_signatory() else {
-                    return Err(LaneRelayError::AggregateSignatureInvalid);
-                };
-                let (algorithm, _payload) = signatory.to_bytes();
-                if algorithm != Algorithm::BlsNormal {
+                let peer = &committee[signer_index];
+                if peer.public_key().algorithm() != Algorithm::BlsNormal {
                     return Err(LaneRelayError::AggregateSignatureInvalid);
                 }
-                let Some(pop) = consensus_key_pop_for_public_key(world, signatory) else {
+                let Some(pop) = live_consensus_key_pop_for_peer(world, peer, block_height) else {
                     return Err(LaneRelayError::AggregateSignatureInvalid);
                 };
-                public_keys.push(signatory.clone());
+                public_keys.push(peer.public_key().clone());
                 pops.push(pop);
             }
         }
@@ -16135,12 +19085,16 @@ impl State {
     fn verify_lane_relay_qc(
         &self,
         envelope: &LaneRelayEnvelope,
-        committee: &[AccountId],
+        committee: &[PeerId],
     ) -> Result<(), LaneRelayError> {
         let qc = envelope.qc.as_ref().ok_or(LaneRelayError::MissingQc)?;
         let world = self.world.view();
-        let (public_keys, pops) =
-            Self::lane_relay_qc_signers(&world, committee, &qc.aggregate.signers_bitmap)?;
+        let (public_keys, pops) = Self::lane_relay_qc_signers(
+            &world,
+            committee,
+            &qc.aggregate.signers_bitmap,
+            envelope.block_height,
+        )?;
         if public_keys.is_empty() {
             return Err(LaneRelayError::AggregateSignatureInvalid);
         }
@@ -16243,14 +19197,26 @@ impl State {
         let validator_mode = nexus
             .staking
             .validator_mode(envelope.lane_id, &nexus.lane_catalog);
-        let mut validator_pool = self.lane_relay_validator_pool(
+        let commit_topology = self.commit_topology_snapshot();
+        let world = self.world.view();
+        let base_pool = Self::authoritative_lane_peer_ids_from_sources(
+            &world,
             envelope.lane_id,
             validator_mode,
             manifest_registry.as_ref(),
             &nexus,
+            &commit_topology,
+            envelope.block_height,
         );
         let min_quorum = crate::sumeragi::network_topology::commit_quorum_from_len(committee_size);
-        if validator_pool.len() < committee_size {
+        let seed = self.lane_relay_committee_seed(
+            envelope.dataspace_id,
+            envelope.lane_id,
+            envelope.block_height,
+        );
+        let committee = if base_pool.len() >= committee_size {
+            Self::lane_relay_committee_from_pool(&base_pool, committee_size, seed)?
+        } else {
             #[cfg(feature = "telemetry")]
             let mut override_outcome = None;
             #[cfg(feature = "telemetry")]
@@ -16259,27 +19225,35 @@ impl State {
             };
             #[cfg(not(feature = "telemetry"))]
             let set_override_outcome = |_: &'static str| {};
+
+            let mut committee = base_pool.clone();
             if !nexus.lane_relay_emergency.enabled {
                 set_override_outcome("disabled");
             } else if let Some(record) = self
                 .world
                 .lane_relay_emergency_validators
                 .view()
-                .get(&envelope.dataspace_id)
+                .get(&envelope.lane_id)
                 .cloned()
             {
-                if record
-                    .expires_at_height
-                    .is_some_and(|height| envelope.block_height > height)
-                {
+                if envelope.block_height > record.expires_at_height {
                     set_override_outcome("expired");
                 } else {
-                    validator_pool.extend(record.validators);
-                    validator_pool.sort();
-                    validator_pool.dedup();
-                    if validator_pool.len() < committee_size {
+                    let base_members: BTreeSet<_> = committee.iter().cloned().collect();
+                    let mut emergency_pool = eligible_lane_relay_emergency_peers(
+                        &world,
+                        &record.peers,
+                        &commit_topology,
+                        envelope.block_height,
+                    );
+                    emergency_pool.retain(|peer| !base_members.contains(peer));
+                    let deficit = committee_size.saturating_sub(committee.len());
+                    let fillers =
+                        Self::lane_relay_committee_from_pool(&emergency_pool, deficit, seed)?;
+                    if fillers.len() < deficit {
                         set_override_outcome("insufficient");
                     } else {
+                        committee.extend(fillers);
                         set_override_outcome("applied");
                     }
                 }
@@ -16296,21 +19270,14 @@ impl State {
                 );
             }
 
-            if validator_pool.len() < committee_size {
+            if committee.len() < committee_size {
                 return Err(LaneRelayError::InvalidValidatorSet {
-                    validator_count: u32::try_from(validator_pool.len()).unwrap_or(u32::MAX),
+                    validator_count: u32::try_from(committee.len()).unwrap_or(u32::MAX),
                     min_quorum: u32::try_from(min_quorum).unwrap_or(u32::MAX),
                 });
             }
-        }
-
-        let seed = self.lane_relay_committee_seed(
-            envelope.dataspace_id,
-            envelope.lane_id,
-            envelope.block_height,
-        );
-        let committee =
-            Self::lane_relay_committee_from_pool(&validator_pool, committee_size, seed)?;
+            committee
+        };
         let validator_count =
             u32::try_from(committee.len()).map_err(|_| LaneRelayError::InvalidValidatorSet {
                 validator_count: u32::MAX,
@@ -16324,6 +19291,9 @@ impl State {
         )?;
         envelope.verify_with_quorum(quorum)?;
         self.verify_lane_relay_qc(envelope, &committee)?;
+        if let Some(error) = self.lane_relays.read().conflicting_existing(envelope) {
+            return Err(error);
+        }
         envelope.verify_fastpq_proof_material()?;
 
         let inserted = {
@@ -16816,6 +19786,12 @@ impl State {
         self.settlement_engine = SettlementEngine::from_router_config(&self.settlement.router);
     }
 
+    /// Current settlement configuration snapshot.
+    #[must_use]
+    pub fn settlement(&self) -> &iroha_config::parameters::actual::Settlement {
+        &self.settlement
+    }
+
     /// Update Nexus configuration snapshot.
     ///
     /// # Errors
@@ -16832,6 +19808,12 @@ impl State {
             .iter()
             .map(|entry| entry.id)
             .collect();
+        let active_lane_ids: BTreeSet<_> = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| lane.id)
+            .collect();
         for lane in nexus.lane_catalog.lanes() {
             if !dataspace_ids.contains(&lane.dataspace_id) {
                 return Err(LaneLifecycleError::UnknownDataspace(lane.dataspace_id));
@@ -16839,10 +19821,15 @@ impl State {
         }
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        let configured_fee_asset_id = nexus.fees.fee_asset_id.clone();
         let previous_lane_config = self.nexus.read().lane_config.clone();
         let lanes_to_prune = lanes_requiring_state_prune(&previous_lane_config, &nexus.lane_config);
         self.apply_lane_geometry_updates(&previous_lane_config, &nexus.lane_config)?;
         *self.nexus.write() = nexus;
+        crate::sns::sync_default_namespace_policy_payment_asset(
+            &mut self.world,
+            &configured_fee_asset_id,
+        );
         if !lanes_to_prune.is_empty() {
             self.lane_relays.write().prune_lanes(&lanes_to_prune);
             self.da_commitments.write().prune_lanes(&lanes_to_prune);
@@ -16852,21 +19839,19 @@ impl State {
             self.da_pin_intents.write().prune_lanes(&lanes_to_prune);
         }
 
-        // Drop emergency override entries that target dataspaces no longer present
-        // in the active catalog to avoid stale cross-dataspace references.
-        let stale_overrides: Vec<DataSpaceId> = self
+        // Drop emergency override entries that target lanes no longer present in
+        // the active catalog to avoid stale lane-relay trust roots.
+        let stale_overrides: Vec<LaneId> = self
             .world
             .lane_relay_emergency_validators
             .view()
             .iter()
-            .filter_map(|(dataspace_id, _)| {
-                (!dataspace_ids.contains(dataspace_id)).then_some(*dataspace_id)
-            })
+            .filter_map(|(lane_id, _)| (!active_lane_ids.contains(lane_id)).then_some(*lane_id))
             .collect();
         if !stale_overrides.is_empty() {
             let mut tx = self.world.lane_relay_emergency_validators.block();
-            for dataspace_id in stale_overrides {
-                tx.remove(dataspace_id);
+            for lane_id in stale_overrides {
+                tx.remove(lane_id);
             }
             tx.commit();
         }
@@ -16937,6 +19922,38 @@ impl State {
                     tx.remove(uaid);
                 } else {
                     tx.insert(uaid, manifests);
+                }
+            }
+            tx.commit();
+        }
+
+        // Drop account-scope directory entries targeting removed dataspaces so routed
+        // account-read scope cannot retain stale dataspace references after catalog updates.
+        let stale_account_scope_accounts: Vec<AccountId> = self
+            .world
+            .account_scope_directory
+            .view()
+            .iter()
+            .filter_map(|(account_id, entry)| {
+                entry
+                    .iter()
+                    .any(|(dataspace_id, _)| !dataspace_ids.contains(dataspace_id))
+                    .then_some(account_id.clone())
+            })
+            .collect();
+        if !stale_account_scope_accounts.is_empty() {
+            let mut tx = self.world.account_scope_directory.block();
+            for account_id in stale_account_scope_accounts {
+                let Some(mut entry) = tx.get(&account_id).cloned() else {
+                    continue;
+                };
+                if !entry.retain_dataspaces(&dataspace_ids) {
+                    continue;
+                }
+                if entry.is_empty() {
+                    tx.remove(account_id);
+                } else {
+                    tx.insert(account_id, entry);
                 }
             }
             tx.commit();
@@ -18889,6 +21906,13 @@ impl<'state> StateBlock<'state> {
             axt_current_slot,
             self.nexus.axt.replay_retention_slots.get(),
         );
+        let mut world = self.world.trasaction(
+            #[cfg(feature = "telemetry")]
+            Some(self.telemetry),
+            self.nexus.lane_config.clone(),
+            axt_current_slot,
+        );
+        world.dataspace_catalog = self.nexus.dataspace_catalog.clone();
         StateTransaction {
             committed_fragments: &mut self.committed_fragments,
             touched_lanes: &mut self.touched_lanes,
@@ -18897,12 +21921,7 @@ impl<'state> StateBlock<'state> {
             mode_cutover_next_set_in_tx: false,
             mode_cutover_activation_set_in_tx: false,
             confidential_registry_dirty: &mut self.confidential_registry_dirty,
-            world: self.world.trasaction(
-                #[cfg(feature = "telemetry")]
-                Some(self.telemetry),
-                self.nexus.lane_config.clone(),
-                axt_current_slot,
-            ),
+            world,
             block_hashes: self.block_hashes.transaction(),
             merge_ledger: self.merge_ledger,
             commit_topology: self.commit_topology.transaction(),
@@ -18934,7 +21953,7 @@ impl<'state> StateBlock<'state> {
             pending_settlement_records: BTreeMap::new(),
             pending_nexus_fee_event: None,
             #[cfg(feature = "telemetry")]
-            pending_block_fee_units: 0,
+            pending_block_fee_amount: Numeric::zero(),
             zk_confidential_ops_in_tx: 0,
             zk_verify_calls_in_tx: 0,
             zk_proof_bytes_in_tx: 0,
@@ -18943,6 +21962,7 @@ impl<'state> StateBlock<'state> {
             zk_proof_bytes_in_block_so_far: self.zk_proof_bytes_in_block,
             zk_nullifiers_in_tx: 0,
             zk_commitments_in_tx: 0,
+            native_anonymous_escrow_transfer_depth: 0,
             implicit_account_creations_in_tx: 0,
             implicit_account_creations_in_block_so_far,
             implicit_account_creations_in_block: &mut self.implicit_account_creations_in_block,
@@ -18954,7 +21974,10 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_tx: 0,
             confidential_gas_used_in_block_so_far: self.confidential_gas_used_in_block,
             tx_call_hash: None,
+            current_tx_hash: None,
+            rwa_generated_id_ordinal: 0,
             executor_fuel_remaining: None,
+            replay_compatibility: self.replay_compatibility,
             preverified_batch: self.preverified_batch.clone(),
             fastpq_transcripts: &mut self.fastpq_transcripts,
             pending_transfer_transcripts: Vec::new(),
@@ -19135,6 +22158,7 @@ impl<'state> StateBlock<'state> {
             }
         }
         state_ref.enforce_nexus_storage_budget(block_height);
+        state_ref.persist_query_index_status(block_height, state_ref.latest_block_hash_fast());
         Ok(())
     }
 
@@ -19151,6 +22175,24 @@ impl<'state> StateBlock<'state> {
         &mut self,
         block: &CommittedBlock,
         topology: Vec<PeerId>,
+    ) -> Vec<EventBox> {
+        self.apply_without_execution_with_commit_qc(block, topology, None)
+    }
+
+    /// Apply post-execution block effects, optionally using an explicit commit certificate hint
+    /// instead of relying on the global status cache to recover per-block commit-roster evidence.
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::needless_pass_by_value)]
+    #[iroha_logger::log(
+        skip_all,
+        fields(block_height = block.as_ref().header().height())
+    )]
+    #[must_use]
+    pub fn apply_without_execution_with_commit_qc(
+        &mut self,
+        block: &CommittedBlock,
+        topology: Vec<PeerId>,
+        commit_qc_hint: Option<&Qc>,
     ) -> Vec<EventBox> {
         let block_hash = block.as_ref().hash();
         trace!(%block_hash, "Applying block");
@@ -19239,18 +22281,50 @@ impl<'state> StateBlock<'state> {
         let checkpoint_topology = topology;
         let checkpoint_block_height = block.as_ref().header().height().get();
         let checkpoint_block_hash = block.as_ref().hash();
+        let hinted_commit_cert = commit_qc_hint
+            .filter(|cert| {
+                cert.height == checkpoint_block_height
+                    && cert.subject_block_hash == checkpoint_block_hash
+                    && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
+            })
+            .cloned();
         let commit_cert_for_block = if checkpoint_topology.is_empty() {
             None
         } else {
-            crate::sumeragi::status::commit_qc_history()
-                .into_iter()
-                .find(|cert| {
-                    cert.height == checkpoint_block_height
-                        && cert.subject_block_hash == checkpoint_block_hash
-                        && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
-                })
+            hinted_commit_cert.clone().or_else(|| {
+                crate::sumeragi::status::commit_qc_history()
+                    .into_iter()
+                    .find(|cert| {
+                        cert.height == checkpoint_block_height
+                            && cert.subject_block_hash == checkpoint_block_hash
+                            && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
+                    })
+            })
         };
         let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
+        let checkpoint_lane_ids = if checkpoint_topology.is_empty() {
+            BTreeSet::new()
+        } else {
+            validator_lane_ids_for_peers(&self.world, checkpoint_topology.iter())
+        };
+        if !checkpoint_lane_ids.is_empty() {
+            let before = world_peers.len();
+            world_peers.retain(|peer| {
+                checkpoint_topology.contains(peer)
+                    || !validator_lane_ids_for_peer(&self.world, peer)
+                        .is_disjoint(&checkpoint_lane_ids)
+            });
+            let filtered = before.saturating_sub(world_peers.len());
+            if filtered > 0 {
+                warn!(
+                    height = block_height,
+                    block = %block_hash,
+                    filtered,
+                    lanes = checkpoint_lane_ids.len(),
+                    "ignoring world peers outside checkpoint topology lanes during block apply reconciliation"
+                );
+            }
+        }
         let (status_mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
         // Treat NPoS roster snapshots as authoritative during block-apply reconciliation.
         // Status tags can be stale around mode transitions, so we also consult the effective
@@ -19350,11 +22424,22 @@ impl<'state> StateBlock<'state> {
                         commit_cert.validator_set_hash_version,
                         None,
                     );
-                    let recorded = self.state_ref.record_commit_roster_without_world(
-                        &commit_cert,
-                        &checkpoint,
-                        stake_snapshot,
-                    );
+                    let recorded = if hinted_commit_cert
+                        .as_ref()
+                        .is_some_and(|hint| hint == &commit_cert)
+                    {
+                        self.state_ref.record_commit_roster_without_world_or_status(
+                            &commit_cert,
+                            &checkpoint,
+                            stake_snapshot,
+                        )
+                    } else {
+                        self.state_ref.record_commit_roster_without_world(
+                            &commit_cert,
+                            &checkpoint,
+                            stake_snapshot,
+                        )
+                    };
                     if recorded {
                         let should_update =
                             match self.world.commit_qcs.get(&commit_cert.subject_block_hash) {
@@ -19491,7 +22576,7 @@ impl<'state> StateBlock<'state> {
             };
             let mut lane = iroha_data_model::nexus::LaneConfig {
                 id: next_lane_id,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: format!("elastic-lane-{}", next_lane_id.as_u32()),
                 description: Some("Consensus-managed elastic lane".to_owned()),
                 visibility: iroha_data_model::nexus::LaneVisibility::Public,
@@ -19847,18 +22932,21 @@ impl<'state> StateBlock<'state> {
             .external_event_buf
             .mutate_vec(|events| events.push(time_event.into()));
 
-        // Time-trigger phase maintenance: unbind asset aliases whose grace window elapsed.
+        // Time-trigger phase maintenance: unbind aliases whose grace window elapsed.
         {
             let mut maintenance_tx = self.transaction();
             let now_ms = maintenance_tx.block_unix_timestamp_ms();
-            let removed = maintenance_tx
+            let removed_asset_aliases = maintenance_tx
                 .world
                 .sweep_expired_asset_definition_aliases(now_ms);
-            if !removed.is_empty() {
+            let removed_contract_aliases =
+                maintenance_tx.world.sweep_expired_contract_aliases(now_ms);
+            if !removed_asset_aliases.is_empty() || !removed_contract_aliases.is_empty() {
                 iroha_logger::info!(
-                    removed = removed.len(),
+                    removed_asset_aliases = removed_asset_aliases.len(),
+                    removed_contract_aliases = removed_contract_aliases.len(),
                     now_ms,
-                    "expired asset aliases were unbound during time-trigger maintenance"
+                    "expired aliases were unbound during time-trigger maintenance"
                 );
                 maintenance_tx.apply();
             }
@@ -19886,6 +22974,7 @@ impl<'state> StateBlock<'state> {
                     .and_then(|json| json.try_into_any_norito::<u64>().ok());
                 registered_height.is_some_and(|height| height != current_block_height)
             })
+            .map(|(id, _)| id)
             .collect();
         let matched_count = matched.len();
         if matched_count > 0 {
@@ -19898,14 +22987,31 @@ impl<'state> StateBlock<'state> {
             );
         }
 
+        let mut suppress_remaining = std::collections::BTreeSet::new();
         matched.iter().enumerate().fold(
             (Vec::new(), Vec::new(), Vec::new()),
-            |mut acc, (invocation_index, (trg_id, action))| {
+            |mut acc, (invocation_index, trg_id)| {
+                if suppress_remaining.contains(trg_id) {
+                    return acc;
+                }
+                let Some(action) = self.world.triggers.time_triggers().get(trg_id).cloned() else {
+                    return acc;
+                };
                 let (entrypoint, result) =
-                    self.execute_time_trigger(trg_id, action, &time_event, invocation_index);
+                    self.execute_time_trigger(trg_id, &action, &time_event, invocation_index);
+                let entrypoint_hash = entrypoint.hash_as_entrypoint();
 
                 match &result {
                     Err(reason) => {
+                        if self.handle_failed_time_trigger(
+                            trg_id,
+                            &action,
+                            entrypoint_hash,
+                            reason,
+                            current_block_time_ms,
+                        ) {
+                            suppress_remaining.insert(trg_id.clone());
+                        }
                         iroha_logger::info!(
                             trigger=%trg_id,
                             block=%block_header.hash(),
@@ -19923,7 +23029,6 @@ impl<'state> StateBlock<'state> {
                     }
                 }
 
-                let entrypoint_hash = entrypoint.hash_as_entrypoint();
                 acc.0.push(entrypoint);
                 acc.1.push(entrypoint_hash);
                 acc.2.push(result);
@@ -19981,6 +23086,10 @@ impl<'state> StateBlock<'state> {
             err => return (entrypoint, err),
         };
 
+        let _ = transaction
+            .world
+            .triggers
+            .set_time_trigger_retry_state(trg_id, None);
         transaction
             .world
             .triggers
@@ -19989,6 +23098,56 @@ impl<'state> StateBlock<'state> {
         transaction.apply();
 
         (entrypoint, Ok(trigger_sequence))
+    }
+
+    fn handle_failed_time_trigger(
+        &mut self,
+        trg_id: &TriggerId,
+        action: &LoadedAction<TimeEventFilter>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        reason: &TransactionRejectionReason,
+        current_block_time_ms: u64,
+    ) -> bool {
+        let event = TriggerCompletedEvent::new(
+            trg_id.clone(),
+            entrypoint_hash,
+            0,
+            TriggerCompletedOutcome::Failure(reason.to_string()),
+        );
+        self.world
+            .external_event_buf
+            .mutate_vec(|events| events.push(event.into()));
+
+        let Some(retry_policy) = action.retry_policy else {
+            return false;
+        };
+
+        let retries_used = action.retry_state.map_or(0, |state| state.retries_used);
+        let next_retry_used = retries_used.saturating_add(1);
+        if next_retry_used > retry_policy.max_retries.get() {
+            let mut transaction = self.transaction();
+            if transaction.world.triggers.remove(trg_id) {
+                crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                    &mut transaction,
+                    trg_id,
+                );
+            }
+            transaction.apply();
+            return true;
+        }
+
+        let retry_state = TimeTriggerRetryState {
+            retries_used: next_retry_used,
+            next_retry_at_ms: current_block_time_ms
+                .saturating_add(retry_policy.retry_after_ms.get()),
+        };
+        let mut transaction = self.transaction();
+        let _ = transaction
+            .world
+            .triggers
+            .set_time_trigger_retry_state(trg_id, Some(retry_state));
+        transaction.apply();
+        true
     }
 
     /// Create time event using previous and current blocks.
@@ -20027,7 +23186,6 @@ impl<'state> StateBlock<'state> {
     /// # Panics
     ///
     /// Panics if processing approved transactions or time triggers fails.
-    #[cfg(any(test, feature = "bench"))]
     #[iroha_logger::log(skip_all, fields(block_height))]
     pub fn apply(&mut self, block: &CommittedBlock, topology: Vec<PeerId>) -> Vec<EventBox> {
         self.apply_transactions(block);
@@ -20038,7 +23196,6 @@ impl<'state> StateBlock<'state> {
     }
 
     /// Apply all non-erroneous transactions in the given committed block.
-    #[cfg(any(test, feature = "bench"))]
     fn apply_transactions(&mut self, block: &CommittedBlock) {
         let block = block.as_ref();
 
@@ -20373,7 +23530,7 @@ mod transfer_transcript_tests {
         tx.tx_call_hash = Some(call_hash);
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let delta = TransferDeltaTranscript {
@@ -20414,7 +23571,7 @@ mod transfer_transcript_tests {
         let mut tx = block.transaction();
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let delta = TransferDeltaTranscript {
@@ -20463,7 +23620,7 @@ mod transfer_transcript_tests {
         let mut tx = block.transaction();
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let delta_a = TransferDeltaTranscript {
@@ -20540,9 +23697,10 @@ mod fastpq_tx_set_hash_tests {
     #[test]
     fn validate_and_record_transactions_sets_tx_set_hash() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("valid domain");
         let domain = Domain::new(domain_id.clone()).build(&authority);
-        let account = Account::new(authority.clone().to_account_id(domain_id)).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([domain], [account], []);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -20599,7 +23757,7 @@ mod fastpq_tx_set_hash_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
             amount: Numeric::from(10u32),
@@ -20645,7 +23803,7 @@ mod fastpq_tx_set_hash_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
             amount: Numeric::from(10u32),
@@ -20711,7 +23869,7 @@ mod fastpq_tx_set_hash_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
             amount: Numeric::from(10u32),
@@ -20765,7 +23923,7 @@ mod block_proof_tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "block-proof-tests".parse().expect("chain id");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
@@ -20883,7 +24041,12 @@ fn replay_signature_error_recoverable(err: &crate::block::BlockValidationError) 
     )
 }
 
-fn replay_remap_block_signature_indices_to_topology(
+/// Remap block-signature indices to the provided topology when the signatures themselves remain
+/// valid but their embedded signer indices no longer line up with the local roster ordering.
+///
+/// This is used during replay and live catch-up validation to recover certified blocks that were
+/// authored under a compatible roster ordering but arrived with stale signer indices.
+pub(crate) fn remap_block_signature_indices_to_topology(
     block: &mut SignedBlock,
     topology: &crate::sumeragi::network_topology::Topology,
 ) -> Result<(), crate::block::BlockValidationError> {
@@ -20974,6 +24137,71 @@ fn replay_remap_block_signature_indices_to_topology(
     Ok(())
 }
 
+fn ensure_replayed_results_match_committed(
+    height: u64,
+    committed: &SignedBlock,
+    replayed: &SignedBlock,
+) -> Result<()> {
+    if !committed.has_results() {
+        return Err(eyre!(
+            "committed block #{height} does not contain stored execution results"
+        ));
+    }
+    if !replayed.has_results() {
+        return Err(eyre!(
+            "replayed block #{height} did not produce execution results"
+        ));
+    }
+
+    let committed_result_root = committed.header().result_merkle_root();
+    let replayed_result_root = replayed.header().result_merkle_root();
+    if committed_result_root != replayed_result_root {
+        return Err(eyre!(
+            "replayed block #{height} result root mismatch: committed={committed_result_root:?} replayed={replayed_result_root:?}"
+        ));
+    }
+
+    let committed_entry_root = committed.full_entry_merkle_root();
+    let replayed_entry_root = replayed.full_entry_merkle_root();
+    if committed_entry_root != replayed_entry_root {
+        return Err(eyre!(
+            "replayed block #{height} entry root mismatch: committed={committed_entry_root:?} replayed={replayed_entry_root:?}"
+        ));
+    }
+
+    let committed_entry_hashes = committed.entrypoint_hashes().collect::<Vec<_>>();
+    let replayed_entry_hashes = replayed.entrypoint_hashes().collect::<Vec<_>>();
+    if committed_entry_hashes != replayed_entry_hashes {
+        return Err(eyre!(
+            "replayed block #{height} entrypoint sequence mismatch: committed_len={} replayed_len={}",
+            committed_entry_hashes.len(),
+            replayed_entry_hashes.len()
+        ));
+    }
+
+    let committed_result_hashes = committed.result_hashes().collect::<Vec<_>>();
+    let replayed_result_hashes = replayed.result_hashes().collect::<Vec<_>>();
+    if committed_result_hashes != replayed_result_hashes {
+        return Err(eyre!(
+            "replayed block #{height} result hash sequence mismatch: committed_len={} replayed_len={}",
+            committed_result_hashes.len(),
+            replayed_result_hashes.len()
+        ));
+    }
+
+    let committed_results = committed.results().cloned().collect::<Vec<_>>();
+    let replayed_results = replayed.results().cloned().collect::<Vec<_>>();
+    if committed_results != replayed_results {
+        return Err(eyre!(
+            "replayed block #{height} transaction result payload mismatch: committed_len={} replayed_len={}",
+            committed_results.len(),
+            replayed_results.len()
+        ));
+    }
+
+    Ok(())
+}
+
 /// Replay blocks from the local Kura store into the provided [`State`], rebuilding world state
 /// when a snapshot is unavailable.
 /// Uses the configured consensus mode as a fallback when resolving topology rotation.
@@ -21043,6 +24271,15 @@ pub fn replay_blocks_from_kura_range(
         );
     }
 
+    let mut wsv_checkpoint_seen = if start_height > 1 {
+        let previous_height = u64::try_from(start_height.saturating_sub(1))?;
+        kura.has_wsv_checkpoint_at_or_before(previous_height)
+            .wrap_err_with(|| {
+                format!("failed to scan WSV checkpoints before block #{start_height}")
+            })?
+    } else {
+        false
+    };
     for height in start_height..=block_count {
         let nz = NonZeroUsize::new(height)
             .ok_or_else(|| eyre!("invalid block height during replay: {height}"))?;
@@ -21055,6 +24292,16 @@ pub fn replay_blocks_from_kura_range(
         let mut block_topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
         let view = signed_block.header().view_change_index();
         let height = signed_block.header().height().get();
+        let wsv_checkpoint = kura
+            .wsv_checkpoint(height)
+            .wrap_err_with(|| format!("failed to read WSV checkpoint for block #{height}"))?;
+        if wsv_checkpoint.is_some() {
+            wsv_checkpoint_seen = true;
+        } else if wsv_checkpoint_seen {
+            return Err(eyre!(
+                "missing WSV checkpoint for block #{height} after checkpointed history began"
+            ));
+        }
         let (effective_mode, prf_seed) = {
             let view = state.view();
             let mode = crate::sumeragi::effective_consensus_mode(&view, fallback_consensus_mode);
@@ -21113,7 +24360,7 @@ pub fn replay_blocks_from_kura_range(
                     ) =>
                 {
                     let mut recovered = *failed_block;
-                    match replay_remap_block_signature_indices_to_topology(
+                    match remap_block_signature_indices_to_topology(
                         &mut recovered,
                         &validation_topology,
                     ) {
@@ -21162,7 +24409,7 @@ pub fn replay_blocks_from_kura_range(
                                         unreachable!("needs_remap derived from an error result")
                                     }
                                 };
-                                if replay_remap_block_signature_indices_to_topology(
+                                if remap_block_signature_indices_to_topology(
                                     &mut remapped,
                                     &rotated_topology,
                                 )
@@ -21205,7 +24452,27 @@ pub fn replay_blocks_from_kura_range(
                 });
             }
         };
-        let committed_block = valid_block.commit_unchecked().unpack(|_| {});
+        let replayed_committed_block = valid_block.commit_unchecked().unpack(|_| {});
+        let mut committed_block = replayed_committed_block;
+        if let Err(err) =
+            ensure_replayed_results_match_committed(height, &signed_block, committed_block.as_ref())
+        {
+            let legacy_uncheckpointed_history = wsv_checkpoint.is_none() && !wsv_checkpoint_seen;
+            if legacy_uncheckpointed_history {
+                iroha_logger::warn!(
+                    height,
+                    error = %err,
+                    "legacy uncheckpointed block replay produced different execution-result material; preserving committed Kura block hash and continuing"
+                );
+                committed_block = ValidBlock::committed_from_replay_signed_block(signed_block);
+            } else {
+                return Err(err).wrap_err_with(|| {
+                    format!(
+                        "failed to verify replayed block #{height} against committed execution results"
+                    )
+                });
+            }
+        }
         let tx_count = committed_block.as_ref().external_transactions().count();
         let mut rejected = Vec::new();
         for idx in 0..tx_count {
@@ -21247,21 +24514,57 @@ pub fn replay_blocks_from_kura_range(
         state_block.commit().map_err(|err| {
             eyre!(err).wrap_err(format!("failed to commit replayed block #{height}"))
         })?;
+        if let Some(checkpoint) = wsv_checkpoint {
+            let actual = crate::snapshot::canonical_state_snapshot_hash(state);
+            if actual != checkpoint.state_hash() {
+                let legacy =
+                    crate::snapshot::legacy_state_snapshot_hash_without_space_directory_manifests(
+                        state,
+                    );
+                if legacy == checkpoint.state_hash() {
+                    iroha_logger::warn!(
+                        height,
+                        committed = ?checkpoint.state_hash(),
+                        replayed = ?actual,
+                        "WSV checkpoint matched legacy snapshot surface without Space Directory manifests; accepting during upgrade"
+                    );
+                } else {
+                    iroha_logger::warn!(
+                        height,
+                        committed = ?checkpoint.state_hash(),
+                        replayed = ?actual,
+                        "WSV checkpoint sidecar mismatch during replay; preserving committed Kura block hash and continuing"
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod replay_validation_tests {
-    use std::sync::Arc;
+    use std::{collections::BTreeSet, sync::Arc};
 
     use iroha_config::parameters::actual::ConsensusMode;
+    use iroha_crypto::SignatureOf;
     use iroha_data_model::{
-        ChainId,
-        block::SignedBlock,
-        isi::Log,
+        ChainId, ValidationFail,
+        account::{AccountAlias, AccountAliasDomain, AccountId},
+        asset::{AssetDefinition, AssetDefinitionId, AssetId},
+        block::{BlockSignature, SignedBlock},
+        isi::{
+            InstructionBox, Log, Mint, Register, SetKeyValue,
+            domain_link::{SetAccountAliasBinding, SetPrimaryAccountAlias},
+        },
+        name::Name,
+        nexus::{
+            DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
+            LaneVisibility,
+        },
+        peer::PeerId,
         prelude::{Account, Domain, DomainId},
-        transaction::TransactionBuilder,
+        transaction::{TransactionBuilder, error::TransactionRejectionReason},
     };
     use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 
@@ -21270,11 +24573,193 @@ mod replay_validation_tests {
     fn new_genesis_account(
         account_id: &iroha_data_model::account::AccountId,
     ) -> iroha_data_model::account::NewAccount {
-        Account::new(
-            account_id
-                .clone()
-                .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
+        Account::new(account_id.clone())
+    }
+
+    fn previous_roster_evidence_for_parent(
+        parent: &SignedBlock,
+        roster: &[PeerId],
+    ) -> iroha_data_model::consensus::PreviousRosterEvidence {
+        let zero_state_root = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
+        let mut signers_bitmap = vec![0_u8; roster.len().div_ceil(8)];
+        if let Some(first_byte) = signers_bitmap.first_mut() {
+            *first_byte = 1;
+        }
+        iroha_data_model::consensus::PreviousRosterEvidence {
+            height: parent.header().height().get(),
+            block_hash: parent.hash(),
+            validator_checkpoint: iroha_data_model::consensus::ValidatorSetCheckpoint::new(
+                parent.header().height().get(),
+                parent.header().view_change_index(),
+                parent.hash(),
+                zero_state_root,
+                zero_state_root,
+                roster.to_vec(),
+                signers_bitmap,
+                Vec::new(),
+                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            ),
+            stake_snapshot: None,
+        }
+    }
+
+    fn commit_replay_validated_block_with_options(
+        state: &State,
+        topology: &crate::sumeragi::network_topology::Topology,
+        block: SignedBlock,
+        chain_id: &ChainId,
+        genesis_account: &AccountId,
+        skip_block_signatures: bool,
+        store_wsv_checkpoint: bool,
+    ) -> SignedBlock {
+        let time_source = TimeSource::new_system();
+        let mut voting_block = None;
+        let (valid_block, mut state_block) = ValidBlock::validate_keep_voting_block_for_replay(
+            block,
+            topology,
+            chain_id,
+            genesis_account,
+            &time_source,
+            state,
+            &mut voting_block,
+            false,
+            skip_block_signatures,
+            skip_block_signatures,
         )
+        .unpack(|_| {})
+        .expect("block validates for replay fixture");
+        let committed = valid_block.commit_unchecked().unpack(|_| {});
+        let committed_signed = committed.as_ref().clone();
+        state
+            .kura
+            .store_block(Arc::new(committed_signed.clone()))
+            .expect("store committed replay fixture block");
+        let _events = state_block.apply_without_execution(&committed, topology.as_ref().to_vec());
+        state_block.commit().expect("commit replay fixture block");
+        if store_wsv_checkpoint {
+            state
+                .kura
+                .store_wsv_checkpoint(
+                    committed_signed.header().height().get(),
+                    committed_signed.hash(),
+                    crate::snapshot::canonical_state_snapshot_hash(state),
+                )
+                .expect("store committed replay fixture WSV checkpoint");
+        }
+        committed_signed
+    }
+
+    fn commit_replay_validated_block_with_signature_mode(
+        state: &State,
+        topology: &crate::sumeragi::network_topology::Topology,
+        block: SignedBlock,
+        chain_id: &ChainId,
+        genesis_account: &AccountId,
+        skip_block_signatures: bool,
+    ) -> SignedBlock {
+        commit_replay_validated_block_with_options(
+            state,
+            topology,
+            block,
+            chain_id,
+            genesis_account,
+            skip_block_signatures,
+            true,
+        )
+    }
+
+    fn commit_replay_validated_block(
+        state: &State,
+        topology: &crate::sumeragi::network_topology::Topology,
+        block: SignedBlock,
+        chain_id: &ChainId,
+        genesis_account: &AccountId,
+    ) -> SignedBlock {
+        commit_replay_validated_block_with_signature_mode(
+            state,
+            topology,
+            block,
+            chain_id,
+            genesis_account,
+            false,
+        )
+    }
+
+    fn strip_execution_context_and_resign_for_test(
+        block: &mut SignedBlock,
+        private_key: &iroha_crypto::PrivateKey,
+        signatory_idx: u64,
+    ) {
+        block.set_execution_context(None);
+        let signature = BlockSignature::new(
+            signatory_idx,
+            SignatureOf::from_hash(private_key, block.header().hash()),
+        );
+        block
+            .replace_signatures(BTreeSet::from([signature]))
+            .expect("replace block signatures");
+    }
+
+    fn configure_private_replay_route(
+        state: &mut State,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) {
+        let lane_catalog = LaneCatalog::new(
+            std::num::NonZeroU32::new(4).expect("non-zero lane count"),
+            vec![
+                LaneConfig::default(),
+                LaneConfig {
+                    id: lane_id,
+                    dataspace_id,
+                    alias: "private-fixture".to_owned(),
+                    visibility: LaneVisibility::Restricted,
+                    ..LaneConfig::default()
+                },
+            ],
+        )
+        .expect("lane catalog");
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace_id,
+                alias: "private-fixture".to_owned(),
+                description: Some("private replay fixture dataspace".to_owned()),
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.lane_catalog = lane_catalog;
+            nexus.dataspace_catalog = dataspace_catalog.clone();
+            nexus.routing_policy.default_lane = lane_id;
+            nexus.routing_policy.default_dataspace = dataspace_id;
+        }
+    }
+
+    fn replay_fixture_state(
+        kura: Arc<Kura>,
+        chain_id: ChainId,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> State {
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let world = World::with(
+            [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
+            [new_genesis_account(&genesis_id).build(&genesis_id)],
+            [],
+        );
+        let mut state = State::new_with_chain(
+            world,
+            kura,
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id,
+        );
+        configure_private_replay_route(&mut state, lane_id, dataspace_id);
+        state
     }
 
     #[test]
@@ -21334,7 +24819,7 @@ mod replay_validation_tests {
         )]);
 
         let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let user_domain_id: DomainId = "users".parse().expect("domain id");
+        let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
         let user_id = iroha_data_model::account::AccountId::new(user_keypair.public_key().clone());
         let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
             .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
@@ -21364,11 +24849,62 @@ mod replay_validation_tests {
             crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block3));
         let block3 = crate::block::BlockBuilder::new(vec![accepted_block3])
             .chain(0, Some(&signed_block2))
+            .with_previous_roster_evidence(Some(previous_roster_evidence_for_parent(
+                &signed_block2,
+                topology.as_ref(),
+            )))
             .sign(leader.private_key())
             .unpack(|_| {});
         let signed_block3: SignedBlock = block3.into();
 
+        let make_world = || {
+            World::with(
+                [
+                    Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
+                    Domain::new(user_domain_id.clone()).build(&genesis_id),
+                ],
+                [
+                    new_genesis_account(&genesis_id).build(&genesis_id),
+                    Account::new(user_id.clone()).build(&genesis_id),
+                ],
+                [],
+            )
+        };
         let kura = Kura::blank_kura_for_testing();
+        let materialize_state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        {
+            let mut params_block = materialize_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+        let genesis_block = commit_replay_validated_block(
+            &materialize_state,
+            &topology,
+            genesis_block,
+            &chain_id,
+            &genesis_id,
+        );
+        let signed_block2 = commit_replay_validated_block(
+            &materialize_state,
+            &topology,
+            signed_block2,
+            &chain_id,
+            &genesis_id,
+        );
+        let signed_block3 = commit_replay_validated_block_with_options(
+            &materialize_state,
+            &topology,
+            signed_block3,
+            &chain_id,
+            &genesis_id,
+            false,
+            false,
+        );
         kura.store_block(Arc::new(genesis_block))
             .expect("store genesis");
         kura.store_block(Arc::new(signed_block2.clone()))
@@ -21376,19 +24912,8 @@ mod replay_validation_tests {
         kura.store_block(Arc::new(signed_block3.clone()))
             .expect("store block3");
 
-        let world = World::with(
-            [
-                Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
-                Domain::new(user_domain_id.clone()).build(&genesis_id),
-            ],
-            [
-                new_genesis_account(&genesis_id).build(&genesis_id),
-                Account::new(user_id.clone().to_account_id(user_domain_id)).build(&genesis_id),
-            ],
-            [],
-        );
         let mut state = State::new_with_chain(
-            world,
+            make_world(),
             Arc::clone(&kura),
             crate::query::store::LiveQueryStore::start_test(),
             chain_id,
@@ -21403,6 +24928,29 @@ mod replay_validation_tests {
             .expect("replay first two blocks");
         assert_eq!(state.view().height(), 2);
 
+        let missing_checkpoint = replay_blocks_from_kura_range(
+            &kura,
+            &mut state,
+            &topology,
+            3,
+            3,
+            ConsensusMode::Permissioned,
+        )
+        .expect_err("range replay must reject missing checkpoint after checkpointed history");
+        assert!(
+            missing_checkpoint
+                .to_string()
+                .contains("missing WSV checkpoint"),
+            "{missing_checkpoint:?}"
+        );
+        assert_eq!(state.view().height(), 2);
+
+        kura.store_wsv_checkpoint(
+            3,
+            signed_block3.hash(),
+            crate::snapshot::canonical_state_snapshot_hash(&materialize_state),
+        )
+        .expect("store block3 checkpoint");
         replay_blocks_from_kura_range(
             &kura,
             &mut state,
@@ -21424,7 +24972,6 @@ mod replay_validation_tests {
 
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
-            name::Name,
             parameter::system::{Parameter, SumeragiNposParameters},
             peer::PeerId,
         };
@@ -21477,7 +25024,7 @@ mod replay_validation_tests {
                 .set_topology(topology_entries)
                 .append_parameter(Parameter::Custom(npos_params.into_custom_parameter()));
         genesis_builder = genesis_builder
-            .domain("wonderland".parse::<Name>().expect("domain id"))
+            .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
             .account(user_keypair.public_key().clone())
             .finish_domain();
         let genesis_block = genesis_builder
@@ -21486,24 +25033,14 @@ mod replay_validation_tests {
         let genesis_signed = genesis_block.0.clone();
 
         let kura = Kura::blank_kura_for_testing();
-        let live_query = crate::query::store::LiveQueryStore::start_test();
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-        let world = World::with(
-            [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-            [new_genesis_account(&genesis_id).build(&genesis_id)],
-            [],
-        );
-        let mut state =
-            State::new_with_chain(world, Arc::clone(&kura), live_query, chain_id.clone());
-        {
-            let mut params_block = state.world.parameters.block();
-            params_block.sumeragi.key_require_hsm = false;
-            params_block.commit();
-        }
-
-        let genesis_arc = Arc::new(genesis_signed.clone());
-        kura.store_block(Arc::clone(&genesis_arc))
-            .expect("store genesis");
+        let make_world = || {
+            World::with(
+                [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
+                [new_genesis_account(&genesis_id).build(&genesis_id)],
+                [],
+            )
+        };
 
         let tx = TransactionBuilder::new(chain_id.clone(), user_id.clone())
             .with_instructions([Log::new(
@@ -21530,8 +25067,50 @@ mod replay_validation_tests {
         let signed_block: SignedBlock = new_block.into();
 
         let block_arc = Arc::new(signed_block);
-        kura.store_block(Arc::clone(&block_arc))
+        let mut validation_topology =
+            crate::sumeragi::network_topology::Topology::new(peers.clone());
+        validation_topology.rotate_preserve_view_to_front(leader_index);
+        let materialize_state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        {
+            let mut params_block = materialize_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+        let genesis_signed = commit_replay_validated_block(
+            &materialize_state,
+            &topology,
+            genesis_signed,
+            &chain_id,
+            &genesis_id,
+        );
+        let signed_block = commit_replay_validated_block(
+            &materialize_state,
+            &validation_topology,
+            (*block_arc).clone(),
+            &chain_id,
+            &genesis_id,
+        );
+        kura.store_block(Arc::new(genesis_signed))
+            .expect("store genesis");
+        kura.store_block(Arc::new(signed_block))
             .expect("store block");
+
+        let mut state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        {
+            let mut params_block = state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
 
         replay_blocks_from_kura(&kura, &mut state, &topology, 2, ConsensusMode::Npos)
             .expect("replay should validate prf leader");
@@ -21550,8 +25129,7 @@ mod replay_validation_tests {
         };
         use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
         use iroha_data_model::{
-            block::BlockSignature, consensus::VALIDATOR_SET_HASH_VERSION_V1, name::Name,
-            peer::PeerId,
+            block::BlockSignature, consensus::VALIDATOR_SET_HASH_VERSION_V1, peer::PeerId,
         };
         use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
         use iroha_test_samples::{
@@ -21574,6 +25152,8 @@ mod replay_validation_tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
 
@@ -21600,17 +25180,13 @@ mod replay_validation_tests {
             GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
                 .set_topology(topology_entries);
         genesis_builder = genesis_builder
-            .domain("wonderland".parse::<Name>().expect("domain id"))
+            .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
             .account(user_keypair.public_key().clone())
             .finish_domain();
         let genesis_block = genesis_builder
             .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
             .expect("genesis");
         let genesis_signed = genesis_block.0.clone();
-
-        let genesis_arc = Arc::new(genesis_signed.clone());
-        kura.store_block(Arc::clone(&genesis_arc))
-            .expect("store genesis");
 
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let world = World::with(
@@ -21629,6 +25205,17 @@ mod replay_validation_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
+        let genesis_signed = commit_replay_validated_block_with_options(
+            &state,
+            &crate::sumeragi::network_topology::Topology::new(roster.clone()),
+            genesis_signed,
+            &chain_id,
+            &genesis_id,
+            false,
+            false,
+        );
+        kura.store_block(Arc::new(genesis_signed.clone()))
+            .expect("store genesis");
 
         let tx = TransactionBuilder::new(chain_id.clone(), user_id.clone())
             .with_instructions([Log::new(
@@ -21669,8 +25256,16 @@ mod replay_validation_tests {
             .replace_signatures(signature_set)
             .expect("replace signatures");
 
-        let block_arc = Arc::new(signed_block.clone());
-        kura.store_block(Arc::clone(&block_arc))
+        let signed_block = commit_replay_validated_block_with_options(
+            &state,
+            &signature_topology,
+            signed_block,
+            &chain_id,
+            &genesis_id,
+            false,
+            false,
+        );
+        kura.store_block(Arc::new(signed_block.clone()))
             .expect("store block");
 
         let signatures: Vec<_> = signed_block.signatures().cloned().collect();
@@ -21759,7 +25354,7 @@ mod replay_validation_tests {
         let chain_id = ChainId::from("iroha:test:replay-signature-rotation-recovery");
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let user_domain: DomainId = "users".parse().expect("domain id");
+        let user_domain: DomainId = DomainId::try_new("users", "universal").expect("domain id");
         let user_id = AccountId::new(user_keypair.public_key().clone());
 
         crate::sumeragi::status::reset_commit_certs_for_tests();
@@ -21791,7 +25386,7 @@ mod replay_validation_tests {
             ],
             [
                 new_genesis_account(&genesis_id).build(&genesis_id),
-                Account::new(user_id.clone().to_account_id(user_domain.clone())).build(&genesis_id),
+                Account::new(user_id.clone()).build(&genesis_id),
             ],
             [],
         );
@@ -21803,6 +25398,15 @@ mod replay_validation_tests {
             params_block.sumeragi.key_require_hsm = false;
             params_block.commit();
         }
+        let genesis_block = commit_replay_validated_block(
+            &state,
+            &fallback_topology,
+            genesis_block,
+            &chain_id,
+            &genesis_id,
+        );
+        kura.store_block(Arc::new(genesis_block.clone()))
+            .expect("store genesis");
 
         let height = 2_u64;
         let view = 0_u64;
@@ -21844,8 +25448,14 @@ mod replay_validation_tests {
             .replace_signatures(BTreeSet::from([forged_signature]))
             .expect("replace signatures");
 
-        kura.store_block(Arc::new(genesis_block))
-            .expect("store genesis");
+        let signed_block2 = commit_replay_validated_block_with_signature_mode(
+            &state,
+            &expected_topology,
+            signed_block2,
+            &chain_id,
+            &genesis_id,
+            true,
+        );
         kura.store_block(Arc::new(signed_block2.clone()))
             .expect("store block2");
 
@@ -21856,7 +25466,7 @@ mod replay_validation_tests {
             ],
             [
                 new_genesis_account(&genesis_id).build(&genesis_id),
-                Account::new(user_id.to_account_id(user_domain)).build(&genesis_id),
+                Account::new(user_id.clone()).build(&genesis_id),
             ],
             [],
         );
@@ -21886,19 +25496,407 @@ mod replay_validation_tests {
             Some(signed_block2.hash())
         );
     }
+
+    #[test]
+    fn replay_rejects_committed_result_mismatch_before_applying_block() {
+        use std::borrow::Cow;
+
+        use iroha_crypto::{Algorithm, Hash, KeyPair};
+        use iroha_data_model::transaction::signed::TransactionResultInner;
+
+        let chain_id = ChainId::from("iroha:test:replay-result-mismatch");
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            leader.public_key().clone(),
+        )]);
+        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
+        let user_id = AccountId::new(user_keypair.public_key().clone());
+        let make_world = || {
+            World::with(
+                [
+                    Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
+                    Domain::new(user_domain_id.clone()).build(&genesis_id),
+                ],
+                [
+                    new_genesis_account(&genesis_id).build(&genesis_id),
+                    Account::new(user_id.clone()).build(&genesis_id),
+                ],
+                [],
+            )
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let materialize_state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        {
+            let mut params_block = materialize_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let genesis_block = SignedBlock::genesis(
+            vec![tx_genesis],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            None,
+            None,
+        );
+        let genesis_block = commit_replay_validated_block(
+            &materialize_state,
+            &topology,
+            genesis_block,
+            &chain_id,
+            &genesis_id,
+        );
+        kura.store_block(Arc::new(genesis_block.clone()))
+            .expect("store genesis");
+
+        let tx_block2 = TransactionBuilder::new(chain_id.clone(), user_id.clone())
+            .with_instructions([Log::new(
+                iroha_logger::Level::INFO,
+                "result mismatch".to_owned(),
+            )])
+            .sign(user_keypair.private_key());
+        let accepted_block2 =
+            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
+        let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
+            .chain(0, Some(&genesis_block))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut signed_block2: SignedBlock = block2.into();
+        let entry_hashes = signed_block2
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .collect::<Vec<_>>();
+        let bad_result: TransactionResultInner = Err(TransactionRejectionReason::Validation(
+            ValidationFail::NotPermitted("forced mismatch".to_owned()),
+        ));
+        signed_block2.set_transaction_results(Vec::new(), &entry_hashes, vec![bad_result]);
+        let block2_hash = signed_block2.hash();
+        kura.store_block(Arc::new(signed_block2))
+            .expect("store mismatched block");
+        kura.store_wsv_checkpoint(2, block2_hash, Hash::new(b"not the replayed WSV"))
+            .expect("store mismatched block WSV checkpoint");
+
+        let mut replay_state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id,
+        );
+        {
+            let mut params_block = replay_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let result = replay_blocks_from_kura(
+            &kura,
+            &mut replay_state,
+            &topology,
+            2,
+            ConsensusMode::Permissioned,
+        );
+        let err = result.expect_err("result mismatch must stop replay");
+        assert!(
+            format!("{err:?}").contains("result"),
+            "replay error should report the result mismatch: {err:?}"
+        );
+        assert_eq!(
+            replay_state.view().height(),
+            1,
+            "mismatched block must not be committed"
+        );
+    }
+
+    #[test]
+    fn replay_warns_and_continues_on_wsv_checkpoint_mismatch_after_applying_block() {
+        use std::borrow::Cow;
+
+        use iroha_crypto::{Algorithm, Hash, KeyPair};
+
+        let chain_id = ChainId::from("iroha:test:replay-wsv-checkpoint-mismatch");
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            leader.public_key().clone(),
+        )]);
+        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
+        let user_id = AccountId::new(user_keypair.public_key().clone());
+        let make_world = || {
+            World::with(
+                [
+                    Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id),
+                    Domain::new(user_domain_id.clone()).build(&genesis_id),
+                ],
+                [
+                    new_genesis_account(&genesis_id).build(&genesis_id),
+                    Account::new(user_id.clone()).build(&genesis_id),
+                ],
+                [],
+            )
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let materialize_state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id.clone(),
+        );
+        {
+            let mut params_block = materialize_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let genesis_block = SignedBlock::genesis(
+            vec![tx_genesis],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            None,
+            None,
+        );
+        let genesis_block = commit_replay_validated_block(
+            &materialize_state,
+            &topology,
+            genesis_block,
+            &chain_id,
+            &genesis_id,
+        );
+        kura.store_block(Arc::new(genesis_block.clone()))
+            .expect("store genesis");
+
+        let tx_block2 = TransactionBuilder::new(chain_id.clone(), user_id.clone())
+            .with_instructions([Log::new(
+                iroha_logger::Level::INFO,
+                "checkpoint mismatch".to_owned(),
+            )])
+            .sign(user_keypair.private_key());
+        let accepted_block2 =
+            crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block2));
+        let block2 = crate::block::BlockBuilder::new(vec![accepted_block2])
+            .chain(0, Some(&genesis_block))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let signed_block2 = commit_replay_validated_block(
+            &materialize_state,
+            &topology,
+            block2.into(),
+            &chain_id,
+            &genesis_id,
+        );
+        kura.store_block(Arc::new(signed_block2.clone()))
+            .expect("store block2");
+        kura.store_wsv_checkpoint(
+            2,
+            signed_block2.hash(),
+            Hash::new(b"not the replayed canonical WSV"),
+        )
+        .expect("overwrite block2 WSV checkpoint");
+
+        let mut replay_state = State::new_with_chain(
+            make_world(),
+            Arc::clone(&kura),
+            crate::query::store::LiveQueryStore::start_test(),
+            chain_id,
+        );
+        {
+            let mut params_block = replay_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let result = replay_blocks_from_kura(
+            &kura,
+            &mut replay_state,
+            &topology,
+            2,
+            ConsensusMode::Permissioned,
+        );
+        result.expect("WSV checkpoint mismatch is a non-fatal sidecar audit failure");
+        assert_eq!(
+            replay_state.view().height(),
+            2,
+            "mismatched WSV checkpoint sidecar must not prevent Kura replay"
+        );
+    }
+
+    #[test]
+    fn replay_legacy_route_sensitive_block_reconstructs_canonical_state() {
+        use std::borrow::Cow;
+
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_primitives::{json::Json, numeric::Numeric};
+
+        let chain_id = ChainId::from("iroha:test:legacy-route-replay");
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let lane_id = LaneId::new(3);
+        let dataspace_id = DataSpaceId::new(10);
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
+            leader.public_key().clone(),
+        )]);
+        let kura = Kura::blank_kura_for_testing();
+        let original_state =
+            replay_fixture_state(Arc::clone(&kura), chain_id.clone(), lane_id, dataspace_id);
+        {
+            let mut params_block = original_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let genesis_block = SignedBlock::genesis(
+            vec![tx_genesis],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            None,
+            None,
+        );
+        let genesis_block = commit_replay_validated_block(
+            &original_state,
+            &topology,
+            genesis_block,
+            &chain_id,
+            &genesis_id,
+        );
+        kura.store_block(Arc::new(genesis_block.clone()))
+            .expect("store genesis");
+
+        let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let user_id = AccountId::new(user_keypair.public_key().clone());
+        let domain_id = DomainId::try_new("settlement", "private-fixture").expect("domain id");
+        let primary_alias = AccountAlias::new(
+            "merchant".parse::<Name>().expect("primary alias"),
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            dataspace_id,
+        );
+        let secondary_alias = AccountAlias::new(
+            "cashier".parse::<Name>().expect("secondary alias"),
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            dataspace_id,
+        );
+        let asset_definition_id = AssetDefinitionId::new(
+            domain_id.clone(),
+            "credit".parse().expect("asset definition name"),
+        );
+        let asset_id = AssetId::of(asset_definition_id.clone(), user_id.clone());
+        let instructions = vec![
+            InstructionBox::from(Register::domain(Domain::new(domain_id.clone()))),
+            InstructionBox::from(Register::account(Account::new(user_id.clone()))),
+            InstructionBox::from(SetPrimaryAccountAlias::bind(
+                user_id.clone(),
+                primary_alias,
+                Some(10_000),
+            )),
+            InstructionBox::from(SetAccountAliasBinding::bind(
+                user_id.clone(),
+                secondary_alias,
+                Some(10_001),
+            )),
+            InstructionBox::from(Register::asset_definition(
+                AssetDefinition::numeric(asset_definition_id.clone())
+                    .with_name("credit".to_owned()),
+            )),
+            InstructionBox::from(Mint::asset_numeric(Numeric::from(7_u32), asset_id.clone())),
+            InstructionBox::from(SetKeyValue::account(
+                user_id.clone(),
+                "tier".parse::<Name>().expect("account metadata key"),
+                Json::new("preferred"),
+            )),
+            InstructionBox::from(SetKeyValue::domain(
+                domain_id.clone(),
+                "quota".parse::<Name>().expect("domain metadata key"),
+                Json::new(7_u32),
+            )),
+            InstructionBox::from(SetKeyValue::asset_definition(
+                asset_definition_id,
+                "class".parse::<Name>().expect("asset metadata key"),
+                Json::new("retail"),
+            )),
+        ];
+        let tx = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
+            .with_instructions::<InstructionBox>(instructions)
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
+        let block = crate::block::BlockBuilder::new(vec![accepted])
+            .chain(0, Some(&genesis_block))
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut legacy_block: SignedBlock = block.into();
+        strip_execution_context_and_resign_for_test(&mut legacy_block, leader.private_key(), 0);
+        assert!(
+            legacy_block.execution_context().is_none(),
+            "fixture must exercise the legacy missing-context replay path"
+        );
+        let legacy_block = commit_replay_validated_block(
+            &original_state,
+            &topology,
+            legacy_block,
+            &chain_id,
+            &genesis_id,
+        );
+        assert!(legacy_block.has_results());
+        kura.store_block(Arc::new(legacy_block.clone()))
+            .expect("store legacy block");
+
+        let mut replay_state =
+            replay_fixture_state(Arc::clone(&kura), chain_id, lane_id, dataspace_id);
+        {
+            let mut params_block = replay_state.world.parameters.block();
+            params_block.sumeragi.key_require_hsm = false;
+            params_block.commit();
+        }
+
+        replay_blocks_from_kura(
+            &kura,
+            &mut replay_state,
+            &topology,
+            2,
+            ConsensusMode::Permissioned,
+        )
+        .expect("replay should reconstruct canonical state");
+        assert_eq!(replay_state.view().height(), 2);
+        assert_eq!(
+            replay_state.view().latest_block_hash(),
+            Some(legacy_block.hash())
+        );
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_bytes_for_tests(&replay_state),
+            crate::snapshot::canonical_state_snapshot_bytes_for_tests(&original_state),
+        );
+    }
 }
 
 #[cfg(test)]
 mod permission_cache_tests {
+    use std::collections::BTreeSet;
+
     use iroha_data_model::{
         account::AccountId,
         domain::DomainId,
         isi::{Grant, Revoke},
+        nexus::DataSpaceId,
+        permission::Permission,
         prelude::{Account, Domain},
         role::{Role, RoleId},
         trigger::TriggerId,
     };
     use iroha_executor_data_model::permission::{
+        account::{AccountAliasPermissionScope, CanManageAccountAlias},
         nexus::CanUseFeeSponsor,
         trigger::{CanExecuteTrigger, CanRegisterTrigger},
     };
@@ -21913,19 +25911,15 @@ mod permission_cache_tests {
     };
 
     fn wonderland_domain_id() -> DomainId {
-        "wonderland".parse().expect("domain id")
+        DomainId::try_new("wonderland", "universal").expect("domain id")
     }
 
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-        Account::new(account_id.clone().to_account_id(wonderland_domain_id()))
+        Account::new(account_id.clone())
     }
 
     fn new_genesis_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
-        Account::new(
-            account_id
-                .clone()
-                .to_account_id(iroha_genesis::GENESIS_DOMAIN_ID.clone()),
-        )
+        Account::new(account_id.clone())
     }
 
     #[test]
@@ -21970,8 +25964,6 @@ mod permission_cache_tests {
 
     #[test]
     fn trigger_permission_payload_with_whitespace_decodes() {
-        use std::collections::BTreeSet;
-
         let (registrar, _) = gen_account_in("wonderland");
 
         let domain: Domain = Domain::new(wonderland_domain_id()).build(&registrar);
@@ -22001,6 +25993,33 @@ mod permission_cache_tests {
             "Norito decoder should handle non-canonical JSON payloads"
         );
         assert!(stx.can_execute_trigger_for(&registrar, &trigger_id));
+    }
+
+    #[test]
+    fn permission_deserialized_from_json_matches_canonical_permission() {
+        let stored: Permission = norito::json::from_str(
+            r#"{
+                "name": "CanManageAccountAlias",
+                "payload": { "scope": { "scope": "dataspace", "value": 0 } }
+            }"#,
+        )
+        .expect("deserialize permission");
+        let target = Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+        });
+
+        let permissions = BTreeSet::from([stored]);
+
+        assert!(
+            permissions.contains(&target),
+            "deserialized permissions should use canonical JSON payloads: stored={}, target={}",
+            permissions
+                .first()
+                .expect("stored permission")
+                .payload()
+                .get(),
+            target.payload().get(),
+        );
     }
 
     #[test]
@@ -22256,13 +26275,68 @@ mod permission_cache_tests {
         exec_path.to_string_lossy().to_string()
     }
 
+    fn previous_roster_evidence_for_parent(
+        parent: &SignedBlock,
+        roster: &[PeerId],
+    ) -> iroha_data_model::consensus::PreviousRosterEvidence {
+        let zero_state_root = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
+        let mut signers_bitmap = vec![0_u8; roster.len().div_ceil(8)];
+        if let Some(first_byte) = signers_bitmap.first_mut() {
+            *first_byte = 1;
+        }
+        iroha_data_model::consensus::PreviousRosterEvidence {
+            height: parent.header().height().get(),
+            block_hash: parent.hash(),
+            validator_checkpoint: iroha_data_model::consensus::ValidatorSetCheckpoint::new(
+                parent.header().height().get(),
+                parent.header().view_change_index(),
+                parent.hash(),
+                zero_state_root,
+                zero_state_root,
+                roster.to_vec(),
+                signers_bitmap,
+                Vec::new(),
+                iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                None,
+            ),
+            stake_snapshot: None,
+        }
+    }
+
+    fn build_test_block(
+        accepted: AcceptedTransaction<'static>,
+        parent: Option<&SignedBlock>,
+        topology: &crate::sumeragi::network_topology::Topology,
+        signer: &iroha_crypto::PrivateKey,
+    ) -> crate::block::NewBlock {
+        let mut builder = crate::block::BlockBuilder::new(vec![accepted]).chain(0, parent);
+        if let Some(parent) = parent.filter(|block| block.header().height().get() >= 2) {
+            builder = builder.with_previous_roster_evidence(Some(
+                previous_roster_evidence_for_parent(parent, topology.as_ref()),
+            ));
+        }
+        builder.sign(signer).unpack(|_| {})
+    }
+
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn permission_cache_rebuilds_after_restart() {
+        // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
+        // platform-default worker stack for this integration-heavy scenario.
+        let handle = std::thread::Builder::new()
+            .name("permission_cache_rebuilds_after_restart".to_owned())
+            .stack_size(16 * 1024 * 1024)
+            .spawn(permission_cache_rebuilds_after_restart_impl)
+            .expect("spawn permission cache replay test");
+        if let Err(payload) = handle.join() {
+            std::panic::resume_unwind(payload);
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn permission_cache_rebuilds_after_restart_impl() {
         use std::{
             borrow::Cow,
             num::{NonZeroU64, NonZeroUsize},
-            str::FromStr,
             sync::Arc,
         };
 
@@ -22279,7 +26353,6 @@ mod permission_cache_tests {
             block::{BlockHeader, SignedBlock},
             domain::Domain,
             isi::{Grant, InstructionBox},
-            name::Name,
             prelude::PeerId,
             transaction::TransactionBuilder,
             trigger::TriggerId,
@@ -22318,6 +26391,8 @@ mod permission_cache_tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let lane_config = LaneConfig::default();
 
@@ -22364,7 +26439,7 @@ mod permission_cache_tests {
                     leader_pop,
                 )]);
         genesis_builder = genesis_builder
-            .domain(Name::from_str("wonderland").unwrap())
+            .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
             .account(registrar_keypair.public_key().clone())
             .account(owner_keypair.public_key().clone())
             .finish_domain();
@@ -22454,10 +26529,13 @@ mod permission_cache_tests {
             .sign(owner_keypair.private_key());
         let accepted_grant = AcceptedTransaction::new_unchecked(Cow::Owned(grant_tx));
 
-        let unverified_grant = crate::block::BlockBuilder::new(vec![accepted_grant])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
+        let latest_block = state.view().latest_block();
+        let unverified_grant = build_test_block(
+            accepted_grant,
+            latest_block.as_deref(),
+            &topology,
+            &leader_private_key,
+        );
         {
             let mut state_block = state.block(unverified_grant.header());
             let committed_grant = unverified_grant
@@ -22550,8 +26628,16 @@ mod permission_cache_tests {
             let mut block = state.block(next_header);
             let mut stx = block.transaction();
             let mut summary = AccountPermissionSummary::default();
-            summary.apply_grant(&stx.world, &Permission::from(permission_register.clone()));
-            summary.apply_grant(&stx.world, &Permission::from(permission_execute.clone()));
+            summary.apply_grant(
+                &stx.world,
+                &stx.nexus.dataspace_catalog,
+                &Permission::from(permission_register.clone()),
+            );
+            summary.apply_grant(
+                &stx.world,
+                &stx.nexus.dataspace_catalog,
+                &Permission::from(permission_execute.clone()),
+            );
             stx.perm_cache.insert_summary(registrar.clone(), summary);
             assert!(
                 stx.can_register_trigger_for(&registrar, &owner),
@@ -22590,10 +26676,13 @@ mod permission_cache_tests {
             ])
             .sign(owner_keypair.private_key());
         let accepted_revoke = AcceptedTransaction::new_unchecked(Cow::Owned(revoke_tx));
-        let unverified_revoke = crate::block::BlockBuilder::new(vec![accepted_revoke])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
+        let latest_block = state.view().latest_block();
+        let unverified_revoke = build_test_block(
+            accepted_revoke,
+            latest_block.as_deref(),
+            &topology,
+            &leader_private_key,
+        );
         {
             let mut state_block = state.block(unverified_revoke.header());
             let committed_revoke = unverified_revoke
@@ -22709,10 +26798,13 @@ mod permission_cache_tests {
             ])
             .sign(owner_keypair.private_key());
         let accepted_role = AcceptedTransaction::new_unchecked(Cow::Owned(register_role_tx));
-        let unverified_role = crate::block::BlockBuilder::new(vec![accepted_role])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
+        let latest_block = state.view().latest_block();
+        let unverified_role = build_test_block(
+            accepted_role,
+            latest_block.as_deref(),
+            &topology,
+            &leader_private_key,
+        );
         {
             let mut state_block = state.block(unverified_role.header());
             let committed_role = unverified_role
@@ -22813,10 +26905,13 @@ mod permission_cache_tests {
             ))])
             .sign(owner_keypair.private_key());
         let accepted_revoke_role = AcceptedTransaction::new_unchecked(Cow::Owned(revoke_role_tx));
-        let unverified_revoke_role = crate::block::BlockBuilder::new(vec![accepted_revoke_role])
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(&leader_private_key)
-            .unpack(|_| {});
+        let latest_block = state.view().latest_block();
+        let unverified_revoke_role = build_test_block(
+            accepted_revoke_role,
+            latest_block.as_deref(),
+            &topology,
+            &leader_private_key,
+        );
         {
             let mut state_block = state.block(unverified_revoke_role.header());
             let committed_revoke_role = unverified_revoke_role
@@ -23200,6 +27295,29 @@ impl StateTransaction<'_, '_> {
         self.pending_transfer_transcripts.push(transcript);
     }
 
+    /// Generate the next canonical RWA identifier for this transaction scope.
+    ///
+    /// The id is derived from the current transaction entrypoint hash when available and
+    /// falls back to a deterministic synthetic batch hash for ad-hoc execution contexts.
+    #[must_use]
+    pub fn next_generated_rwa_id(&mut self, domain: &DomainId, purpose: &str) -> RwaId {
+        let batch_hash = self
+            .tx_call_hash
+            .unwrap_or_else(|| self.ensure_synthetic_batch_hash_with(|_| {}));
+        let ordinal = self.rwa_generated_id_ordinal;
+        self.rwa_generated_id_ordinal = self.rwa_generated_id_ordinal.saturating_add(1);
+
+        let mut bytes = Vec::with_capacity(
+            b"iroha:rwa:id:v2|".len() + purpose.len() + batch_hash.as_ref().len() + 8,
+        );
+        bytes.extend_from_slice(b"iroha:rwa:id:v2|");
+        bytes.extend_from_slice(purpose.as_bytes());
+        bytes.push(0xff);
+        bytes.extend_from_slice(batch_hash.as_ref());
+        bytes.extend_from_slice(&ordinal.to_le_bytes());
+        RwaId::generated(domain.clone(), Hash::new(bytes))
+    }
+
     /// Record a completed AXT envelope for persistence within the current block.
     pub fn record_axt_envelope(&mut self, record: AxtEnvelopeRecord) {
         self.update_axt_policies_from_envelope(&record);
@@ -23322,7 +27440,7 @@ impl StateTransaction<'_, '_> {
             pending_settlement_records,
             pending_nexus_fee_event,
             #[cfg(feature = "telemetry")]
-            pending_block_fee_units,
+            pending_block_fee_amount,
             fastpq_transcripts,
             mut pending_transfer_transcripts,
             block_axt_envelopes,
@@ -23364,7 +27482,7 @@ impl StateTransaction<'_, '_> {
                         target: "economics",
                         payer_kind = payer_kind_label,
                         payer = %payer_id,
-                        fee_amount = amount,
+                        fee_amount = %amount,
                         asset = %asset_id,
                         sink = %nexus.fees.fee_sink_account_id,
                         "nexus fee charged"
@@ -23387,8 +27505,8 @@ impl StateTransaction<'_, '_> {
         {
             let cumulative = gas_used_in_block_so_far.saturating_add(last_tx_gas_used);
             telemetry.set_block_gas_used(cumulative);
-            if pending_block_fee_units > 0 {
-                telemetry.add_block_fee_units(pending_block_fee_units);
+            if pending_block_fee_amount > Numeric::zero() {
+                telemetry.add_block_fee_amount(&pending_block_fee_amount);
             }
         }
         if !pending_transfer_transcripts.is_empty() {
@@ -23579,7 +27697,7 @@ impl StateTransaction<'_, '_> {
     /// Returns the trigger sequence on success, or the rejection reason on failure.
     pub(crate) fn execute_data_triggers_dfs(
         &mut self,
-        authority: &AccountId,
+        _outer_authority: &AccountId,
     ) -> TransactionResultInner {
         if self.world.triggers.data_triggers().is_empty() {
             // No data triggers registered; drop buffered events to keep memory bounded.
@@ -23602,7 +27720,7 @@ impl StateTransaction<'_, '_> {
             if max_depth < depth {
                 return Err(TriggerExecutionFail::MaxDepthExceeded.into());
             }
-            let executable = {
+            let (executable, trigger_authority) = {
                 let Some(action) = self.world.triggers.data_triggers().get(&trg_id) else {
                     warn!(
                         trigger_id = %trg_id,
@@ -23632,10 +27750,11 @@ impl StateTransaction<'_, '_> {
                     continue;
                 }
 
-                action.executable().clone()
+                (action.executable().clone(), action.authority().clone())
             };
 
-            let step = self.execute_trigger(&trg_id, authority, &executable, event, None)?;
+            let step =
+                self.execute_trigger(&trg_id, &trigger_authority, &executable, event, None)?;
 
             let depleted = self.world.triggers.decrease_repeats([&trg_id].into_iter());
             stack.retain(|(_, trg_id, _)| !depleted.contains(trg_id));
@@ -23694,15 +27813,15 @@ impl StateTransaction<'_, '_> {
         }))
     }
 
-    fn trigger_args_from_event(event: &EventBox) -> Json {
+    fn trigger_args_from_event(&self, event: &EventBox) -> Json {
         match event {
             EventBox::ExecuteTrigger(ev) => ev.args().clone(),
-            EventBox::Data(shared) => Self::trigger_args_from_data_event(shared.as_ref()),
+            EventBox::Data(shared) => self.trigger_args_from_data_event(shared.as_ref()),
             _ => Json::default(),
         }
     }
 
-    fn trigger_args_from_data_event(event: &data_pre::DataEvent) -> Json {
+    fn trigger_args_from_data_event(&self, event: &data_pre::DataEvent) -> Json {
         use data_pre::{AccountEvent, AssetEvent, DataEvent, DomainEvent};
 
         let mut payload = norito::json!({
@@ -23711,7 +27830,6 @@ impl StateTransaction<'_, '_> {
         });
 
         if let DataEvent::Domain(DomainEvent::Account(account_event)) = event {
-            let account_domain = account_event.origin_domain().to_string();
             let AccountEvent::Asset(asset_event) = account_event else {
                 return Json::from(payload);
             };
@@ -23724,10 +27842,48 @@ impl StateTransaction<'_, '_> {
             let asset_id = changed.asset();
             let amount_str = changed.amount().to_string();
             let asset_definition_id = asset_id.definition().to_string();
-            let asset_definition_name = (!asset_id.definition().is_opaque_canonical())
-                .then(|| asset_id.definition().name().as_ref().to_owned());
-            let asset_definition_domain = (!asset_id.definition().is_opaque_canonical())
-                .then(|| asset_id.definition().domain().to_string());
+            let alias_domains: Vec<String> = self
+                .world
+                .bound_account_aliases(asset_id.account())
+                .into_iter()
+                .filter_map(|alias| {
+                    alias
+                        .domain_id(&self.nexus.dataspace_catalog)
+                        .ok()
+                        .flatten()
+                        .map(|domain| domain.to_string())
+                })
+                .collect();
+            let account_domain = self
+                .world
+                .accounts
+                .get(asset_id.account())
+                .and_then(|value| {
+                    value.as_ref().label().and_then(|label| {
+                        label
+                            .domain_id(&self.nexus.dataspace_catalog)
+                            .ok()
+                            .flatten()
+                            .map(|domain| domain.to_string())
+                    })
+                })
+                .or_else(|| {
+                    alias_domains
+                        .iter()
+                        .find(|domain| {
+                            let (name, _) = domain.split_once('.').unwrap_or((domain.as_str(), ""));
+                            matches!(name, "banka" | "bankb" | "paynet")
+                        })
+                        .cloned()
+                })
+                .or_else(|| alias_domains.first().cloned())
+                .unwrap_or_else(|| account_event.origin_domain().to_string());
+            let asset_definition_name = asset_id
+                .definition()
+                .try_name()
+                .map(|name| name.as_ref().to_owned());
+            let asset_definition_domain =
+                asset_id.definition().try_domain().map(ToString::to_string);
             let account_id = asset_id.account().to_string();
             if let Ok(amount_i64) = amount_str.parse::<i64>() {
                 let mut details = norito::json::Map::new();
@@ -23807,9 +27963,142 @@ impl StateTransaction<'_, '_> {
                 self.execute_instructions(instructions.clone(), authority),
                 None,
             ),
+            ExecutableRef::ContractCall(invocation) => {
+                let record = crate::smartcontracts::code::fetch_bound_contract_record(
+                    self,
+                    &invocation.contract_address,
+                )
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` not found in WSV",
+                        invocation.contract_address
+                    ))
+                })?;
+                let bytecode = record.code_bytes.clone();
+                let summary = {
+                    let mut cache = self.ivm_cache.lock();
+                    cache
+                        .summarize_program(bytecode.as_ref())
+                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                };
+                let meta = summary.metadata.clone();
+                let pipeline_cap = self.pipeline.ivm_max_cycles_upper_bound;
+                let mut eff_cycles = meta.max_cycles;
+                if eff_cycles == 0 {
+                    eff_cycles = u64::MAX;
+                }
+                if pipeline_cap > 0 {
+                    eff_cycles = eff_cycles.min(pipeline_cap);
+                }
+                if eff_cycles == u64::MAX {
+                    eff_cycles = 0;
+                }
+                let gas_cap_cycles = if eff_cycles == 0 {
+                    meta.max_cycles
+                } else {
+                    eff_cycles
+                };
+                let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap_cycles);
+                let remaining_block_budget = if self.gas_limit_per_block == 0 {
+                    u64::MAX
+                } else {
+                    self.gas_limit_per_block
+                        .saturating_sub(self.gas_used_in_block_so_far)
+                };
+                let mut gas_limit = gas_cap.min(remaining_block_budget);
+                if gas_limit == u64::MAX {
+                    gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+                }
+                let mut cached_runtime = {
+                    let mut cache = self.ivm_cache.lock();
+                    cache
+                        .take_or_create_cached_runtime(bytecode.as_ref(), gas_limit)
+                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                };
+                let mut vm = cached_runtime.vm;
+                let contract_call_context =
+                    crate::executor::parse_contract_invocation_execution_context(
+                        invocation,
+                        bytecode.as_ref(),
+                        record.contract_alias.clone(),
+                    )?;
+                if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
+                    vm.set_register(1, vm.memory.code_len());
+                    vm.set_program_counter(entrypoint_pc).map_err(|err| {
+                        let selector = contract_call_context
+                            .runtime_context()
+                            .map(|runtime| runtime.entrypoint)
+                            .unwrap_or_else(|| "main".to_owned());
+                        ValidationFail::NotPermitted(format!(
+                            "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                        ))
+                    })?;
+                }
+                let contract_runtime_context = contract_call_context.runtime_context();
+                let accounts = self.trigger_accounts_snapshot();
+                let mut host =
+                    crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+                        authority.clone(),
+                        accounts,
+                        contract_call_context.args().clone(),
+                    );
+                let current_block_time_ms =
+                    u64::try_from(self._curr_block.creation_time().as_millis())
+                        .expect("block creation timestamp must fit into u64");
+                host.set_trigger_id(id.clone());
+                host.set_block_time_ms(current_block_time_ms);
+                let default_base = self._curr_block.height().get().saturating_mul(256);
+                host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
+                #[cfg(feature = "telemetry")]
+                host.set_telemetry(self.telemetry.clone());
+                host.set_crypto_config(self.crypto());
+                host.set_halo2_config(&self.zk.halo2);
+                host.set_chain_id(self.chain_id());
+                host.set_durable_state_snapshot_from_world(&self.world);
+                host.set_public_inputs_from_parameters(self.world.parameters.get());
+                host.set_vrf_epoch_seeds_from_world(&self.world);
+                host.set_query_state(self);
+                host.set_contract_runtime_context(contract_runtime_context.clone());
+                host.set_zk_snapshots_from_world(&self.world, &self.zk)
+                    .map_err(|e| {
+                        ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
+                    })?;
+                if eff_cycles > 0 {
+                    vm.set_max_cycles(eff_cycles);
+                }
+                vm.set_gas_limit(gas_limit);
+                let run_result = vm.run_with_host(&mut host);
+                cached_runtime.vm = vm;
+                {
+                    let mut cache = self.ivm_cache.lock();
+                    cache.put_cached_runtime(&cached_runtime);
+                }
+                if let Err(e) = run_result {
+                    return Err(
+                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                            &cached_runtime.vm,
+                            &e,
+                        )
+                        .into(),
+                    );
+                }
+                let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
+                let queued = artifacts.apply_to_transaction(self, authority)?;
+                let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
+                (Ok(cvs.into()), None)
+            }
             ExecutableRef::Ivm(blob_hash) => {
                 if let Some(bytecode) = self.world.triggers.get_original_contract(blob_hash) {
-                    let trigger_args = Self::trigger_args_from_event(&event);
+                    let trigger_args = self.trigger_args_from_event(&event);
+                    let contract_call_context = self
+                        .world
+                        .triggers
+                        .inspect_by_id(id, |action| action.metadata().clone())
+                        .map(|metadata| {
+                            parse_contract_call_execution_context(&metadata, bytecode.as_ref())
+                        })
+                        .transpose()?
+                        .flatten();
                     let bytecode = bytecode.clone();
                     let summary = {
                         let mut cache = self.ivm_cache.lock();
@@ -23852,6 +28141,26 @@ impl StateTransaction<'_, '_> {
                             .map_err(|e| ValidationFail::InternalError(e.to_string()))?
                     };
                     let mut vm = cached_runtime.vm;
+                    if let Some(context) = contract_call_context.as_ref()
+                        && let Some(entrypoint_pc) = context.entrypoint_pc()
+                    {
+                        vm.set_register(1, vm.memory.code_len());
+                        vm.set_program_counter(entrypoint_pc).map_err(|err| {
+                            let selector = context
+                                .runtime_context()
+                                .map(|runtime| runtime.entrypoint)
+                                .unwrap_or_else(|| "main".to_owned());
+                            ValidationFail::NotPermitted(format!(
+                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                            ))
+                        })?;
+                    }
+                    let host_args = contract_call_context
+                        .as_ref()
+                        .map_or(trigger_args, |context| context.args().clone());
+                    let contract_runtime_context = contract_call_context
+                        .as_ref()
+                        .and_then(|context| context.runtime_context());
                     // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
                     // which we collect after `vm.run()` and return as the trigger step.
                     let accounts = self.trigger_accounts_snapshot();
@@ -23859,7 +28168,7 @@ impl StateTransaction<'_, '_> {
                         crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                             authority.clone(),
                             accounts,
-                            trigger_args,
+                            host_args,
                         );
                     let current_block_time_ms =
                         u64::try_from(self._curr_block.creation_time().as_millis())
@@ -23880,6 +28189,7 @@ impl StateTransaction<'_, '_> {
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
                     host.set_vrf_epoch_seeds_from_world(&self.world);
                     host.set_query_state(self);
+                    host.set_contract_runtime_context(contract_runtime_context.clone());
                     host.set_zk_snapshots_from_world(&self.world, &self.zk)
                         .map_err(|e| {
                             ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
@@ -23896,12 +28206,16 @@ impl StateTransaction<'_, '_> {
                     }
                     if let Err(e) = run_result {
                         return Err(
-                            crate::smartcontracts::ivm::map_vm_error_to_validation(&e).into()
+                            crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                                &cached_runtime.vm,
+                                &e,
+                            )
+                            .into(),
                         );
                     }
                     // Collect queued ISIs from the host, execute them via the executor,
                     // and return them as the step.
-                    let artifacts = host.into_execution_artifacts()?;
+                    let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
                     let queued = artifacts.apply_to_transaction(self, authority)?;
                     let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                     (Ok(cvs.into()), None)
@@ -23954,7 +28268,9 @@ impl StateTransaction<'_, '_> {
     fn execution_step_from_executable(executable: &ExecutableRef) -> ExecutionStep {
         match executable {
             ExecutableRef::Instructions(instructions) => ExecutionStep(instructions.clone()),
-            ExecutableRef::Ivm(_) => ExecutionStep(ConstVec::new_empty()),
+            ExecutableRef::ContractCall(_) | ExecutableRef::Ivm(_) => {
+                ExecutionStep(ConstVec::new_empty())
+            }
         }
     }
 
@@ -23979,12 +28295,14 @@ impl StateTransaction<'_, '_> {
     }
 
     /// Apply a non-erroneous executable in the given committed block.
-    #[cfg(any(test, feature = "bench"))]
     pub fn apply_executable(&mut self, executable: &Executable, authority: &AccountId) {
         match executable {
             Executable::Instructions(instructions) => {
                 self.execute_instructions(instructions.clone(), authority)
                     .expect("should be no errors");
+            }
+            Executable::ContractCall(_) => {
+                panic!("apply_executable does not support Executable::ContractCall")
             }
             Executable::Ivm(bytes) => {
                 let mut vm = IVM::new(0);
@@ -24011,9 +28329,10 @@ impl StateTransaction<'_, '_> {
 
     fn build_permission_summary(&mut self, account: &AccountId) -> AccountPermissionSummary {
         let world = &self.world;
+        let dataspace_catalog = &self.nexus.dataspace_catalog;
         let mut summary = AccountPermissionSummary::default();
         let mut merge_permission = |permission: &Permission| {
-            summary.apply_grant(world, permission);
+            summary.apply_grant(world, dataspace_catalog, permission);
         };
         if let Some(perms) = world.account_permissions.get(account) {
             for permission in perms {
@@ -24343,9 +28662,29 @@ mod range_bounds {
     }
 }
 
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SnapshotPublicLaneRewardClaim {
+    pub lane_id: LaneId,
+    pub account: AccountId,
+    pub asset: AssetId,
+    pub last_claimed_epoch: u64,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SnapshotNoritoBlob {
+    pub encoded_hex: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SnapshotSpaceDirectoryManifestSet {
+    pub uaid: UniversalAccountId,
+    pub encoded_hex: String,
+}
+
 pub(crate) mod deserialize {
     use std::marker::PhantomData;
 
+    use norito::codec::DecodeAll;
     use norito::json::{self, JsonDeserialize};
 
     use super::{default_oracle, *};
@@ -24398,7 +28737,17 @@ pub(crate) mod deserialize {
                 ivm: &ivm_runtime,
                 _marker: PhantomData,
             };
-            let world = parse_world(world_value, &ivm_seed)?;
+            let mut world = parse_world(world_value, &ivm_seed)?;
+            let public_lane_validators: Vec<SnapshotNoritoBlob> =
+                take_optional_default(&mut map, "public_lane_validators")?;
+            let public_lane_stake_shares: Vec<SnapshotNoritoBlob> =
+                take_optional_default(&mut map, "public_lane_stake_shares")?;
+            let public_lane_rewards: Vec<SnapshotNoritoBlob> =
+                take_optional_default(&mut map, "public_lane_rewards")?;
+            let public_lane_reward_claims: Vec<SnapshotPublicLaneRewardClaim> =
+                take_optional_default(&mut map, "public_lane_reward_claims")?;
+            let space_directory_manifests: Vec<SnapshotSpaceDirectoryManifestSet> =
+                take_optional_default(&mut map, "space_directory_manifests")?;
 
             let chain_id: ChainId = take_required(&mut map, "chain_id")?;
             let block_hashes_vec: Vec<HashOf<BlockHeader>> =
@@ -24408,6 +28757,48 @@ pub(crate) mod deserialize {
             let prev_commit_topology = take_topology_cell(&mut map, "prev_commit_topology")?;
 
             drain_unknown(&map, "state");
+
+            world.public_lane_validators = decode_snapshot_records::<PublicLaneValidatorRecord>(
+                public_lane_validators,
+                "public_lane_validators",
+            )?
+            .into_iter()
+            .map(|record| ((record.lane_id, record.validator.clone()), record))
+            .collect();
+            world.public_lane_stake_shares = decode_snapshot_records::<PublicLaneStakeShare>(
+                public_lane_stake_shares,
+                "public_lane_stake_shares",
+            )?
+            .into_iter()
+            .map(|record| {
+                (
+                    (
+                        record.lane_id,
+                        record.validator.clone(),
+                        record.staker.clone(),
+                    ),
+                    record,
+                )
+            })
+            .collect();
+            world.public_lane_rewards = decode_snapshot_records::<PublicLaneRewardRecord>(
+                public_lane_rewards,
+                "public_lane_rewards",
+            )?
+            .into_iter()
+            .map(|record| ((record.lane_id, record.epoch), record))
+            .collect();
+            world.public_lane_reward_claims = public_lane_reward_claims
+                .into_iter()
+                .map(|record| {
+                    (
+                        (record.lane_id, record.account.clone(), record.asset.clone()),
+                        record.last_claimed_epoch,
+                    )
+                })
+                .collect();
+            world.space_directory_manifests =
+                decode_space_directory_manifest_sets(space_directory_manifests)?;
 
             let mut state = build_state(BuildStateInputs {
                 world,
@@ -24424,6 +28815,59 @@ pub(crate) mod deserialize {
             state.chain_id = chain_id;
             Ok(state)
         }
+    }
+
+    fn decode_snapshot_records<T>(
+        records: Vec<SnapshotNoritoBlob>,
+        field: &str,
+    ) -> Result<Vec<T>, json::Error>
+    where
+        T: DecodeAll,
+    {
+        records
+            .into_iter()
+            .enumerate()
+            .map(|(index, record)| {
+                let bytes =
+                    hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: format!("record {index} hex decode failed: {err}"),
+                    })?;
+                let mut cursor = bytes.as_slice();
+                T::decode_all(&mut cursor).map_err(|err| json::Error::InvalidField {
+                    field: field.to_owned(),
+                    message: format!("record {index} norito decode failed: {err}"),
+                })
+            })
+            .collect()
+    }
+
+    fn decode_space_directory_manifest_sets(
+        records: Vec<SnapshotSpaceDirectoryManifestSet>,
+    ) -> Result<Storage<UniversalAccountId, SpaceDirectoryManifestSet>, json::Error> {
+        let mut storage = Storage::default();
+        for (index, record) in records.into_iter().enumerate() {
+            let bytes =
+                hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
+                    field: "space_directory_manifests".to_owned(),
+                    message: format!("record {index} hex decode failed: {err}"),
+                })?;
+            let mut cursor = bytes.as_slice();
+            let manifest_set =
+                SpaceDirectoryManifestSet::decode_all(&mut cursor).map_err(|err| {
+                    json::Error::InvalidField {
+                        field: "space_directory_manifests".to_owned(),
+                        message: format!("record {index} norito decode failed: {err}"),
+                    }
+                })?;
+            if storage.insert(record.uaid, manifest_set).is_some() {
+                return Err(json::Error::InvalidField {
+                    field: "space_directory_manifests".to_owned(),
+                    message: format!("duplicate UAID at record {index}"),
+                });
+            }
+        }
+        Ok(storage)
     }
 
     fn take_required<T: JsonDeserialize>(
@@ -24450,6 +28894,27 @@ pub(crate) mod deserialize {
                     field: key.to_owned(),
                     message: err.to_string(),
                 })
+            },
+        )
+    }
+
+    fn take_optional_default_lossy<T>(
+        map: &mut json::native::Map,
+        key: &str,
+    ) -> Result<T, json::Error>
+    where
+        T: JsonDeserialize + Default,
+    {
+        map.remove(key).map_or_else(
+            || Ok(T::default()),
+            |value| match json::value::from_value(value) {
+                Ok(parsed) => Ok(parsed),
+                Err(err) => {
+                    eprintln!(
+                        "snapshot compatibility: discarding persisted `{key}` value because it could not be decoded: {err}"
+                    );
+                    Ok(T::default())
+                }
             },
         )
     }
@@ -24525,16 +28990,27 @@ pub(crate) mod deserialize {
         let peers: Cell<Peers> = take_required(&mut map, "peers")?;
         let domains: Storage<DomainId, Domain> = take_required(&mut map, "domains")?;
         let accounts: Storage<AccountId, AccountValue> = take_required(&mut map, "accounts")?;
-        let account_subject_domains = take_optional_default(&mut map, "account_subject_domains")?;
-        let domain_account_subjects = take_optional_default(&mut map, "domain_account_subjects")?;
+        let account_aliases = take_optional_default(&mut map, "account_aliases")?;
+        let account_aliases_by_account =
+            take_optional_default(&mut map, "account_aliases_by_account")?;
+        let account_scope_directory = take_optional_default(&mut map, "account_scope_directory")?;
+        let ram_lfe_program_policies = take_optional_default(&mut map, "ram_lfe_program_policies")?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
+        let account_recovery_policies =
+            take_optional_default(&mut map, "account_recovery_policies")?;
+        let account_recovery_requests =
+            take_optional_default(&mut map, "account_recovery_requests")?;
         let asset_definitions: Storage<AssetDefinitionId, AssetDefinition> =
             take_required(&mut map, "asset_definitions")?;
+        let asset_definition_alias_bindings =
+            take_optional_default(&mut map, "asset_definition_alias_bindings")?;
+        let contract_alias_bindings = take_optional_default(&mut map, "contract_alias_bindings")?;
         let assets: Storage<AssetId, AssetValue> = take_required(&mut map, "assets")?;
         let account_rekey_records = take_optional_default(&mut map, "account_rekey_records")?;
         let asset_metadata = take_optional_default(&mut map, "asset_metadata")?;
         let nfts: Storage<NftId, NftValue> = take_required(&mut map, "nfts")?;
+        let rwas: Storage<RwaId, RwaValue> = take_optional_default(&mut map, "rwas")?;
         let roles: Storage<RoleId, Role> = take_required(&mut map, "roles")?;
         let account_permissions: Storage<AccountId, Permissions> =
             take_required(&mut map, "account_permissions")?;
@@ -24574,10 +29050,73 @@ pub(crate) mod deserialize {
         let contract_code = take_optional_default(&mut map, "contract_code")?;
         let contract_instances = take_optional_default(&mut map, "contract_instances")?;
         let smart_contract_state = take_optional_default(&mut map, "smart_contract_state")?;
+        let soracloud_service_revisions =
+            take_optional_default_lossy(&mut map, "soracloud_service_revisions")?;
+        let soracloud_service_deployments =
+            take_optional_default(&mut map, "soracloud_service_deployments")?;
+        let soracloud_service_runtime =
+            take_optional_default(&mut map, "soracloud_service_runtime")?;
+        let soracloud_inrou_replica_runtime =
+            take_optional_default(&mut map, "soracloud_inrou_replica_runtime")?;
+        let soracloud_service_audit_events =
+            take_optional_default(&mut map, "soracloud_service_audit_events")?;
+        let soracloud_service_state_entries =
+            take_optional_default(&mut map, "soracloud_service_state_entries")?;
+        let soracloud_decryption_request_records =
+            take_optional_default(&mut map, "soracloud_decryption_request_records")?;
+        let soracloud_agent_apartments =
+            take_optional_default(&mut map, "soracloud_agent_apartments")?;
+        let soracloud_agent_apartment_audit_events =
+            take_optional_default(&mut map, "soracloud_agent_apartment_audit_events")?;
+        let soracloud_training_jobs = take_optional_default(&mut map, "soracloud_training_jobs")?;
+        let soracloud_training_job_audit_events =
+            take_optional_default(&mut map, "soracloud_training_job_audit_events")?;
+        let soracloud_model_registries =
+            take_optional_default(&mut map, "soracloud_model_registries")?;
+        let soracloud_model_weight_versions =
+            take_optional_default(&mut map, "soracloud_model_weight_versions")?;
+        let soracloud_model_weight_audit_events =
+            take_optional_default(&mut map, "soracloud_model_weight_audit_events")?;
+        let soracloud_model_artifacts =
+            take_optional_default(&mut map, "soracloud_model_artifacts")?;
+        let soracloud_model_artifact_audit_events =
+            take_optional_default(&mut map, "soracloud_model_artifact_audit_events")?;
+        let soracloud_private_compile_profiles =
+            take_optional_default(&mut map, "soracloud_private_compile_profiles")?;
+        let soracloud_uploaded_model_bundles =
+            take_optional_default(&mut map, "soracloud_uploaded_model_bundles")?;
+        let soracloud_uploaded_model_chunks =
+            take_optional_default(&mut map, "soracloud_uploaded_model_chunks")?;
+        let soracloud_private_inference_sessions =
+            take_optional_default(&mut map, "soracloud_private_inference_sessions")?;
+        let soracloud_private_inference_checkpoints =
+            take_optional_default(&mut map, "soracloud_private_inference_checkpoints")?;
+        let soracloud_model_host_capabilities =
+            take_optional_default(&mut map, "soracloud_model_host_capabilities")?;
+        let soracloud_inrou_host_capabilities =
+            take_optional_default(&mut map, "soracloud_inrou_host_capabilities")?;
+        let soracloud_hf_sources = take_optional_default(&mut map, "soracloud_hf_sources")?;
+        let soracloud_hf_shared_lease_pools =
+            take_optional_default(&mut map, "soracloud_hf_shared_lease_pools")?;
+        let soracloud_hf_shared_lease_members =
+            take_optional_default(&mut map, "soracloud_hf_shared_lease_members")?;
+        let soracloud_hf_shared_lease_audit_events =
+            take_optional_default(&mut map, "soracloud_hf_shared_lease_audit_events")?;
+        let soracloud_model_host_violation_evidence =
+            take_optional_default(&mut map, "soracloud_model_host_violation_evidence")?;
+        let soracloud_hf_placements = take_optional_default(&mut map, "soracloud_hf_placements")?;
+        let soracloud_inrou_service_placements =
+            take_optional_default(&mut map, "soracloud_inrou_service_placements")?;
+        let soracloud_mailbox_messages =
+            take_optional_default(&mut map, "soracloud_mailbox_messages")?;
+        let soracloud_runtime_receipts =
+            take_optional_default(&mut map, "soracloud_runtime_receipts")?;
         let pin_manifests = take_optional_default(&mut map, "pin_manifests")?;
         let zk_assets = take_optional_default(&mut map, "zk_assets")?;
         let elections = take_optional_default(&mut map, "elections")?;
         let citizens = take_optional_default(&mut map, "citizens")?;
+        let ministry_agenda_proposals =
+            take_optional_default(&mut map, "ministry_agenda_proposals")?;
         let governance_proposals = take_optional_default(&mut map, "governance_proposals")?;
         let governance_referenda = take_optional_default(&mut map, "governance_referenda")?;
         let governance_stage_approvals =
@@ -24591,19 +29130,16 @@ pub(crate) mod deserialize {
         let vrf_epochs = take_optional_default(&mut map, "vrf_epochs")?;
         let repo_agreements = take_optional_default(&mut map, "repo_agreements")?;
         let settlement_ledgers = take_optional_default(&mut map, "settlement_ledgers")?;
-        let offline_allowances = take_optional_default(&mut map, "offline_allowances")?;
-        let offline_verdict_revocations =
-            take_optional_default(&mut map, "offline_verdict_revocations")?;
-        let offline_consumed_build_claim_ids =
-            take_optional_default(&mut map, "offline_consumed_build_claim_ids")?;
-        let offline_to_online_transfers =
-            take_optional_default(&mut map, "offline_to_online_transfers")?;
+        let offline_note_v2_replay_keys =
+            take_optional_default(&mut map, "offline_note_v2_replay_keys")?;
         let lane_relay_emergency_validators =
             take_optional_default(&mut map, "lane_relay_emergency_validators")?;
         let manifest_aliases = take_optional_default(&mut map, "manifest_aliases")?;
         let replication_orders = take_optional_default(&mut map, "replication_orders")?;
         let content_bundles = take_optional_default(&mut map, "content_bundles")?;
         let content_chunks = take_optional_default(&mut map, "content_chunks")?;
+        let asset_escrows = take_optional_default(&mut map, "asset_escrows")?;
+        let anonymous_asset_escrows = take_optional_default(&mut map, "anonymous_asset_escrows")?;
         let merge_hint_roots: Cell<Vec<Hash>> =
             take_optional_default(&mut map, "merge_hint_roots")?;
         let merge_global_state_root: Cell<Option<Hash>> =
@@ -24616,23 +29152,29 @@ pub(crate) mod deserialize {
             domains,
             domain_selectors: Storage::default(),
             accounts,
-            account_subject_domains,
-            domain_account_subjects,
             uaid_accounts: Storage::default(),
-            account_aliases: Storage::default(),
+            account_aliases,
+            account_aliases_by_account,
+            account_scope_directory,
             opaque_uaids: Storage::default(),
+            ram_lfe_program_policies,
             identifier_policies,
             identifier_claims,
             account_rekey_records,
+            account_recovery_policies,
+            account_recovery_requests,
             asset_definitions,
             asset_definition_aliases: Storage::default(),
-            asset_definition_alias_bindings: Storage::default(),
+            asset_definition_alias_bindings,
+            contract_aliases: Storage::default(),
+            contract_alias_bindings,
             domain_asset_definitions: Storage::default(),
             asset_definition_holders: Storage::default(),
             asset_definition_assets: Storage::default(),
             assets,
             asset_metadata,
             nfts,
+            rwas,
             roles,
             account_permissions,
             account_roles,
@@ -24650,6 +29192,8 @@ pub(crate) mod deserialize {
             viral_binding_claims: Storage::default(),
             viral_escrows: Storage::default(),
             viral_bonus_paid: Storage::default(),
+            asset_escrows,
+            anonymous_asset_escrows,
             uaid_dataspaces: Storage::default(),
             space_directory_manifests: Storage::default(),
             axt_policies: Storage::default(),
@@ -24673,6 +29217,38 @@ pub(crate) mod deserialize {
             contract_code,
             contract_instances,
             smart_contract_state,
+            soracloud_service_revisions,
+            soracloud_service_deployments,
+            soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
+            soracloud_service_audit_events,
+            soracloud_service_state_entries,
+            soracloud_decryption_request_records,
+            soracloud_agent_apartments,
+            soracloud_agent_apartment_audit_events,
+            soracloud_training_jobs,
+            soracloud_training_job_audit_events,
+            soracloud_model_registries,
+            soracloud_model_weight_versions,
+            soracloud_model_weight_audit_events,
+            soracloud_model_artifacts,
+            soracloud_model_artifact_audit_events,
+            soracloud_private_compile_profiles,
+            soracloud_uploaded_model_bundles,
+            soracloud_uploaded_model_chunks,
+            soracloud_private_inference_sessions,
+            soracloud_private_inference_checkpoints,
+            soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
+            soracloud_hf_sources,
+            soracloud_hf_shared_lease_pools,
+            soracloud_hf_shared_lease_members,
+            soracloud_hf_shared_lease_audit_events,
+            soracloud_model_host_violation_evidence,
+            soracloud_hf_placements,
+            soracloud_inrou_service_placements,
+            soracloud_mailbox_messages,
+            soracloud_runtime_receipts,
             capacity_declarations: Storage::default(),
             capacity_fee_ledger: Storage::default(),
             capacity_disputes: Storage::default(),
@@ -24700,13 +29276,7 @@ pub(crate) mod deserialize {
             soradns_history_len: Cell::default(),
             repo_agreements,
             settlement_ledgers,
-            offline_allowances,
-            offline_verdict_revocations,
-            offline_consumed_build_claim_ids,
-            offline_to_online_transfers,
-            offline_transfer_sender_index: Storage::default(),
-            offline_transfer_receiver_index: Storage::default(),
-            offline_transfer_status_index: Storage::default(),
+            offline_note_v2_replay_keys,
             domain_committees: Storage::default(),
             domain_endorsement_policies: Storage::default(),
             domain_endorsements: Storage::default(),
@@ -24719,6 +29289,7 @@ pub(crate) mod deserialize {
             zk_assets,
             elections,
             citizens,
+            ministry_agenda_proposals,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,
@@ -24739,7 +29310,6 @@ pub(crate) mod deserialize {
                 field: "domain_selectors".into(),
                 message,
             })?;
-        world.rebuild_account_subject_domain_indexes();
         world
             .rebuild_uaid_account_index()
             .map_err(|message| json::Error::InvalidField {
@@ -24753,9 +29323,27 @@ pub(crate) mod deserialize {
                 message,
             })?;
         world
+            .rebuild_account_scope_directory()
+            .map_err(|message| json::Error::InvalidField {
+                field: "account_scope_directory".into(),
+                message,
+            })?;
+        world
+            .rebuild_account_rekey_records()
+            .map_err(|message| json::Error::InvalidField {
+                field: "account_rekey_records".into(),
+                message,
+            })?;
+        world
             .rebuild_asset_definition_alias_indexes()
             .map_err(|message| json::Error::InvalidField {
                 field: "asset_definition_aliases".into(),
+                message,
+            })?;
+        world
+            .rebuild_contract_alias_indexes()
+            .map_err(|message| json::Error::InvalidField {
+                field: "contract_aliases".into(),
                 message,
             })?;
         world.rebuild_asset_definition_indexes();
@@ -24771,8 +29359,6 @@ pub(crate) mod deserialize {
                 field: "identifier_claims".into(),
                 message,
             })?;
-        world.rebuild_offline_transfer_indexes();
-        world.rebuild_offline_consumed_build_claim_ids();
         Ok(world)
     }
 
@@ -24837,6 +29423,46 @@ pub(crate) mod deserialize {
                     CommitRosterJournal::new(commit_roster_journal_path, roster_retention)
                 }
             };
+        let query_index_journal_path = QueryIndexJournal::journal_path(&store_root);
+        let query_index_journal = match QueryIndexJournal::load(query_index_journal_path.clone()) {
+            Ok(mut journal) => {
+                let height = u64::try_from(block_hashes.committed_height()).unwrap_or(u64::MAX);
+                let hash = block_hashes.view().last().copied();
+                if height > 0 {
+                    journal.set_latest(height, hash);
+                }
+                journal
+            }
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %query_index_journal_path.display(),
+                    "failed to load query index journal; starting empty"
+                );
+                let mut journal = QueryIndexJournal::new(query_index_journal_path);
+                let height = u64::try_from(block_hashes.committed_height()).unwrap_or(u64::MAX);
+                let hash = block_hashes.view().last().copied();
+                if height > 0 {
+                    journal.set_latest(height, hash);
+                }
+                journal
+            }
+        };
+        let query_projection_checkpoint_journal_path =
+            QueryProjectionCheckpointJournal::journal_path(&store_root);
+        let query_projection_checkpoint_journal = match QueryProjectionCheckpointJournal::load(
+            query_projection_checkpoint_journal_path.clone(),
+        ) {
+            Ok(journal) => journal,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %query_projection_checkpoint_journal_path.display(),
+                    "failed to load query projection checkpoint journal; starting empty"
+                );
+                QueryProjectionCheckpointJournal::new(query_projection_checkpoint_journal_path)
+            }
+        };
         let pipeline = default_pipeline();
         let pipeline_parallelism = PipelineParallelism::new(&pipeline);
         let stateless_cache_cap = pipeline.stateless_cache_cap;
@@ -24847,7 +29473,7 @@ pub(crate) mod deserialize {
             #[cfg(feature = "telemetry")]
             Some(telemetry_seed.clone()),
         );
-        let state = State {
+        let mut state = State {
             world,
             block_hashes,
             merge_ledger: MergeLedgerStore::with_default_capacity(),
@@ -24860,6 +29486,10 @@ pub(crate) mod deserialize {
             da_shard_cursors,
             da_shard_cursor_persistor: DaShardCursorJournalPersistor::new(),
             commit_roster_journal: parking_lot::RwLock::new(commit_roster_journal),
+            query_index_journal: parking_lot::RwLock::new(query_index_journal),
+            query_projection_checkpoint_journal: parking_lot::RwLock::new(
+                query_projection_checkpoint_journal,
+            ),
             da_pin_intents: parking_lot::RwLock::new(DaPinStore::default()),
             lane_relays: parking_lot::RwLock::new(LaneRelayStore::default()),
             lane_manifests: parking_lot::RwLock::new(Arc::new(LaneManifestRegistry::empty())),
@@ -24873,6 +29503,7 @@ pub(crate) mod deserialize {
             pacing_governor: iroha_config::parameters::actual::SumeragiPacingGovernor::default(),
             pipeline,
             pipeline_parallelism,
+            soracloud_runtime: parking_lot::RwLock::new(None),
             stateless_validation_cache: parking_lot::Mutex::new(StatelessValidationCache::new(
                 stateless_cache_cap,
             )),
@@ -24898,6 +29529,7 @@ pub(crate) mod deserialize {
             view_lock: parking_lot::RwLock::new(()),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
         };
+        state.run_storage_migrations();
         #[cfg(feature = "sm")]
         Sm2PublicKey::set_default_distid(initial_crypto.sm2_distid_default.clone())
             .expect("sm2_distid_default must be valid");
@@ -24906,6 +29538,9 @@ pub(crate) mod deserialize {
             let view = state.world.governance_proposals.view();
             let records: Vec<_> = view.iter().map(|(id, rec)| (*id, rec.status)).collect();
             telemetry_seed.seed_governance_proposals(records);
+            let citizens_total =
+                u64::try_from(state.world.citizens.view().iter().count()).unwrap_or(u64::MAX);
+            telemetry_seed.record_citizens_total(citizens_total);
         }
         let snapshot = state.kura.merge_ledger_snapshot();
         state.merge_ledger.replace(snapshot);
@@ -25199,8 +29834,6 @@ pub(crate) mod deserialize {
 
     #[cfg(test)]
     mod decode_tests {
-        use iroha_crypto::KeyPair;
-
         use super::*;
 
         #[test]
@@ -25218,44 +29851,6 @@ pub(crate) mod deserialize {
             let parsed = take_parameters_cell(&mut map, "parameters")
                 .expect("historical envelope should decode into parameters cell");
             assert_eq!(parsed.view().get(), &expected);
-        }
-
-        #[test]
-        fn take_optional_default_decodes_subject_domain_index_storages() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
-            let account = AccountId::new(KeyPair::random().public_key().clone());
-            let subject = account.subject_id();
-
-            let mut subject_domains: Storage<AccountId, BTreeSet<DomainId>> = Storage::default();
-            subject_domains.insert(subject.clone(), BTreeSet::new());
-            let mut domain_subjects: Storage<DomainId, BTreeSet<AccountId>> = Storage::default();
-            domain_subjects.insert(domain_id.clone(), BTreeSet::from([subject.clone()]));
-
-            let mut map = json::native::Map::new();
-            map.insert(
-                "account_subject_domains".to_owned(),
-                norito::json::to_value(&subject_domains).expect("serialize subject domains"),
-            );
-            map.insert(
-                "domain_account_subjects".to_owned(),
-                norito::json::to_value(&domain_subjects).expect("serialize domain subjects"),
-            );
-
-            let decoded_subject_domains: Storage<AccountId, BTreeSet<DomainId>> =
-                take_optional_default(&mut map, "account_subject_domains")
-                    .expect("decode subject domains");
-            let decoded_domain_subjects: Storage<DomainId, BTreeSet<AccountId>> =
-                take_optional_default(&mut map, "domain_account_subjects")
-                    .expect("decode domain subjects");
-
-            assert_eq!(
-                decoded_subject_domains.view().get(&subject),
-                Some(&BTreeSet::new())
-            );
-            assert_eq!(
-                decoded_domain_subjects.view().get(&domain_id),
-                Some(&BTreeSet::from([subject]))
-            );
         }
     }
 }
@@ -25375,7 +29970,11 @@ fn default_fraud_monitoring_cfg() -> iroha_config::parameters::actual::FraudMoni
 
 #[cfg(test)]
 mod tests {
-    use core::{mem, num::NonZeroU64, time::Duration};
+    use core::{
+        mem,
+        num::{NonZeroU32, NonZeroU64},
+        time::Duration,
+    };
     use std::{
         borrow::Cow,
         collections::{BTreeMap, BTreeSet},
@@ -25390,6 +29989,7 @@ mod tests {
     #[cfg(feature = "sm")]
     use iroha_crypto::sm::Sm2PublicKey;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_data_model::account::AccountDetails;
     use iroha_data_model::isi::verifying_keys;
     use iroha_data_model::proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord};
     use iroha_data_model::zk::BackendTag;
@@ -25425,7 +30025,8 @@ mod tests {
             DataSpaceId, DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject, LaneCatalog,
             LaneConfig, LaneFastpqProofMaterial, LaneId, LaneRelayEmergencyValidatorSet,
             LaneRelayEnvelope, LaneRelayError, LaneStorageProfile, LaneVisibility, ManifestVersion,
-            ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest,
+            ProofBlob, PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding,
+            RemoteSpendIntent, SpendOp, TouchManifest,
         },
         peer::PeerId,
         prelude::*,
@@ -25444,10 +30045,616 @@ mod tests {
     use super::*;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
+
+    fn asset_alias_test_world() -> (World, AssetDefinitionId) {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain");
+        let definition_id =
+            AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("asset name"));
+        let definition = AssetDefinition::numeric(definition_id.clone())
+            .with_name("usd".to_owned())
+            .build(&authority);
+
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        (
+            World::with([domain], [account], [definition]),
+            definition_id,
+        )
+    }
+
+    fn alias_in_domain(domain_id: &DomainId, label: Name) -> AccountAlias {
+        AccountAlias::new(
+            label,
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            DataSpaceId::UNIVERSAL,
+        )
+    }
+
+    fn seed_account_alias_lease(
+        tx: &mut StateTransaction<'_, '_>,
+        owner: &AccountId,
+        alias: &AccountAlias,
+    ) {
+        let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
+            .expect("account alias selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(owner)
+            .expect("account address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        tx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+
+    #[test]
+    fn new_for_testing_seeds_reserved_universal_dataspace_name_record() {
+        let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
+        let genesis_domain =
+            Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&genesis_id);
+        let genesis_account = Account::new(genesis_id.clone()).build(&genesis_id);
+        let state = State::new_for_testing(
+            World::with([genesis_domain], [genesis_account], []),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+
+        let view = state.view();
+        assert_eq!(
+            crate::sns::active_dataspace_owner_by_alias(
+                view.world(),
+                crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+                0,
+            ),
+            Some(genesis_id)
+        );
+    }
+
+    #[test]
+    fn asset_definition_alias_binding_status_classifies_lifecycle() {
+        let leased_alias: AssetDefinitionAlias = "usd#lease".parse().expect("lease alias");
+        let binding = AssetDefinitionAliasBindingRecord {
+            alias: leased_alias,
+            lease_expiry_ms: Some(200),
+            grace_until_ms: Some(250),
+            bound_at_ms: 100,
+        };
+        assert_eq!(
+            binding.status_at(150),
+            AssetDefinitionAliasLeaseStatus::LeasedActive
+        );
+        assert_eq!(
+            binding.status_at(200),
+            AssetDefinitionAliasLeaseStatus::LeasedGrace
+        );
+        assert_eq!(
+            binding.status_at(250),
+            AssetDefinitionAliasLeaseStatus::LeasedGrace
+        );
+        assert_eq!(
+            binding.status_at(251),
+            AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup
+        );
+
+        let permanent_binding = AssetDefinitionAliasBindingRecord {
+            alias: "usd#permanent".parse().expect("permanent alias"),
+            lease_expiry_ms: None,
+            grace_until_ms: None,
+            bound_at_ms: 100,
+        };
+        assert_eq!(
+            permanent_binding.status_at(10_000),
+            AssetDefinitionAliasLeaseStatus::Permanent
+        );
+    }
+
+    #[test]
+    fn rebuild_asset_definition_alias_indexes_prefers_persisted_bindings() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let persisted_alias: AssetDefinitionAlias = "usd#canonical".parse().expect("alias");
+        let binding = AssetDefinitionAliasBindingRecord {
+            alias: persisted_alias.clone(),
+            lease_expiry_ms: Some(200),
+            grace_until_ms: Some(300),
+            bound_at_ms: 100,
+        };
+
+        world.asset_definition_aliases = Storage::default();
+        world.asset_definition_alias_bindings =
+            std::iter::once((definition_id.clone(), binding.clone())).collect();
+        world
+            .rebuild_asset_definition_alias_indexes()
+            .expect("rebuild should succeed");
+        let view = world.view();
+
+        assert_eq!(
+            view.asset_definition_aliases().get(&persisted_alias),
+            Some(&definition_id)
+        );
+        assert_eq!(
+            view.asset_definition_alias_bindings()
+                .get(&definition_id)
+                .expect("binding"),
+            &binding
+        );
+        assert_eq!(
+            view.asset_definition(&definition_id)
+                .expect("definition")
+                .alias()
+                .as_ref(),
+            Some(&persisted_alias)
+        );
+        assert!(
+            world
+                .asset_definitions
+                .view()
+                .get(&definition_id)
+                .expect("stored definition")
+                .alias()
+                .is_none(),
+            "stored asset definition alias must stay empty; bindings drive alias reads"
+        );
+    }
+
+    #[test]
+    fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_without_binding() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let legacy_alias: AssetDefinitionAlias = "usd#legacy".parse().expect("legacy alias");
+        world.asset_definition_aliases = Storage::default();
+        world.asset_definition_alias_bindings = Storage::default();
+        let mut stored_definition = world
+            .asset_definitions
+            .view()
+            .get(&definition_id)
+            .expect("stored definition")
+            .clone();
+        stored_definition.alias = Some(legacy_alias.clone());
+        world
+            .asset_definitions
+            .insert(definition_id.clone(), stored_definition);
+
+        let err = world
+            .rebuild_asset_definition_alias_indexes()
+            .expect_err("rebuild must reject inline asset-definition aliases");
+        assert_eq!(
+            err,
+            format!(
+                "Asset definition {definition_id} stores inline alias `{legacy_alias}`; persist aliases only in asset_definition_alias_bindings"
+            )
+        );
+    }
+
+    #[test]
+    fn rebuild_asset_definition_alias_indexes_rejects_inline_alias_even_with_binding() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let inline_alias: AssetDefinitionAlias = "usd#legacy".parse().expect("inline alias");
+        world.asset_definition_aliases = Storage::default();
+        world.asset_definition_alias_bindings = std::iter::once((
+            definition_id.clone(),
+            AssetDefinitionAliasBindingRecord {
+                alias: "usd#canonical".parse().expect("persisted alias"),
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 100,
+            },
+        ))
+        .collect();
+        let mut stored_definition = world
+            .asset_definitions
+            .view()
+            .get(&definition_id)
+            .expect("stored definition")
+            .clone();
+        stored_definition.alias = Some(inline_alias.clone());
+        world
+            .asset_definitions
+            .insert(definition_id.clone(), stored_definition);
+
+        let err = world
+            .rebuild_asset_definition_alias_indexes()
+            .expect_err("rebuild must reject inline asset-definition aliases");
+        assert_eq!(
+            err,
+            format!(
+                "Asset definition {definition_id} stores inline alias `{inline_alias}`; persist aliases only in asset_definition_alias_bindings"
+            )
+        );
+    }
+
+    #[test]
+    fn asset_definition_alias_lookup_stops_after_grace_even_before_sweep() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let alias: AssetDefinitionAlias = "usd#lease".parse().expect("alias");
+        world.asset_definition_aliases = Storage::default();
+        world.asset_definition_alias_bindings = std::iter::once((
+            definition_id.clone(),
+            AssetDefinitionAliasBindingRecord {
+                alias: alias.clone(),
+                lease_expiry_ms: Some(200),
+                grace_until_ms: Some(250),
+                bound_at_ms: 100,
+            },
+        ))
+        .collect();
+        world
+            .rebuild_asset_definition_alias_indexes()
+            .expect("rebuild should succeed");
+
+        let view = world.view();
+        assert_eq!(
+            view.asset_definition_id_by_alias_at(&alias, 249),
+            Some(definition_id.clone())
+        );
+        assert_eq!(view.asset_definition_id_by_alias_at(&alias, 251), None);
+        assert_eq!(
+            view.asset_definition_aliases().get(&alias),
+            Some(&definition_id),
+            "stale binding remains indexed until sweep"
+        );
+        assert_eq!(
+            view.asset_definition(&definition_id)
+                .expect("definition")
+                .alias()
+                .as_ref(),
+            Some(&alias),
+            "effective definition still exposes the persisted binding for inspection"
+        );
+    }
+
+    #[test]
+    fn account_alias_bindings_roundtrip_through_state_json() {
+        let mut world = World::default();
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
+        let primary_label = alias_in_domain(
+            &domain_id,
+            "primary".parse::<Name>().expect("primary label name"),
+        );
+        let bound_label = alias_in_domain(
+            &domain_id,
+            "issuance".parse::<Name>().expect("bound label name"),
+        );
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        let details = AccountDetails::new(
+            Metadata::default(),
+            Some(primary_label.clone()),
+            None,
+            Vec::new(),
+        );
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+        world
+            .account_aliases
+            .insert(bound_label.clone(), account_id.clone());
+        world.account_rekey_records.insert(
+            bound_label.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                bound_label.clone(),
+                account_id.clone(),
+            ),
+        );
+        world
+            .rebuild_account_alias_index()
+            .expect("rebuild should preserve additional alias bindings");
+        world
+            .rebuild_account_rekey_records()
+            .expect("rebuild should preserve rekey records");
+
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let seed = deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        };
+        let restored = seed
+            .into_state_from_json(json_value)
+            .expect("deserialize state");
+        let view = restored.world_view();
+
+        assert_eq!(
+            view.account_aliases().get(&primary_label),
+            Some(&account_id)
+        );
+        assert_eq!(view.account_aliases().get(&bound_label), Some(&account_id));
+        assert_eq!(
+            view.account_rekey_records()
+                .get(&bound_label)
+                .expect("bound alias rekey record")
+                .active_account_id,
+            account_id
+        );
+        assert_eq!(
+            view.bound_account_aliases(&account_id)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([primary_label, bound_label])
+        );
+    }
+
+    #[test]
+    fn asset_definition_alias_bindings_roundtrip_through_state_json() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let alias: AssetDefinitionAlias = "usd#durable".parse().expect("alias");
+        let binding = AssetDefinitionAliasBindingRecord {
+            alias: alias.clone(),
+            lease_expiry_ms: Some(2_000),
+            grace_until_ms: Some(2_500),
+            bound_at_ms: 1_000,
+        };
+        world.asset_definition_aliases = Storage::default();
+        world.asset_definition_alias_bindings =
+            std::iter::once((definition_id.clone(), binding.clone())).collect();
+        world
+            .rebuild_asset_definition_alias_indexes()
+            .expect("rebuild should succeed");
+
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let seed = deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        };
+        let restored = seed
+            .into_state_from_json(json_value)
+            .expect("deserialize state");
+        let view = restored.world_view();
+
+        assert_eq!(
+            view.asset_definition_alias_bindings()
+                .get(&definition_id)
+                .expect("binding"),
+            &binding
+        );
+        assert_eq!(
+            view.asset_definition_aliases().get(&alias),
+            Some(&definition_id)
+        );
+        assert_eq!(
+            view.asset_definition(&definition_id)
+                .expect("definition")
+                .alias()
+                .as_ref(),
+            Some(&alias)
+        );
+    }
+
+    #[test]
+    fn escrow_records_roundtrip_through_state_json() {
+        let mut world = World::default();
+        let seller = AccountId::new(KeyPair::random().public_key().clone());
+        let buyer = AccountId::new(KeyPair::random().public_key().clone());
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("escrowsnapshot", "universal").expect("domain id"),
+            "xor".parse().expect("asset name"),
+        );
+
+        let public_id = iroha_data_model::escrow::EscrowId::new(Hash::new("public-escrow"));
+        let public_record = iroha_data_model::escrow::AssetEscrowRecord {
+            id: public_id,
+            seller: seller.clone(),
+            buyer: Some(buyer.clone()),
+            asset_definition: asset_definition.clone(),
+            amount: Numeric::new(42_u32, 0),
+            custody: seller.clone(),
+            status: iroha_data_model::escrow::AssetEscrowStatus::PaymentSent,
+            evidence_hashes: vec![Hash::new("public-evidence")],
+            created_at_ms: 1,
+            accepted_at_ms: Some(2),
+            payment_sent_at_ms: Some(3),
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        };
+
+        let anonymous_id = iroha_data_model::escrow::EscrowId::new(Hash::new("anonymous-escrow"));
+        let proof_record = iroha_data_model::escrow::AnonymousAssetEscrowProofRecord {
+            nullifiers: vec![[0x11; 32]],
+            output_commitments: vec![[0x22; 32]],
+            proof_hash: [0x33; 32],
+            envelope_hash: Some([0x44; 32]),
+            root_hint: Some([0x55; 32]),
+            recorded_at_ms: 4,
+        };
+        let anonymous_record = iroha_data_model::escrow::AnonymousAssetEscrowRecord {
+            id: anonymous_id,
+            seller: seller.clone(),
+            buyer: Some(buyer),
+            asset_definition,
+            escrow_commitment: [0x22; 32],
+            status: iroha_data_model::escrow::AssetEscrowStatus::Accepted,
+            evidence_hashes: vec![Hash::new("anonymous-evidence")],
+            opening: proof_record,
+            release: None,
+            cancellation: None,
+            created_at_ms: 4,
+            accepted_at_ms: Some(5),
+            payment_sent_at_ms: None,
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        };
+
+        world.asset_escrows.insert(public_id, public_record.clone());
+        world
+            .anonymous_asset_escrows
+            .insert(anonymous_id, anonymous_record.clone());
+
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let seed = deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        };
+        let restored = seed
+            .into_state_from_json(json_value)
+            .expect("deserialize state");
+        let view = restored.world_view();
+
+        assert_eq!(
+            view.asset_escrows().get(&public_id).expect("public escrow"),
+            &public_record
+        );
+        assert_eq!(
+            view.anonymous_asset_escrows()
+                .get(&anonymous_id)
+                .expect("anonymous escrow"),
+            &anonymous_record
+        );
+    }
+
+    #[test]
+    fn public_lane_staking_roundtrip_through_state_json() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut world = World::default();
+        let validator = ALICE_ID.clone();
+        let staker = BOB_ID.clone();
+        let stake_asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("stake asset domain"),
+            "stake".parse().expect("stake asset name"),
+        );
+        let reward_asset = AssetId::new(stake_asset_definition, validator.clone());
+        let request_id = Hash::new("unbond-request");
+
+        world.public_lane_validators.insert(
+            (LaneId::SINGLE, validator.clone()),
+            PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                peer_id: PeerId::from(validator.signatory().clone()),
+                stake_account: validator.clone(),
+                total_stake: Numeric::new(2_000, 0),
+                self_stake: Numeric::new(1_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: Some(0),
+                activation_height: Some(1),
+                last_reward_epoch: Some(7),
+            },
+        );
+        world.public_lane_stake_shares.insert(
+            (LaneId::SINGLE, validator.clone(), staker.clone()),
+            PublicLaneStakeShare {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                staker: staker.clone(),
+                bonded: Numeric::new(900, 0),
+                pending_unbonds: BTreeMap::from([(
+                    request_id,
+                    PublicLaneUnbonding {
+                        request_id,
+                        amount: Numeric::new(100, 0),
+                        release_at_ms: 12_345,
+                    },
+                )]),
+                metadata: Metadata::default(),
+            },
+        );
+        world.public_lane_rewards.insert(
+            (LaneId::SINGLE, 7),
+            PublicLaneRewardRecord {
+                lane_id: LaneId::SINGLE,
+                epoch: 7,
+                asset: reward_asset.clone(),
+                total_reward: Numeric::new(77, 0),
+                shares: vec![PublicLaneRewardShare {
+                    account: validator.clone(),
+                    role: PublicLaneRewardRole::Validator,
+                    amount: Numeric::new(77, 0),
+                }],
+                metadata: Metadata::default(),
+            },
+        );
+        world
+            .public_lane_reward_claims
+            .insert((LaneId::SINGLE, validator.clone(), reward_asset.clone()), 6);
+
+        let state = State::new(world, kura, query_handle);
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let seed = deserialize::KuraSeed {
+            kura: Kura::blank_kura_for_testing(),
+            query_handle: LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            telemetry: crate::telemetry::StateTelemetry::default(),
+        };
+        let restored = seed
+            .into_state_from_json(json_value)
+            .expect("deserialize state");
+        let view = restored.world_view();
+
+        assert_eq!(
+            view.public_lane_validators()
+                .get(&(LaneId::SINGLE, validator.clone()))
+                .expect("validator"),
+            &PublicLaneValidatorRecord {
+                lane_id: LaneId::SINGLE,
+                validator: validator.clone(),
+                peer_id: PeerId::from(validator.signatory().clone()),
+                stake_account: validator.clone(),
+                total_stake: Numeric::new(2_000, 0),
+                self_stake: Numeric::new(1_000, 0),
+                metadata: Metadata::default(),
+                status: PublicLaneValidatorStatus::Active,
+                activation_epoch: Some(0),
+                activation_height: Some(1),
+                last_reward_epoch: Some(7),
+            }
+        );
+        assert_eq!(
+            view.public_lane_stake_shares()
+                .get(&(LaneId::SINGLE, validator.clone(), staker.clone()))
+                .expect("stake share")
+                .bonded,
+            Numeric::new(900, 0)
+        );
+        assert_eq!(
+            view.public_lane_rewards()
+                .get(&(LaneId::SINGLE, 7))
+                .expect("reward")
+                .total_reward,
+            Numeric::new(77, 0)
+        );
+        assert_eq!(
+            view.public_lane_reward_claims()
+                .get(&(LaneId::SINGLE, validator, reward_asset)),
+            Some(&6)
+        );
+    }
     use crate::{
         block::{BlockBuilder, BlockValidationError, ValidBlock, valid::validate_axt_envelopes},
         da::DaShardCursorJournal,
-        governance::manifest::{GovernanceRules, LaneManifestRegistry, LaneManifestStatus},
+        governance::manifest::{
+            GovernanceRules, LaneManifestRegistry, LaneManifestStatus, ManifestValidatorBinding,
+        },
         kura::Kura,
         nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
         query::store::LiveQueryStore,
@@ -25458,18 +30665,383 @@ mod tests {
     };
 
     fn sample_domain_id() -> DomainId {
-        "wonderland".parse().expect("sample domain id")
+        DomainId::try_new("wonderland", "universal").expect("sample domain id")
     }
 
     fn new_account_in_domain(
         account_id: &AccountId,
-        domain_id: &DomainId,
+        _domain_id: &DomainId,
     ) -> iroha_data_model::account::NewAccount {
-        Account::new(account_id.clone().to_account_id(domain_id.clone()))
+        Account::new(account_id.clone())
     }
 
     fn new_sample_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
         new_account_in_domain(account_id, &sample_domain_id())
+    }
+
+    #[test]
+    fn account_scope_hierarchy_tracks_dataspaces_and_domains() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        Register::account(Account::new(authority.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register authority");
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register account");
+
+        let universal_domain: DomainId =
+            DomainId::try_new("treasury", "universal").expect("domain");
+        let retail_domain: DomainId = DomainId::try_new("treasury", "retail").expect("domain");
+        let universal_alias = iroha_data_model::account::rekey::AccountAlias::new(
+            "rootdesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                universal_domain.name().clone(),
+            )),
+            DataSpaceId::UNIVERSAL,
+        );
+        let retail_alias = iroha_data_model::account::rekey::AccountAlias::new(
+            "retaildesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                retail_domain.name().clone(),
+            )),
+            retail_dataspace,
+        );
+
+        stx.world
+            .account_mut(&account_id)
+            .expect("account exists")
+            .set_label(Some(universal_alias.clone()));
+        stx.world
+            .insert_account_alias_binding(universal_alias.clone(), account_id.clone());
+        stx.world
+            .insert_account_alias_binding(retail_alias, account_id.clone());
+
+        let hierarchy = stx
+            .world
+            .account_scope_hierarchy(&account_id)
+            .expect("account hierarchy");
+        assert_eq!(
+            hierarchy.get(&DataSpaceId::UNIVERSAL),
+            Some(&BTreeSet::from([universal_domain.clone()])),
+            "universal dataspace should expose the bound universal domain",
+        );
+        assert_eq!(
+            hierarchy.get(&retail_dataspace),
+            Some(&BTreeSet::from([retail_domain.clone()])),
+            "retail dataspace should expose the bound retail domain",
+        );
+        assert_eq!(
+            stx.world
+                .account_dataspaces(&account_id)
+                .expect("account dataspaces"),
+            BTreeSet::from([DataSpaceId::UNIVERSAL, retail_dataspace]),
+            "accounts should expose the universal dataspace plus extra bindings",
+        );
+        assert_eq!(
+            stx.world
+                .account_domains(&account_id)
+                .expect("account domains"),
+            BTreeSet::from([universal_domain, retail_domain]),
+            "domains should flatten across all bound dataspaces",
+        );
+    }
+
+    #[test]
+    fn account_scope_directory_tracks_alias_bind_and_unbind() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        Register::account(Account::new(authority.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register authority");
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register account");
+
+        let retail_alias = iroha_data_model::account::rekey::AccountAlias::new(
+            "retaildesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "treasury".parse::<Name>().expect("domain name"),
+            )),
+            retail_dataspace,
+        );
+
+        let initial_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("initial account scope")
+            .expect("materialized account should have an account scope entry")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            initial_scopes,
+            BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())]),
+            "materialized accounts should start in the universal dataspace only",
+        );
+
+        stx.world
+            .insert_account_alias_binding(retail_alias.clone(), account_id.clone());
+        let bound_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("bound account scope")
+            .expect("bound account scope entry")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            bound_scopes,
+            BTreeMap::from([
+                (DataSpaceId::UNIVERSAL, BTreeSet::new()),
+                (
+                    retail_dataspace,
+                    BTreeSet::from([iroha_data_model::account::rekey::AccountAliasDomain::new(
+                        "treasury".parse::<Name>().expect("domain name"),
+                    )]),
+                ),
+            ]),
+            "alias binds should immediately refresh the account scope directory",
+        );
+
+        stx.world.remove_account_alias_binding(&retail_alias);
+        let unbound_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("unbound account scope")
+            .expect("account scope entry should remain after unbind")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            unbound_scopes,
+            BTreeMap::from([(DataSpaceId::UNIVERSAL, BTreeSet::new())]),
+            "alias unbinds should remove the extra dataspace from the account scope directory",
+        );
+    }
+
+    #[test]
+    fn account_scope_directory_uses_primary_label_materialization_for_private_accounts() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        let private_domain = DomainId::try_new("treasury", "retail").expect("domain");
+        let private_primary_label = iroha_data_model::account::rekey::AccountAlias::new(
+            "retaildesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                private_domain.name().clone(),
+            )),
+            retail_dataspace,
+        );
+        stx.world.domains.insert(
+            private_domain.clone(),
+            Domain::new(private_domain.clone()).build(&authority),
+        );
+        let (authority_id, authority_value) = Account::new(authority.clone())
+            .build(&authority)
+            .into_key_value();
+        stx.world.accounts.insert(authority_id, authority_value);
+        let (account_key, account_value) = Account::new(account_id.clone())
+            .with_label(Some(private_primary_label.clone()))
+            .build(&authority)
+            .into_key_value();
+        stx.world.accounts.insert(account_key, account_value);
+
+        let scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("account scope")
+            .expect("materialized account should have an account scope entry")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            scopes,
+            BTreeMap::from([(
+                retail_dataspace,
+                BTreeSet::from([iroha_data_model::account::rekey::AccountAliasDomain::new(
+                    "treasury".parse::<Name>().expect("domain name"),
+                )]),
+            )]),
+            "private primary labels should materialize the account scope in that private dataspace without a universal fallback",
+        );
+        assert_eq!(
+            stx.world
+                .account_scope_hierarchy(&account_id)
+                .expect("account hierarchy"),
+            BTreeMap::from([(retail_dataspace, BTreeSet::from([private_domain]))]),
+            "hierarchy should resolve the primary-label dataspace/domain pair",
+        );
+    }
+
+    #[test]
+    fn account_scope_directory_tracks_manifest_driven_uaid_binding_changes() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let treasury_dataspace = DataSpaceId::new(18);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: treasury_dataspace,
+                alias: "treasury".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::account-scope-refresh"));
+        Register::account(Account::new(authority.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register authority");
+        Register::account(Account::new(account_id.clone()).with_uaid(Some(uaid)))
+            .execute(&authority, &mut stx)
+            .expect("register account");
+
+        let manifest_record = |dataspace| {
+            let manifest = AssetPermissionManifest {
+                version: ManifestVersion::default(),
+                uaid,
+                dataspace,
+                issued_ms: 0,
+                activation_epoch: 1,
+                expiry_epoch: None,
+                entries: Vec::new(),
+            };
+            let mut record = SpaceDirectoryManifestRecord::new(manifest);
+            record.lifecycle.mark_activated(1);
+            record
+        };
+
+        let mut retail_set = SpaceDirectoryManifestSet::default();
+        retail_set.upsert(manifest_record(retail_dataspace));
+        stx.world.space_directory_manifests.insert(uaid, retail_set);
+        stx.world.rebuild_space_directory_bindings(uaid);
+
+        let retail_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("retail account scope")
+            .expect("account scope entry after retail manifest")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            retail_scopes,
+            BTreeMap::from([
+                (DataSpaceId::UNIVERSAL, BTreeSet::new()),
+                (retail_dataspace, BTreeSet::new()),
+            ]),
+            "UAID bindings should surface the manifest dataspace in the account scope directory",
+        );
+
+        let mut treasury_set = SpaceDirectoryManifestSet::default();
+        treasury_set.upsert(manifest_record(treasury_dataspace));
+        stx.world
+            .space_directory_manifests
+            .insert(uaid, treasury_set);
+        stx.world.rebuild_space_directory_bindings(uaid);
+
+        let treasury_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("treasury account scope")
+            .expect("account scope entry after manifest rotation")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            treasury_scopes,
+            BTreeMap::from([
+                (DataSpaceId::UNIVERSAL, BTreeSet::new()),
+                (treasury_dataspace, BTreeSet::new()),
+            ]),
+            "manifest-driven UAID binding changes should refresh the account scope directory",
+        );
     }
 
     fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -25494,6 +31066,108 @@ mod tests {
             .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
             .sign(keypair.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
+    #[test]
+    fn trigger_args_from_asset_event_falls_back_to_event_domain_without_account_alias() {
+        let recipient_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
+        let asset_domain: DomainId = DomainId::try_new("cbuae", "universal").unwrap();
+        let (subject, _) = gen_account_in("centralbank");
+        let recipient = subject.clone();
+        let asset_definition = AssetDefinitionId::new(asset_domain, "aed".parse().unwrap());
+        let asset_id = AssetId::new(asset_definition.clone(), subject.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        Register::domain(Domain::new(recipient_domain.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        Register::account(Account::new(recipient.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
+            data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
+                asset: asset_id,
+                amount: Numeric::from(1_u32),
+            })),
+        ));
+
+        let args = stx.trigger_args_from_data_event(&event);
+        let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
+        let obj = payload.as_object().expect("trigger args object");
+
+        assert_eq!(
+            obj.get("account_domain"),
+            Some(&norito::json!("cbuae.universal"))
+        );
+        assert_eq!(
+            obj.get("account_id"),
+            Some(&norito::json!(subject.to_string()))
+        );
+        assert_eq!(
+            obj.get("asset_definition_id"),
+            Some(&norito::json!(asset_definition.to_string()))
+        );
+    }
+
+    #[test]
+    fn trigger_args_from_asset_event_use_account_label_domain_when_subject_links_missing() {
+        let recipient_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
+        let asset_domain: DomainId = DomainId::try_new("cbuae", "universal").unwrap();
+        let (subject, _) = gen_account_in("ghost");
+        let account_label =
+            alias_in_domain(&recipient_domain, "admin1".parse().expect("valid label"));
+        let asset_definition = AssetDefinitionId::new(asset_domain, "aed".parse().unwrap());
+        let asset_id = AssetId::new(asset_definition.clone(), subject.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        Register::domain(Domain::new(recipient_domain.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+        let account = Account {
+            id: subject.clone(),
+            metadata: Metadata::default(),
+            label: Some(account_label),
+            uaid: None,
+            opaque_ids: Vec::new(),
+        };
+        let (account_id, account_value) = account.into_key_value();
+        stx.world.accounts.insert(account_id, account_value);
+
+        let event = data_pre::DataEvent::Domain(data_pre::DomainEvent::Account(
+            data_pre::AccountEvent::Asset(data_pre::AssetEvent::Added(data_pre::AssetChanged {
+                asset: asset_id,
+                amount: Numeric::from(1_u32),
+            })),
+        ));
+
+        let args = stx.trigger_args_from_data_event(&event);
+        let payload: norito::json::Value = args.try_into_any().expect("decode trigger args");
+        let obj = payload.as_object().expect("trigger args object");
+
+        assert_eq!(
+            obj.get("account_domain"),
+            Some(&norito::json!("centralbank.universal"))
+        );
+        assert_eq!(
+            obj.get("account_id"),
+            Some(&norito::json!(subject.to_string()))
+        );
+        assert_eq!(
+            obj.get("asset_definition_id"),
+            Some(&norito::json!(asset_definition.to_string()))
+        );
     }
 
     #[test]
@@ -25779,7 +31453,7 @@ mod tests {
         };
 
         let (account_id, _keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let world = World::with(
             [Domain::new(domain_id.clone()).build(&account_id)],
             [new_account_in_domain(&account_id, &domain_id).build(&account_id)],
@@ -25790,12 +31464,14 @@ mod tests {
         let mut summary = AccountPermissionSummary::default();
         summary.apply_grant(
             &world_view,
+            &iroha_data_model::nexus::DataSpaceCatalog::default(),
             &Permission::from(CanRegisterTrigger {
                 authority: account_id.clone(),
             }),
         );
         summary.apply_grant(
             &world_view,
+            &iroha_data_model::nexus::DataSpaceCatalog::default(),
             &Permission::from(CanUseFeeSponsor {
                 sponsor: account_id.clone(),
             }),
@@ -25805,156 +31481,13 @@ mod tests {
         assert!(summary.fee_sponsors.contains(&account_id));
     }
 
-    #[test]
-    fn world_view_exposes_subject_domain_links() {
-        let keypair = KeyPair::random();
-        let wonderland: DomainId = "wonderland".parse().expect("domain id");
-        let acme: DomainId = "acme".parse().expect("domain id");
-
-        let wonderland_account = AccountId::new(keypair.public_key().clone());
-        let second_subject_account = AccountId::new(KeyPair::random().public_key().clone());
-        let shared_subject = wonderland_account.subject_id();
-        let acme_account = shared_subject.to_account_id(acme.clone());
-
-        let world = World::with(
-            [
-                Domain::new(wonderland.clone()).build(&wonderland_account),
-                Domain::new(acme.clone()).build(acme_account.account()),
-            ],
-            [
-                new_account_in_domain(&wonderland_account, &wonderland).build(&wonderland_account),
-                new_account_in_domain(&second_subject_account, &wonderland)
-                    .build(&second_subject_account),
-            ],
-            [],
-        );
-        let mut block = world.block();
-        #[cfg(feature = "telemetry")]
-        let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
-        #[cfg(not(feature = "telemetry"))]
-        let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
-        tx.link_account_subject_domain(&acme_account);
-        tx.apply();
-        block.commit();
-
-        let world_view = world.view();
-
-        let linked_domains = world_view.domains_for_subject(&shared_subject);
-        assert_eq!(linked_domains, vec![acme.clone(), wonderland.clone()]);
-
-        let subjects_in_wonderland = world_view.account_subjects_in_domain(&wonderland);
-        assert!(subjects_in_wonderland.contains(&shared_subject));
-        assert!(subjects_in_wonderland.contains(&second_subject_account.subject_id()));
-        assert_eq!(subjects_in_wonderland.len(), 2);
-
-        let subjects_in_acme = world_view.account_subjects_in_domain(&acme);
-        assert_eq!(subjects_in_acme, vec![shared_subject]);
-    }
-
-    #[test]
-    fn unlink_last_domain_keeps_subject_record_materialized() {
-        let keypair = KeyPair::random();
-        let solo: DomainId = "solo".parse().expect("domain id");
-        let scoped = AccountId::new(keypair.public_key().clone());
-        let subject = scoped.subject_id();
-
-        let world = World::with(
-            [Domain::new(solo.clone()).build(&scoped)],
-            [new_account_in_domain(&scoped, &solo).build(&scoped)],
-            [],
-        );
-
-        let mut block = world.block();
-        #[cfg(feature = "telemetry")]
-        let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
-        #[cfg(not(feature = "telemetry"))]
-        let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
-        let removed = tx.remove_account_with_links(&scoped);
-        assert!(removed.is_some(), "scoped account must be removed");
-        let linked_domains = tx
-            .account_subject_domains
-            .get(&subject)
-            .expect("subject record should remain materialized");
-        assert!(
-            linked_domains.is_empty(),
-            "subject should remain with no linked domains after last unlink"
-        );
-        assert!(
-            tx.domain_account_subjects.get(&solo).is_none(),
-            "domain subject index should be empty after unlink"
-        );
-        tx.apply();
-        block.commit();
-
-        let view = world.view();
-        assert!(view.accounts.get(&scoped).is_none());
-        let linked_domains = view
-            .account_subject_domains
-            .get(&subject)
-            .expect("subject record should persist post-commit");
-        assert!(
-            linked_domains.is_empty(),
-            "subject should persist with an empty domain set"
-        );
-    }
-
-    #[test]
-    fn unlink_one_domain_preserves_other_subject_links() {
-        let keypair = KeyPair::random();
-        let wonderland: DomainId = "wonderland".parse().expect("domain id");
-        let acme: DomainId = "acme".parse().expect("domain id");
-
-        let wonderland_account = AccountId::new(keypair.public_key().clone());
-        let subject = wonderland_account.subject_id();
-        let acme_account = subject.to_account_id(acme.clone());
-
-        let world = World::with(
-            [
-                Domain::new(wonderland.clone()).build(&wonderland_account),
-                Domain::new(acme.clone()).build(acme_account.account()),
-            ],
-            [new_account_in_domain(&wonderland_account, &wonderland).build(&wonderland_account)],
-            [],
-        );
-
-        let mut block = world.block();
-        #[cfg(feature = "telemetry")]
-        let mut tx = block.trasaction(None, RuntimeLaneConfig::default(), 0);
-        #[cfg(not(feature = "telemetry"))]
-        let mut tx = block.trasaction(RuntimeLaneConfig::default(), 0);
-        tx.link_account_subject_domain(&acme_account);
-        let removed = tx.remove_account_with_links(&wonderland_account);
-        assert!(removed.is_some(), "linked scoped account must be removed");
-        let linked_domains = tx
-            .account_subject_domains
-            .get(&subject)
-            .expect("subject record should remain materialized");
-        assert_eq!(linked_domains, &BTreeSet::from([acme.clone()]));
-        let subjects_in_acme = tx
-            .domain_account_subjects
-            .get(&acme)
-            .expect("remaining domain should still reference subject");
-        assert!(subjects_in_acme.contains(&subject));
-        assert!(
-            tx.domain_account_subjects.get(&wonderland).is_none(),
-            "unlinked domain should have no subject references"
-        );
-        tx.apply();
-        block.commit();
-
-        let view = world.view();
-        assert!(view.accounts.get(&wonderland_account).is_none());
-        assert!(view.accounts.get(acme_account.account()).is_none());
-        assert_eq!(view.domains_for_subject(&subject), vec![acme]);
-    }
-
     fn dataspace_catalog_for_lane_catalog(catalog: &LaneCatalog) -> DataSpaceCatalog {
         let mut ids: BTreeSet<DataSpaceId> = catalog
             .lanes()
             .iter()
             .map(|lane| lane.dataspace_id)
             .collect();
-        ids.insert(DataSpaceId::GLOBAL);
+        ids.insert(DataSpaceId::UNIVERSAL);
         let entries = ids
             .into_iter()
             .map(|id| DataSpaceMetadata {
@@ -26093,7 +31626,7 @@ mod tests {
     #[test]
     fn world_rebuild_account_indexes_populates_storage() {
         let mut world = World::default();
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let owner_id = AccountId::new(keypair.public_key().clone());
         let domain = iroha_data_model::domain::Domain {
@@ -26104,7 +31637,7 @@ mod tests {
         };
         world.domains.insert(domain_id.clone(), domain);
 
-        let label = AccountLabel::new(domain_id.clone(), "alice".parse().expect("label"));
+        let label = alias_in_domain(&domain_id, "alice".parse().expect("label"));
         let uaid = UniversalAccountId::from_hash(Hash::new("uaid-index"));
         let opaque = OpaqueAccountId::from_hash(Hash::new("opaque-index"));
         let details = iroha_data_model::account::AccountDetails::new(
@@ -26120,7 +31653,6 @@ mod tests {
         world
             .rebuild_domain_selector_index()
             .expect("domain selector rebuild");
-        world.rebuild_account_subject_domain_indexes();
         world
             .rebuild_uaid_account_index()
             .expect("UAID index rebuild");
@@ -26136,49 +31668,9 @@ mod tests {
             world.domain_selectors.view().get(&selector),
             Some(&domain_id)
         );
-        let subject = owner_id.subject_id();
-        assert_eq!(
-            world.account_subject_domains.view().get(&subject),
-            Some(&BTreeSet::from([domain_id.clone()]))
-        );
-        assert_eq!(
-            world.domain_account_subjects.view().get(&domain_id),
-            Some(&BTreeSet::from([subject]))
-        );
         assert_eq!(world.uaid_accounts.view().get(&uaid), Some(&owner_id));
         assert_eq!(world.account_aliases.view().get(&label), Some(&owner_id));
         assert_eq!(world.opaque_uaids.view().get(&opaque), Some(&uaid));
-    }
-
-    #[test]
-    fn world_rebuild_account_indexes_preserves_materialized_empty_subject_records() {
-        let mut world = World::default();
-        let keypair = KeyPair::random();
-        let scoped = AccountId::new(keypair.public_key().clone());
-        let subject = scoped.subject_id();
-
-        world
-            .account_subject_domains
-            .insert(subject.clone(), BTreeSet::new());
-
-        world.rebuild_account_subject_domain_indexes();
-
-        assert_eq!(
-            world.account_subject_domains.view().get(&subject),
-            Some(&BTreeSet::new())
-        );
-        assert!(
-            world.domain_account_subjects.view().iter().next().is_none(),
-            "empty-subject materialization must not emit phantom domain entries"
-        );
-
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query);
-        assert_eq!(
-            state.world.account_subject_domains.view().get(&subject),
-            Some(&BTreeSet::new())
-        );
     }
 
     #[test]
@@ -26188,7 +31680,7 @@ mod tests {
 
         let provider_id = ProviderId::new([9_u8; 32]);
         let keypair = KeyPair::random();
-        let domain_id: DomainId = "providers".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("providers", "universal").expect("domain id");
         let owner_id = AccountId::new(keypair.public_key().clone());
         let owner_domain = iroha_data_model::domain::Domain {
             id: domain_id.clone(),
@@ -26294,6 +31786,25 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn state_startup_telemetry_seeds_citizens_total() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(metrics.clone(), true);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let mut world = World::default();
+        world.citizens.insert(
+            account_id.clone(),
+            CitizenshipRecord::new(account_id, 10, 1),
+        );
+
+        let _state = State::with_telemetry(world, kura, query_handle, telemetry);
+
+        assert_eq!(metrics.governance_citizens_total.get(), 1);
+    }
+
     #[cfg(feature = "sm")]
     #[test]
     fn set_crypto_updates_sm2_distid_default() {
@@ -26311,7 +31822,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let world = World::default();
-        let mut state = State::new_for_testing(world, kura, query_handle);
+        let state = State::new_for_testing(world, kura, query_handle);
 
         let mut crypto_cfg = (*state.crypto()).clone();
         crypto_cfg.sm2_distid_default = "runtime-override".to_owned();
@@ -26398,6 +31909,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -26440,13 +31953,12 @@ mod tests {
         let desired_excess = oldest_spool_size.saturating_sub(1).max(1);
         let max_disk_usage = total_used.saturating_sub(desired_excess);
 
+        let mut storage = iroha_config::parameters::actual::NexusStorage::default();
+        storage.max_disk_usage_bytes = iroha_config::base::util::Bytes(max_disk_usage);
+        storage.budget_enforce_interval_blocks = 0;
         let nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
-            storage: iroha_config::parameters::actual::NexusStorage {
-                max_disk_usage_bytes: iroha_config::base::util::Bytes(max_disk_usage),
-                budget_enforce_interval_blocks: 0,
-                ..Default::default()
-            },
+            storage,
             ..Default::default()
         };
         state.set_nexus(nexus).expect("apply nexus config");
@@ -26488,6 +32000,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -26502,13 +32016,12 @@ mod tests {
         let total_used = kura_used.saturating_add(soranet_used);
         let interval_blocks = 10;
 
+        let mut storage = iroha_config::parameters::actual::NexusStorage::default();
+        storage.max_disk_usage_bytes = iroha_config::base::util::Bytes(total_used);
+        storage.budget_enforce_interval_blocks = interval_blocks;
         let nexus_ok = iroha_config::parameters::actual::Nexus {
             enabled: true,
-            storage: iroha_config::parameters::actual::NexusStorage {
-                max_disk_usage_bytes: iroha_config::base::util::Bytes(total_used),
-                budget_enforce_interval_blocks: interval_blocks,
-                ..Default::default()
-            },
+            storage,
             ..Default::default()
         };
         state.set_nexus(nexus_ok).expect("apply nexus config");
@@ -26601,6 +32114,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &initial_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -26806,31 +32321,35 @@ mod tests {
     }
 
     #[test]
-    fn set_nexus_prunes_lane_relay_emergency_overrides_for_removed_dataspaces() {
+    fn set_nexus_prunes_lane_relay_emergency_overrides_for_removed_lanes() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
-        let removed = DataSpaceId::new(7);
+        let removed = LaneId::new(1);
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
-            dataspace_catalog: DataSpaceCatalog::new(vec![
-                DataSpaceMetadata {
-                    id: retained,
-                    alias: "global".to_string(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-                DataSpaceMetadata {
-                    id: removed,
-                    alias: "historical".to_string(),
-                    description: None,
-                    fault_tolerance: 1,
-                },
-            ])
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
             .expect("dataspace catalog"),
+            lane_catalog: LaneCatalog::new(
+                nonzero!(2_u32),
+                vec![
+                    LaneConfig::default(),
+                    LaneConfig {
+                        id: LaneId::new(1),
+                        dataspace_id: DataSpaceId::UNIVERSAL,
+                        alias: "historical".to_string(),
+                        ..LaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog"),
             ..iroha_config::parameters::actual::Nexus::default()
         };
         state
@@ -26841,8 +32360,8 @@ mod tests {
         wb.lane_relay_emergency_validators.insert(
             removed,
             LaneRelayEmergencyValidatorSet {
-                validators: vec![ALICE_ID.clone()],
-                expires_at_height: None,
+                peers: vec![PeerId::from(ALICE_ID.signatory().clone())],
+                expires_at_height: 10,
                 metadata: Metadata::default(),
             },
         );
@@ -26854,18 +32373,20 @@ mod tests {
                 .view()
                 .get(&removed)
                 .is_some(),
-            "test setup should install removed-dataspace override"
+            "test setup should install removed-lane override"
         );
 
         let updated_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: retained,
-                alias: "global".to_string(),
+                id: DataSpaceId::UNIVERSAL,
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
             .expect("dataspace catalog"),
+            lane_catalog: LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()])
+                .expect("lane catalog"),
             ..iroha_config::parameters::actual::Nexus::default()
         };
         state
@@ -26879,7 +32400,7 @@ mod tests {
                 .view()
                 .get(&removed)
                 .is_none(),
-            "removed dataspace override must be pruned by set_nexus"
+            "removed lane override must be pruned by set_nexus"
         );
     }
 
@@ -26889,7 +32410,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::stale-binding"));
 
@@ -26898,7 +32419,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -26928,7 +32449,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -26957,7 +32478,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::stale-binding-only"));
 
@@ -26966,7 +32487,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -26995,7 +32516,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -27018,7 +32539,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
@@ -27026,7 +32547,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -27071,7 +32592,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -27099,7 +32620,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
@@ -27107,7 +32628,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -27150,7 +32671,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -27178,7 +32699,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
@@ -27186,7 +32707,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -27242,7 +32763,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -27295,7 +32816,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
         let uaid_mixed = UniversalAccountId::from_hash(Hash::new(b"uaid::mixed-manifests"));
         let uaid_stale_only =
@@ -27306,7 +32827,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -27356,7 +32877,7 @@ mod tests {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: retained,
-                alias: "global".to_string(),
+                alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
@@ -27386,13 +32907,91 @@ mod tests {
     }
 
     #[test]
+    fn set_nexus_prunes_account_scope_directory_for_removed_dataspaces() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::UNIVERSAL;
+        let removed = DataSpaceId::new(7);
+        let mixed_account = AccountId::new(KeyPair::random().public_key().clone());
+        let stale_only_account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "universal".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: removed,
+                    alias: "historical".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let mut mixed_entry = AccountScopeDirectoryEntry::default();
+        mixed_entry.ensure_dataspace(retained);
+        mixed_entry.ensure_dataspace(removed);
+        let mut stale_only_entry = AccountScopeDirectoryEntry::default();
+        stale_only_entry.ensure_dataspace(removed);
+
+        let mut wb = state.world.block();
+        wb.account_scope_directory
+            .insert(mixed_account.clone(), mixed_entry);
+        wb.account_scope_directory
+            .insert(stale_only_account.clone(), stale_only_entry);
+        wb.commit();
+
+        let updated_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: retained,
+                alias: "universal".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(updated_nexus)
+            .expect("set updated nexus config");
+
+        let view = state.world.account_scope_directory.view();
+        let mixed = view
+            .get(&mixed_account)
+            .expect("mixed account scope entry should remain");
+        assert!(
+            mixed
+                .iter()
+                .all(|(dataspace_id, _)| *dataspace_id == retained),
+            "stale dataspaces should be pruned from mixed account scope entries",
+        );
+        assert!(
+            view.get(&stale_only_account).is_none(),
+            "entries should be removed when every dataspace becomes stale",
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn set_nexus_prunes_lane_state_when_lane_dataspace_changes() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let migrated = DataSpaceId::new(9);
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
@@ -27401,7 +33000,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -27502,7 +33101,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -27557,7 +33156,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let retained = DataSpaceId::GLOBAL;
+        let retained = DataSpaceId::UNIVERSAL;
         let migrated = DataSpaceId::new(11);
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
@@ -27566,7 +33165,7 @@ mod tests {
             dataspace_catalog: DataSpaceCatalog::new(vec![
                 DataSpaceMetadata {
                     id: retained,
-                    alias: "global".to_string(),
+                    alias: "universal".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -27901,8 +33500,22 @@ mod tests {
     ) {
         let mut statuses = BTreeMap::new();
         for (lane_id, dataspace_id, validators) in lanes {
+            let validator_bindings = validators
+                .iter()
+                .map(|validator| ManifestValidatorBinding {
+                    validator: validator.clone(),
+                    peer_id: PeerId::from(
+                        validator
+                            .try_signatory()
+                            .expect("manifest test validators must be single-signatory")
+                            .clone(),
+                    ),
+                    torii_url: None,
+                })
+                .collect();
             let rules = GovernanceRules {
                 validators: validators.clone(),
+                validator_bindings,
                 ..GovernanceRules::default()
             };
             let status = LaneManifestStatus {
@@ -27939,8 +33552,27 @@ mod tests {
         (accounts, keypairs)
     }
 
+    fn peer_id_for_account(account: &AccountId) -> PeerId {
+        PeerId::from(
+            account
+                .try_signatory()
+                .expect("test validator account must be single-signatory")
+                .clone(),
+        )
+    }
+
     fn seed_consensus_keys_with_pops(state: &State, keypairs: &[KeyPair]) {
         let mut world_block = state.world.block();
+        {
+            let mut peers = world_block.peers_mut_for_testing().transaction();
+            for keypair in keypairs {
+                let peer = PeerId::new(keypair.public_key().clone());
+                if !peers.iter().any(|existing| existing == &peer) {
+                    peers.push(peer);
+                }
+            }
+            peers.apply();
+        }
         for keypair in keypairs {
             let pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
                 .expect("generate pop for consensus key");
@@ -28089,7 +33721,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
             total_xor_due_micro: 1,
@@ -28134,7 +33766,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -28167,7 +33803,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -28192,7 +33832,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -28217,7 +33861,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -28260,7 +33908,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -28284,7 +33936,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -28327,7 +33983,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -28369,7 +34029,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -28381,7 +34045,7 @@ mod tests {
         assert!(matches!(
             err,
             LaneRelayError::DataspaceMismatch { expected, actual }
-                if expected == DataSpaceId::GLOBAL && actual == DataSpaceId::new(1)
+                if expected == DataSpaceId::UNIVERSAL && actual == DataSpaceId::new(1)
         ));
     }
 
@@ -28397,7 +34061,11 @@ mod tests {
         let signers_bitmap = signer_bitmap(&[0], validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -28420,7 +34088,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         configure_commit_topology(&state, 1);
 
@@ -28444,7 +34116,7 @@ mod tests {
         let nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -28457,7 +34129,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![ALICE_ID.clone(), BOB_ID.clone()],
             )],
         );
@@ -28480,7 +34152,7 @@ mod tests {
         let (base_2, base_2_kp) = bls_account_in("wonderland");
         let (extra_1, extra_1_kp) = bls_account_in("wonderland");
         let (extra_2, extra_2_kp) = bls_account_in("wonderland");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let multisig_members = (0..5)
             .map(|_| {
                 let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -28509,7 +34181,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -28522,7 +34194,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -28539,15 +34211,17 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
-        let permission =
-            iroha_data_model::permission::Permission::new("CanManagePeers".into(), Json::new(()));
+        let permission = iroha_data_model::permission::Permission::new(
+            "CanManageLaneRelayEmergency".into(),
+            Json::new(()),
+        );
         stx.world
             .account_permissions
             .insert(emergency_authority.clone(), BTreeSet::from([permission]));
         SetLaneRelayEmergencyValidators {
-            dataspace_id: DataSpaceId::GLOBAL,
-            validators: vec![extra_1.clone(), extra_2.clone()],
-            expires_at_height: None,
+            lane_id: LaneId::new(0),
+            peers: vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)],
+            expires_at_height: Some(5),
             metadata: Metadata::default(),
         }
         .execute(&emergency_authority, &mut stx)
@@ -28559,7 +34233,7 @@ mod tests {
                 .world
                 .lane_relay_emergency_validators
                 .view()
-                .get(&DataSpaceId::GLOBAL)
+                .get(&LaneId::new(0))
                 .is_some(),
             "override should be stored in world"
         );
@@ -28575,22 +34249,19 @@ mod tests {
         );
         let parent_state_root = Hash::new([0xBC; 4]);
         let post_state_root = Hash::new([0xAB; 4]);
-        let mut validator_pool = vec![
-            base_1.clone(),
-            base_2.clone(),
-            extra_1.clone(),
-            extra_2.clone(),
-        ];
-        validator_pool.sort();
-        validator_pool.dedup();
-        let seed = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), height);
-        let committee =
-            State::lane_relay_committee_from_pool(&validator_pool, 4, seed).expect("committee");
-        let keypairs: BTreeMap<AccountId, KeyPair> = [
-            (base_1.clone(), base_1_kp.clone()),
-            (base_2.clone(), base_2_kp.clone()),
-            (extra_1.clone(), extra_1_kp.clone()),
-            (extra_2.clone(), extra_2_kp.clone()),
+        let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
+        let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
+        let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)];
+        let fillers =
+            State::lane_relay_committee_from_pool(&emergency_pool, 2, seed).expect("fillers");
+        let mut committee = base_pool.clone();
+        committee.extend(fillers);
+        assert_eq!(&committee[..base_pool.len()], base_pool.as_slice());
+        let keypairs: BTreeMap<PeerId, KeyPair> = [
+            (peer_id_for_account(&base_1), base_1_kp.clone()),
+            (peer_id_for_account(&base_2), base_2_kp.clone()),
+            (peer_id_for_account(&extra_1), extra_1_kp.clone()),
+            (peer_id_for_account(&extra_2), extra_2_kp.clone()),
         ]
         .into_iter()
         .collect();
@@ -28610,7 +34281,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(0),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
             total_xor_due_micro: 1,
@@ -28645,7 +34316,7 @@ mod tests {
         let (base_2, base_2_kp) = bls_account_in("wonderland");
         let (extra_1, extra_1_kp) = bls_account_in("wonderland");
         let (extra_2, extra_2_kp) = bls_account_in("wonderland");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let world = World::with(
             [Domain::new(domain.clone()).build(&ALICE_ID)],
             [
@@ -28665,7 +34336,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -28678,7 +34349,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -28695,10 +34366,10 @@ mod tests {
         let height = 1;
         let mut wb = state.world.block();
         wb.lane_relay_emergency_validators.insert(
-            DataSpaceId::GLOBAL,
+            LaneId::new(0),
             LaneRelayEmergencyValidatorSet {
-                validators: vec![extra_1.clone(), extra_2.clone()],
-                expires_at_height: Some(height),
+                peers: vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)],
+                expires_at_height: height,
                 metadata: Metadata::default(),
             },
         );
@@ -28714,22 +34385,19 @@ mod tests {
         );
         let parent_state_root = Hash::new([0xBC; 4]);
         let post_state_root = Hash::new([0xAB; 4]);
-        let mut validator_pool = vec![
-            base_1.clone(),
-            base_2.clone(),
-            extra_1.clone(),
-            extra_2.clone(),
-        ];
-        validator_pool.sort();
-        validator_pool.dedup();
-        let seed = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), height);
-        let committee =
-            State::lane_relay_committee_from_pool(&validator_pool, 4, seed).expect("committee");
-        let keypairs: BTreeMap<AccountId, KeyPair> = [
-            (base_1.clone(), base_1_kp.clone()),
-            (base_2.clone(), base_2_kp.clone()),
-            (extra_1.clone(), extra_1_kp.clone()),
-            (extra_2.clone(), extra_2_kp.clone()),
+        let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), height);
+        let base_pool = state.authoritative_lane_peer_ids(LaneId::new(0));
+        let emergency_pool = vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)];
+        let fillers =
+            State::lane_relay_committee_from_pool(&emergency_pool, 2, seed).expect("fillers");
+        let mut committee = base_pool.clone();
+        committee.extend(fillers);
+        assert_eq!(&committee[..base_pool.len()], base_pool.as_slice());
+        let keypairs: BTreeMap<PeerId, KeyPair> = [
+            (peer_id_for_account(&base_1), base_1_kp.clone()),
+            (peer_id_for_account(&base_2), base_2_kp.clone()),
+            (peer_id_for_account(&extra_1), extra_1_kp.clone()),
+            (peer_id_for_account(&extra_2), extra_2_kp.clone()),
         ]
         .into_iter()
         .collect();
@@ -28749,7 +34417,7 @@ mod tests {
         let settlement = LaneBlockCommitment {
             block_height: height,
             lane_id: LaneId::new(0),
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 1,
             total_local_micro: 1,
             total_xor_due_micro: 1,
@@ -28787,7 +34455,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -28803,7 +34471,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -28812,10 +34480,10 @@ mod tests {
         let (extra_2, _) = bls_account_in("validators");
         let mut wb = state.world.block();
         wb.lane_relay_emergency_validators.insert(
-            DataSpaceId::GLOBAL,
+            LaneId::new(0),
             LaneRelayEmergencyValidatorSet {
-                validators: vec![extra_1, extra_2],
-                expires_at_height: Some(0),
+                peers: vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)],
+                expires_at_height: 0,
                 metadata: Metadata::default(),
             },
         );
@@ -28838,7 +34506,7 @@ mod tests {
         let nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -28854,7 +34522,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -28863,10 +34531,10 @@ mod tests {
         let (extra_2, _) = bls_account_in("validators");
         let mut wb = state.world.block();
         wb.lane_relay_emergency_validators.insert(
-            DataSpaceId::GLOBAL,
+            LaneId::new(0),
             LaneRelayEmergencyValidatorSet {
-                validators: vec![extra_1, extra_2],
-                expires_at_height: None,
+                peers: vec![peer_id_for_account(&extra_1), peer_id_for_account(&extra_2)],
+                expires_at_height: 10,
                 metadata: Metadata::default(),
             },
         );
@@ -28893,7 +34561,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -28909,17 +34577,17 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
 
         let mut wb = state.world.block();
         wb.lane_relay_emergency_validators.insert(
-            DataSpaceId::GLOBAL,
+            LaneId::new(0),
             LaneRelayEmergencyValidatorSet {
-                validators: vec![base_1, base_2],
-                expires_at_height: None,
+                peers: vec![peer_id_for_account(&base_1), peer_id_for_account(&base_2)],
+                expires_at_height: 10,
                 metadata: Metadata::default(),
             },
         );
@@ -28946,7 +34614,7 @@ mod tests {
                 ..Default::default()
             },
             dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: DataSpaceId::GLOBAL,
+                id: DataSpaceId::UNIVERSAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
@@ -28962,7 +34630,7 @@ mod tests {
             &state,
             &[(
                 LaneId::new(0),
-                DataSpaceId::GLOBAL,
+                DataSpaceId::UNIVERSAL,
                 vec![base_1.clone(), base_2.clone()],
             )],
         );
@@ -28970,10 +34638,10 @@ mod tests {
         let (extra_1, _) = bls_account_in("validators");
         let mut wb = state.world.block();
         wb.lane_relay_emergency_validators.insert(
-            DataSpaceId::GLOBAL,
+            LaneId::new(0),
             LaneRelayEmergencyValidatorSet {
-                validators: vec![extra_1],
-                expires_at_height: None,
+                peers: vec![peer_id_for_account(&extra_1)],
+                expires_at_height: 10,
                 metadata: Metadata::default(),
             },
         );
@@ -28994,12 +34662,12 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
 
-        let seed = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), 1);
-        let same = state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(0), 1);
+        let seed = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), 1);
+        let same = state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(0), 1);
         assert_eq!(seed, same);
 
         let different_lane =
-            state.lane_relay_committee_seed(DataSpaceId::GLOBAL, LaneId::new(1), 1);
+            state.lane_relay_committee_seed(DataSpaceId::UNIVERSAL, LaneId::new(1), 1);
         assert_ne!(seed, different_lane);
         let different_ds = state.lane_relay_committee_seed(DataSpaceId::new(1), LaneId::new(0), 1);
         assert_ne!(seed, different_ds);
@@ -29007,9 +34675,21 @@ mod tests {
 
     #[test]
     fn lane_relay_committee_from_pool_is_deterministic() {
-        let (alice, _) = gen_account_in("wonderland");
-        let (bob, _) = gen_account_in("wonderland");
-        let (carol, _) = gen_account_in("wonderland");
+        let alice = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let bob = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
+        let carol = PeerId::new(
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+                .public_key()
+                .clone(),
+        );
         let pool = vec![bob.clone(), alice.clone(), carol.clone(), alice.clone()];
         let seed = [0x11; 32];
 
@@ -29040,6 +34720,7 @@ mod tests {
             PublicLaneValidatorRecord {
                 lane_id: LaneId::SINGLE,
                 validator: validator.clone(),
+                peer_id: PeerId::from(validator.signatory().clone()),
                 stake_account: validator.clone(),
                 total_stake: Numeric::new(1_000_000, 0),
                 self_stake: Numeric::new(1_000_000, 0),
@@ -29064,6 +34745,66 @@ mod tests {
             &nexus,
         );
         assert_eq!(pool, vec![validator]);
+        assert_eq!(
+            state.authoritative_lane_validator_accounts(LaneId::SINGLE),
+            vec![ALICE_ID.clone()]
+        );
+    }
+
+    #[test]
+    fn authoritative_lane_validator_accounts_use_manifest_for_admin_managed_lane() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(1);
+
+        state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: LaneCatalog::new(
+                    NonZeroU32::new(2).expect("non-zero lane count"),
+                    vec![
+                        LaneConfig::default(),
+                        LaneConfig {
+                            id: lane_id,
+                            dataspace_id,
+                            alias: format!("lane-{}", lane_id.as_u32()),
+                            visibility: LaneVisibility::Restricted,
+                            ..LaneConfig::default()
+                        },
+                    ],
+                )
+                .expect("lane catalog"),
+                dataspace_catalog: DataSpaceCatalog::new(vec![
+                    DataSpaceMetadata::default(),
+                    DataSpaceMetadata {
+                        id: dataspace_id,
+                        alias: "restricted".to_owned(),
+                        description: None,
+                        fault_tolerance: 1,
+                    },
+                ])
+                .expect("dataspace catalog"),
+                ..iroha_config::parameters::actual::Nexus::default()
+            })
+            .expect("apply nexus config");
+
+        install_lane_manifest_registry(
+            &state,
+            &[(
+                lane_id,
+                dataspace_id,
+                vec![ALICE_ID.clone(), BOB_ID.clone()],
+            )],
+        );
+
+        let mut expected = vec![ALICE_ID.clone(), BOB_ID.clone()];
+        expected.sort();
+        assert_eq!(
+            state.authoritative_lane_validator_accounts(lane_id),
+            expected
+        );
     }
 
     #[test]
@@ -29078,7 +34819,11 @@ mod tests {
         let signers_bitmap = full_signer_bitmap(validator_keypairs.len());
         install_lane_manifest_registry(
             &state,
-            &[(LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone())],
+            &[(
+                LaneId::new(0),
+                DataSpaceId::UNIVERSAL,
+                validator_ids.clone(),
+            )],
         );
         let keypairs = configure_commit_topology(&state, 1);
 
@@ -29124,7 +34869,7 @@ mod tests {
                 LaneConfig {
                     id: LaneId::new(1),
                     alias: "beta".to_string(),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     ..LaneConfig::default()
                 },
             ],
@@ -29142,8 +34887,16 @@ mod tests {
         install_lane_manifest_registry(
             &state,
             &[
-                (LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone()),
-                (LaneId::new(1), DataSpaceId::GLOBAL, validator_ids.clone()),
+                (
+                    LaneId::new(0),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (
+                    LaneId::new(1),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
             ],
         );
         let keypairs = configure_commit_topology(&state, 1);
@@ -29203,7 +34956,7 @@ mod tests {
                 LaneConfig {
                     id: LaneId::new(1),
                     alias: "beta".to_string(),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     ..LaneConfig::default()
                 },
             ],
@@ -29221,8 +34974,12 @@ mod tests {
         install_lane_manifest_registry(
             &state,
             &[
-                (LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone()),
-                (LaneId::new(1), DataSpaceId::GLOBAL, validator_ids),
+                (
+                    LaneId::new(0),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (LaneId::new(1), DataSpaceId::UNIVERSAL, validator_ids),
             ],
         );
         configure_commit_topology(&state, 1);
@@ -29262,7 +35019,7 @@ mod tests {
                 LaneConfig {
                     id: LaneId::new(1),
                     alias: "beta".to_string(),
-                    dataspace_id: DataSpaceId::GLOBAL,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
                     ..LaneConfig::default()
                 },
             ],
@@ -29280,8 +35037,16 @@ mod tests {
         install_lane_manifest_registry(
             &state,
             &[
-                (LaneId::new(0), DataSpaceId::GLOBAL, validator_ids.clone()),
-                (LaneId::new(1), DataSpaceId::GLOBAL, validator_ids.clone()),
+                (
+                    LaneId::new(0),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
+                (
+                    LaneId::new(1),
+                    DataSpaceId::UNIVERSAL,
+                    validator_ids.clone(),
+                ),
             ],
         );
         let keypairs = configure_commit_topology(&state, 1);
@@ -29359,6 +35124,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -29857,6 +35624,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -30175,6 +35944,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -30270,6 +36041,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -30484,6 +36257,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -30555,6 +36330,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -30619,6 +36396,482 @@ mod tests {
     }
 
     #[test]
+    fn state_commit_persists_query_index_status_journal() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        let mut state_block = state.block(signed.header());
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let expected = QueryIndexStatus {
+            indexed_height: committed.as_ref().header().height().get(),
+            indexed_block_hash: Some(committed.as_ref().hash()),
+        };
+        assert_eq!(state.query_index_status_snapshot(), expected);
+
+        let path = state.query_index_journal_path();
+        assert!(
+            path.exists(),
+            "query index journal should be materialized when store root is set"
+        );
+        let persisted = QueryIndexJournal::load(&path)
+            .expect("load query index journal")
+            .snapshot();
+        assert_eq!(persisted, expected);
+
+        let restarted = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        assert_eq!(restarted.query_index_status_snapshot(), expected);
+    }
+
+    #[test]
+    fn state_persists_query_projection_checkpoint_journal() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+
+        let expected = QueryProjectionCheckpoint::from_index_status(
+            QueryIndexStatus {
+                indexed_height: 99,
+                indexed_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new([0xAA; 32]))),
+            },
+            1_714_000_999,
+            vec![crate::query::projection_checkpoint::QueryProjectionCheckpointShard {
+                resource: crate::query::projection_checkpoint::QueryProjectionResourceKind::AssetHolders,
+                partition_id: 4,
+                asset_definition_id: Some("pkr#paynet".to_string()),
+                manifest_digest: BlobDigest::new([0x11; 32]),
+                storage_ticket: StorageTicketId::new([0x22; 32]),
+                blob_hash: BlobDigest::new([0x33; 32]),
+            }],
+        );
+        state.persist_query_projection_checkpoint(Some(expected.clone()));
+        assert_eq!(
+            state.query_projection_checkpoint_snapshot(),
+            Some(expected.clone())
+        );
+
+        let path = state.query_projection_checkpoint_journal_path();
+        assert!(
+            path.exists(),
+            "query projection checkpoint journal should be materialized when store root is set"
+        );
+        let persisted = QueryProjectionCheckpointJournal::load(&path)
+            .expect("load query projection checkpoint journal")
+            .snapshot();
+        assert_eq!(persisted, Some(expected.clone()));
+
+        let restarted = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        assert_eq!(
+            restarted.query_projection_checkpoint_snapshot(),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn state_publish_query_projection_checkpoint_uses_current_index_snapshot() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        let mut state_block = state.block(signed.header());
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let checkpoint = state.publish_query_projection_checkpoint(
+            1_714_001_111,
+            vec![
+                crate::query::projection_checkpoint::QueryProjectionCheckpointShard {
+                    resource:
+                        crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts,
+                    partition_id: 2,
+                    asset_definition_id: None,
+                    manifest_digest: BlobDigest::new([0x41; 32]),
+                    storage_ticket: StorageTicketId::new([0x42; 32]),
+                    blob_hash: BlobDigest::new([0x43; 32]),
+                },
+            ],
+        );
+
+        assert_eq!(
+            checkpoint.indexed_height,
+            committed.as_ref().header().height().get()
+        );
+        assert_eq!(
+            checkpoint.indexed_block_hash,
+            Some(committed.as_ref().hash())
+        );
+        assert_eq!(checkpoint.emitted_at_unix, 1_714_001_111);
+        assert_eq!(checkpoint.shards.len(), 1);
+        assert_eq!(
+            state.query_projection_checkpoint_snapshot(),
+            Some(checkpoint.clone())
+        );
+    }
+
+    #[test]
+    fn state_publish_query_projection_checkpoint_from_archives_builds_checkpoint_refs() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        let mut state_block = state.block(signed.header());
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let archive =
+            crate::query::projection_shard::QueryProjectionShardArchive::from_index_status(
+                state.query_index_status_snapshot(),
+                1_714_002_222,
+                crate::query::projection_checkpoint::QueryProjectionResourceKind::AssetHolders,
+                7,
+                Some("pkr#paynet".to_string()),
+                2,
+                b"rows".to_vec(),
+            );
+        let expected_blob_hash = archive
+            .build_da_payload()
+            .expect("build payload")
+            .payload_hash;
+
+        let checkpoint = state
+            .publish_query_projection_checkpoint_from_archives(
+                1_714_002_222,
+                vec![(
+                    archive,
+                    BlobDigest::new([0x51; 32]),
+                    StorageTicketId::new([0x52; 32]),
+                )],
+            )
+            .expect("publish checkpoint from archives");
+
+        assert_eq!(
+            checkpoint.indexed_height,
+            committed.as_ref().header().height().get()
+        );
+        assert_eq!(
+            checkpoint.indexed_block_hash,
+            Some(committed.as_ref().hash())
+        );
+        assert_eq!(checkpoint.shards.len(), 1);
+        assert_eq!(
+            checkpoint.shards[0],
+            crate::query::projection_checkpoint::QueryProjectionCheckpointShard {
+                resource:
+                    crate::query::projection_checkpoint::QueryProjectionResourceKind::AssetHolders,
+                partition_id: 7,
+                asset_definition_id: Some("pkr#paynet".to_string()),
+                manifest_digest: BlobDigest::new([0x51; 32]),
+                storage_ticket: StorageTicketId::new([0x52; 32]),
+                blob_hash: expected_blob_hash,
+            }
+        );
+        assert_eq!(
+            state.query_projection_checkpoint_snapshot(),
+            Some(checkpoint.clone())
+        );
+    }
+
+    #[test]
+    fn state_plan_query_projection_checkpoint_from_archives_rejects_duplicate_shards() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        let mut state_block = state.block(signed.header());
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let status = state.query_index_status_snapshot();
+        let archive =
+            crate::query::projection_shard::QueryProjectionShardArchive::from_index_status(
+                status,
+                1_714_002_222,
+                crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts,
+                7,
+                None,
+                2,
+                b"rows".to_vec(),
+            );
+
+        let err = state
+            .plan_query_projection_checkpoint_from_archives(
+                1_714_002_222,
+                vec![
+                    crate::query::projection_checkpoint::QueryProjectionUploadedShardArchive::new(
+                        archive.clone(),
+                        BlobDigest::new([0x61; 32]),
+                        StorageTicketId::new([0x62; 32]),
+                    ),
+                    crate::query::projection_checkpoint::QueryProjectionUploadedShardArchive::new(
+                        archive,
+                        BlobDigest::new([0x63; 32]),
+                        StorageTicketId::new([0x64; 32]),
+                    ),
+                ],
+            )
+            .expect_err("duplicate shards must fail");
+
+        assert!(matches!(
+            err,
+            crate::query::projection_checkpoint::QueryProjectionCheckpointPlanError::DuplicateShard {
+                resource:
+                    crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts,
+                partition_id: 7,
+                asset_definition_id: None,
+            }
+        ));
+        assert!(state.query_projection_checkpoint_snapshot().is_none());
+    }
+
+    #[test]
+    fn state_publish_query_projection_checkpoint_from_archives_rejects_mismatched_snapshot() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let store_root = temp_dir.path().join("kura");
+        let lane_count = nonzero!(1_u32);
+        let catalog =
+            LaneCatalog::new(lane_count, vec![LaneConfig::default()]).expect("lane catalog");
+        let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+        let kura_cfg = KuraConfig {
+            init_mode: InitMode::Strict,
+            store_dir: WithOrigin::inline(store_root),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypair = KeyPair::random();
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypair.private_key())
+            .unpack(|_| {});
+        let signed: SignedBlock = block.into();
+        let mut state_block = state.block(signed.header());
+        let valid = ValidBlock::validate_unchecked(signed, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let _ = state_block.apply_without_execution(&committed, Vec::new());
+        state_block.commit().expect("commit state block");
+
+        let archive =
+            crate::query::projection_shard::QueryProjectionShardArchive::from_index_status(
+                crate::query::index_status::QueryIndexStatus {
+                    indexed_height: committed.as_ref().header().height().get() + 1,
+                    indexed_block_hash: Some(iroha_crypto::HashOf::from_untyped_unchecked(
+                        iroha_crypto::Hash::new([0x71; iroha_crypto::Hash::LENGTH]),
+                    )),
+                },
+                1_714_002_333,
+                crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts,
+                9,
+                None,
+                2,
+                b"rows".to_vec(),
+            );
+
+        let err = state
+            .publish_query_projection_checkpoint_from_archives(
+                1_714_002_333,
+                vec![(
+                    archive,
+                    BlobDigest::new([0x72; 32]),
+                    StorageTicketId::new([0x73; 32]),
+                )],
+            )
+            .expect_err("mismatched snapshot must fail");
+
+        assert!(matches!(
+            err,
+            crate::query::projection_checkpoint::QueryProjectionCheckpointPlanError::IndexedHeightMismatch {
+                resource:
+                    crate::query::projection_checkpoint::QueryProjectionResourceKind::Accounts,
+                partition_id: 9,
+                ..
+            }
+        ));
+        assert!(state.query_projection_checkpoint_snapshot().is_none());
+    }
+
+    #[test]
     fn hydrate_da_indexes_restore_from_journal_without_blocks() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
         let store_root = temp_dir.path().join("kura");
@@ -30641,6 +36894,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
 
@@ -30728,6 +36983,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
 
@@ -30963,6 +37220,108 @@ mod tests {
     }
 
     #[test]
+    fn apply_without_execution_with_commit_qc_hint_persists_roster_without_status_history() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+
+        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![
+            PeerId::new(kp_a.public_key().clone()),
+            PeerId::new(kp_b.public_key().clone()),
+        ];
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 1);
+        let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(1, kp_b.private_key());
+
+        let mut state_block = state.block(signed_block.header());
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let signers_bitmap = signer_bitmap(&[0, 1], roster.len());
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
+        let height = committed.as_ref().header().height().get();
+        let view = committed.as_ref().header().view_change_index();
+        let vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash: committed.as_ref().hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = crate::sumeragi::consensus::vote_preimage(
+            &super::DEFAULT_TEST_CHAIN_ID,
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            &vote,
+        );
+        let signatures: Vec<Vec<u8>> = [kp_a, kp_b]
+            .iter()
+            .map(|kp| {
+                Signature::new(kp.private_key(), &preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect();
+        let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+        let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
+            .expect("aggregate commit QC signatures");
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: committed.as_ref().hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature,
+            },
+        };
+
+        let _ = state_block.apply_without_execution_with_commit_qc(
+            &committed,
+            roster.clone(),
+            Some(&commit_cert),
+        );
+        state_block.commit().expect("commit");
+
+        let history = status::commit_qc_history();
+        assert!(
+            history.is_empty(),
+            "explicit commit-QC hints should not populate status history during state apply"
+        );
+        let snapshot = state
+            .commit_roster_snapshot_for_block(height, committed.as_ref().hash())
+            .expect("commit-roster snapshot");
+        assert_eq!(snapshot.commit_qc, commit_cert);
+        let view = state.view();
+        let stored = view.world().commit_qcs().get(&committed.as_ref().hash());
+        assert_eq!(
+            stored,
+            Some(&snapshot.commit_qc),
+            "explicit commit-QC hints should still persist durable roster evidence"
+        );
+
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
     fn commit_roster_record_does_not_persist_sidecar_to_kura() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
@@ -30982,6 +37341,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
         let state = State::new_for_testing(
@@ -31086,6 +37447,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &initial_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -31298,6 +37661,7 @@ mod tests {
         let keypair = KeyPair::random();
         let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
+            .with_da_commitments(Some(DaCommitmentBundle::new(Vec::new())))
             .sign(keypair.private_key())
             .unpack(|_| {})
             .into();
@@ -31455,6 +37819,9 @@ mod tests {
             Signature::from_bytes(&[0x11; 64]),
         );
         state
+            .ensure_da_indexes_hydrated()
+            .expect("hydrate empty DA cursor index before seeding stale cursor");
+        state
             .advance_da_shard_cursors_from_bundle(1, &[record])
             .expect("advance cursor");
 
@@ -31465,6 +37832,7 @@ mod tests {
             .into();
         let second_block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, Some(&first_block))
+            .with_da_commitments(Some(DaCommitmentBundle::new(Vec::new())))
             .sign(keypair.private_key())
             .unpack(|_| {})
             .into();
@@ -31474,10 +37842,13 @@ mod tests {
         let err = state_block
             .validate_da_shard_cursors(&second_block)
             .expect_err("stale cursor should fail validation");
-        assert!(matches!(
-            err,
-            BlockValidationError::DaShardCursor(DaShardCursorError::StaleCursor { .. })
-        ));
+        assert!(
+            matches!(
+                err,
+                BlockValidationError::DaShardCursor(DaShardCursorError::StaleCursor { .. })
+            ),
+            "unexpected DA shard cursor validation error: {err:?}"
+        );
 
         let counter = metrics
             .da_shard_cursor_events_total
@@ -31652,6 +38023,8 @@ mod tests {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         };
         let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
         let query_handle = LiveQueryStore::start_test();
@@ -32008,7 +38381,8 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "zero-snapshot".parse().expect("domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("zero-snapshot", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -32784,7 +39158,7 @@ mod tests {
         assert_eq!(
             metrics
                 .axt_policy_snapshot_cache_events_total
-                .with_label_values(&["hit"])
+                .with_label_values(&["cache_hit"])
                 .get(),
             1
         );
@@ -32805,7 +39179,7 @@ mod tests {
         assert_eq!(
             metrics
                 .axt_policy_snapshot_cache_events_total
-                .with_label_values(&["miss"])
+                .with_label_values(&["cache_miss"])
                 .get(),
             1
         );
@@ -32836,7 +39210,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "preserve".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("preserve", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -32960,7 +39334,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "lane-change".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("lane-change", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -33563,7 +39937,7 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::expiry"));
         let dataspace = DataSpaceId::new(11);
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -33678,7 +40052,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -33781,7 +40155,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "rotate".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("rotate", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -33903,7 +40277,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "zero-hash".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("zero-hash", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -33990,7 +40364,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -34088,7 +40462,7 @@ mod tests {
 
         let mut delta = DetachedStateTransactionDelta::default();
         let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         delta.record_mint_consumption(def_id.clone(), 1);
@@ -34098,11 +40472,13 @@ mod tests {
 
     #[test]
     fn detached_can_modify_nft_metadata_allows_domain_owner() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-        let nft_id: NftId = "nft_perm_owner$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_perm_owner$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
 
         let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
@@ -34119,11 +40495,13 @@ mod tests {
 
     #[test]
     fn detached_can_modify_nft_metadata_checks_grants_and_revokes() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-        let nft_id: NftId = "nft_perm_grant$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_perm_grant$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
 
         let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
@@ -34168,10 +40546,13 @@ mod tests {
 
     #[test]
     fn detached_can_modify_account_metadata_allows_domain_owner() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
-        let domain = Domain::new(domain_id).build(&ALICE_ID);
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
+        let bob_alias = alias_in_domain(&domain_id, "bob".parse().expect("alias"));
+        let bob_account = new_sample_account(&BOB_ID)
+            .with_label(Some(bob_alias))
+            .build(&BOB_ID);
 
         let world = World::with([domain], [alice_account, bob_account], []);
         let view = world.view();
@@ -34187,8 +40568,10 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_domain_denies_non_owner() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let transferred_domain_id: DomainId = "foo".parse().expect("foo domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let transferred_domain_id: DomainId =
+            DomainId::try_new("foo", "universal").expect("foo domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -34196,7 +40579,12 @@ mod tests {
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
+        let user1_account = new_account_in_domain(&user1, &users_domain_id)
+            .with_label(Some(alias_in_domain(
+                &users_domain_id,
+                "user1".parse().expect("alias"),
+            )))
+            .build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
 
         let world = World::with(
@@ -34219,8 +40607,10 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_domain_considers_pending_domain_transfers() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let transferred_domain_id: DomainId = "foo".parse().expect("foo domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let transferred_domain_id: DomainId =
+            DomainId::try_new("foo", "universal").expect("foo domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -34228,7 +40618,12 @@ mod tests {
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
+        let user1_account = new_account_in_domain(&user1, &users_domain_id)
+            .with_label(Some(alias_in_domain(
+                &users_domain_id,
+                "user1".parse().expect("alias"),
+            )))
+            .build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
 
         let world = World::with(
@@ -34275,8 +40670,10 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_asset_definition_denies_non_owner() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let definition_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let definition_domain_id: DomainId =
+            DomainId::try_new("defs", "universal").expect("defs domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -34315,8 +40712,10 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_asset_definition_considers_pending_owner_transfer() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let definition_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let definition_domain_id: DomainId =
+            DomainId::try_new("defs", "universal").expect("defs domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -34370,7 +40769,8 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_nft_denies_non_owner() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -34379,7 +40779,7 @@ mod tests {
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
         let world = World::with_assets(
@@ -34403,7 +40803,8 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_nft_considers_pending_domain_transfers() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -34412,7 +40813,7 @@ mod tests {
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
-        let nft_id: NftId = "ticket$users".parse().expect("nft id");
+        let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
 
         let world = World::with_assets(
@@ -34444,7 +40845,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_account_metadata_respects_role_permission_ops() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -34504,11 +40905,13 @@ mod tests {
 
     #[test]
     fn detached_can_modify_nft_metadata_respects_role_grant_order() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-        let nft_id: NftId = "nft_role_grant$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_role_grant$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
         let role_id: RoleId = "nft_editor".parse().expect("role id");
         let perm: Permission = CanModifyNftMetadata {
@@ -34564,11 +40967,13 @@ mod tests {
 
     #[test]
     fn detached_can_modify_nft_metadata_respects_role_permission_ops() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
-        let nft_id: NftId = "nft_role_perm$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "nft_role_perm$wonderland.universal"
+            .parse()
+            .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&BOB_ID);
         let role_id: RoleId = "nft_editor_perm".parse().expect("role id");
         let role = Role::new(role_id.clone(), BOB_ID.clone()).build(&BOB_ID);
@@ -34627,7 +41032,7 @@ mod tests {
     fn detached_merge_rejects_permission_revoke_without_grant() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
@@ -34669,7 +41074,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -34677,7 +41082,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -34688,7 +41093,7 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
         let other_asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "tulip".parse().unwrap(),
         );
         Register::asset_definition({
@@ -34734,7 +41139,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -34743,7 +41148,7 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -34793,8 +41198,8 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let wonderland: DomainId = "wonderland".parse().expect("domain id");
-        let denoland: DomainId = "denoland".parse().expect("domain id");
+        let wonderland: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let denoland: DomainId = DomainId::try_new("denoland", "universal").expect("domain id");
         for domain_id in [&wonderland, &denoland] {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -34807,9 +41212,11 @@ mod tests {
         let rose_id = AssetDefinitionId::new(wonderland.clone(), "rose".parse().unwrap());
         let tulip_id = AssetDefinitionId::new(wonderland.clone(), "tulip".parse().unwrap());
         let cactus_id = AssetDefinitionId::new(denoland.clone(), "cactus".parse().unwrap());
-        let opaque_id: AssetDefinitionId = "aid:2e3d34beb8a84239b3d9590770f1189e"
-            .parse()
-            .expect("opaque aid asset definition id");
+        let opaque_id = AssetDefinitionId::from_uuid_bytes([
+            0x2e, 0x3d, 0x34, 0xbe, 0xb8, 0xa8, 0x42, 0x39, 0xb3, 0xd9, 0x59, 0x07, 0x70, 0xf1,
+            0x18, 0x9e,
+        ])
+        .expect("opaque asset definition id");
         for definition_id in [&rose_id, &tulip_id, &cactus_id] {
             Register::asset_definition({
                 let __asset_definition_id = definition_id.clone();
@@ -34820,7 +41227,7 @@ mod tests {
             .expect("register asset definition");
         }
         Register::asset_definition(
-            AssetDefinition::numeric(opaque_id.clone()).with_name("pkr".to_owned()),
+            AssetDefinition::numeric(opaque_id.clone()).with_name("cbdc".to_owned()),
         )
         .execute(&ALICE_ID, &mut stx)
         .expect("register opaque asset definition");
@@ -34845,20 +41252,16 @@ mod tests {
             BTreeSet::from([cactus_id.clone()]),
             "denoland should only expose its own definitions"
         );
-        let synthetic_aid_domain: DomainId = "aid".parse().expect("synthetic label");
         assert!(
-            stx.world
-                .asset_definitions_in_domain_iter(&synthetic_aid_domain)
-                .next()
-                .is_none(),
-            "opaque aid asset definitions must not be exposed through any domain index"
+            opaque_id.try_domain().is_none(),
+            "opaque asset definitions must not expose a synthetic domain projection"
         );
         assert!(
             stx.world
                 .domain_asset_definitions
-                .get(&synthetic_aid_domain)
-                .is_none(),
-            "opaque aid asset definitions must not create internal aid-domain index entries"
+                .iter()
+                .all(|(_, definitions)| !definitions.contains(&opaque_id)),
+            "opaque asset definitions must not create internal domain index entries"
         );
 
         Unregister::asset_definition(cactus_id.clone())
@@ -34887,7 +41290,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -34896,7 +41299,7 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -34955,7 +41358,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -34964,7 +41367,7 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -35044,7 +41447,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -35053,7 +41456,7 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -35064,7 +41467,7 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
         let other_asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "tulip".parse().unwrap(),
         );
         Register::asset_definition({
@@ -35124,7 +41527,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -35132,7 +41535,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -35171,7 +41574,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -35179,7 +41582,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -35217,11 +41620,12 @@ mod tests {
         use iroha_test_samples::ALICE_ID;
 
         fn build_world() -> (World, DomainId, AssetDefinitionId, AssetId, AccountId) {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let asset_def = {
@@ -35403,8 +41807,10 @@ mod tests {
 
         let _guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
-        let asset_def_id =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_def_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
         crate::sumeragi::witness::record_write_asset(
             &asset_id,
@@ -35447,14 +41853,14 @@ mod tests {
 
         {
             let mut stx = state_block.transaction();
-            let domain_id: DomainId = "wonderland".parse()?;
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Register::asset_definition({
                 let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse()?,
+                    DomainId::try_new("wonderland", "universal")?,
                     "rose".parse()?,
                 );
                 AssetDefinition::numeric(__asset_definition_id.clone())
@@ -35465,8 +41871,10 @@ mod tests {
         }
 
         let trigger_id: TriggerId = "failing_time_trigger".parse()?;
-        let asset_def_id: AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let alice_asset = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let failing_instruction: InstructionBox =
             Transfer::asset_numeric(alice_asset, 1_u32, BOB_ID.clone()).into();
@@ -35561,7 +41969,7 @@ mod tests {
         let mut state_block1 = state.block(header1);
         {
             let mut stx = state_block1.transaction();
-            let domain_id: DomainId = "wonderland".parse()?;
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Register::account(new_sample_account(&ALICE_ID))
@@ -35652,7 +42060,8 @@ mod tests {
         let mut block1 = state.block(header1);
         {
             let mut stx = block1.transaction();
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             Register::domain(Domain::new(domain_id))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
                 .expect("register domain");
@@ -35787,15 +42196,23 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
+        Grant::account_permission(
+            iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                authority: ALICE_ID.clone(),
+            },
+            ALICE_ID.clone(),
+        )
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -35885,7 +42302,7 @@ mod tests {
         let trigger_id: TriggerId = "rollback_trigger".parse().unwrap();
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
 
@@ -35896,9 +42313,11 @@ mod tests {
         {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -35908,7 +42327,7 @@ mod tests {
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             });
-            let fail_isi = Unregister::domain("dummy".parse().unwrap());
+            let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
             let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
             let trigger = Trigger::new(
                 trigger_id.clone(),
@@ -35963,6 +42382,434 @@ mod tests {
     }
 
     #[test]
+    fn execute_called_trigger_accepts_staged_mint_like_json_args() {
+        use iroha_data_model::{
+            events::execute_trigger::{ExecuteTriggerEvent, ExecuteTriggerEventFilter},
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+        use ivm::KotodamaCompiler;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let trigger_id: TriggerId = "staged_mint_like".parse().unwrap();
+        let src = r#"
+            seiyaku StagedMintRequest {
+              state int MintRequestNextSequence;
+              state MintRequestSequenceById: Map<Name, int>;
+              state MintRequestSequences: Map<int, int>;
+              state MintRequestRequestIds: Map<int, Name>;
+              state MintRequestFiIds: Map<int, Name>;
+              state MintRequestFiAuthorities: Map<int, AccountId>;
+              state MintRequestToAccounts: Map<int, AccountId>;
+              state MintRequestAmounts: Map<int, int>;
+              state MintRequestRequestedBy: Map<int, Json>;
+              state MintRequestStates: Map<int, int>;
+              state MintRequestCreatedAt: Map<int, int>;
+              state MintRequestExpiresAt: Map<int, int>;
+              state MintRequestFinalizedAt: Map<int, int>;
+              state MintRequestCanceledAt: Map<int, int>;
+
+              fn update_record(sequence: int,
+                               request_id: Name,
+                               fi_id: Name,
+                               fi_multisig_account_id: AccountId,
+                               to_account_id: AccountId,
+                               amount_i64: int,
+                               requested_by_actor_id: Json,
+                               state_code: int,
+                               created_at_ms: int,
+                               expires_at_ms: int,
+                               finalized_at_ms: int,
+                               canceled_at_ms: int) {
+                MintRequestSequences[sequence] = sequence;
+                MintRequestRequestIds[sequence] = request_id;
+                MintRequestFiIds[sequence] = fi_id;
+                MintRequestFiAuthorities[sequence] = fi_multisig_account_id;
+                MintRequestToAccounts[sequence] = to_account_id;
+                MintRequestAmounts[sequence] = amount_i64;
+                MintRequestRequestedBy[sequence] = requested_by_actor_id;
+                MintRequestStates[sequence] = state_code;
+                MintRequestCreatedAt[sequence] = created_at_ms;
+                MintRequestExpiresAt[sequence] = expires_at_ms;
+                MintRequestFinalizedAt[sequence] = finalized_at_ms;
+                MintRequestCanceledAt[sequence] = canceled_at_ms;
+              }
+
+              fn main() {
+                let ev = trigger_event();
+                let action_key = name("action");
+                let request_id_key = name("request_id");
+                let fi_id_key = name("fi_id");
+                let to_account_id_key = name("to_account_id");
+                let amount_i64_key = name("amount_i64");
+                let requested_by_actor_id_key = name("requested_by_actor_id");
+                let created_at_ms_key = name("created_at_ms");
+                let expires_at_ms_key = name("expires_at_ms");
+
+                let action = ev.get_name(action_key);
+
+                if (action == name("create")) {
+                  let request_id = ev.get_name(request_id_key);
+                  assert(!MintRequestSequenceById.contains(request_id), "mint request already exists");
+
+                  let sequence = MintRequestNextSequence + 1;
+                  let fi_id = ev.get_name(fi_id_key);
+                  let to_account_id = ev.get_account_id(to_account_id_key);
+                  let amount_i64 = ev.get_int(amount_i64_key);
+                  let requested_by_actor_id = ev.get_json(requested_by_actor_id_key);
+                  let created_at_ms = ev.get_int(created_at_ms_key);
+                  let expires_at_ms = ev.get_int(expires_at_ms_key);
+
+                  MintRequestNextSequence = sequence;
+                  MintRequestSequenceById[request_id] = sequence;
+                  update_record(sequence,
+                                request_id,
+                                fi_id,
+                                to_account_id,
+                                to_account_id,
+                                amount_i64,
+                                requested_by_actor_id,
+                                0,
+                                created_at_ms,
+                                expires_at_ms,
+                                0,
+                                0);
+                  return;
+                }
+
+                assert(false, "unsupported staged mint action");
+              }
+            }
+        "#;
+        let program = KotodamaCompiler::new()
+            .compile_source(&src)
+            .expect("compile staged-mint-like contract");
+        let bytecode = IvmBytecode::from_compiled(program);
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.creation_time_ms = 1;
+        });
+        {
+            let mut state_block = state.block(block1.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(new_sample_account(&BOB_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Grant::account_permission(
+                Permission::new("staged_mint_request_run".into(), Json::new(())),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Executable::Ivm(bytecode),
+                    Repeats::Indefinitely,
+                    ALICE_ID.clone(),
+                    ExecuteTriggerEventFilter::new()
+                        .for_trigger(trigger_id.clone())
+                        .under_authority(ALICE_ID.clone()),
+                ),
+            );
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+        }
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).unwrap());
+            header.creation_time_ms = 2;
+        });
+        {
+            let mut state_block = state.block(block2.as_ref().header());
+            let mut stx = state_block.transaction();
+            let opaque_asset_id = AssetDefinitionId::from_uuid_bytes([
+                0x2e, 0x3d, 0x34, 0xbe, 0xb8, 0xa8, 0x42, 0x39, 0xb3, 0xd9, 0x59, 0x07, 0x70, 0xf1,
+                0x18, 0x9e,
+            ])
+            .expect("opaque asset definition id");
+            let args_json = format!(
+                r#"{{"action":"create","request_id":"cd38ea58-bc66-4844-921f-22af49b6cf3d","asset_id":"{}","asset_definition_blob_hex":"4e5254300000035dc38f291ebaa4035dc38f291ebaa4000900000000000000003666540b910988cf0001000000000000002e01000000000000003d0100000000000000340100000000000000be0100000000000000b80100000000000000a80100000000000000420100000000000000390100000000000000b30100000000000000d90100000000000000590100000000000000070100000000000000700100000000000000f101000000000000001801000000000000009e","fi_id":"banka","to_account_id":"{}","amount_i64":53378,"requested_by_actor_id":"operator1@banka","created_at_ms":1773904751245,"expires_at_ms":1773905351245}}"#,
+                opaque_asset_id,
+                (*BOB_ID).to_string()
+            );
+            let event = ExecuteTriggerEvent {
+                trigger_id: trigger_id.clone(),
+                authority: ALICE_ID.clone(),
+                args: Json::from_string_unchecked(args_json),
+            };
+            eprintln!("before execute_called_trigger");
+            stx.execute_called_trigger(&trigger_id, &event)
+                .expect("staged-mint-like trigger should accept live create args");
+            eprintln!("after execute_called_trigger");
+            stx.apply();
+            state_block.commit().unwrap();
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    #[test]
+    fn execute_data_trigger_supports_alias_resolve_and_json_amount_transfer() {
+        use iroha_data_model::{
+            account::rekey::AccountAlias,
+            events::data::prelude as data_pre,
+            permission::Permission,
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+        use iroha_primitives::json::Json;
+        use iroha_primitives::numeric::Numeric;
+        use ivm::KotodamaCompiler;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            domain_id.clone(),
+            "rose".parse().unwrap(),
+        );
+        let gold_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            domain_id.clone(),
+            "gold".parse().unwrap(),
+        );
+        let gold_source = AssetId::new(gold_def_id.clone(), ALICE_ID.clone());
+        let gold_target = AssetId::new(gold_def_id.clone(), BOB_ID.clone());
+        let rose_source = AssetId::new(rose_def_id.clone(), ALICE_ID.clone());
+        let rose_target = AssetId::new(rose_def_id.clone(), BOB_ID.clone());
+        let trigger_id: TriggerId = "alias_json_transfer".parse().unwrap();
+        let banking_label = AccountAlias::new(
+            "banking".parse().expect("banking label"),
+            Some(AccountAliasDomain::new(domain_id.name().clone())),
+            DataSpaceId::UNIVERSAL,
+        );
+
+        let src = r#"
+            seiyaku AliasTransfer {
+              fn main() {
+                let ev = trigger_event();
+                if (ev.get_name(name("kind")) != name("asset_change")) {
+                  return;
+                }
+                if (ev.get_name(name("op")) != name("added")) {
+                  return;
+                }
+                let dst_domain = ev.get_name(name("account_domain"));
+                let dst = ev.get_account_id(name("account_id"));
+                let amount = ev.get_int(name("amount_i64"));
+                if (amount <= 0) {
+                  return;
+                }
+                let src = resolve_account_alias("banking@wonderland.universal");
+                let payout = amount * 76;
+                if (dst_domain != name("wonderland.universal")) {
+                  return;
+                }
+                transfer_asset(dst, src, asset_definition("__ROSE_ASSET_DEFINITION_ID__"), amount);
+                transfer_asset(src, dst, asset_definition("__GOLD_ASSET_DEFINITION_ID__"), payout);
+              }
+            }
+        "#
+        .replace("__ROSE_ASSET_DEFINITION_ID__", &rose_def_id.to_string())
+        .replace("__GOLD_ASSET_DEFINITION_ID__", &gold_def_id.to_string());
+        let program = KotodamaCompiler::new()
+            .compile_source(&src)
+            .expect("compile alias transfer contract");
+        let bytecode = IvmBytecode::from_compiled(program);
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.creation_time_ms = 1;
+        });
+        {
+            let mut state_block = state.block(block1.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(new_sample_account(&BOB_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::asset_definition({
+                let __asset_definition_id = rose_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::asset_definition({
+                let __asset_definition_id = gold_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Mint::asset_numeric(1_000_u32, gold_source.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Grant::account_permission(
+                Permission::new("alias_transfer_run".into(), Json::new(())),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::account::CanManageAccountAlias {
+                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                        ),
+                    },
+                ),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::account::CanManageAccountAlias {
+                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                            domain_id.clone(),
+                        ),
+                    },
+                ),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::account::CanResolveAccountAlias {
+                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+                        ),
+                    },
+                ),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::account::CanResolveAccountAlias {
+                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                            domain_id.clone(),
+                        ),
+                    },
+                ),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Grant::account_permission(
+                Permission::from(
+                    iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
+                        asset_definition: rose_def_id.clone(),
+                    },
+                ),
+                ALICE_ID.clone(),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            seed_account_alias_lease(&mut stx, &ALICE_ID, &banking_label);
+            iroha_data_model::isi::domain_link::SetPrimaryAccountAlias {
+                account: ALICE_ID.clone(),
+                alias: Some(banking_label.clone()),
+                lease_expiry_ms: None,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            let trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    Executable::Ivm(bytecode),
+                    Repeats::Indefinitely,
+                    ALICE_ID.clone(),
+                    data_pre::DataEventFilter::Asset(
+                        data_pre::AssetEventFilter::new()
+                            .for_events(data_pre::AssetEventSet::Added)
+                            .for_asset(rose_target.clone()),
+                    ),
+                ),
+            );
+            Register::trigger(trigger)
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            stx.apply();
+            state_block.commit().unwrap();
+        }
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).unwrap());
+            header.creation_time_ms = 2;
+        });
+        {
+            let mut state_block = state.block(block2.as_ref().header());
+            let mut stx = state_block.transaction();
+
+            Mint::asset_numeric(5_u32, rose_target.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let steps = stx
+                .execute_data_triggers_dfs(&ALICE_ID)
+                .expect("data trigger should execute transfer path");
+            assert_eq!(steps.len(), 1, "expected one data trigger execution");
+
+            stx.apply();
+            state_block.commit().unwrap();
+        }
+
+        let view = state.view();
+        let bob_gold = view
+            .world
+            .asset(&gold_target)
+            .expect("trigger should credit gold to bob");
+        assert_eq!(&**bob_gold.value(), &Numeric::from(380_u32));
+        let alice_gold = view
+            .world
+            .asset(&gold_source)
+            .expect("trigger should debit gold from the reserve");
+        assert_eq!(&**alice_gold.value(), &Numeric::from(620_u32));
+        let alice_rose = view
+            .world
+            .asset(&rose_source)
+            .expect("trigger should collect rose into the reserve");
+        assert_eq!(&**alice_rose.value(), &Numeric::from(5_u32));
+    }
+
+    #[test]
     fn detached_execute_called_trigger_failure_rolls_back_state() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -35971,7 +42818,7 @@ mod tests {
         let trigger_id: TriggerId = "rollback_trigger_detached".parse().unwrap();
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
 
@@ -35982,9 +42829,11 @@ mod tests {
         {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -35994,7 +42843,7 @@ mod tests {
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             });
-            let fail_isi = Unregister::domain("dummy".parse().unwrap());
+            let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
             let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
             let trigger = Trigger::new(
                 trigger_id.clone(),
@@ -36162,7 +43011,8 @@ mod tests {
             crate::executor::LoadedExecutor::load(raw).expect("load executor"),
         );
 
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID);
         let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
         let mut executor_block = world.executor.block();
@@ -36233,7 +43083,8 @@ mod tests {
         use crate::{block::BlockBuilder, tx::AcceptedTransaction};
 
         // Seed the world with a domain and ALICE account to author the trigger.
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID);
         let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
 
@@ -36245,7 +43096,7 @@ mod tests {
         let trigger_id: TriggerId = "rollback_trigger_block".parse().unwrap();
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
 
@@ -36255,7 +43106,7 @@ mod tests {
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
         });
-        let fail_isi = Unregister::domain("dummy".parse().unwrap());
+        let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
         let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
         let register_trigger = Register::trigger(Trigger::new(
             trigger_id.clone(),
@@ -36523,12 +43374,31 @@ mod tests {
             topo.push(peer);
         }
         topo.commit();
+        let committed_peers: Vec<_> = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect();
+        let mut world_block = state.world.block();
+        {
+            let mut peers = world_block.peers_mut_for_testing().transaction();
+            peers.clear();
+            peers.extend(committed_peers);
+            peers.apply();
+        }
+        world_block.commit();
         seed_consensus_keys_with_pops(state, &keypairs);
         keypairs
     }
 
     #[test]
     fn apply_without_execution_updates_commit_topology_from_world_peers() {
+        let _mode_guard = crate::sumeragi::status::mode_tags_test_guard();
+        crate::sumeragi::status::set_mode_tags(
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            None,
+            None,
+        );
+
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
@@ -36543,6 +43413,17 @@ mod tests {
                 .public_key()
                 .clone(),
         );
+        {
+            let mut world_block = state.world.block();
+            {
+                let mut peers = world_block.peers_mut_for_testing().transaction();
+                peers.clear();
+                peers.extend(base_topology.clone());
+                peers.push(new_peer.clone());
+                peers.apply();
+            }
+            world_block.commit();
+        }
 
         let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
             .chain(0, None)
@@ -36550,14 +43431,6 @@ mod tests {
             .unpack(|_| {});
         let signed_block: SignedBlock = block.into();
         let mut state_block = state.block(signed_block.header());
-
-        {
-            let mut peers = state_block.world.peers_mut_for_testing().transaction();
-            peers.clear();
-            peers.extend(base_topology.clone());
-            peers.push(new_peer.clone());
-            peers.apply();
-        }
 
         let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
         let committed = valid.commit_unchecked().unpack(|_| {});
@@ -36569,6 +43442,146 @@ mod tests {
         let mut world_peers = base_topology.clone();
         world_peers.push(new_peer);
         expected_topology.block_committed(world_peers, prev_hash);
+        let expected = expected_topology.as_ref().to_vec();
+
+        let view = state.view();
+        let actual: Vec<_> = view.commit_topology().iter().cloned().collect();
+        assert_eq!(actual, expected);
+        let prev: Vec<_> = view.prev_commit_topology().iter().cloned().collect();
+        assert_eq!(prev, base_topology);
+
+        crate::sumeragi::status::set_mode_tags("", None, None);
+    }
+
+    #[test]
+    fn apply_without_execution_keeps_world_peer_append_scoped_to_checkpoint_lanes() {
+        use iroha_config::parameters::actual::LaneValidatorMode;
+        use iroha_data_model::nexus::{
+            LaneCatalog, LaneConfig as CatalogLaneConfig, LaneVisibility,
+        };
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query);
+        {
+            let lane_catalog = LaneCatalog::new(
+                NonZeroU32::new(2).expect("nonzero lane count"),
+                vec![
+                    CatalogLaneConfig::default(),
+                    CatalogLaneConfig {
+                        id: LaneId::new(1),
+                        alias: "restricted".to_string(),
+                        visibility: LaneVisibility::Restricted,
+                        ..CatalogLaneConfig::default()
+                    },
+                ],
+            )
+            .expect("lane catalog");
+            let nexus = state.nexus.get_mut();
+            nexus.lane_catalog = lane_catalog.clone();
+            nexus.lane_config =
+                iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
+            nexus.staking.public_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.restricted_validator_mode = LaneValidatorMode::StakeElected;
+            nexus.staking.min_validator_stake = 100;
+        }
+
+        let public_keypairs: Vec<_> = (0..2)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let restricted_keypairs: Vec<_> = (0..2)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let base_topology: Vec<_> = public_keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+
+        {
+            let mut topo = state.commit_topology.block();
+            topo.clear();
+            for peer in &base_topology {
+                topo.push(peer.clone());
+            }
+            topo.commit();
+        }
+
+        {
+            let mut world_block = state.world.block();
+            {
+                let mut peers = world_block.peers_mut_for_testing().transaction();
+                peers.clear();
+                peers.extend(base_topology.clone());
+                peers.extend(
+                    restricted_keypairs
+                        .iter()
+                        .map(|kp| PeerId::new(kp.public_key().clone())),
+                );
+                peers.apply();
+            }
+            for kp in &public_keypairs {
+                let validator = AccountId::new(kp.public_key().clone());
+                world_block.public_lane_validators.insert(
+                    (LaneId::SINGLE, validator.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id: LaneId::SINGLE,
+                        validator: validator.clone(),
+                        peer_id: PeerId::new(kp.public_key().clone()),
+                        stake_account: validator,
+                        total_stake: Numeric::new(1_000, 0),
+                        self_stake: Numeric::new(1_000, 0),
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            for kp in &restricted_keypairs {
+                let validator = AccountId::new(kp.public_key().clone());
+                world_block.public_lane_validators.insert(
+                    (LaneId::new(1), validator.clone()),
+                    PublicLaneValidatorRecord {
+                        lane_id: LaneId::new(1),
+                        validator: validator.clone(),
+                        peer_id: PeerId::new(kp.public_key().clone()),
+                        stake_account: validator,
+                        total_stake: Numeric::new(1_000, 0),
+                        self_stake: Numeric::new(1_000, 0),
+                        metadata: Metadata::default(),
+                        status: PublicLaneValidatorStatus::Active,
+                        activation_epoch: None,
+                        activation_height: None,
+                        last_reward_epoch: None,
+                    },
+                );
+            }
+            world_block.commit();
+        }
+        seed_consensus_keys_with_pops(
+            &state,
+            &public_keypairs
+                .iter()
+                .chain(restricted_keypairs.iter())
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
+
+        let block = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(public_keypairs[0].private_key())
+            .unpack(|_| {});
+        let signed_block: SignedBlock = block.into();
+        let mut state_block = state.block(signed_block.header());
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let prev_hash = committed.as_ref().hash();
+        let _ = state_block.apply_without_execution(&committed, base_topology.clone());
+        state_block.commit().expect("commit state block");
+
+        let mut expected_topology = Topology::new(base_topology.clone());
+        expected_topology.block_committed(base_topology.clone(), prev_hash);
         let expected = expected_topology.as_ref().to_vec();
 
         let view = state.view();
@@ -37276,7 +44289,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -37284,7 +44297,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -37482,9 +44495,11 @@ mod tests {
         });
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -37631,6 +44646,547 @@ mod tests {
         Ok(())
     }
 
+    fn persist_committed_test_block(kura: &Kura, block: &CommittedBlock) {
+        let block_arc = Arc::new(block.clone().into());
+        kura.store_block(Arc::clone(&block_arc))
+            .expect("store committed block in kura");
+        kura.persist_block_immediate_for_tests(&block_arc);
+    }
+
+    #[test]
+    fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() {
+        use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
+        use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let trigger_id: TriggerId = "time_retry_once".parse().unwrap();
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "retrycoin".parse().unwrap(),
+        );
+        let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+        let retry_policy = TimeTriggerRetryPolicy {
+            max_retries: NonZeroU32::new(1).unwrap(),
+            retry_after_ms: NonZeroU64::new(5).unwrap(),
+        };
+        let world = World::with(
+            [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+        );
+        let state = State::new(world, kura.clone(), query_handle);
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.creation_time_ms = 0;
+        });
+        let mut state_block1 = state.block(block1.as_ref().header());
+        {
+            let mut stx = state_block1.transaction();
+            let action = Action::new(
+                vec![InstructionBox::from(Mint::asset_numeric(
+                    1_u32,
+                    alice_asset_id.clone(),
+                ))],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::Schedule(Schedule::starting_at(
+                    Duration::from_millis(1),
+                ))),
+            )
+            .with_retry_policy(retry_policy);
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        let _ = state_block1.apply_without_execution(&block1, Vec::new());
+        state_block1.commit().unwrap();
+        persist_committed_test_block(&kura, &block1);
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).unwrap());
+            header.creation_time_ms = 6;
+        });
+        {
+            let view = state.view();
+            assert!(
+                view.time_triggers_due_for_block(&block2.as_ref().header()),
+                "scheduled retry trigger should be due for block2"
+            );
+        }
+        let mut state_block2 = state.block(block2.as_ref().header());
+        let events2 = state_block2.apply(&block2, Vec::new());
+        let completions2: Vec<_> = events2
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            completions2.len(),
+            1,
+            "expected one failed completion, events: {events2:#?}"
+        );
+        assert!(matches!(
+            completions2[0].outcome(),
+            TriggerCompletedOutcome::Failure(_)
+        ));
+        state_block2.commit().unwrap();
+        persist_committed_test_block(&kura, &block2);
+
+        {
+            let view = state.view();
+            let action = view
+                .world
+                .triggers()
+                .time_triggers()
+                .get(&trigger_id)
+                .expect("trigger should remain registered after first failure");
+            assert_eq!(action.repeats, Repeats::Exactly(1));
+            assert_eq!(
+                action.retry_state,
+                Some(TimeTriggerRetryState {
+                    retries_used: 1,
+                    next_retry_at_ms: 11,
+                })
+            );
+        }
+
+        let block3 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(3).unwrap());
+            header.creation_time_ms = 8;
+        });
+        let mut state_block3 = state.block(block3.as_ref().header());
+        {
+            let mut stx = state_block3.transaction();
+            Register::asset_definition(
+                AssetDefinition::numeric(asset_definition_id.clone())
+                    .with_name(asset_definition_id.name().to_string()),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            stx.apply();
+        }
+        let _ = state_block3.apply_without_execution(&block3, Vec::new());
+        state_block3.commit().unwrap();
+        persist_committed_test_block(&kura, &block3);
+
+        let block4 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(4).unwrap());
+            header.creation_time_ms = 12;
+        });
+        let mut state_block4 = state.block(block4.as_ref().header());
+        let events4 = state_block4.apply(&block4, Vec::new());
+        let completions4: Vec<_> = events4
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(completions4.len(), 1, "expected one retry completion");
+        assert!(matches!(
+            completions4[0].outcome(),
+            TriggerCompletedOutcome::Success
+        ));
+        state_block4.commit().unwrap();
+        persist_committed_test_block(&kura, &block4);
+
+        let view = state.view();
+        let alice_asset = view
+            .world
+            .asset(&alice_asset_id)
+            .expect("retry should mint the asset after the definition is registered");
+        assert_eq!(&**alice_asset.value(), &Numeric::from(1_u32));
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_none(),
+            "one-shot trigger should be removed after successful retry"
+        );
+    }
+
+    #[test]
+    fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
+        use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
+        use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let trigger_id: TriggerId = "time_retry_exhausted".parse().unwrap();
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "exhaustcoin".parse().unwrap(),
+        );
+        let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+        let retry_policy = TimeTriggerRetryPolicy {
+            max_retries: NonZeroU32::new(1).unwrap(),
+            retry_after_ms: NonZeroU64::new(5).unwrap(),
+        };
+        let world = World::with(
+            [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+        );
+        let state = State::new(world, kura.clone(), query_handle);
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.creation_time_ms = 0;
+        });
+        let mut state_block1 = state.block(block1.as_ref().header());
+        {
+            let mut stx = state_block1.transaction();
+            let action = Action::new(
+                vec![InstructionBox::from(Mint::asset_numeric(
+                    1_u32,
+                    alice_asset_id.clone(),
+                ))],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::Schedule(Schedule::starting_at(
+                    Duration::from_millis(1),
+                ))),
+            )
+            .with_retry_policy(retry_policy);
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        let _ = state_block1.apply_without_execution(&block1, Vec::new());
+        state_block1.commit().unwrap();
+        persist_committed_test_block(&kura, &block1);
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).unwrap());
+            header.creation_time_ms = 6;
+        });
+        {
+            let view = state.view();
+            assert!(
+                view.time_triggers_due_for_block(&block2.as_ref().header()),
+                "scheduled retry trigger should be due for block2"
+            );
+        }
+        let mut state_block2 = state.block(block2.as_ref().header());
+        let events2 = state_block2.apply(&block2, Vec::new());
+        let completions2: Vec<_> = events2
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            completions2.len(),
+            1,
+            "expected first failure event, events: {events2:#?}"
+        );
+        assert!(matches!(
+            completions2[0].outcome(),
+            TriggerCompletedOutcome::Failure(_)
+        ));
+        state_block2.commit().unwrap();
+        persist_committed_test_block(&kura, &block2);
+
+        {
+            let view = state.view();
+            let action = view
+                .world
+                .triggers()
+                .time_triggers()
+                .get(&trigger_id)
+                .expect("trigger should still exist while retry budget remains");
+            assert_eq!(action.repeats, Repeats::Exactly(1));
+            assert_eq!(
+                action.retry_state,
+                Some(TimeTriggerRetryState {
+                    retries_used: 1,
+                    next_retry_at_ms: 11,
+                })
+            );
+        }
+
+        let block3 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(3).unwrap());
+            header.creation_time_ms = 12;
+        });
+        let mut state_block3 = state.block(block3.as_ref().header());
+        let events3 = state_block3.apply(&block3, Vec::new());
+        let completions3: Vec<_> = events3
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(completions3.len(), 1, "expected exhausted retry failure");
+        assert!(matches!(
+            completions3[0].outcome(),
+            TriggerCompletedOutcome::Failure(_)
+        ));
+        state_block3.commit().unwrap();
+        persist_committed_test_block(&kura, &block3);
+
+        let view = state.view();
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_none(),
+            "trigger should be unregistered after retry budget exhaustion"
+        );
+        assert!(
+            view.world.asset(&alice_asset_id).is_err(),
+            "failed trigger must not mint any asset"
+        );
+    }
+
+    #[test]
+    fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
+        use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
+        use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let trigger_id: TriggerId = "time_retry_periodic".parse().unwrap();
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "periodiccoin".parse().unwrap(),
+        );
+        let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+        let retry_policy = TimeTriggerRetryPolicy {
+            max_retries: NonZeroU32::new(1).unwrap(),
+            retry_after_ms: NonZeroU64::new(5).unwrap(),
+        };
+        let world = World::with(
+            [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+        );
+        let state = State::new(world, kura.clone(), query_handle);
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.creation_time_ms = 0;
+        });
+        let mut state_block1 = state.block(block1.as_ref().header());
+        {
+            let mut stx = state_block1.transaction();
+            let action = Action::new(
+                vec![InstructionBox::from(Mint::asset_numeric(
+                    1_u32,
+                    alice_asset_id.clone(),
+                ))],
+                Repeats::Exactly(3),
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::Schedule(
+                    Schedule::starting_at(Duration::from_millis(1))
+                        .with_period(Duration::from_millis(4)),
+                )),
+            )
+            .with_retry_policy(retry_policy);
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        let _ = state_block1.apply_without_execution(&block1, Vec::new());
+        state_block1.commit().unwrap();
+        persist_committed_test_block(&kura, &block1);
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).unwrap());
+            header.creation_time_ms = 2;
+        });
+        {
+            let view = state.view();
+            assert!(
+                view.time_triggers_due_for_block(&block2.as_ref().header()),
+                "periodic retry trigger should be due for block2"
+            );
+        }
+        let mut state_block2 = state.block(block2.as_ref().header());
+        let events2 = state_block2.apply(&block2, Vec::new());
+        let completions2: Vec<_> = events2
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            completions2.len(),
+            1,
+            "expected initial failure, events: {events2:#?}"
+        );
+        assert!(matches!(
+            completions2[0].outcome(),
+            TriggerCompletedOutcome::Failure(_)
+        ));
+        state_block2.commit().unwrap();
+        persist_committed_test_block(&kura, &block2);
+
+        {
+            let view = state.view();
+            let action = view
+                .world
+                .triggers()
+                .time_triggers()
+                .get(&trigger_id)
+                .expect("periodic trigger should stay registered after first failure");
+            assert_eq!(action.repeats, Repeats::Exactly(3));
+            assert_eq!(
+                action.retry_state,
+                Some(TimeTriggerRetryState {
+                    retries_used: 1,
+                    next_retry_at_ms: 7,
+                })
+            );
+        }
+
+        let block3 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(3).unwrap());
+            header.creation_time_ms = 6;
+        });
+        let mut state_block3 = state.block(block3.as_ref().header());
+        {
+            let mut stx = state_block3.transaction();
+            Register::asset_definition(
+                AssetDefinition::numeric(asset_definition_id.clone())
+                    .with_name(asset_definition_id.name().to_string()),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            stx.apply();
+        }
+        let events3 = state_block3.apply(&block3, Vec::new());
+        let completions3: Vec<_> = events3
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            completions3.is_empty(),
+            "scheduled ticks must be suppressed while retry is pending"
+        );
+        state_block3.commit().unwrap();
+        persist_committed_test_block(&kura, &block3);
+
+        {
+            let view = state.view();
+            let action = view
+                .world
+                .triggers()
+                .time_triggers()
+                .get(&trigger_id)
+                .expect("trigger should remain pending after suppressed block");
+            assert_eq!(action.repeats, Repeats::Exactly(3));
+            assert_eq!(
+                action.retry_state,
+                Some(TimeTriggerRetryState {
+                    retries_used: 1,
+                    next_retry_at_ms: 7,
+                })
+            );
+        }
+
+        let block4 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(4).unwrap());
+            header.creation_time_ms = 8;
+        });
+        let mut state_block4 = state.block(block4.as_ref().header());
+        let events4 = state_block4.apply(&block4, Vec::new());
+        let completions4: Vec<_> = events4
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(completions4.len(), 1, "expected retry success");
+        assert!(matches!(
+            completions4[0].outcome(),
+            TriggerCompletedOutcome::Success
+        ));
+        state_block4.commit().unwrap();
+        persist_committed_test_block(&kura, &block4);
+
+        {
+            let view = state.view();
+            let alice_asset = view
+                .world
+                .asset(&alice_asset_id)
+                .expect("retry success should mint exactly once");
+            assert_eq!(&**alice_asset.value(), &Numeric::from(1_u32));
+            let action = view
+                .world
+                .triggers()
+                .time_triggers()
+                .get(&trigger_id)
+                .expect("periodic trigger should remain after successful retry");
+            assert_eq!(action.repeats, Repeats::Exactly(2));
+            assert_eq!(action.retry_state, None);
+        }
+
+        let block5 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(5).unwrap());
+            header.creation_time_ms = 10;
+        });
+        let mut state_block5 = state.block(block5.as_ref().header());
+        let events5 = state_block5.apply(&block5, Vec::new());
+        let completions5: Vec<_> = events5
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            completions5.len(),
+            1,
+            "expected next scheduled tick only once"
+        );
+        assert!(matches!(
+            completions5[0].outcome(),
+            TriggerCompletedOutcome::Success
+        ));
+        state_block5.commit().unwrap();
+        persist_committed_test_block(&kura, &block5);
+
+        let view = state.view();
+        let alice_asset = view
+            .world
+            .asset(&alice_asset_id)
+            .expect("periodic trigger should mint the next scheduled tick");
+        assert_eq!(&**alice_asset.value(), &Numeric::from(2_u32));
+        let action = view
+            .world
+            .triggers()
+            .time_triggers()
+            .get(&trigger_id)
+            .expect("periodic trigger should still have one repeat left");
+        assert_eq!(action.repeats, Repeats::Exactly(1));
+        assert_eq!(action.retry_state, None);
+    }
+
     #[test]
     fn ivm_trigger_respects_pipeline_cycle_cap() {
         use iroha_data_model::{
@@ -37654,7 +45210,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -37724,9 +45280,11 @@ mod tests {
         });
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -37802,9 +45360,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -37874,9 +45434,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -37953,9 +45515,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -38025,9 +45589,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -38060,8 +45626,9 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
-        let event =
-            data_pre::DomainEvent::Created(Domain::new("alpha".parse().unwrap()).build(&ALICE_ID));
+        let event = data_pre::DomainEvent::Created(
+            Domain::new(DomainId::try_new("alpha", "universal").unwrap()).build(&ALICE_ID),
+        );
         stx.world
             .internal_event_buf
             .push(Arc::new(DataEvent::Domain(event)));
@@ -38096,9 +45663,11 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -38130,6 +45699,95 @@ mod tests {
     }
 
     #[test]
+    fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
+        use iroha_primitives::json::Json;
+        use iroha_test_samples::{ALICE_ID, BOB_ID};
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+        let flag_key: Name = "trigger_authority".parse().unwrap();
+        let trigger_id: TriggerId = "data_trigger_registered_authority".parse().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            Register::account(new_sample_account(&ALICE_ID))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(new_sample_account(&BOB_ID))
+                .execute(&BOB_ID, &mut stx)
+                .unwrap();
+            Register::asset_definition({
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+
+            let data_trigger = Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    vec![InstructionBox::from(SetKeyValue::account(
+                        BOB_ID.clone(),
+                        flag_key.clone(),
+                        Json::from(norito::json!("ok")),
+                    ))],
+                    Repeats::Exactly(1),
+                    BOB_ID.clone(),
+                    data_pre::DataEventFilter::Asset(
+                        data_pre::AssetEventFilter::new().for_asset(asset_id.clone()),
+                    ),
+                ),
+            );
+            Register::trigger(data_trigger)
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
+        let mut state_block = state.block(header);
+        {
+            let mut stx = state_block.transaction();
+            Mint::asset_numeric(1_u32, asset_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let steps = stx
+                .execute_data_triggers_dfs(&ALICE_ID)
+                .expect("data trigger should run under its registered authority");
+            assert_eq!(steps.len(), 1, "expected one data trigger execution");
+
+            stx.apply();
+        }
+        state_block.commit().unwrap();
+
+        let flag_value = state
+            .view()
+            .world
+            .map_account(&BOB_ID, |account| {
+                account.value().metadata().get(&flag_key).cloned()
+            })
+            .unwrap();
+        assert_eq!(flag_value, Some(Json::from(norito::json!("ok"))));
+    }
+
+    #[test]
     fn execute_data_triggers_dfs_skips_missing_trigger_after_bytecode_drop() {
         use iroha_data_model::{
             prelude::DataEvent,
@@ -38154,9 +45812,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -38183,8 +45843,8 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let alpha_domain: DomainId = "alpha".parse().unwrap();
-        let beta_domain: DomainId = "beta".parse().unwrap();
+        let alpha_domain: DomainId = DomainId::try_new("alpha", "universal").unwrap();
+        let beta_domain: DomainId = DomainId::try_new("beta", "universal").unwrap();
         let event_a = data_pre::DomainEvent::Created(Domain::new(alpha_domain).build(&ALICE_ID));
         let event_b = data_pre::DomainEvent::Created(Domain::new(beta_domain).build(&ALICE_ID));
         stx.world
@@ -38290,10 +45950,10 @@ mod tests {
         let block = new_dummy_block_with_payload(|_| {});
         let mut state_block = state.block(block.as_ref().header());
 
-        let holder_domain_id: DomainId = "holders".parse().unwrap();
-        let nft_domain_id: DomainId = "nfts".parse().unwrap();
+        let holder_domain_id: DomainId = DomainId::try_new("holders", "universal").unwrap();
+        let nft_domain_id: DomainId = DomainId::try_new("nfts", "universal").unwrap();
         let holder_id = AccountId::new(KeyPair::random().into_parts().0);
-        let nft_id: NftId = "ticket$nfts".parse().unwrap();
+        let nft_id: NftId = "ticket$nfts.universal".parse().unwrap();
         let role_id: RoleId = "nft_cleanup_delta".parse().unwrap();
         let permission: Permission = iroha_executor_data_model::permission::nft::CanTransferNft {
             nft: nft_id.clone(),
@@ -38494,7 +46154,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -38502,7 +46162,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38628,7 +46288,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -38636,7 +46296,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38712,7 +46372,8 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&BOB_ID);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&BOB_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
         let world = World::with([domain], [alice_account, bob_account], []);
@@ -38979,7 +46640,7 @@ mod tests {
             let _events = state_block.apply(&block, Vec::new());
             state_block.commit().unwrap();
 
-            if height != 2 {
+            if height != 3 {
                 kura.store_block(block).expect("store block");
             }
         }
@@ -38989,7 +46650,7 @@ mod tests {
             .all_blocks(nonzero!(1_usize))
             .map(|block| block.header().height().get())
             .collect();
-        assert_eq!(heights, vec![1, 3]);
+        assert_eq!(heights, vec![1, 2]);
     }
 
     #[test]
@@ -39018,7 +46679,7 @@ mod tests {
 
     #[test]
     fn asset_account_range() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
 
         let account_id = gen_account_in("wonderland").0;
 
@@ -39039,21 +46700,30 @@ mod tests {
             AssetDefinitionId::new(domain_id.clone(), "e".parse().unwrap()),
         ];
 
-        let assets = accounts
+        let mut assets = accounts
             .into_iter()
             .zip(asset_definitions)
             .map(|(account, asset_definition)| AssetId::new(asset_definition, account))
-            .map(|asset| (asset, ()));
+            .map(|asset| (asset, ()))
+            .collect::<Vec<_>>();
+        assets.push((
+            AssetId::with_scope(
+                AssetDefinitionId::new(domain_id, "g".parse().unwrap()),
+                account_id.clone(),
+                AssetBalanceScope::Dataspace(iroha_data_model::nexus::DataSpaceId::new(7)),
+            ),
+            (),
+        ));
 
-        let map: Storage<_, _> = assets.collect();
+        let map: Storage<_, _> = assets.into_iter().collect();
         let view = map.view();
         let range = view.range(AssetByAccountBounds::new(&account_id));
-        assert_eq!(range.count(), 2);
+        assert_eq!(range.count(), 3);
     }
 
     #[test]
     fn asset_account_definition_range_includes_all_scopes() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = gen_account_in("wonderland").0;
         let target_definition = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let other_definition = AssetDefinitionId::new(domain_id, "tulip".parse().unwrap());
@@ -39095,7 +46765,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -39103,7 +46773,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -39153,7 +46823,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -39161,7 +46831,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -39216,9 +46886,9 @@ mod tests {
 
     #[test]
     fn detached_merge_removes_asset_metadata_on_zero_balance() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -39283,6 +46953,505 @@ mod tests {
 
         let view = state.view();
         assert!(view.world.elections().get(&election_id).is_some());
+    }
+
+    #[test]
+    fn soracloud_runtime_records_are_visible_through_world_view() {
+        let mut world = World::new();
+        let service_name: Name = "portal".parse().expect("valid name");
+        let service_version = "2026.1".to_string();
+        let revision = SoraDeploymentBundleV1 {
+            schema_version: iroha_data_model::soracloud::SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container: iroha_data_model::soracloud::SoraContainerManifestV1 {
+                schema_version: iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
+                runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm,
+                bundle_hash: Hash::new(b"bundle"),
+                bundle_path: "/bundle/service.ivm".to_string(),
+                entrypoint: "main".to_string(),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+                inrou: None,
+                required_config_names: Vec::new(),
+                required_secret_names: Vec::new(),
+                config_exports: Vec::new(),
+                capabilities: iroha_data_model::soracloud::SoraCapabilityPolicyV1 {
+                    network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
+                    allow_wallet_signing: false,
+                    allow_state_writes: false,
+                    allow_model_inference: false,
+                    allow_model_training: false,
+                },
+                resources: iroha_data_model::soracloud::SoraResourceLimitsV1 {
+                    cpu_millis: std::num::NonZeroU32::new(500).expect("nonzero"),
+                    memory_bytes: std::num::NonZeroU64::new(16 * 1024 * 1024).expect("nonzero"),
+                    ephemeral_storage_bytes: std::num::NonZeroU64::new(16 * 1024 * 1024)
+                        .expect("nonzero"),
+                    max_open_files: std::num::NonZeroU32::new(256).expect("nonzero"),
+                    max_tasks: std::num::NonZeroU16::new(16).expect("nonzero"),
+                },
+                lifecycle: iroha_data_model::soracloud::SoraLifecycleHooksV1 {
+                    start_grace_secs: std::num::NonZeroU32::new(10).expect("nonzero"),
+                    stop_grace_secs: std::num::NonZeroU32::new(10).expect("nonzero"),
+                    healthcheck_path: Some("/health".to_string()),
+                },
+            },
+            service: iroha_data_model::soracloud::SoraServiceManifestV1 {
+                schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
+                service_name: service_name.clone(),
+                service_version: service_version.clone(),
+                execution_plane:
+                    iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
+                container: iroha_data_model::soracloud::SoraContainerManifestRefV1 {
+                    manifest_hash: Hash::new(b"container"),
+                    expected_schema_version:
+                        iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
+                },
+                replicas: std::num::NonZeroU16::new(1).expect("nonzero"),
+                route: None,
+                rollout: iroha_data_model::soracloud::SoraRolloutPolicyV1 {
+                    canary_percent: 0,
+                    max_unavailable_replicas: 0,
+                    health_window_secs: std::num::NonZeroU32::new(30).expect("nonzero"),
+                    automatic_rollback_failures: std::num::NonZeroU32::new(1).expect("nonzero"),
+                },
+                economics: iroha_data_model::soracloud::SoraHttpServiceEconomicsV1::default(),
+                state_bindings: Vec::new(),
+                lease_volumes: Vec::new(),
+                handlers: vec![iroha_data_model::soracloud::SoraServiceHandlerV1 {
+                    handler_name: "query".parse().expect("valid name"),
+                    class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
+                    entrypoint: "serve_query".to_string(),
+                    route_path: Some("/query".to_string()),
+                    certified_response:
+                        iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    mailbox: None,
+                }],
+                artifacts: vec![iroha_data_model::soracloud::SoraArtifactRefV1 {
+                    kind: iroha_data_model::soracloud::SoraArtifactKindV1::StaticAsset,
+                    artifact_hash: Hash::new(b"asset"),
+                    artifact_path: "/public/index.html".to_string(),
+                    handler_name: Some("query".parse().expect("valid name")),
+                }],
+            },
+        };
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (service_name.as_ref().to_owned(), service_version.clone()),
+            revision,
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name.clone(),
+                iroha_data_model::soracloud::SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name: service_name.clone(),
+                    current_service_version: service_version.clone(),
+                    current_service_manifest_hash: Hash::new(b"service-manifest"),
+                    current_container_manifest_hash: Hash::new(b"container-manifest"),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 4,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: std::collections::BTreeMap::new(),
+                    service_secrets: std::collections::BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
+                },
+            );
+        world.soracloud_service_runtime_mut_for_testing().insert(
+            service_name.clone(),
+            SoraServiceRuntimeStateV1 {
+                schema_version: iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+                service_name: service_name.clone(),
+                active_service_version: service_version.clone(),
+                health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+                load_factor_bps: 250,
+                materialized_bundle_hash: Hash::new(b"bundle"),
+                rollout_handle: Some("rollout-1".to_string()),
+                pending_mailbox_message_count: 1,
+                last_receipt_id: Some(Hash::new(b"receipt")),
+            },
+        );
+        world
+            .soracloud_service_audit_events_mut_for_testing()
+            .insert(
+                4,
+                iroha_data_model::soracloud::SoraServiceAuditEventV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+                    sequence: 4,
+                    action: iroha_data_model::soracloud::SoraServiceLifecycleActionV1::Deploy,
+                    service_name: service_name.clone(),
+                    from_version: None,
+                    to_version: service_version.clone(),
+                    service_manifest_hash: Hash::new(b"service-manifest"),
+                    container_manifest_hash: Hash::new(b"container-manifest"),
+                    governance_tx_hash: None,
+                    binding_name: None,
+                    state_key: None,
+                    config_name: None,
+                    secret_name: None,
+                    rollout_handle: None,
+                    policy_name: None,
+                    policy_snapshot_hash: None,
+                    jurisdiction_tag: None,
+                    consent_evidence_hash: None,
+                    break_glass: None,
+                    break_glass_reason: None,
+                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                },
+            );
+        world
+            .soracloud_service_state_entries_mut_for_testing()
+            .insert(
+                (
+                    service_name.as_ref().to_owned(),
+                    "vault".to_string(),
+                    "/state/private/patient-1".to_string(),
+                ),
+                iroha_data_model::soracloud::SoraServiceStateEntryV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    binding_name: "vault".parse().expect("valid name"),
+                    state_key: "/state/private/patient-1".to_string(),
+                    encryption: iroha_data_model::soracloud::SoraStateEncryptionV1::FheCiphertext,
+                    payload_bytes: std::num::NonZeroU64::new(128).expect("nonzero"),
+                    payload_commitment: Hash::new(b"ciphertext"),
+                    last_update_sequence: 4,
+                    governance_tx_hash: Hash::new(b"gov"),
+                    source_action:
+                        iroha_data_model::soracloud::SoraServiceLifecycleActionV1::StateMutation,
+                },
+            );
+        world
+            .soracloud_decryption_request_records_mut_for_testing()
+            .insert(
+                (service_name.as_ref().to_owned(), "decrypt-1".to_string()),
+                iroha_data_model::soracloud::SoraDecryptionRequestRecordV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_DECRYPTION_REQUEST_RECORD_VERSION_V1,
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    policy: iroha_data_model::soracloud::DecryptionAuthorityPolicyV1 {
+                        schema_version:
+                            iroha_data_model::soracloud::DECRYPTION_AUTHORITY_POLICY_VERSION_V1,
+                        policy_name: "phi_policy".parse().expect("valid name"),
+                        mode:
+                            iroha_data_model::soracloud::DecryptionAuthorityModeV1::ThresholdService,
+                        approver_quorum: std::num::NonZeroU16::new(1).expect("nonzero"),
+                        approver_ids: vec!["approver".parse().expect("valid name")],
+                        allow_break_glass: true,
+                        jurisdiction_tag: "us_hipaa".to_string(),
+                        require_consent_evidence: false,
+                        max_ttl_blocks: std::num::NonZeroU32::new(64).expect("nonzero"),
+                        audit_tag: "phi.access".to_string(),
+                    },
+                    request: iroha_data_model::soracloud::DecryptionRequestV1 {
+                        schema_version: iroha_data_model::soracloud::DECRYPTION_REQUEST_VERSION_V1,
+                        request_id: "decrypt-1".to_string(),
+                        policy_name: "phi_policy".parse().expect("valid name"),
+                        binding_name: "vault".parse().expect("valid name"),
+                        state_key: "/state/private/patient-1".to_string(),
+                        ciphertext_commitment: Hash::new(b"ciphertext"),
+                        justification: "care review".to_string(),
+                        jurisdiction_tag: "us_hipaa".to_string(),
+                        consent_evidence_hash: None,
+                        requested_ttl_blocks: std::num::NonZeroU32::new(32).expect("nonzero"),
+                        break_glass: false,
+                        break_glass_reason: None,
+                        governance_tx_hash: Hash::new(b"gov"),
+                    },
+                    sequence: 5,
+                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                },
+            );
+        world.soracloud_training_jobs_mut_for_testing().insert(
+            (service_name.as_ref().to_owned(), "job-1".to_string()),
+            iroha_data_model::soracloud::SoraTrainingJobRecordV1 {
+                schema_version: iroha_data_model::soracloud::SORA_TRAINING_JOB_RECORD_VERSION_V1,
+                service_name: service_name.clone(),
+                service_version: service_version.clone(),
+                model_name: "vision_model".to_string(),
+                job_id: "job-1".to_string(),
+                status: iroha_data_model::soracloud::SoraTrainingJobStatusV1::Completed,
+                worker_group_size: 4,
+                target_steps: 100,
+                completed_steps: 100,
+                checkpoint_interval_steps: 20,
+                last_checkpoint_step: Some(100),
+                checkpoint_count: 5,
+                retry_count: 1,
+                max_retries: 3,
+                step_compute_units: 50,
+                compute_budget_units: 40_000,
+                compute_consumed_units: 20_000,
+                storage_budget_bytes: 8_192,
+                storage_consumed_bytes: 4_096,
+                latest_metrics_hash: Some(Hash::new(b"metrics")),
+                last_failure_reason: None,
+                created_sequence: 6,
+                updated_sequence: 8,
+            },
+        );
+        world
+            .soracloud_training_job_audit_events_mut_for_testing()
+            .insert(
+                8,
+                iroha_data_model::soracloud::SoraTrainingJobAuditEventV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
+                    sequence: 8,
+                    action: iroha_data_model::soracloud::SoraTrainingJobActionV1::Checkpoint,
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    model_name: "vision_model".to_string(),
+                    job_id: "job-1".to_string(),
+                    status: iroha_data_model::soracloud::SoraTrainingJobStatusV1::Completed,
+                    completed_steps: 100,
+                    checkpoint_count: 5,
+                    retry_count: 1,
+                    compute_consumed_units: 20_000,
+                    storage_consumed_bytes: 4_096,
+                    last_checkpoint_step: Some(100),
+                    latest_metrics_hash: Some(Hash::new(b"metrics")),
+                    last_failure_reason: None,
+                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                },
+            );
+        world.soracloud_model_registries_mut_for_testing().insert(
+            (service_name.as_ref().to_owned(), "vision_model".to_string()),
+            iroha_data_model::soracloud::SoraModelRegistryV1 {
+                schema_version: iroha_data_model::soracloud::SORA_MODEL_REGISTRY_VERSION_V1,
+                service_name: service_name.clone(),
+                service_version: service_version.clone(),
+                model_name: "vision_model".to_string(),
+                current_version: Some("v2".to_string()),
+                updated_sequence: 10,
+            },
+        );
+        world
+            .soracloud_model_weight_versions_mut_for_testing()
+            .insert(
+                (
+                    service_name.as_ref().to_owned(),
+                    "vision_model".to_string(),
+                    "v2".to_string(),
+                ),
+                iroha_data_model::soracloud::SoraModelWeightVersionRecordV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    model_name: "vision_model".to_string(),
+                    weight_version: "v2".to_string(),
+                    parent_version: Some("v1".to_string()),
+                    training_job_id: "job-1".to_string(),
+                    source_provenance: Some(
+                        iroha_data_model::soracloud::SoraModelProvenanceRefV1 {
+                            kind:
+                                iroha_data_model::soracloud::SoraModelProvenanceKindV1::TrainingJob,
+                            id: "job-1".to_string(),
+                        },
+                    ),
+                    weight_artifact_hash: Hash::new(b"weights"),
+                    dataset_ref: "dataset://train".to_string(),
+                    training_config_hash: Hash::new(b"train-config"),
+                    reproducibility_hash: Hash::new(b"repro"),
+                    provenance_attestation_hash: Hash::new(b"prov"),
+                    registered_sequence: 9,
+                    promoted_sequence: Some(10),
+                    gate_report_hash: Some(Hash::new(b"gate")),
+                    promoted_by: Some(iroha_crypto::KeyPair::random().public_key().clone()),
+                },
+            );
+        world
+            .soracloud_model_weight_audit_events_mut_for_testing()
+            .insert(
+                10,
+                iroha_data_model::soracloud::SoraModelWeightAuditEventV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1,
+                    sequence: 10,
+                    action: iroha_data_model::soracloud::SoraModelWeightActionV1::Promote,
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    model_name: "vision_model".to_string(),
+                    target_version: "v2".to_string(),
+                    current_version: Some("v2".to_string()),
+                    parent_version: Some("v1".to_string()),
+                    gate_approved: Some(true),
+                    rollback_reason: None,
+                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                },
+            );
+        world.soracloud_model_artifacts_mut_for_testing().insert(
+            (service_name.as_ref().to_owned(), "job-1".to_string()),
+            iroha_data_model::soracloud::SoraModelArtifactRecordV1 {
+                schema_version: iroha_data_model::soracloud::SORA_MODEL_ARTIFACT_RECORD_VERSION_V1,
+                service_name: service_name.clone(),
+                service_version: service_version.clone(),
+                model_name: "vision_model".to_string(),
+                artifact_id: "job-1".to_string(),
+                training_job_id: "job-1".to_string(),
+                weight_version: Some("v2".to_string()),
+                source_provenance: Some(iroha_data_model::soracloud::SoraModelProvenanceRefV1 {
+                    kind: iroha_data_model::soracloud::SoraModelProvenanceKindV1::TrainingJob,
+                    id: "job-1".to_string(),
+                }),
+                weight_artifact_hash: Hash::new(b"weights"),
+                dataset_ref: "dataset://train".to_string(),
+                training_config_hash: Hash::new(b"train-config"),
+                reproducibility_hash: Hash::new(b"repro"),
+                provenance_attestation_hash: Hash::new(b"prov"),
+                registered_sequence: 9,
+                consumed_by_version: Some("v2".to_string()),
+                private_bundle_root: None,
+                compile_profile_hash: None,
+                chunk_manifest_root: None,
+                privacy_mode: None,
+            },
+        );
+        world
+            .soracloud_model_artifact_audit_events_mut_for_testing()
+            .insert(
+                9,
+                iroha_data_model::soracloud::SoraModelArtifactAuditEventV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_MODEL_ARTIFACT_AUDIT_EVENT_VERSION_V1,
+                    sequence: 9,
+                    action: iroha_data_model::soracloud::SoraModelArtifactActionV1::Register,
+                    service_name: service_name.clone(),
+                    service_version: service_version.clone(),
+                    model_name: "vision_model".to_string(),
+                    training_job_id: "job-1".to_string(),
+                    consumed_by_version: Some("v2".to_string()),
+                    signer: iroha_crypto::KeyPair::random().public_key().clone(),
+                },
+            );
+        world.soracloud_mailbox_messages_mut_for_testing().insert(
+            Hash::new(b"message"),
+            SoraServiceMailboxMessageV1 {
+                schema_version:
+                    iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+                message_id: Hash::new(b"message"),
+                from_service: service_name.clone(),
+                from_handler: "query".parse().expect("valid name"),
+                to_service: service_name.clone(),
+                to_handler: "query".parse().expect("valid name"),
+                payload_bytes: b"payload".to_vec(),
+                payload_commitment: Hash::new(b"payload"),
+                enqueue_sequence: 4,
+                available_after_sequence: 4,
+                expires_at_sequence: Some(8),
+            },
+        );
+        world.soracloud_runtime_receipts_mut_for_testing().insert(
+            Hash::new(b"receipt"),
+            SoraRuntimeReceiptV1 {
+                schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
+                receipt_id: Hash::new(b"receipt"),
+                service_name: service_name.clone(),
+                service_version: service_version.clone(),
+                handler_name: "query".parse().expect("valid name"),
+                handler_class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
+                request_commitment: Hash::new(b"request"),
+                result_commitment: Hash::new(b"result"),
+                certified_by:
+                    iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
+                emitted_sequence: 5,
+                mailbox_message_id: None,
+                journal_artifact_hash: None,
+                checkpoint_artifact_hash: None,
+                placement_id: None,
+                selected_validator_account_id: None,
+                selected_peer_id: None,
+            },
+        );
+
+        let view = world.view();
+        assert!(
+            view.soracloud_service_revisions()
+                .get(&(service_name.as_ref().to_owned(), service_version.clone()))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_service_deployments()
+                .get(&service_name)
+                .is_some()
+        );
+        assert_eq!(
+            view.soracloud_service_runtime()
+                .get(&service_name)
+                .expect("runtime state")
+                .pending_mailbox_message_count,
+            1
+        );
+        assert!(view.soracloud_service_audit_events().get(&4).is_some());
+        assert!(
+            view.soracloud_service_state_entries()
+                .get(&(
+                    service_name.as_ref().to_owned(),
+                    "vault".to_string(),
+                    "/state/private/patient-1".to_string(),
+                ))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_decryption_request_records()
+                .get(&(service_name.as_ref().to_owned(), "decrypt-1".to_string()))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_training_jobs()
+                .get(&(service_name.as_ref().to_owned(), "job-1".to_string()))
+                .is_some()
+        );
+        assert!(view.soracloud_training_job_audit_events().get(&8).is_some());
+        assert!(
+            view.soracloud_model_registries()
+                .get(&(service_name.as_ref().to_owned(), "vision_model".to_string()))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_model_weight_versions()
+                .get(&(
+                    service_name.as_ref().to_owned(),
+                    "vision_model".to_string(),
+                    "v2".to_string(),
+                ))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_model_weight_audit_events()
+                .get(&10)
+                .is_some()
+        );
+        assert!(
+            view.soracloud_model_artifacts()
+                .get(&(service_name.as_ref().to_owned(), "job-1".to_string()))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_model_artifact_audit_events()
+                .get(&9)
+                .is_some()
+        );
+        assert!(
+            view.soracloud_mailbox_messages()
+                .get(&Hash::new(b"message"))
+                .is_some()
+        );
+        assert!(
+            view.soracloud_runtime_receipts()
+                .get(&Hash::new(b"receipt"))
+                .is_some()
+        );
     }
 
     #[tokio::test]

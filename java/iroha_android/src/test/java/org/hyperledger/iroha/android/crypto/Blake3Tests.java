@@ -33,7 +33,7 @@ public final class Blake3Tests {
   }
 
   private static void hashIsDeterministic() {
-    final byte[] input = "rose#wonderland".getBytes(StandardCharsets.UTF_8);
+    final byte[] input = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM".getBytes(StandardCharsets.UTF_8);
     final byte[] first = Blake3.hash(input);
     final byte[] second = Blake3.hash(input);
     assert Arrays.equals(first, second) : "hash must be deterministic across calls";

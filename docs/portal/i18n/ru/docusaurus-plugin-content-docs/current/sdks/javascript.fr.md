@@ -69,15 +69,15 @@ const mint = buildMintAssetInstruction({
 
 const transfer = buildTransferAssetInstruction({
   sourceAssetId: "norito:4e52543000000001",
-  destinationAccountId: "i105...",
+  destinationAccountId: "<i105-account-id>",
   quantity: "5",
 });
 
 const { signedTransaction } = buildMintAndTransferTransaction({
   chainId: "test-chain",
-  authority: "i105...",
+  authority: "<i105-account-id>",
   mint: { assetId: "norito:4e52543000000001", quantity: "10" },
-  transfers: [{ destinationAccountId: "i105...", quantity: "5" }],
+  transfers: [{ destinationAccountId: "<i105-account-id>", quantity: "5" }],
   privateKey: Buffer.alloc(32, 0x42),
 });
 ```
@@ -165,82 +165,31 @@ const defs = await torii.queryAssetDefinitions({
 console.log("filtered definitions", defs.items);
 
 const assetId = "norito:4e52543000000001";
-const balances = await torii.listAccountAssets("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const balances = await torii.listAccountAssets("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 10,
   assetId,
 });
-const txs = await torii.listAccountTransactions("6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9", {
+const txs = await torii.listAccountTransactions("sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D", {
   limit: 5,
   assetId,
 });
-const holders = await torii.listAssetHolders("rose#wonderland", {
+const holders = await torii.listAssetHolders("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", {
   limit: 5,
   assetId,
 });
 console.log(balances.items, txs.items, holders.items);
 ```
 
-## Офлайн-допуски и метаданные вердиктов
+## Offline V2 readiness
 
-Ответы на офлайн-результаты заранее раскрывают метаданные расширенного реестра —
-И18НИ00000064Х, И18НИ00000065Х, И18НИ00000066Х, И18НИ00000067Х,
-`attestation_nonce_hex` и `remaining_amount` возвращаются вместе с необработанными данными.
-запись, чтобы панелям мониторинга не приходилось декодировать встроенные полезные данные Norito. Новый
-помощники обратного отсчета (`deadline_kind`, `deadline_state`, `deadline_ms`,
-`deadline_ms_remaining`) выделить следующий истекающий срок (обновить → политика
-→ сертификат), чтобы значки пользовательского интерфейса могли предупреждать операторов о превышении допуска.
-Осталось <24 ч. SDK
-отражает фильтры REST, представленные `/v1/offline/allowances`:
-И18НИ00000075Х, И18НИ00000076Х,
-`verdictIdHex`, `attestationNonceHex`, `refreshBeforeMs/AfterMs` и
-`requireVerdict` / `onlyMissingVerdict` логические значения. Недопустимые комбинации (для
-пример `onlyMissingVerdict` + `verdictIdHex`) отклоняются локально до Torii
-называется.
+JavaScript integrations should use `GET /v1/offline/v2/readiness` for offline feature discovery.
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions;
+legacy offline allowance, reserve, revocation, transfer-history, and cash HTTP routes are no longer published by Torii.
 
 ```ts
-const { items: allowances } = await torii.listOfflineAllowances({
-  limit: 25,
-  policyExpiresBeforeMs: Date.now() + 86_400_000,
-  requireVerdict: true,
-});
-
-for (const entry of allowances) {
-  console.log(
-    entry.controller_display,
-    entry.remaining_amount,
-    entry.verdict_id_hex,
-    entry.refresh_at_ms,
-  );
-}
+const readiness = await torii.getOfflineV2Readiness();
+console.log("offline notes", readiness.offline_note_v2);
 ```
-
-## Оффлайн пополнения (оформить + зарегистрироваться)Используйте помощники пополнения счета, когда хотите оформить сертификат и сразу
-зарегистрировать его в реестре. SDK проверяет выданный и зарегистрированный сертификат.
-Идентификаторы совпадают перед возвратом, и ответ включает обе полезные нагрузки. Есть
-нет выделенной конечной точки пополнения счета; помощник связывает проблему + регистрирует вызовы. Если
-у вас уже есть подписанный сертификат, позвоните по `registerOfflineAllowance` (или
-`renewOfflineAllowance`) напрямую.
-
-```ts
-const topUp = await torii.topUpOfflineAllowance({
-  authority: "<account_i105>",
-  privateKeyHex: alicePrivateKey,
-  certificate: draftCertificate,
-});
-console.log(topUp.certificate.certificate_id_hex);
-console.log(topUp.registration.certificate_id_hex);
-
-const renewed = await torii.topUpOfflineAllowanceRenewal(
-  topUp.registration.certificate_id_hex,
-  {
-    authority: "<account_i105>",
-    privateKeyHex: alicePrivateKey,
-    certificate: draftCertificate,
-  },
-);
-console.log(renewed.registration.certificate_id_hex);
-```
-
 ## Torii запросы и потоковая передача (WebSockets)
 
 Помощники запросов предоставляют статус, метрики Prometheus, снимки телеметрии и события.
@@ -275,7 +224,7 @@ abort.abort(); // closes the underlying WebSocket cleanly
 Конечные точки `/v1/explorer/accounts/{account_id}/qr`, чтобы информационные панели могли воспроизводить
 те же снимки, которые питают портал. `getExplorerMetrics()` нормализует
 полезная нагрузка и возвращает `null`, когда маршрут отключен. Соедините его с
-`getExplorerAccountQr()` всякий раз, когда вам нужны литералы I105 (предпочтительный)/sora (второй лучший) плюс встроенные
+`getExplorerAccountQr()` всякий раз, когда вам нужны литералы i105 (предпочтительный)/sora (второй лучший) плюс встроенные
 SVG для кнопок «Поделиться».
 
 ```ts
@@ -290,7 +239,7 @@ if (!snapshot) {
   console.log("avg commit ms:", snapshot.averageCommitTimeMs ?? "n/a");
 }
 
-const qr = await torii.getExplorerAccountQr("i105...");
+const qr = await torii.getExplorerAccountQr("<i105-account-id>");
 console.log("explorer literal", qr.literal);
 await fs.writeFile("alice.svg", qr.svg, "utf8");
 console.log(
@@ -298,8 +247,8 @@ console.log(
 );
 ```
 
-Передача `I105` отражает сжатый файл Explorer по умолчанию.
-селекторы; опустите переопределение для предпочтительного выхода I105 или запросите `i105_qr`
+Передача `i105` отражает сжатый файл Explorer по умолчанию.
+селекторы; опустите переопределение для предпочтительного выхода i105 или запросите `i105_qr`
 когда вам нужен QR-безопасный вариант. Сжатый литерал является вторым лучшим
 Вариант только для Sora для UX. Помощник всегда возвращает канонический идентификатор,
 выбранный литерал и метаданные (префикс сети, версия/модули QR, ошибка
@@ -514,7 +463,7 @@ API-интерфейсы Space Directory отражают жизненный ц�
   группировка активов по каноническим идентификаторам учетных записей; передайте `assetId` для фильтрации
   портфель до одного экземпляра актива.
 - `getUaidBindings(uaid)` перечисляет каждое пространство данных ↔ учетную запись.
-  привязка (`I105` возвращает литералы `i105`).
+  привязка (`i105` возвращает литералы `i105`).
 - `getUaidManifests(uaid, { dataspaceId })` возвращает каждый манифест возможностей,
   статус жизненного цикла и привязанные счета для аудита.
 
@@ -559,7 +508,7 @@ const controller = new AbortController();
 
 await torii.publishSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     manifest,
     privateKeyHex: process.env.SPACE_DIRECTORY_KEY_HEX,
     reason: "Attester v2 rollout",
@@ -569,7 +518,7 @@ await torii.publishSpaceDirectoryManifest(
 
 await torii.revokeSpaceDirectoryManifest(
   {
-    authority: "i105...",
+    authority: "<i105-account-id>",
     privateKey: Buffer.from(process.env.SPACE_DIRECTORY_KEY_SEED, "hex"),
     uaid,
     dataspaceId: 11,

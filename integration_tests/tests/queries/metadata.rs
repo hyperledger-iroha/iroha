@@ -22,7 +22,8 @@ fn find_accounts_with_asset() {
             return Ok(());
         };
         let test_client = network.client();
-        let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
+        let wonderland_domain: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("wonderland domain");
 
         let key = Name::from_str("key").unwrap();
         let another_key = Name::from_str("another_key").unwrap();
@@ -53,9 +54,7 @@ fn find_accounts_with_asset() {
                 ))
                 .expect("Failed to grant account registration permission to Alice");
             test_client
-                .submit_blocking(Register::account(Account::new(
-                    BOB_ID.to_account_id(wonderland_domain.clone()),
-                )))
+                .submit_blocking(Register::account(Account::new(BOB_ID.clone())))
                 .expect("Failed to register Bob account");
         }
         let bob_client = network

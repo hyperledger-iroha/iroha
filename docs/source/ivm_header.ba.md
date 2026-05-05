@@ -2,87 +2,92 @@
 lang: ba
 direction: ltr
 source: docs/source/ivm_header.md
-status: complete
+status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 779174437b1a7e57b371d3b41d1cab780d94700acf6642b1356cdb75504ae5fa
-source_last_modified: "2026-01-21T19:17:13.237630+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 70ccb43ffcaf762c6eb1ac381a21be99fc81aa58a787ff95e8313950c7ec5f03
+source_last_modified: "2026-03-20T07:39:53+00:00"
+translation_last_reviewed: 2026-03-20
 translator: machine-google-reviewed
 ---
 
-# IVM Байтекод башы
+> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
+
+# IVM Bytecode Header
 
 
-Тылсымлы
-- 4 байт: ASCII `IVM\0` 0-сы офсетта.
+Magic
+- 4 bytes: ASCII `IVM\0` at offset 0.
 
-Макет (ағымдағы)
-- офсет һәм ҙурлыҡтағы (17 байт дөйөм):
-  - 0..4: тылсымлы `IVM\0`
-  — 4: `version_major: u8`
+Layout (current)
+- Offsets and sizes (17 bytes total):
+  - 0..4: magic `IVM\0`
+  - 4: `version_major: u8`
   - 5: `version_minor: u8`
-  - 6: `mode: u8` (функция биттары; аҫта ҡарағыҙ)
+  - 6: `mode: u8` (feature bits; see below)
   - 7: `vector_length: u8`
-  - 8..16: `max_cycles: u64` (бәләкәй-энд)
+  - 8..16: `max_cycles: u64` (little‑endian)
   - 16: `abi_version: u8`
 
-Режим биттары
-- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (запас/функциональ-гамба).
+Mode bits
+- `ZK = 0x01`, `VECTOR = 0x02`, `HTM = 0x04` (reserved/feature‑gated).
 
-Яландар (мәғәнә)
-- `abi_version`: syscall таблицаһы һәм күрһәткес‐АБИ схема версияһы.
-- `mode`: ZK эҙләү/VECTOR/HTM өсөн функция биттары.
-- `vector_length`: вектор опстары өсөн логик вектор оҙонлоғо (0 → unset).
-- `max_cycles`: ZK режимында һәм ҡабул итеүҙә ҡулланылған башҡарыу прокладкаһы.
+Fields (meaning)
+- `abi_version`: syscall table and pointer‑ABI schema version.
+- `mode`: feature bits for ZK tracing/VECTOR/HTM.
+- `vector_length`: logical vector length for vector ops (0 → unset).
+- `max_cycles`: execution padding bound used in ZK mode and admission.
 
-Иҫкәрмәләр
-- Ендианлыҡ һәм планировка тормошҡа ашырыу менән билдәләнә һәм `version`-ға бәйле. Өҫтәге сымлы планировка `crates/ivm_abi/src/metadata.rs`-тағы ағымдағы тормошҡа ашырыуҙы сағылдыра.
-- Минималь уҡыусы был планировкаға таяна ала, ағымдағы артефакттар һәм киләсәктә үҙгәрештәр менән эш итергә тейеш `version` ҡапҡаһы аша.
-- Аппарат тиҙләтеү (SIMD/Metal/CUDA) хост бер опт-ин. 18NI00000027X ҡиммәттәре `iroha_config`: `IVM\0` көстәре скаляр fallbacks уҡый, ә ялған, ә `enable_metal` һәм `enable_cuda` ҡапҡаһы уларҙы тейешле бекэндтар хатта төҙөгәндә. `ivm::set_acceleration_config` виртуаль булдырыу алдынан.
-- Мобиль SDKs (Android/Swift) өҫтө бер үк ручкалар; `IrohaSwift.AccelerationSettings`
-  шылтыратыуҙар `connect_norito_set_acceleration_config` шулай macOS/iOS төҙөү мөмкин Metal /
-  NEON, шул уҡ ваҡытта детерминистик fallbacks һаҡлау.
-- Операторҙар шулай уҡ диагностика өсөн махсус бэкэндтарҙы өҙөү өсөн `IVM_DISABLE_METAL=1` йәки `IVM_DISABLE_CUDA=1` экспортлау юлы менән көсләп өҙөлә ала. Был тирә-яҡ мөхит өҫтөнлөктәрен конфигурация өҫтөндә өҫтөнлөк ала һәм детерминистик процессор юлында виртуаль һаҡлау.
+Notes
+- Endianness and layout are defined by the implementation and bound to `version`. The on‑wire layout above reflects the current implementation in `crates/ivm_abi/src/metadata.rs`.
+- A minimal reader can rely on this layout for current artifacts and should handle future changes via `version` gating.
+- Hardware acceleration (SIMD/Metal/CUDA) is opt-in per host. The runtime reads `AccelerationConfig` values from `iroha_config`: `enable_simd` forces scalar fallbacks when false, while `enable_metal` and `enable_cuda` gate their respective backends even when compiled in. These toggles are applied through `ivm::set_acceleration_config` before VM creation.
+- Mobile SDKs (Android/Swift) surface the same knobs; `IrohaSwift.AccelerationSettings`
+  calls `connect_norito_set_acceleration_config` so macOS/iOS builds can opt into Metal /
+  NEON while keeping deterministic fallbacks.
+- Operators can also force-disable specific backends for diagnostics by exporting `IVM_DISABLE_METAL=1` or `IVM_DISABLE_CUDA=1`. These environment overrides take precedence over configuration and keep the VM on the deterministic CPU path.
 
-Ҡаты дәүләт ярҙамсылары һәм АБИ өҫтө
-- ныҡлы дәүләт ярҙамсыһы syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* һәм JSON/SCHEMA кодексы/декод) V1 ABI өлөшө булып тора һәм <!-- BEGIN GENERATED ABI HASHES --> иҫәпләүҙәренә индерелгән.
-- CoreHost сымдар STATE_{GET,SET,DEL} WSV-арҡалы ныҡлы аҡыллы аҡыллы хәлгә; dev/һынау хужалары өҫтәмәләр йәки локаль ныҡышмалылыҡ ҡулланырға мөмкин, әммә шул уҡ күҙәтелгән тәртипте һаҡларға тейеш.
+Durable state helpers and ABI surface
+- The durable state helper syscalls (0x50–0x5A: STATE_{GET,SET,DEL}, ENCODE/DECODE_INT, BUILD_PATH_* and JSON/SCHEMA encode/decode) are part of the V1 ABI and are included in `abi_hash` computation.
+- CoreHost wires STATE_{GET,SET,DEL} to WSV-backed durable smart-contract state; dev/test hosts may use overlays or local persistence but must preserve the same observable behavior.
 
-Валидация
-- Төйөнгә ҡабул итеү `version_major = 1` һәм `version_minor = 0` баштары ғына ҡабул итә.
-- `mode` тик билдәле биттар булырға тейеш: `ZK`, `VECTOR`, `HTM` (билдәһеҙ биттар кире ҡағыла).
-- `vector_length` консультатив һәм нуль булмаған булыуы мөмкин, хатта `VECTOR` бит ҡуйылмаһа; ҡабул итеү өҫкө сикте генә үтәй.
-- `abi_version` ҡиммәттәре менән тәьмин ителгән: беренсе релиз тик `1` ғына ҡабул итә (V1); башҡа ҡиммәттәр ҡабул итеү ваҡытында кире ҡағыла.
+Validation
+- Generic IVM parsing accepts only `version_major = 1`, `version_minor = 1` headers.
+- Contract artifacts must embed a `CNTR` section immediately after the fixed header and are rejected if that section is missing or inconsistent with the executable stream.
+- `mode` must only contain known bits: `ZK`, `VECTOR`, `HTM` (unknown bits are rejected).
+- `vector_length` is advisory and may be non‑zero even if the `VECTOR` bit is not set; admission enforces an upper bound only.
+- Supported `abi_version` values: first release accepts only `1` (V1); other values are rejected at admission.
 
-### Сәйәсәт (генерацияланған)
-Түбәндәге сәйәсәт резюмеһы тормошҡа ашырыуҙан генерациялана һәм ҡул менән мөхәррирләнергә тейеш түгел.<!-- BEGIN GENERATED HEADER POLICY -->
-| Ялан | Сәйәсәт |
+### Policy (generated)
+The following policy summary is generated from the implementation and should not be edited manually.
+
+<!-- BEGIN GENERATED HEADER POLICY -->
+| Field | Policy |
 |---|---|
-| версия_мажор | 1 |
-| версия_минор | 0 |
-| режим (билдәле биттар) | 0x07 (ZK=0x01, ВЕКТОР=0х02, HTM=0x04) |
-| аби_версия | 1 |
-| вектор_оҙонлоғо | 0 йәки 1..=64 (консультация; ВЭКТОР бит бойондороҡһоҙ) |
+| version_major | 1 |
+| version_minor | 1 |
+| mode (known bits) | 0x07 (ZK=0x01, VECTOR=0x02, HTM=0x04) |
+| abi_version | 1 |
+| vector_length | 0 or 1..=64 (advisory; independent of VECTOR bit) |
 <!-- END GENERATED HEADER POLICY -->
 
-### АБИ Хэштары (генерацияланған)
-Түбәндәге таблица тормошҡа ашырыуҙан генерациялана һәм ярҙам сәйәсәте өсөн канонлы `abi_hash` ҡиммәттәрен исемлеккә индерә.
+### ABI Hashes (generated)
+The following table is generated from the implementation and lists canonical `abi_hash` values for supported policies.
 
 <!-- BEGIN GENERATED ABI HASHES -->
-| Сәйәсәт | аби_хаш (гекс) |
+| Policy | abi_hash (hex) |
 |---|---|
-| АБИ v1 | ba178603d0dbdbdbd607debdae1c611a0807bf9cf49 de349 de3285572496969 |
+| ABI v1 | 76a5ec2375dfd65cc8b7cceb798ce087f6000bfe1d836ae3e390cb9e150bf595 |
 <!-- END GENERATED ABI HASHES -->
 
-- ваҡ яңыртыуҙар `feature_bits` X һәм opcode киңлеге артында күрһәтмәләр өҫтәй ала; төп яңыртыуҙар үҙгәртә ала кодлау йәки юйып/редукция ғына бергә протокол яңыртыу.
-- Сыскал диапазондары тотороҡло; әүҙем `abi_version` өсөн билдәһеҙ `E_SCALL_UNKNOWN` бирә.
-- Газ графиктары `version`-ға бәйле һәм үҙгәрештәр буйынса алтын векторҙар талап итә.
+- Minor updates may add instructions behind `feature_bits` and reserved opcode space; major updates may change encodings or remove/repurpose only together with a protocol upgrade.
+- Syscall ranges are stable; unknown for the active `abi_version` yields `E_SCALL_UNKNOWN`.
+- Gas schedules are bound to the `version` and require golden vectors on change.
 
-Артефакттарҙы тикшергән
-- Башлыҡ ҡырҙарына тотороҡло күренеш өсөн `ivm_tool inspect <file.to>` ҡулланыу.
-- Үҫеш өсөн миҫалдар/ бәләкәй Makefile маҡсатлы `examples-inspect` үҙ эсенә төҙөлгән артефакттар өҫтөндә тикшерә.
+Inspecting artifacts
+- Use `ivm_tool inspect <file.to>` for a stable view of header fields.
+- For development, examples/ include a small Makefile target `examples-inspect` that runs inspect over built artifacts.
 
-Миҫал (Раст): минималь тылсымлы + ҙурлыҡ тикшерергә
+Example (Rust): minimal magic + size check
 
 ```rust
 use std::fs::File;
@@ -98,4 +103,4 @@ fn is_ivm_artifact(path: &std::path::Path) -> std::io::Result<bool> {
 }
 ```
 
-Иҫкәрмә: тылсымдан тыш теүәл баш макеты версияһында һәм тормошҡа ашырыу‐билдәләнгән; өҫтөнлөк `ivm_tool inspect` тотороҡло ялан исемдәре һәм ҡиммәттәре өсөн.
+Note: The exact header layout beyond the magic is versioned and implementation‑defined; prefer `ivm_tool inspect` for stable field names and values.

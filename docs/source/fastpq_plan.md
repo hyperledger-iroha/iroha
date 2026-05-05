@@ -1,6 +1,6 @@
 # FASTPQ Prover Work Breakdown
 
-This document captures the staged plan for delivering a production-ready FASTPQ-ISI prover and wiring it into the data-space scheduling pipeline. Every definition below is normative unless marked as a TODO. Estimated soundness uses Cairo-style DEEP-FRI bounds; automated rejection-sampling tests in CI fail if the measured bound drops below 128 bits.
+This document captures the staged plan for delivering a production-ready FASTPQ-ISI prover and wiring it into the data-space scheduling pipeline. Every definition below is normative unless explicitly marked as future work. Estimated soundness uses Cairo-style DEEP-FRI bounds; automated rejection-sampling tests in CI fail if the measured bound drops below 128 bits.
 
 ## Stage 0 — Hash Placeholder (landed)
 - Deterministic Norito encoding with BLAKE2b commitment.
@@ -67,7 +67,8 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
 - Low-degree extension: evaluate each column on domain `D = { g^i | i = 0 .. N_eval-1 }`, where `N_eval = 2^{k+b}` divides the 2-adic capacity of Goldilocks. Let `g = ω^{(p-1)/N_eval}` with `ω` the fixed primitive root of Goldilocks and `p` its modulus; use the base subgroup (no coset). Record `g` in the transcript (tag `fastpq:v1:lde`).
 - Composition polynomials: for each constraint `C_j`, form `F_j(X) = C_j(X) / Z_N(X)` with degree margins listed below.
 - Lookup argument (permissions): sample `γ` from transcript. Trace product `Z_0 = 1`, `Z_i = Z_{i-1} * (perm_hash_i - γ)^{s_perm_i}`. Table product `T = ∏_j (table_perm_j - γ)`. Boundary constraint: `Z_final / T = 1`.
-- DEEP-FRI with arity `r ∈ {8, 16}`: for each layer, absorb the root with tag `fastpq:v1:fri_layer_ℓ`, sample `β_ℓ` (tag `fastpq:v1:beta_ℓ`), and fold via `H_{ℓ+1}(i) = Σ_{k=0}^{r-1} H_ℓ(r*i + k) * β_ℓ^k`.
+- DEEP-FRI with arity `r ∈ {8, 16}`: for each layer, absorb the root with tag `fastpq:v1:fri_layer_ℓ`, sample `β_ℓ` (tag `fastpq:v1:beta_ℓ`), and fold an opened coset using the domain elements for that coset. Verifiers must bind every opened value to its Merkle path and evaluation point; an x-free linear combination of sibling values is not a valid low-degree check.
+- V1 verification authenticates sampled LDE query chunks against `lookup_root`, requires the exact V1 AIR composition challenge count, samples row-major AIR trace openings against `air_trace_root`, checks sampled AIR composition openings against `air_composition_root`, and verifies per-round FRI openings under `fri_layers`. The FRI base layer is now the AIR composition evaluation vector, so sampled constraints are recomputed from opened current/next rows and then bound to the corresponding FRI opening without rebuilding the LDE or folding the full trace.
 - Proof object (Norito-encoded):
   ```
   Proof {
@@ -76,14 +77,47 @@ This document captures the staged plan for delivering a production-ready FASTPQ-
       parameter_set: String,
       public_io: PublicIO,
       trace_root: [u8; 32],
+      air_trace_root: [u8; 32],
+      air_composition_root: [u8; 32],
       lookup_root: [u8; 32],
+      lde_domain_size: u32,
       fri_layers: Vec<[u8; 32]>,
       alphas: Vec<Field>,
       betas: Vec<Field>,
       queries: Vec<QueryOpening>,
+      air_openings: Vec<AirConstraintOpening>,
+      fri_queries: Vec<FriQueryOpening>,
+  }
+
+  QueryOpening {
+      index: u32,
+      value: Field,
+      chunk_values: Vec<Field>,
+      merkle_path: Vec<Field>,
+  }
+
+  FriQueryOpening {
+      initial_index: u32,
+      rounds: Vec<FriRoundOpening>,
+      final_index: u32,
+      final_values: Vec<Field>,
+      final_merkle_path: Vec<Field>,
+  }
+
+  AirConstraintOpening {
+      index: u32,
+      current_row: Vec<Field>,
+      next_row: Vec<Field>,
+      current_row_path: Vec<Field>,
+      next_row_path: Vec<Field>,
+      composition_value: Field,
+      composition_path: Vec<Field>,
   }
   ```
-- Verifier mirrors prover; run regression suite on 1k/5k/20k-row traces with golden transcripts.
+- Node-facing V1 verification no longer runs trace rebuild, LDE derivation, or
+  full recursive folding. `VerifyLimits` caps proof material, query counts, path
+  depth, transition count, and payload size; large 1k/5k/20k-row traces remain
+  in prover and benchmark regression suites.
 
 ### Degree Accounting
 | Constraint | Degree before division | Degree after selectors | Margin vs `deg(Z_N)` |
@@ -104,9 +138,10 @@ Padding rows are handled through `s_active`; dummy rows extend the trace to `N_t
   1. BLAKE2b absorb `protocol_version`, `params_version`, `parameter_set`, `public_io`, and Poseidon2 commit tag (`fastpq:v1:init`).
   2. Absorb `trace_root`, `lookup_root` (`fastpq:v1:roots`).
   3. Derive lookup challenge `γ` (`fastpq:v1:gamma`).
-  4. Derive composition challenges `α_j` (`fastpq:v1:alpha_j`).
-  5. For each FRI layer root, absorb with `fastpq:v1:fri_layer_ℓ`, derive `β_ℓ` (`fastpq:v1:beta_ℓ`).
-  6. Derive query indices (`fastpq:v1:query_index`).
+  4. Derive exactly two V1 composition challenges `α_j` (`fastpq:v1:alpha_j`).
+  5. Absorb `air_trace_root`, `air_composition_root` (`fastpq:v1:air_roots`).
+  6. For each FRI layer root, absorb with `fastpq:v1:fri_layer_ℓ`, derive `β_ℓ` (`fastpq:v1:beta_ℓ`).
+  7. Derive query indices (`fastpq:v1:query_index`).
 
   Tags are lowercase ASCII; verifiers reject mismatches before sampling challenges. Golden transcript fixture: `tests/fixtures/transcript_v1.json`.
 - **Versioning:** `protocol_version = 1`, `params_version` matches `fastpq_isi` parameter set.
@@ -317,6 +352,15 @@ batch metadata is reserved for entry hash/transcript count bookkeeping.
   - The `FASTPQ Acceleration Overview` Grafana board (`dashboards/grafana/fastpq_acceleration.json`) visualises the Metal adoption rate and links back to the benchmark artefacts, while the paired alert rules (`dashboards/alerts/fastpq_acceleration_rules.yml`) gate rollouts on sustained downgrades.
   - `FASTPQ_GPU={auto,cpu,gpu}` overrides remain supported; unknown values raise warnings but still propagate to telemetry for auditing.【crates/fastpq_prover/src/backend.rs:308】【crates/fastpq_prover/src/backend.rs:349】
   - GPU parity tests (`cargo test -p fastpq_prover --features fastpq_prover/fastpq-gpu`) must pass for CUDA and Metal; CI skips gracefully when the metallib is absent or detection fails.【crates/fastpq_prover/src/gpu.rs:49】【crates/fastpq_prover/src/backend.rs:346】
+  - CUDA now also has focused low-level BN254 FFT/LDE parity coverage via
+    `fastpq_bn254_fft(...)` and `fastpq_bn254_lde(...)`, and
+    `fastpq_cuda_bench` now promotes those timings into a raw
+    `bn254_metrics` block so wrapped CUDA evidence can carry
+    `acceleration.bn254_{fft,lde}_ms` directly. When the local BN254 CUDA path
+    downgrades at runtime, the bench now keeps the CPU timings and emits
+    `bn254_warnings` instead of aborting the capture. The remaining work is the
+    lab rerun / higher-level integration side, not the basic bench/report
+    wiring.
   - Metal readiness evidence (archive the artefacts below with every rollout so the roadmap audit can prove determinism, telemetry coverage, and fallback behaviour):
 
     | Step | Goal | Command / Evidence |
@@ -407,7 +451,21 @@ benchmark bundles
 `fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json`,
 `fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json`) are now checked
 in, so every release enforces the same cross-device medians before the manifest
-is signed.【artifacts/fastpq_benchmarks/matrix/devices/apple-m4-metal.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/neoverse-mi300.txt:1】【artifacts/fastpq_benchmarks/fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json:1】【artifacts/fastpq_benchmarks/fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json:1】【artifacts/fastpq_benchmarks/fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json:1】
+is signed. The matrix manifest now also records the `operation_filters` seen
+for each device label, so a device backed only by focused FFT/LDE/Poseidon CUDA
+captures cannot be mistaken for a full `all`-operations evidence set when the
+same manifest is fed back into release gating or dashboards. Signed bench
+manifests produced by `cargo xtask fastpq-bench-manifest` now carry those
+matrix-derived filter lists per bench as `matrix_operation_filters`, so
+downstream release review can tell whether a device label was gated from full
+captures or only from focused reruns without reopening the matrix JSON. The
+release pipeline now turns that same manifest into
+`fastpq_rollout_summary.{json,md}` whenever it archives a rollout bundle, so
+release tickets can attach a compact reviewer view of each archived Metal/CUDA
+lane without losing the underlying manifest as the source of truth. That same
+archive step now also records the copied rollout bundle roots and summary paths
+under `release_manifest.json.evidence.fastpq`, closing the machine-readable
+link from the release manifest back to the Stage 7 rollout evidence.【artifacts/fastpq_benchmarks/matrix/devices/apple-m4-metal.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/xeon-rtx-sm80.txt:1】【artifacts/fastpq_benchmarks/matrix/devices/neoverse-mi300.txt:1】【artifacts/fastpq_benchmarks/fastpq_metal_bench_2025-11-07T123018Z_macos14_arm64.json:1】【artifacts/fastpq_benchmarks/fastpq_cuda_bench_2025-11-12T090501Z_ubuntu24_x86_64.json:1】【artifacts/fastpq_benchmarks/fastpq_opencl_bench_2025-11-18T074455Z_ubuntu24_aarch64.json:1】
 
 ---
 

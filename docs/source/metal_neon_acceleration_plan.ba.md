@@ -182,7 +182,7 @@ translator: machine-google-reviewed
   Яңы телеметрия каналдарын яңынан уйлап сығармайынса, металл-vs-процессор дельталары.
 
 ## WP2-B Посейдон манифест тейәү һәм үҙ-үҙеңде һынау паритеты- `fastpq_prover::poseidon_manifest()` хәҙер встраиваемый һәм анализдар
-  `artifacts/offline_poseidon/constants.ron` X, үҙ SHA-256 иҫәпләй
+  `artifacts/poseidon/constants.ron` X, үҙ SHA-256 иҫәпләй
   (`poseidon_manifest_sha256()`), һәм процессорға ҡаршы снимок раҫлай
   посейдон таблицалары ниндәй ҙә булһа GPU эше йүгерә алдынан. `build_metal_context()` логин
   разведка ваҡытында разминка шулай телеметрия экспортерҙар баҫтырып сығара ала

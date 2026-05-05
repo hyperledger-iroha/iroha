@@ -82,7 +82,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -223,7 +223,7 @@ Observer узлы, намеренно пропускающие проверку 
 - גזירת Иерархия ключей на аккаунт:
   - `sk_spend` → `nk` (מפתח מבטל), `ivk` (מפתח צפייה נכנס), `ovk` (מפתח צפייה יוצא), `fvk`.
 - Зашифрованные הערות מטענים используют AEAD עם מפתחות משותפים שמקורם ב-ECDH; опциональные מקשי תצוגת מבקר могут быть прикреплены к יציאות в соответствии с политикой актива.
-- Дополнения CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, אאודיט-инструменты для расшифровки תזכיר и helper Sumeragi создания/инспекции Norito מעטפות תזכיר офлайн. Torii предоставляет тот же גזירת זרימה через `POST /v1/confidential/derive-keyset`, возвращая hex и base64 формы, чтобы кошелки получать иерархии ключей.## Газ, лимиты ו-DoS-контроли
+- Дополнения CLI: `confidential create-keys`, `confidential send`, `confidential export-view-key`, אאודיט-инструменты для расшифровки תזכיר и helper Sumeragi создания/инспекции Norito מעטפות תזכיר офлайн.
 - לוח הזמנים של דלק Детерминированный:
   - Halo2 (Plonkish): גז `250_000` + `2_000` גז на каждый קלט ציבורי.
   - `5` גז הוכחה, плюс לכל מבטל (`300`) и לכל התחייבות (`500`) начисления.

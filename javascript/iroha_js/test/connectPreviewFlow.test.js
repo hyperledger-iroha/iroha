@@ -7,10 +7,12 @@ class FakeToriiClient {
   constructor(response = {}) {
     this.response = {
       sid: "0x00",
-      wallet_uri: "iroha://connect?sid=AA",
-      app_uri: "iroha://connect/app?sid=AA",
+      wallet_uri: "iroha://connect?sid=AA&role=wallet&token=token-wallet",
+      app_uri: "iroha://connect?sid=AA&role=app&token=token-app",
       token_app: "token-app",
       token_wallet: "token-wallet",
+      token_management: "management-token",
+      token_relay: "relay-token",
       extra: {},
       raw: {},
       ...response,
@@ -51,8 +53,13 @@ test("bootstrapConnectPreviewSession registers by default", async () => {
   );
   assert.match(result.preview.sidBase64Url, /^[A-Za-z0-9_-]+$/);
   assert.equal(result.preview.sidBase64Url.includes("="), false);
+  assert.match(result.preview.walletUri, /role=wallet/);
+  assert.match(result.preview.appUri, /role=app/);
+  assert.doesNotMatch(result.preview.appUri, /connect\/app/);
   assert.equal(result.session?.token_app, "app-token");
   assert.equal(result.tokens?.wallet, "wallet-token");
+  assert.equal(result.tokens?.management, "management-token");
+  assert.equal(result.tokens?.relay, "relay-token");
   assert.equal(client.calls.length, 1);
   assert.equal(client.calls[0].sid, result.preview.sidBase64Url);
   assert.equal(client.calls[0].node, "torii.devnet.example");

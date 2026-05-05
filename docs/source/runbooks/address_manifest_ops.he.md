@@ -174,7 +174,7 @@ address-manifest-<REVISION>/
   - `AddressLocal12Collision` — נורה מייד כששתי תוויות Local‑12 מתחככות לאותו digest.
     עצרו קידומי מניפסט, הריצו `scripts/address_local_toolkit.sh` לאימות המיפוי,
     ותאמו עם governance Nexus לפני הוצאה מחדש של הרשומה.
-  - `AddressInvalidRatioSlo` — אזהרה כאשר שליחות I105/דחוסות לא תקינות
+  - `AddressInvalidRatioSlo` — אזהרה כאשר שליחות i105/דחוסות לא תקינות
     (למעט דחיות Local‑8/strict‑mode) עוברות 0.1 % SLO ל‑10 דקות. בדקו
     `torii_address_invalid_total` לפי הקשר/סיבה ותאמו עם צוות ה‑SDK לפני החזרת strict‑mode.
 - לוגים: שמרו שורות `manifest_refresh` של Torii ואת מספר טיקט ה‑governance ב‑`notes.md`.

@@ -110,8 +110,8 @@ impl Run for AbiCommand {
             }
             AbiCommand::ActiveQuery => {
                 let client = context.client_from_config();
-                let out: iroha::data_model::query::runtime::AbiVersion =
-                    client.query_single(iroha::data_model::query::runtime::prelude::FindAbiVersion)?;
+                let out: iroha::data_model::query::runtime::AbiVersion = client
+                    .query_single(iroha::data_model::query::runtime::prelude::FindAbiVersion)?;
                 context.print_data(&out)
             }
             AbiCommand::Hash => {

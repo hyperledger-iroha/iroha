@@ -4,9 +4,9 @@ direction: rtl
 source: docs/portal/docs/norito/try-it-console.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: d38bbaedc2d75fc67e3f027c46834fb5a94d5fccd845014f829f3defcbc782b5
-source_last_modified: "2025-11-20T15:21:55.938588+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: 2b1c75d262ff579d7b04df9122c9a9c55cd8d694a04cd326d3138717f396cfe7
+source_last_modified: "2026-03-26T11:40:25.614954+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -81,7 +81,7 @@ TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 4. "Try it" ڈراور میں `application/x-norito` کنٹینٹ ٹائپ منتخب کریں، **Choose File** پر کلک کریں، اور اپنا پے لوڈ منتخب کریں۔ پراکسی درخواست کو `/proxy/v1/pipeline/submit` پر ری رائٹ کرتا ہے اور اسے `X-TryIt-Client=docs-portal-rapidoc` کے ساتھ ٹیگ کرتا ہے۔
 5. Norito ریسپانسز ڈاؤن لوڈ کرنے کے لئے `Accept: application/x-norito` سیٹ کریں۔ Swagger/RapiDoc اسی ڈراور میں ہیڈر سلیکٹر دکھاتے ہیں اور بائنری کو پراکسی کے ذریعے واپس اسٹریم کرتے ہیں۔
 
-صرف JSON روٹس کے لئے ایمبیڈڈ Try it sandbox عموما تیز ہوتا ہے: پاتھ درج کریں (مثلا `/v1/accounts/i105.../assets`)، HTTP طریقہ منتخب کریں، ضرورت ہو تو JSON باڈی پیسٹ کریں، اور **Send request** پر کلک کریں تاکہ ہیڈرز، دورانیہ اور پے لوڈز فوری طور پر دیکھ سکیں۔
+صرف JSON روٹس کے لئے ایمبیڈڈ Try it sandbox عموما تیز ہوتا ہے: پاتھ درج کریں (مثلا `/v1/accounts/<i105-account-id>/assets`)، HTTP طریقہ منتخب کریں، ضرورت ہو تو JSON باڈی پیسٹ کریں، اور **Send request** پر کلک کریں تاکہ ہیڈرز، دورانیہ اور پے لوڈز فوری طور پر دیکھ سکیں۔
 
 ## خرابیوں کا ازالہ
 

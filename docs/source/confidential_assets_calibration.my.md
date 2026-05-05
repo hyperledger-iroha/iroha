@@ -89,11 +89,11 @@ Merkle နယ်နိမိတ်ကို သက်သေပြရန်အတ
 - `iroha_zk_verifier_cache_events_total{cache,event}`
 
 ချိန်ညှိခြင်းလုပ်ငန်းမစမီနှင့် အပြီးတွင် တန်ဖိုးများကို ချက်ချင်းမှတ်တမ်းတင်ပါ။ တစ်
-ပိုင်ဆိုင်မှုတစ်ခုအတွက် command တစ်ခုတည်းသည် လုံလောက်ပါသည်။ `xor#wonderland` အတွက် ဥပမာ
+ပိုင်ဆိုင်မှုတစ်ခုအတွက် command တစ်ခုတည်းသည် လုံလောက်ပါသည်။ `4cuvDVPuLBKJyN6dPbRQhmLh68sU` အတွက် ဥပမာ
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 ကုန်ကြမ်းအထွက် (သို့မဟုတ် Prometheus) ကို ချိန်ညှိခြင်းလက်မှတ်တွင် ပူးတွဲပါ

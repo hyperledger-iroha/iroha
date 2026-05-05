@@ -25,6 +25,14 @@ fn koto_compile_meta_header_smoke() {
     let bytes = fs::read(&out).expect("read output .to");
     let parsed = ivm::ProgramMetadata::parse(&bytes).expect("parse header");
     let meta = parsed.metadata;
+    assert_eq!(
+        meta.version_minor, 1,
+        "contract artifacts must emit IVM 1.1"
+    );
+    assert!(
+        parsed.contract_interface.is_some(),
+        "compiled contract must embed a CNTR section",
+    );
     assert_eq!(meta.abi_version, 1);
     assert_eq!(meta.vector_length, 8);
     assert_eq!(meta.max_cycles, 2000);
@@ -79,6 +87,10 @@ fn koto_compile_manifest_out_smoke() {
     // Read and sanity-check manifest JSON
     let s = std::fs::read_to_string(&out_manifest).expect("read manifest json");
     assert!(s.contains("abi_hash"), "manifest JSON missing abi_hash");
+    assert!(
+        s.contains("compiler_fingerprint"),
+        "manifest JSON missing compiler_fingerprint",
+    );
 }
 
 #[test]
@@ -105,4 +117,8 @@ fn koto_compile_manifest_out_stdout_smoke() {
     assert!(output.status.success(), "CLI did not exit successfully");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("abi_hash"), "stdout missing manifest JSON");
+    assert!(
+        stdout.contains("compiler_fingerprint"),
+        "stdout missing compiler_fingerprint",
+    );
 }

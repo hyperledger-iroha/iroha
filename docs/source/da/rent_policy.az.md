@@ -94,7 +94,7 @@ sifarişli orkestrasiya kodu tələb etmədən hər sübut üçün bonus hovuzla
 
 ### Kirayə dəftəri planlarının yaradılması
 
-`iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`-i işə salın
+`iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc`-i işə salın
 davamlı icarə təklifini icra edilə bilən kitab köçürmələrinə çevirmək. Əmr
 daxil edilmiş `ledger_projection`-i təhlil edir, Norito `Transfer` təlimatlarını yayır
 əsas icarə haqqını xəzinəyə toplayan, ehtiyatı/provayderi yönləndirir

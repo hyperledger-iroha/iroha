@@ -15,9 +15,12 @@ use crate::data_model::{
 
 impl VisitExecute for MultisigRegister {
     fn visit<V: Execute + Visit + ?Sized>(&self, executor: &mut V) {
-        if let Err(err) =
-            validate_registration(&self.account, &self.home_domain, &self.spec, executor)
-        {
+        if let Err(err) = validate_registration(
+            &self.account,
+            self.home_domain.as_ref(),
+            &self.spec,
+            executor,
+        ) {
             deny!(executor, err);
         }
     }
@@ -26,8 +29,11 @@ impl VisitExecute for MultisigRegister {
         let spec = self.spec;
         let multisig_account_id = self.account;
         let home_domain = self.home_domain;
-        let domain_id = validate_registration(&multisig_account_id, &home_domain, &spec, executor)?;
-        let domain_owner = domain_owner(&domain_id, executor)?;
+        validate_registration(&multisig_account_id, home_domain.as_ref(), &spec, executor)?;
+        let domain_owner = home_domain
+            .as_ref()
+            .map(|domain_id| domain_owner(domain_id, executor))
+            .transpose()?;
 
         if account_exists(&multisig_account_id, executor)? {
             return Err(ValidationFail::NotPermitted(format!(
@@ -39,31 +45,35 @@ impl VisitExecute for MultisigRegister {
         metadata.insert(spec_key(), Json::new(spec.clone()));
         metadata.insert(home_domain_key(), Json::new(home_domain.clone()));
 
-        let register_account = Register::account(
-            Account::new(multisig_account_id.to_account_id(home_domain.clone()))
-                .with_metadata(metadata),
-        );
+        let register_account =
+            Register::account(Account::new(multisig_account_id.clone()).with_metadata(metadata));
         let original_authority = executor.context().authority.clone();
         let register_result = {
-            executor.context_mut().authority = domain_owner.clone();
+            executor.context_mut().authority = domain_owner
+                .clone()
+                .unwrap_or_else(|| original_authority.clone());
             executor.visit_register_account(&register_account);
             executor.verdict().clone()
         };
         executor.context_mut().authority = original_authority;
         register_result?;
 
+        let role_owner = domain_owner
+            .clone()
+            .unwrap_or_else(|| multisig_account_id.clone());
+
         materialize_missing_signatory_accounts(
             executor,
-            &domain_owner,
-            &home_domain,
+            &role_owner,
+            home_domain.as_ref(),
             &multisig_account_id,
             &spec,
         )?;
 
         configure_roles(
             executor,
-            &domain_owner,
-            &home_domain,
+            &role_owner,
+            home_domain.as_ref(),
             &multisig_account_id,
             &spec,
         )?;
@@ -74,13 +84,13 @@ impl VisitExecute for MultisigRegister {
 
 fn validate_registration<V: Execute + Visit + ?Sized>(
     _multisig_account: &AccountId,
-    home_domain: &DomainId,
+    _home_domain: Option<&DomainId>,
     spec: &MultisigSpec,
     executor: &V,
-) -> Result<DomainId, ValidationFail> {
+) -> Result<(), ValidationFail> {
     ensure_quorum_reachable(spec)?;
     ensure_multisig_graph_is_acyclic(spec.signatories.keys().cloned(), executor)?;
-    Ok(home_domain.clone())
+    Ok(())
 }
 
 fn ensure_quorum_reachable(spec: &MultisigSpec) -> Result<(), ValidationFail> {
@@ -116,15 +126,15 @@ fn signatories_to_materialize(spec: &MultisigSpec, multisig_account: &AccountId)
 
 fn materialize_missing_signatory_accounts<V: Execute + Visit + ?Sized>(
     executor: &mut V,
-    domain_owner: &AccountId,
-    home_domain: &DomainId,
+    authority: &AccountId,
+    home_domain: Option<&DomainId>,
     multisig_account: &AccountId,
     spec: &MultisigSpec,
 ) -> Result<(), ValidationFail> {
     let original_authority = executor.context().authority.clone();
 
     let result = (|| {
-        executor.context_mut().authority = domain_owner.clone();
+        executor.context_mut().authority = authority.clone();
 
         for signatory in signatories_to_materialize(spec, multisig_account) {
             ensure_signatory_account_exists(executor, &signatory, home_domain)?;
@@ -140,7 +150,7 @@ fn materialize_missing_signatory_accounts<V: Execute + Visit + ?Sized>(
 fn ensure_signatory_account_exists<V: Execute + Visit + ?Sized>(
     executor: &mut V,
     signatory: &AccountId,
-    home_domain: &DomainId,
+    _home_domain: Option<&DomainId>,
 ) -> Result<(), ValidationFail> {
     if account_exists(signatory, executor)? {
         return Ok(());
@@ -148,9 +158,8 @@ fn ensure_signatory_account_exists<V: Execute + Visit + ?Sized>(
 
     let mut metadata = Metadata::default();
     metadata.insert(multisig_created_via_key(), Json::new("multisig"));
-    let register_account = Register::account(
-        Account::new(signatory.to_account_id(home_domain.clone())).with_metadata(metadata),
-    );
+    let register_account =
+        Register::account(Account::new(signatory.clone()).with_metadata(metadata));
     executor.visit_register_account(&register_account);
     if executor.verdict().is_err() {
         return executor.verdict().clone();
@@ -192,8 +201,8 @@ fn domain_owner<V: Execute + Visit + ?Sized>(
 
 fn configure_roles<V: Execute + Visit + ?Sized>(
     executor: &mut V,
-    domain_owner: &AccountId,
-    home_domain: &DomainId,
+    role_owner: &AccountId,
+    home_domain: Option<&DomainId>,
     multisig_account: &AccountId,
     spec: &MultisigSpec,
 ) -> Result<(), ValidationFail> {
@@ -201,17 +210,17 @@ fn configure_roles<V: Execute + Visit + ?Sized>(
     let signatories: Vec<AccountId> = spec.signatories.keys().cloned().collect();
 
     let result = (|| {
-        executor.context_mut().authority = domain_owner.clone();
+        executor.context_mut().authority = role_owner.clone();
 
         let multisig_role_id = multisig_role_for(home_domain, multisig_account);
-        ensure_role_available(executor, domain_owner, &multisig_role_id, &signatories)?;
+        ensure_role_available(executor, role_owner, &multisig_role_id, &signatories)?;
         grant_role_if_needed(executor, &multisig_role_id, multisig_account)?;
 
         for signatory in &signatories {
             let signatory_role_id = multisig_role_for(home_domain, signatory);
             let delegates = [signatory.clone(), multisig_account.clone()];
 
-            ensure_role_available(executor, domain_owner, &signatory_role_id, &delegates)?;
+            ensure_role_available(executor, role_owner, &signatory_role_id, &delegates)?;
             grant_role_if_needed(executor, &signatory_role_id, signatory)?;
             grant_role_if_needed(executor, &signatory_role_id, multisig_account)?;
             grant_role_if_needed(executor, &multisig_role_id, signatory)?;
@@ -400,8 +409,8 @@ mod tests {
 
     #[test]
     fn signatories_from_multiple_domains_are_allowed() {
-        let domain_a: DomainId = "wonderland".parse().unwrap();
-        let domain_b: DomainId = "looking_glass".parse().unwrap();
+        let domain_a: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain_b: DomainId = DomainId::try_new("looking_glass", "universal").unwrap();
         let account_a = account(0, &domain_a);
         let account_b = account(1, &domain_b);
 
@@ -421,7 +430,7 @@ mod tests {
 
     #[test]
     fn quorum_must_be_reachable() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let single = account(0, &domain);
         let mut signatories = BTreeMap::new();
         signatories.insert(single, 1);
@@ -441,7 +450,7 @@ mod tests {
 
     #[test]
     fn acyclic_graph_passes_validation() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let root = account(0, &domain);
         let child_a = account(1, &domain);
         let child_b = account(2, &domain);
@@ -462,7 +471,7 @@ mod tests {
 
     #[test]
     fn cyclic_graph_is_rejected() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let root = account(0, &domain);
         let child = account(1, &domain);
 
@@ -482,7 +491,7 @@ mod tests {
 
     #[test]
     fn signatory_materialization_skips_multisig_subject() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let multisig_account = account(0, &domain);
         let signer_one = account(1, &domain);
         let signer_two = account(2, &domain);

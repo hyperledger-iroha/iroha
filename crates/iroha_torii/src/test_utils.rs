@@ -7,7 +7,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroU64,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -15,13 +18,23 @@ use iroha_config::parameters::{defaults, defaults::zk::fastpq};
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
     queue::{Queue, TransactionGuard},
+    smartcontracts::Execute,
     state::{State, StateBlock, StateReadOnly},
 };
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
-    ChainId, account::AccountId, block::SignedBlock, content::ContentAuthMode,
-    jurisdiction::JdgSignatureScheme, prelude::ExposedPrivateKey,
+    ChainId, Registrable,
+    account::AccountId,
+    block::{BlockHeader, SignedBlock},
+    content::ContentAuthMode,
+    domain::DomainId,
+    jurisdiction::JdgSignatureScheme,
+    permission,
+    prelude::{Account, Domain, ExposedPrivateKey, Grant},
     sorafs::pricing::PricingScheduleRecord,
+};
+use iroha_executor_data_model::permission::{
+    governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
 };
 use nonzero_ext::nonzero;
 /// Parameters for invoking a contract within Torii integration tests.
@@ -33,6 +46,16 @@ pub struct ContractCallOptions<'a> {
     /// Gas-paying asset identifier to attach to the request.
     pub gas_asset_id: Option<&'a str>,
     /// Upper bound on gas consumption for the call.
+    pub gas_limit: u64,
+}
+
+/// Parameters for invoking a read-only contract view within Torii integration tests.
+pub struct ContractViewOptions<'a> {
+    /// Optional entry point function to execute; defaults to main when `None`.
+    pub entrypoint: Option<&'a str>,
+    /// Serialized JSON payload passed to the contract view.
+    pub payload: Option<&'a norito::json::Value>,
+    /// Upper bound on gas consumption for the local view execution.
     pub gas_limit: u64,
 }
 
@@ -128,28 +151,48 @@ pub fn finalize_committed_block(
     let _ = state.view().kura().store_block(Arc::new(signed_block));
 }
 
-/// Build a minimal IVM `.to` program containing a single HALT, with a V2 header.
+/// Build a minimal self-describing contract artifact containing a single HALT.
 pub fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-    let mut code = Vec::new();
-    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     let meta = ivm::ProgramMetadata {
         version_major: 1,
-        version_minor: 0,
+        version_minor: 1,
         mode: 0,
         vector_length: 0,
         max_cycles: 1_000,
         abi_version,
     };
+    let interface = ivm::EmbeddedContractInterfaceV1 {
+        compiler_fingerprint: "torii-test-utils".to_owned(),
+        features_bitmap: 0,
+        access_set_hints: None,
+        kotoba: Vec::new(),
+        entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+            name: "main".to_owned(),
+            kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+            params: Vec::new(),
+            return_type: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+            entry_pc: 0,
+        }],
+        states: Vec::new(),
+    };
     let mut out = meta.encode();
-    out.extend_from_slice(&code);
+    out.extend_from_slice(&interface.encode_section());
+    out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     out
 }
 
 /// Compute the hex-encoded contract code hash for a `.to` program.
 ///
-/// This matches Torii's deployment hashing (header + body).
+/// This matches Torii's deployment hashing (artifact bytes after the fixed header).
 pub fn body_code_hash_hex(code_bytes: &[u8]) -> String {
-    let h = iroha_crypto::Hash::new(code_bytes);
+    let parsed = ivm::ProgramMetadata::parse(code_bytes).expect("parse contract artifact");
+    let h = iroha_crypto::Hash::new(&code_bytes[parsed.header_len..]);
     hex::encode(<[u8; 32]>::from(h))
 }
 
@@ -203,51 +246,84 @@ pub fn random_authority() -> AuthorityCreds {
     }
 }
 
+/// Build a minimal world that contains the given authority account in `wonderland`.
+pub fn world_with_authority(authority: &AccountId) -> iroha_core::state::World {
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain id");
+    let domain = Domain::new(domain_id.clone()).build(authority);
+    let account = Account::new(authority.clone()).build(authority);
+    iroha_core::state::World::with([domain], [account], [])
+}
+
+/// Grant the permissions needed for contract deploy/activate flows in integration tests.
+pub fn grant_contract_operator_permissions(state: &Arc<State>, authority: &AccountId) {
+    let height_u64 = u64::try_from(state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let header = BlockHeader::new(
+        NonZeroU64::new(height_u64).expect("height > 0"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+
+    let register_permission: permission::Permission = CanRegisterSmartContractCode.into();
+    Grant::account_permission(register_permission, authority.clone())
+        .execute(authority, &mut stx)
+        .expect("grant CanRegisterSmartContractCode");
+
+    let enact_permission: permission::Permission = CanEnactGovernance.into();
+    Grant::account_permission(enact_permission, authority.clone())
+        .execute(authority, &mut stx)
+        .expect("grant CanEnactGovernance");
+
+    stx.apply();
+    block
+        .commit()
+        .expect("commit contract operator permissions");
+}
+
 /// Build JSON string for deploy request body.
 pub fn deploy_request_json(
     account: &AccountId,
     private_key: &ExposedPrivateKey,
     code_b64: &str,
 ) -> String {
+    static DEPLOY_ALIAS_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    let alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        &format!(
+            "deploy{}",
+            DEPLOY_ALIAS_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ),
+        None,
+        "universal",
+    )
+    .expect("construct contract alias");
     let value = crate::json_object(vec![
         crate::json_entry("authority", account.clone()),
         crate::json_entry("private_key", private_key.to_string()),
         crate::json_entry("code_b64", code_b64),
+        crate::json_entry("contract_alias", alias),
     ]);
     norito::json::to_json(&value).expect("serialize deploy request")
-}
-
-/// Build JSON string for activate-instance request body.
-pub fn activate_instance_request_json(
-    account: &AccountId,
-    private_key: &ExposedPrivateKey,
-    namespace: &str,
-    contract_id: &str,
-    code_hash_hex: &str,
-) -> String {
-    let value = crate::json_object(vec![
-        crate::json_entry("authority", account.clone()),
-        crate::json_entry("private_key", private_key.to_string()),
-        crate::json_entry("namespace", namespace),
-        crate::json_entry("contract_id", contract_id),
-        crate::json_entry("code_hash", code_hash_hex),
-    ]);
-    norito::json::to_json(&value).expect("serialize activate request")
 }
 
 /// Build JSON string for contract call request body.
 pub fn contract_call_request_json(
     account: &AccountId,
     private_key: &ExposedPrivateKey,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &str,
     options: ContractCallOptions<'_>,
 ) -> String {
     let mut entries = vec![
         crate::json_entry("authority", account.clone()),
         crate::json_entry("private_key", private_key.to_string()),
-        crate::json_entry("namespace", namespace),
-        crate::json_entry("contract_id", contract_id),
+        crate::json_entry("contract_address", contract_address),
     ];
     if let Some(ep) = options.entrypoint {
         entries.push(crate::json_entry("entrypoint", ep));
@@ -263,22 +339,25 @@ pub fn contract_call_request_json(
     norito::json::to_json(&value).expect("serialize contract call request")
 }
 
-/// Build JSON string for combined deploy+activate request body.
-pub fn deploy_and_activate_request_json(
+/// Build JSON string for contract view request body.
+pub fn contract_view_request_json(
     account: &AccountId,
-    private_key: &ExposedPrivateKey,
-    namespace: &str,
-    contract_id: &str,
-    code_b64: &str,
+    contract_address: &str,
+    options: ContractViewOptions<'_>,
 ) -> String {
-    let value = crate::json_object(vec![
+    let mut entries = vec![
         crate::json_entry("authority", account.clone()),
-        crate::json_entry("private_key", private_key.to_string()),
-        crate::json_entry("namespace", namespace),
-        crate::json_entry("contract_id", contract_id),
-        crate::json_entry("code_b64", code_b64),
-    ]);
-    norito::json::to_json(&value).expect("serialize deploy+activate request")
+        crate::json_entry("contract_address", contract_address),
+    ];
+    if let Some(ep) = options.entrypoint {
+        entries.push(crate::json_entry("entrypoint", ep));
+    }
+    if let Some(value) = options.payload {
+        entries.push(crate::json_entry("payload", value.clone()));
+    }
+    entries.push(crate::json_entry("gas_limit", options.gas_limit));
+    let value = crate::json_object(entries);
+    norito::json::to_json(&value).expect("serialize contract view request")
 }
 
 /// Build a minimal actual configuration root suitable for constructing Kiso and Torii in tests.
@@ -360,6 +439,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             trust_penalty_bad_gossip: defaults::network::TRUST_PENALTY_BAD_GOSSIP,
             trust_penalty_unknown_peer: defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: defaults::network::TRUST_MIN_SCORE,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,
@@ -377,7 +458,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 .get(),
             scion: A::ScionConfig::default(),
             tls_enabled: false,
-            tls_fallback_to_plain: true,
+            tls_fallback_to_plain: false,
             tls_listen_address: None,
             tls_inbound_only: false,
             prefer_ws_fallback: false,
@@ -465,7 +546,12 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             receipt_signer: None,
             transport: A::ToriiTransport::default(),
             mcp: A::ToriiMcp::default(),
-            identifier_resolver: None,
+            ram_lfe: None,
+            faucet: None,
+            offline_issuer: None,
+            tx_history: None,
+            webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
+            zk_attachments_enabled: defaults::torii::ZK_ATTACHMENTS_ENABLED,
             events_buffer_capacity: defaults::torii::events_buffer_capacity(),
             ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
             query_rate_per_authority_per_sec: None,
@@ -474,6 +560,26 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             tx_burst_per_authority: None,
             deploy_rate_per_origin_per_sec: None,
             deploy_burst_per_origin: None,
+            soracloud_public_rate_per_ip_per_sec:
+                iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC
+                    .and_then(std::num::NonZeroU32::new),
+            soracloud_public_burst_per_ip:
+                iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_BURST_PER_IP
+                    .and_then(std::num::NonZeroU32::new),
+            soracloud_public_max_inflight:
+                iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT,
+            soracloud_mutation_rate_per_account_origin_per_sec:
+                iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC
+                    .and_then(std::num::NonZeroU32::new),
+            soracloud_mutation_burst_per_account_origin:
+                iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN
+                    .and_then(std::num::NonZeroU32::new),
+            soracloud_mutation_max_inflight:
+                iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_INFLIGHT,
+            soracloud_mutation_max_body_bytes:
+                iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES,
+            soracloud_upload_max_body_bytes:
+                iroha_config::parameters::defaults::torii::SORACLOUD_UPLOAD_MAX_BODY_BYTES,
             proof_api: iroha_config::parameters::actual::ProofApi {
                 rate_per_minute: defaults::torii::PROOF_RATE_PER_MIN
                     .and_then(std::num::NonZeroU32::new),
@@ -536,6 +642,16 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                     defaults::torii::APP_API_RATE_LIMIT_COST_PER_ROW.max(1),
                 )
                 .expect("rate limit cost must be non-zero"),
+                request_signature_max_clock_skew: std::time::Duration::from_secs(
+                    defaults::torii::app_auth::MAX_CLOCK_SKEW_SECS,
+                ),
+                request_signature_nonce_ttl: std::time::Duration::from_secs(
+                    defaults::torii::app_auth::NONCE_TTL_SECS,
+                ),
+                request_signature_replay_cache_capacity: std::num::NonZeroUsize::new(
+                    defaults::torii::app_auth::REPLAY_CACHE_CAPACITY.max(1),
+                )
+                .expect("request signature replay cache must be non-zero"),
             },
             attachments_ttl_secs: 7 * 24 * 60 * 60,
             attachments_max_bytes: 4 * 1024 * 1024,
@@ -622,8 +738,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             sorafs_por: Default::default(),
             onboarding: None,
-            offline_issuer: None,
         },
+        soracloud_runtime: A::SoracloudRuntime::default(),
         kura: A::Kura {
             init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(std::env::temp_dir()),
@@ -638,6 +754,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         },
         sumeragi: A::Sumeragi {
             role: A::NodeRole::Validator,
@@ -790,7 +908,11 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             rbc: A::SumeragiRbc {
                 chunk_max_bytes: 32 * 1024,
+                encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                data_shards: 0,
+                parity_shards: 0,
                 chunk_fanout: defaults::sumeragi::RBC_CHUNK_FANOUT,
+                rs16_initial_fanout: A::RbcRs16InitialFanout::Full,
                 pending_max_chunks: defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
                 pending_max_bytes: defaults::sumeragi::RBC_PENDING_MAX_BYTES,
                 pending_session_limit: defaults::sumeragi::RBC_PENDING_SESSION_LIMIT,
@@ -839,6 +961,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 epoch_length_blocks: 0,
                 use_stake_snapshot_roster: false,
             },
+            resilience: A::SumeragiResilience::default(),
             adaptive_observability: A::AdaptiveObservability::default(),
             debug: A::SumeragiDebug {
                 force_soft_fork: false,
@@ -1345,9 +1468,12 @@ mod tests {
     use super::{apply_queued_in_one_block, body_code_hash_hex, minimal_ivm_program};
 
     #[test]
-    fn body_code_hash_hex_matches_full_bytes_hash() {
+    fn body_code_hash_hex_matches_post_header_hash() {
         let code = minimal_ivm_program(1);
-        let expected = hex::encode(<[u8; 32]>::from(iroha_crypto::Hash::new(&code)));
+        let parsed = ivm::ProgramMetadata::parse(&code).expect("parse contract artifact");
+        let expected = hex::encode(<[u8; 32]>::from(iroha_crypto::Hash::new(
+            &code[parsed.header_len..],
+        )));
         assert_eq!(body_code_hash_hex(&code), expected);
     }
 

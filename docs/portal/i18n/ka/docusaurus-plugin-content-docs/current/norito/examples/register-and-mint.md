@@ -21,9 +21,9 @@ title: დაარეგისტრირეთ დომენი და ზ�
 
 ## ლეჯერის გზამკვლევი
 
-- დარწმუნდით, რომ დანიშნულების ანგარიში (მაგ., `i105...`) არსებობს, ასახავს დაყენების ფაზას თითოეულ SDK-ის სწრაფ დაწყებაში.
+- დარწმუნდით, რომ დანიშნულების ანგარიში (მაგ., `<i105-account-id>`) არსებობს, ასახავს დაყენების ფაზას თითოეულ SDK-ის სწრაფ დაწყებაში.
 - გამოიძახეთ `register_and_mint` შესასვლელი წერტილი, რომ შექმნათ ROSE აქტივის განმარტება და მიამაგრეთ 250 ერთეული ალისას ერთ ტრანზაქციაში.
-- შეამოწმეთ ნაშთები `client.request(FindAccountAssets)` ან `iroha_cli ledger asset list --account i105...` მეშვეობით, რათა დაადასტუროთ ზარაფხანა წარმატებით.
+- შეამოწმეთ ნაშთები `client.request(FindAccountAssets)` ან `iroha_cli ledger asset list --account <i105-account-id>` მეშვეობით, რათა დაადასტუროთ ზარაფხანა წარმატებით.
 
 ## დაკავშირებული SDK სახელმძღვანელო
 
@@ -45,8 +45,8 @@ seiyaku RegisterAndMint {
     register_asset(name, symbol, qty, mintable);
 
     // Mint 250 ROSE to Alice
-    let to = account!("i105...");
-    let asset = asset_definition!("rose#wonderland");
+    let to = account!("<i105-account-id>");
+    let asset = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
     mint_asset(to, asset, 250);
   }
 }

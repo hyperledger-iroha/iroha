@@ -8,13 +8,15 @@ import {
   buildRegisterDomainAndMintTransaction,
   buildRegisterAssetDefinitionMintAndTransferTransaction,
   buildTransferAssetTransaction,
+  buildRegisterRwaTransaction,
+  buildTransferRwaTransaction,
+  buildSetRwaKeyValueTransaction,
+  buildRemoveRwaKeyValueTransaction,
   buildCreateKaigiTransaction,
   buildJoinKaigiTransaction,
   buildRegisterKaigiRelayTransaction,
   buildRegisterSmartContractCodeTransaction,
   buildRegisterSmartContractBytesTransaction,
-  buildDeactivateContractInstanceTransaction,
-  buildActivateContractInstanceTransaction,
   buildRemoveSmartContractBytesTransaction,
   buildProposeDeployContractTransaction,
   buildCastZkBallotTransaction,
@@ -40,38 +42,37 @@ import {
 import { AccountAddress } from "../src/address.js";
 import { makeNativeTest } from "./helpers/native.js";
 
-const AUTHORITY_ID_RAW =
-  "6cmzPVPX8e5qQsHdB57DhqFT9wp2MiMoXsvt9LYUtypj1nx96bF5s8W";
-const AUTHORITY_ID = i105FromEd25519AccountId(AUTHORITY_ID_RAW);
-const AUTHORITY_ID_INPUT = i105FromEd25519AccountId(AUTHORITY_ID_RAW);
+const AUTHORITY_PUBLIC_KEY_HEX =
+  "CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
+const AUTHORITY_ID = i105FromEd25519PublicKeyHex(AUTHORITY_PUBLIC_KEY_HEX);
+const AUTHORITY_ID_INPUT = i105FromEd25519PublicKeyHex(AUTHORITY_PUBLIC_KEY_HEX);
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
-const RELAY_ACCOUNT_ID_RAW =
-  "6cmzPVPX4Vnjpp7MFrUdgoZ9scoVXwFPcp4U6r6yELFetMDx2taw8et";
-const RELAY_ACCOUNT_ID = i105FromEd25519AccountId(RELAY_ACCOUNT_ID_RAW);
-const RELAY_ACCOUNT_ID_INPUT = i105FromEd25519AccountId(RELAY_ACCOUNT_ID_RAW);
-const CANONICAL_ASSET_ID_INPUT =
-  "norito:4e52543000000eaf5ef05db6ed320eaf5ef05db6ed3200c4000000000000006165e1e191d7b79c00810000000000000017000000000000000f00000000000000070000000000000064656661756c745a00000000000000000000004e00000000000000460000000000000065643031323045444636443742353243373033324430334145433639364632303638424435333130313532384633433742363038314246463035413136363244374643323435330000000000000017000000000000000f00000000000000070000000000000064656661756c740c000000000000000400000000000000726f7365";
-const CANONICAL_LILY_ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT.replace(/726f7365$/u, "6c696c79");
-const SECOND_CANONICAL_ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT.replace("6165e1e191d7b79c", "7165e1e191d7b79c");
+const RELAY_PUBLIC_KEY_HEX =
+  "641297079357229F295938A4B5A333DE35069BF47B9D0704E45805713D13C201";
+const RELAY_ACCOUNT_ID = i105FromEd25519PublicKeyHex(RELAY_PUBLIC_KEY_HEX);
+const RELAY_ACCOUNT_ID_INPUT = i105FromEd25519PublicKeyHex(RELAY_PUBLIC_KEY_HEX);
+const ASSET_DEFINITION_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+const LILY_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc";
+const CANONICAL_ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${AUTHORITY_ID}`;
+const CANONICAL_LILY_ASSET_ID_INPUT = `${LILY_ASSET_DEFINITION_ID}#${AUTHORITY_ID}`;
+const SECOND_CANONICAL_ASSET_ID_INPUT = `${ASSET_DEFINITION_ID}#${RELAY_ACCOUNT_ID}`;
 const ASSET_ID = CANONICAL_ASSET_ID_INPUT;
 const ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT;
+const RWA_ID =
+  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.sora";
 const test = makeNativeTest(baseTest);
 
-function i105FromEd25519AccountId(raw) {
-  const trimmed = raw.trim();
-  const atIndex = trimmed.lastIndexOf("@");
-  if (atIndex === -1) {
-    const { address } = AccountAddress.parseEncoded(trimmed);
-    return address.toI105();
+function i105FromEd25519PublicKeyHex(publicKeyHex) {
+  const publicKey = Buffer.from(publicKeyHex.trim(), "hex");
+  return AccountAddress.fromAccount({ publicKey }).toI105();
+}
+
+function encodeAssetIdForKnownAccount(assetDefinitionId, accountId) {
+  assert.equal(assetDefinitionId, ASSET_DEFINITION_ID);
+  if (accountId === AUTHORITY_ID || accountId === AUTHORITY_ID_INPUT) {
+    return CANONICAL_ASSET_ID_INPUT;
   }
-  const signatory = trimmed.slice(0, atIndex).trim().toUpperCase();
-  const domain = trimmed.slice(atIndex + 1).trim();
-  if (!signatory.startsWith("ED0120")) {
-    throw new Error("expected ed25519 multihash signatory");
-  }
-  const publicKeyHex = signatory.slice(6);
-  const publicKey = Buffer.from(publicKeyHex, "hex");
-  return AccountAddress.fromAccount({ domain, publicKey }).toI105();
+  throw new Error(`unexpected account id for test asset encoding: ${accountId}`);
 }
 
 function crc16(tag, body) {
@@ -116,7 +117,7 @@ function buildSampleRegisterDomain(additionalOptions = {}) {
   return buildRegisterDomainTransaction({
     chainId: "test-chain",
     authority: AUTHORITY_ID_INPUT,
-    domainId: "garden_of_live_flowers",
+    domainId: "garden_of_live_flowers.sora",
     metadata: { key: "value" },
     creationTimeMs: 1_700_000_000_000,
     ttlMs: 5_000,
@@ -252,6 +253,120 @@ test("buildTransferAssetTransaction returns canonical hash", () => {
   assert.deepEqual(recomputed, built.hash);
 });
 
+test("buildTransferRwaTransaction returns canonical hash", () => {
+  const built = buildTransferRwaTransaction({
+    chainId: "test-chain",
+    authority: AUTHORITY_ID_INPUT,
+    sourceAccountId: AUTHORITY_ID_INPUT,
+    rwaId: RWA_ID,
+    quantity: "3",
+    destinationAccountId: AUTHORITY_ID_INPUT,
+    privateKey: PRIVATE_KEY,
+  });
+  assert.ok(Buffer.isBuffer(built.signedTransaction));
+  const recomputed = hashSignedTransaction(built.signedTransaction, {
+    encoding: "buffer",
+  });
+  assert.deepEqual(recomputed, built.hash);
+});
+
+test("buildRegisterRwaTransaction forwards canonical instruction payload", () => {
+  const captures = [];
+  withNativeBinding(
+    {
+      buildTransaction: (_chain, authority, instructions) => {
+        captures.push({ authority, instructions: instructions.map((json) => JSON.parse(json)) });
+        return {
+          signed_transaction: Buffer.from([0x44]),
+          hash: Buffer.alloc(32, 0xdd),
+        };
+      },
+    },
+    () =>
+      buildRegisterRwaTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        rwa: {
+          domain: "commodities.sora",
+          quantity: "10.5",
+          spec: { scale: 1 },
+          primaryReference: "vault-cert-001",
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+  );
+  assert.equal(captures.length, 1);
+  assert.equal(captures[0].authority, AUTHORITY_ID);
+  assert.deepEqual(captures[0].instructions[0], {
+    RegisterRwa: {
+      rwa: {
+        domain: "commodities.sora",
+        quantity: "10.5",
+        spec: { scale: 1 },
+        primary_reference: "vault-cert-001",
+        status: null,
+        metadata: {},
+        parents: [],
+        controls: {
+          controller_accounts: [],
+          controller_roles: [],
+          freeze_enabled: false,
+          hold_enabled: false,
+          force_transfer_enabled: false,
+          redeem_enabled: false,
+        },
+      },
+    },
+  });
+});
+
+test("buildRwaKeyValueTransactions forward canonical instruction payloads", () => {
+  const captures = [];
+  withNativeBinding(
+    {
+      buildTransaction: (_chain, authority, instructions) => {
+        captures.push({ authority, instructions: instructions.map((json) => JSON.parse(json)) });
+        return {
+          signed_transaction: Buffer.from([0x45]),
+          hash: Buffer.alloc(32, 0xee),
+        };
+      },
+    },
+    () => {
+      buildSetRwaKeyValueTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        rwaId: RWA_ID,
+        key: "grade",
+        value: { origin: "AE", score: BigInt(9) },
+        privateKey: PRIVATE_KEY,
+      });
+      buildRemoveRwaKeyValueTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        rwaId: RWA_ID,
+        key: "grade",
+        privateKey: PRIVATE_KEY,
+      });
+    },
+  );
+  assert.equal(captures.length, 2);
+  assert.equal(captures[0].authority, AUTHORITY_ID);
+  assert.deepEqual(captures[0].instructions[0], {
+    SetRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
+      value: { origin: "AE", score: "9" },
+    },
+  });
+  assert.deepEqual(captures[1].instructions[0], {
+    RemoveRwaKeyValue: {
+      rwa: RWA_ID,
+      key: "grade",
+    },
+  });
+});
+
 test("buildMintAndTransferTransaction composes instructions in order", () => {
   const captures = [];
   const fakeResult = {
@@ -311,7 +426,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
       buildRegisterDomainAndMintTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        domain: { domainId: "wonderland" },
+        domain: { domainId: "wonderland.sora" },
         mints: [
           { assetId: ASSET_ID_INPUT, quantity: "4" },
           { assetId: CANONICAL_LILY_ASSET_ID_INPUT, quantity: "1" },
@@ -324,7 +439,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
   assert.equal(instructions.length, 3);
   assert.deepEqual(
     instructions[0],
-    buildRegisterDomainInstruction({ domainId: "wonderland" }),
+    buildRegisterDomainInstruction({ domainId: "wonderland.sora" }),
   );
   assert.deepEqual(instructions[1], {
     Mint: { Asset: { destination: ASSET_ID, object: "4" } },
@@ -341,10 +456,10 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
 
 test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer arrays", () => {
   const captures = [];
-  const secondAccountIdRaw =
-    "6cmzPVPX7iXwUZwgBeaKv96unyGNU1Z5xSmzKApk6TUXv7bTs4t4wZm";
-  const secondAccountId = i105FromEd25519AccountId(secondAccountIdRaw);
-  const secondAccountIdInput = i105FromEd25519AccountId(secondAccountIdRaw);
+  const secondAccountIdPublicKeyHex =
+    "1AA70BFDE38BFD7CBE6AD29E59F290D4A4B0DD02792C0CE7371477C4E0D62759";
+  const secondAccountId = i105FromEd25519PublicKeyHex(secondAccountIdPublicKeyHex);
+  const secondAccountIdInput = i105FromEd25519PublicKeyHex(secondAccountIdPublicKeyHex);
   withNativeBinding(
     {
       buildTransaction: (_chain, authority, instructions) => {
@@ -359,7 +474,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        assetDefinition: { assetDefinitionId: "rose#wonderland" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "7" },
           { assetId: SECOND_CANONICAL_ASSET_ID_INPUT, quantity: "2" },
@@ -414,13 +529,24 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
   });
 });
 
-test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects legacy mint.accountId", () => {
-  assert.throws(
+test("buildRegisterAssetDefinitionMintAndTransferTransaction derives asset ids from accountId", () => {
+  const captures = [];
+  withNativeBinding(
+    {
+      encodeAssetId: encodeAssetIdForKnownAccount,
+      buildTransaction: (_chain, authority, instructions) => {
+        captures.push({ authority, instructions: instructions.map((j) => JSON.parse(j)) });
+        return {
+          signed_transaction: Buffer.from([0x32]),
+          hash: Buffer.alloc(32, 0xee),
+        };
+      },
+    },
     () =>
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
-        assetDefinition: { assetDefinitionId: "rose#wonderland" },
+        assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           {
             accountId: AUTHORITY_ID_INPUT,
@@ -431,8 +557,16 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects legacy mint
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
         privateKey: PRIVATE_KEY,
       }),
-    /accountId is no longer supported/i,
   );
+  assert.equal(captures.length, 1);
+  assert.deepEqual(captures[0].instructions[1], {
+    Mint: {
+      Asset: {
+        destination: CANONICAL_ASSET_ID_INPUT,
+        object: "1",
+      },
+    },
+  });
 });
 
 test("buildMintAndTransferTransaction returns canonical hash", () => {
@@ -458,7 +592,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction returns canonical h
   const built = buildRegisterAssetDefinitionMintAndTransferTransaction({
     chainId: "test-chain",
     authority: AUTHORITY_ID_INPUT,
-    assetDefinition: { assetDefinitionId: "rose#wonderland" },
+    assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
     mint: { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "4" },
     transfer: {
       sourceAssetId: CANONICAL_ASSET_ID_INPUT,
@@ -492,7 +626,7 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         call: {
-          id: { domainId: "wonderland", callName: "weekly-sync" },
+          id: { domainId: "wonderland.sora", callName: "weekly-sync" },
           host: AUTHORITY_ID_INPUT,
           gasRatePerMinute: 120,
           relayManifest: {
@@ -514,7 +648,7 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
   assert.equal(instructions.length, 1);
   const created = instructions[0];
   assert.deepEqual(created.Kaigi.CreateKaigi.call.id, {
-    domain_id: "wonderland",
+    domain_id: "wonderland.sora",
     call_name: "weekly-sync",
   });
   assert.equal(created.Kaigi.CreateKaigi.call.gas_rate_per_minute, 120);
@@ -523,6 +657,44 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
     hpke_public_key: "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
     weight: 2,
   });
+  assert.equal(created.Kaigi.CreateKaigi.commitment, null);
+});
+
+test("buildCreateKaigiTransaction preserves privacy artifacts", () => {
+  const captures = [];
+  const commitment = Buffer.alloc(32, 0x33);
+  const nullifier = Buffer.alloc(32, 0x44);
+  const proof = Buffer.from([0xfa, 0xce]);
+  withNativeBinding(
+    {
+      buildTransaction: (_chain, authority, instructions) => {
+        captures.push({ authority, instructions: instructions.map((payload) => JSON.parse(payload)) });
+        return {
+          signed_transaction: Buffer.from([0x40]),
+          hash: Buffer.alloc(32, 0x55),
+        };
+      },
+    },
+    () =>
+      buildCreateKaigiTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        call: {
+          id: "wonderland.sora:private-room",
+          host: AUTHORITY_ID_INPUT,
+          privacyMode: "ZkRosterV1",
+          commitment: { commitment, aliasTag: "host" },
+          nullifier: { digest: nullifier, issuedAtMs: 12 },
+          proof,
+        },
+        privateKey: PRIVATE_KEY,
+      }),
+  );
+  const [{ instructions }] = captures;
+  const created = instructions[0].Kaigi.CreateKaigi;
+  assert.equal(created.commitment.commitment, normalizedHashHex(commitment));
+  assert.equal(created.nullifier.digest, normalizedHashHex(nullifier));
+  assert.equal(created.proof, proof.toString("base64"));
 });
 
 test("buildJoinKaigiTransaction normalizes binary fields", () => {
@@ -546,7 +718,7 @@ test("buildJoinKaigiTransaction normalizes binary fields", () => {
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         join: {
-          callId: "wonderland:weekly-sync",
+          callId: "wonderland.sora:weekly-sync",
           participant: AUTHORITY_ID_INPUT,
           commitment: { commitment, aliasTag: "alice" },
           nullifier: { digest: nullifier, issuedAtMs: 42 },
@@ -621,8 +793,7 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         proposal: {
-          namespace: "apps",
-          contractId: "ledger",
+          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           codeHash: "aa".repeat(32),
           abiHash: "bb".repeat(32),
           window: { lower: 1, upper: 2 },
@@ -632,7 +803,10 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
   );
   assert.equal(captures.length, 1);
   const propose = captures[0].instructions[0].ProposeDeployContract;
-  assert.equal(propose.namespace, "apps");
+  assert.equal(
+    propose.contract_address,
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  );
 });
 
 test("buildCastZkBallotTransaction encodes ballot", () => {
@@ -771,7 +945,7 @@ test("buildPersistCouncilForEpochTransaction wraps council", () => {
           epoch: 1,
           members: [AUTHORITY_ID_INPUT],
           candidatesCount: 5,
-          derivedBy: "fallback",
+          derivedBy: "Vrf",
         },
         privateKey: PRIVATE_KEY,
       }),
@@ -875,80 +1049,6 @@ test("buildRegisterSmartContractBytesTransaction encodes code payload", () => {
   assert.equal(parsed.RegisterSmartContractBytes.code, codeBytes.toString("base64"));
 });
 
-test("buildDeactivateContractInstanceTransaction wraps instruction with reason", () => {
-  const captures = [];
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x02]),
-    hash: Buffer.alloc(32, 0xdd),
-  };
-  withNativeBinding(
-    {
-      buildTransaction: (...args) => {
-        captures.push(args[2]);
-        return fakeResult;
-      },
-    },
-    () => {
-      buildDeactivateContractInstanceTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        namespace: "apps",
-        contractId: "ledger",
-        reason: "audit",
-        privateKey: PRIVATE_KEY,
-      });
-    },
-  );
-  const parsed = JSON.parse(captures[0][0]);
-  assert.equal(parsed.DeactivateContractInstance.reason, "audit");
-});
-
-test("buildActivateContractInstanceTransaction normalizes identifiers", () => {
-  const captures = [];
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x03]),
-    hash: Buffer.alloc(32, 0xdd),
-  };
-  withNativeBinding(
-    {
-      buildTransaction: (
-        chainId,
-        authority,
-        instructions,
-        metadataPayload,
-        creationTimeMs,
-        ttlMs,
-        nonce,
-        secret,
-      ) => {
-        captures.push({
-          chainId,
-          authority,
-          instructions,
-          metadataPayload,
-          creationTimeMs,
-          ttlMs,
-          nonce,
-          secret,
-        });
-        return fakeResult;
-      },
-    },
-    () => {
-      buildActivateContractInstanceTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        namespace: "apps",
-        contractId: "governance",
-        codeHash: Buffer.alloc(32, 0xee),
-        privateKey: PRIVATE_KEY,
-      });
-    },
-  );
-  const parsed = JSON.parse(captures[0].instructions[0]);
-  assert.equal(parsed.ActivateContractInstance.contract_id, "governance");
-});
-
 test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
   const captures = [];
   const fakeResult = {
@@ -989,28 +1089,28 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     verifyingKeyRef: "halo2/ipa:vk_transfer",
   };
   const register = captureInstructionObject(() =>
-    buildRegisterZkAssetTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      registration: {
-        assetDefinitionId: "rose#wonderland",
-        mode: "Hybrid",
-        transferVerifyingKey: "halo2/ipa:vk_transfer",
-      },
+      buildRegisterZkAssetTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        registration: {
+        assetDefinitionId: ASSET_DEFINITION_ID,
+          mode: "Hybrid",
+          transferVerifyingKey: "halo2/ipa:vk_transfer",
+        },
       privateKey: PRIVATE_KEY,
     }),
   );
   assert.ok(register.zk?.RegisterZkAsset);
 
   const policy = captureInstructionObject(() =>
-    buildScheduleConfidentialPolicyTransitionTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      transition: {
-        assetDefinitionId: "rose#wonderland",
-        newMode: "TransparentOnly",
-        effectiveHeight: 5,
-        transitionId: Buffer.alloc(32, 0xaa),
+      buildScheduleConfidentialPolicyTransitionTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        transition: {
+        assetDefinitionId: ASSET_DEFINITION_ID,
+          newMode: "TransparentOnly",
+          effectiveHeight: 5,
+          transitionId: Buffer.alloc(32, 0xaa),
       },
       privateKey: PRIVATE_KEY,
     }),
@@ -1018,27 +1118,27 @@ test("confidential transaction builders wrap expected instruction payloads", () 
   assert.ok(policy.zk?.ScheduleConfidentialPolicyTransition);
 
   const cancel = captureInstructionObject(() =>
-    buildCancelConfidentialPolicyTransitionTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      cancellation: {
-        assetDefinitionId: "rose#wonderland",
-        transitionId: Buffer.alloc(32, 0xbb),
-      },
+      buildCancelConfidentialPolicyTransitionTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        cancellation: {
+        assetDefinitionId: ASSET_DEFINITION_ID,
+          transitionId: Buffer.alloc(32, 0xbb),
+        },
       privateKey: PRIVATE_KEY,
     }),
   );
   assert.ok(cancel.zk?.CancelConfidentialPolicyTransition);
 
   const shield = captureInstructionObject(() =>
-    buildShieldTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      shield: {
-        assetDefinitionId: "rose#wonderland",
-        fromAccountId: AUTHORITY_ID_INPUT,
-        amount: "10",
-        noteCommitment: Buffer.alloc(32, 0x03),
+      buildShieldTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        shield: {
+        assetDefinitionId: ASSET_DEFINITION_ID,
+          fromAccountId: AUTHORITY_ID_INPUT,
+          amount: "10",
+          noteCommitment: Buffer.alloc(32, 0x03),
         encryptedPayload,
       },
       privateKey: PRIVATE_KEY,
@@ -1047,14 +1147,14 @@ test("confidential transaction builders wrap expected instruction payloads", () 
   assert.ok(shield.zk?.Shield);
 
   const transfer = captureInstructionObject(() =>
-    buildZkTransferTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      transfer: {
-        assetDefinitionId: "rose#wonderland",
-        inputs: [Buffer.alloc(32, 0x10)],
-        outputs: [Buffer.alloc(32, 0x20)],
-        proof,
+      buildZkTransferTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        transfer: {
+        assetDefinitionId: ASSET_DEFINITION_ID,
+          inputs: [Buffer.alloc(32, 0x10)],
+          outputs: [Buffer.alloc(32, 0x20)],
+          proof,
       },
       privateKey: PRIVATE_KEY,
     }),
@@ -1062,14 +1162,14 @@ test("confidential transaction builders wrap expected instruction payloads", () 
   assert.ok(transfer.zk?.ZkTransfer);
 
   const unshield = captureInstructionObject(() =>
-    buildUnshieldTransaction({
-      chainId: "test-chain",
-      authority: AUTHORITY_ID_INPUT,
-      unshield: {
-        assetDefinitionId: "rose#wonderland",
-        destinationAccountId: AUTHORITY_ID_INPUT,
-        publicAmount: 3,
-        inputs: [Buffer.alloc(32, 0x30)],
+      buildUnshieldTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        unshield: {
+        assetDefinitionId: ASSET_DEFINITION_ID,
+          destinationAccountId: AUTHORITY_ID_INPUT,
+          publicAmount: 3,
+          inputs: [Buffer.alloc(32, 0x30)],
         proof,
         rootHint: Buffer.alloc(32, 0x40),
       },

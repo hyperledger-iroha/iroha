@@ -38,7 +38,7 @@ Le parseur exige la ligne d'en-tete suivante (柔軟な選択):
 | `suffix_id` |おうい |接尾辞の識別子 (10 進数または `0x` 16 進数)。 |
 | `owner` |おうい | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` |おうい |エンティア `1..=255`。 |
-| `payment_asset_id` |おうい |和解行為 (`xor#sora` など)。 |
+| `payment_asset_id` |おうい |和解行為 (`61CtjvNd9T3THAR65GsMVHr82Bjc` など)。 |
 | `payment_gross` / `payment_net` |おうい | Entiers nonsignes 代表者 des 団結ネイティブ de l'actif。 |
 | `settlement_tx` |おうい | Valeur JSON は、トランザクションの支払いとハッシュのチェーンリッターの決定を行います。 |
 | `payment_payer` |おうい | AccountId は支払いの自動化に使用されます。 |
@@ -77,18 +77,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -114,7 +114,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -134,9 +134,9 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- `POST /v1/sns/registrations` のリクエストとプレミアのサポートを提供します
+- `POST /v1/sns/names` のリクエストとプレミアのサポートを提供します
   HTTP でエラーが発生しました。 NDJSON を登録するための応答を返します。
-- `--poll-status` 再質問 `/v1/sns/registrations/{selector}` チャク前
+- `--poll-status` 再質問 `/v1/sns/names/{namespace}/{literal}` チャク前
   soumission (jusqu'a `--poll-attempts`、デフォルト 5) 確認者キューを注ぐ
   登録が表示されます。フルニセ `--suffix-map` (`suffix_id` の JSON)
   vers des valeurs "接尾語") pour que l'outilderive les litteraux
@@ -227,7 +227,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -251,7 +251,7 @@ Auditeurs puissent se concentrer sur une seule execution CSV。
   CSV の配置に関連する解決策の決定を参照します。
   オブジェクトではないメタデータが検証に失敗する可能性があります。
 - **コントローラー:** セルセルは、関連する `--default-controllers` を参照します。フルニセズ
-  明示的なリスト (`i105...;i105...` など) は、完全に削除されたものです。
+  明示的なリスト (`<i105-account-id>;<i105-account-id>` など) は、完全に削除されたものです。
   俳優は所有者ではありません。
 
 Les echecs Sont signales avec des numeros de ligne contextuels (par example)

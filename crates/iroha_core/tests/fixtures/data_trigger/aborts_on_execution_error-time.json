@@ -1,1 +1,10 @@
-[]
+[
+  {
+    "TriggerCompleted": {
+      "trigger_id": "time-alice-bob-0",
+      "outcome": {
+        "Failure": "Validation failed"
+      }
+    }
+  }
+]

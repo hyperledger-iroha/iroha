@@ -9,7 +9,7 @@ description = "Python SDK for interacting with Hyperledger Iroha v2 nodes."
 readme = "README.md"
 authors = [{name = "Hyperledger Iroha Contributors"}]
 license = {text = "Apache-2.0"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
   "iroha-norito>=0.1.0",
   "requests>=2.31",
@@ -23,7 +23,6 @@ classifiers = [
   "Programming Language :: Python",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
@@ -33,7 +32,6 @@ classifiers = [
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
-  "typing-extensions>=4.9.0",
   "mypy>=1.8.0",
   "ruff>=0.1.9",
 ]
@@ -51,7 +49,7 @@ include = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -59,7 +57,7 @@ select = ["E", "F", "W", "B", "I"]
 ignore = ["E203", "E501"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 strict = false
 warn_unused_ignores = true
 show_error_codes = true

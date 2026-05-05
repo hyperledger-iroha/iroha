@@ -3,6 +3,10 @@ name = "enum_trait_bench"
 version.workspace = true
 edition = "2024"
 
+[features]
+default = []
+bench = []
+
 [dev-dependencies]
 criterion = { workspace = true }
 

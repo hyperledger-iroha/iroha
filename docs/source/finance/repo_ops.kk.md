@@ -83,10 +83,10 @@ Norito нұсқаулары, CLI/SDK көмекшілері және ISO 20022 
 [settlement.repo]
 default_haircut_bps = 1500
 margin_frequency_secs = 86400
-eligible_collateral = ["bond#wonderland", "note#wonderland"]
+eligible_collateral = ["4fEiy2n5VMFVfi6BzDJge519zAzg", "7dk8Pj8Bqo6XUqch4K2sF8MCM1zd"]
 
 [settlement.repo.collateral_substitution_matrix]
-"bond#wonderland" = ["note#wonderland", "bill#wonderland"]
+"4fEiy2n5VMFVfi6BzDJge519zAzg" = ["7dk8Pj8Bqo6XUqch4K2sF8MCM1zd", "6zK1LDcJ3FvkpfoZQ8kHUaW6sA7F"]
 ```
 
 Операциялық бақылау тізімі:
@@ -186,10 +186,10 @@ scripts/regen_repo_proof_fixture.sh
 [settlement.repo]
 default_haircut_bps = 1750
 margin_frequency_secs = 43200
-eligible_collateral = ["bond#wonderland", "note#wonderland"]
+eligible_collateral = ["4fEiy2n5VMFVfi6BzDJge519zAzg", "7dk8Pj8Bqo6XUqch4K2sF8MCM1zd"]
 
 [settlement.repo.collateral_substitution_matrix]
-"bond#wonderland" = ["note#wonderland", "bill#wonderland"]
+"4fEiy2n5VMFVfi6BzDJge519zAzg" = ["7dk8Pj8Bqo6XUqch4K2sF8MCM1zd", "6zK1LDcJ3FvkpfoZQ8kHUaW6sA7F"]
 ```
 
 **Өзгерістерді басқаруды тексеру тізімі**1. Ұсынылған TOML үзіндісін (алмастыру матрицасының дельталарын қоса) кезеңге қойыңыз, хэш
@@ -573,7 +573,7 @@ artifacts/finance/repo/<agreement-id>/
 ```bash
 python3 scripts/repo_evidence_manifest.py \
   --root artifacts/finance/repo/wonderland-2026q1 \
-  --agreement-id repo#wonderland \
+  --agreement-id 7mxD1tKRyv32je4kZwcWa9wa33bX \
   --output artifacts/finance/repo/wonderland-2026q1/manifest.json \
   --exclude 'scratch/*'
 ```
@@ -588,7 +588,7 @@ stdout, бұл жұмыс үстеліндегі шолулар кезінде �
 
 ```json
 {
-  "agreement_id": "repo#wonderland",
+  "agreement_id": "7mxD1tKRyv32je4kZwcWa9wa33bX",
   "generated_at": "2026-04-30T11:58:43Z",
   "root": "/var/tmp/repo/wonderland-2026q1",
   "file_count": 5,
@@ -803,8 +803,8 @@ GAR, референдум және бұрғылау артефактілерін
 
 1. **Суретті баланстар.** Қуат беретін `FindAssets` сұрауын пайдаланыңыз.
    `iroha ledger asset list` (`crates/iroha_cli/src/main_shared.rs`) немесе
-   `i105...` үшін XOR баланстарын экспорттауға арналған `iroha_python` көмекшісі,
-   `i105...` және шолуға қатысатын әрбір жұмыс үстелі тіркелгісі. Дүкен
+   `<i105-account-id>` үшін XOR баланстарын экспорттауға арналған `iroha_python` көмекшісі,
+   `<i105-account-id>` және шолуға қатысатын әрбір жұмыс үстелі тіркелгісі. Дүкен
    астында JSON
    `artifacts/finance/repo/<period>/treasury_assets.json` және гитті жазыңыз
    ілеспе `README.md` ішіндегі міндеттеме/құралдар тізбегі.

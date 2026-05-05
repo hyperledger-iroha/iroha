@@ -94,7 +94,7 @@ CLI инструменттары (`iroha app da rent-quote`) ҡабул итә, 
 
 ### генерациялаусы аренда лидерҙары планы пландары
 
-`iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora` йүгерергә
+`iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc` йүгерергә
 үҙгәртеп ҡороу өсөн һаҡланған аренда цитатаһы башҡарыла торған баш кейеме күсермәләр. Команда
 анализланған `ledger_projection`, Norito `Transfer` инструкцияларын сығара
 тип йыя база ҡуртымға ҡаҙнаға, маршруттар запас/провайдер

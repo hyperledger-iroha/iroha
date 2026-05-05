@@ -9,7 +9,7 @@ import java.util.Set;
 import java.util.zip.CRC32;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 
-/** QR stream framing helpers for offline payload transfer. */
+/** Fountain QR V1 framing helpers for Offline V2 payload transfer. */
 public final class OfflineQrStream {
 
   private static final byte[] MAGIC = {(byte) 0x49, (byte) 0x51};
@@ -52,9 +52,9 @@ public final class OfflineQrStream {
 
   public enum PayloadKind {
     UNSPECIFIED(0),
-    OFFLINE_TO_ONLINE_TRANSFER(1),
-    OFFLINE_SPEND_RECEIPT(2),
-    OFFLINE_ENVELOPE(3);
+    OFFLINE_RECEIVE_CHALLENGE_V2(1),
+    OFFLINE_PAYMENT_TOKEN_V2(2),
+    OFFLINE_RECEIPT_ACK_V2(3);
 
     private final int value;
 
@@ -104,7 +104,7 @@ public final class OfflineQrStream {
     private final int parityGroup;
 
     public Options() {
-      this(360, 0);
+      this(360, 3);
     }
 
     public Options(final int chunkSize, final int parityGroup) {
@@ -473,6 +473,9 @@ public final class OfflineQrStream {
         final Envelope decoded = Envelope.decode(frame.payload());
         if (!Arrays.equals(decoded.streamId(), frame.streamId())) {
           throw new IllegalArgumentException("Stream id mismatch");
+        }
+        if (envelope != null && Arrays.equals(envelope.streamId(), decoded.streamId())) {
+          return;
         }
         envelope = decoded;
         dataChunks = new byte[decoded.dataChunks()][];

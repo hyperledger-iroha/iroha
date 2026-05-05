@@ -9,6 +9,7 @@ use iroha::{
     client::{Client, QueryError},
     data_model::{prelude::*, query::builder::SingleQueryError},
 };
+use iroha_test_network::submit_register_domain_with_network_lease;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 
 const UNREGISTER_ATTEMPTS: usize = 30;
@@ -28,19 +29,17 @@ fn find_asset_total_quantity() -> Result<()> {
 
     let result: Result<()> = (|| {
         // Register new domain
-        let domain_id: DomainId = "looking_glass".parse()?;
-        let domain = Domain::new(domain_id);
-        test_client.submit_blocking(Register::domain(domain))?;
+        let domain_id: DomainId = DomainId::try_new("looking-glass", "universal")?;
+        submit_register_domain_with_network_lease(&network, &test_client, Domain::new(domain_id))?;
 
         let accounts: [AccountId; 5] = [
             ALICE_ID.clone(),
             gen_account_in("wonderland").0,
             gen_account_in("wonderland").0,
             gen_account_in("wonderland").0,
-            gen_account_in("looking_glass").0,
+            gen_account_in("looking-glass").0,
         ];
-        let wonderland_domain: DomainId = "wonderland".parse()?;
-        let looking_glass_domain: DomainId = "looking_glass".parse()?;
+        let wonderland_domain: DomainId = DomainId::try_new("wonderland", "universal")?;
         let quantity_definition =
             AssetDefinitionId::new(wonderland_domain.clone(), "quantity".parse()?);
         let fixed_definition = AssetDefinitionId::new(wonderland_domain.clone(), "fixed".parse()?);
@@ -50,14 +49,7 @@ fn find_asset_total_quantity() -> Result<()> {
             .iter()
             .enumerate()
             .skip(1) // Alice has already been registered in genesis
-            .map(|(index, account_id)| {
-                let domain = if index == accounts.len() - 1 {
-                    looking_glass_domain.clone()
-                } else {
-                    wonderland_domain.clone()
-                };
-                Register::account(Account::new(account_id.to_account_id(domain)))
-            })
+            .map(|(_index, account_id)| Register::account(Account::new(account_id.clone())))
             .collect::<Vec<_>>();
         test_client.submit_all_blocking(register_accounts)?;
 

@@ -36,6 +36,8 @@ mod model {
         AssetDefinition(AssetDefinitionEventFilter),
         /// Matches [`NftEvent`]s
         Nft(NftEventFilter),
+        /// Matches [`RwaEvent`]s
+        Rwa(RwaEventFilter),
         /// Matches [`TriggerEvent`]s
         Trigger(TriggerEventFilter),
         /// Matches [`RoleEvent`]s
@@ -58,8 +60,10 @@ mod model {
         Sorafs(SorafsGatewayEventFilter),
         /// Matches Space Directory manifest lifecycle events
         SpaceDirectory(SpaceDirectoryEventFilter),
+        /// Matches native asset escrow lifecycle events
+        Escrow(EscrowEventFilter),
         /// Matches offline settlement lifecycle events
-        Offline(OfflineTransferEventFilter),
+        Offline(OfflineNoteEventFilter),
         /// Matches oracle feed lifecycle events
         Oracle(OracleEventFilter),
         /// Matches viral incentive lifecycle events
@@ -159,6 +163,22 @@ mod model {
         pub(super) event_set: super::space_directory::SpaceDirectoryEventSet,
     }
 
+    /// Filter for native asset escrow lifecycle events.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct EscrowEventFilter {
+        /// If specified, matches only events for this escrow identifier.
+        pub(super) escrow_matcher: Option<crate::escrow::EscrowId>,
+        /// If specified, matches only events for escrows opened by this seller.
+        pub(super) seller_matcher: Option<crate::account::AccountId>,
+        /// If specified, matches only events for escrows accepted by this buyer.
+        pub(super) buyer_matcher: Option<crate::account::AccountId>,
+        /// If specified, matches only events whose carried record has this status.
+        pub(super) status_matcher: Option<crate::escrow::AssetEscrowStatus>,
+        /// Matches only events from this set.
+        pub(super) event_set: super::escrow::EscrowEventSet,
+    }
+
     #[cfg(feature = "governance")]
     /// An event filter for [`super::governance::GovernanceEvent`] values.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
@@ -208,6 +228,8 @@ mod model {
     pub struct AssetEventFilter {
         /// If specified matches only events originating from this asset
         pub(super) id_matcher: Option<super::AssetId>,
+        /// If specified matches only events for assets belonging to this asset definition
+        pub(super) asset_definition_matcher: Option<super::AssetDefinitionId>,
         /// Matches only event from this set
         pub(super) event_set: AssetEventSet,
     }
@@ -230,6 +252,16 @@ mod model {
         pub(super) id_matcher: Option<NftId>,
         /// Matches only event from this set
         pub(super) event_set: NftEventSet,
+    }
+
+    /// An event filter for [`RwaEvent`]s
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub struct RwaEventFilter {
+        /// If specified matches only events originating from this RWA lot.
+        pub(super) id_matcher: Option<RwaId>,
+        /// Matches only events from this set.
+        pub(super) event_set: RwaEventSet,
     }
 
     /// An event filter for [`TriggerEvent`]s
@@ -282,10 +314,12 @@ impl_json_via_norito_bytes!(
     AssetEventFilter,
     AssetDefinitionEventFilter,
     NftEventFilter,
+    RwaEventFilter,
     TriggerEventFilter,
     RoleEventFilter,
     ConfigurationEventFilter,
     ExecutorEventFilter,
+    EscrowEventFilter,
 );
 
 #[cfg(all(feature = "json", feature = "governance"))]
@@ -538,6 +572,54 @@ impl SpaceDirectoryEventFilter {
     }
 }
 
+impl EscrowEventFilter {
+    /// Creates a new [`EscrowEventFilter`] accepting all escrow events.
+    pub const fn new() -> Self {
+        Self {
+            escrow_matcher: None,
+            seller_matcher: None,
+            buyer_matcher: None,
+            status_matcher: None,
+            event_set: super::escrow::EscrowEventSet::all(),
+        }
+    }
+
+    /// Restricts matches to a specific escrow identifier.
+    #[must_use]
+    pub const fn for_escrow(mut self, escrow_id: crate::escrow::EscrowId) -> Self {
+        self.escrow_matcher = Some(escrow_id);
+        self
+    }
+
+    /// Restricts matches to escrows opened by the provided seller.
+    #[must_use]
+    pub fn for_seller(mut self, seller: crate::account::AccountId) -> Self {
+        self.seller_matcher = Some(seller);
+        self
+    }
+
+    /// Restricts matches to escrows accepted by the provided buyer.
+    #[must_use]
+    pub fn for_buyer(mut self, buyer: crate::account::AccountId) -> Self {
+        self.buyer_matcher = Some(buyer);
+        self
+    }
+
+    /// Restricts matches to records in the provided escrow status.
+    #[must_use]
+    pub const fn for_status(mut self, status: crate::escrow::AssetEscrowStatus) -> Self {
+        self.status_matcher = Some(status);
+        self
+    }
+
+    /// Restricts matches to the provided event-set.
+    #[must_use]
+    pub const fn for_events(mut self, event_set: super::escrow::EscrowEventSet) -> Self {
+        self.event_set = event_set;
+        self
+    }
+}
+
 impl Default for RuntimeUpgradeEventFilter {
     fn default() -> Self {
         Self::new()
@@ -580,24 +662,28 @@ impl Default for SpaceDirectoryEventFilter {
     }
 }
 
+impl Default for EscrowEventFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Default for OracleEventFilter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// An event filter for [`super::offline::OfflineTransferEvent`] values.
+/// An event filter for [`super::offline::OfflineNoteEvent`] values.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
 #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-pub struct OfflineTransferEventFilter {
-    /// Optional bundle identifier matcher.
-    pub(super) bundle_matcher: Option<iroha_crypto::Hash>,
-    /// Optional receiver matcher (applies only to settled events).
-    pub(super) receiver_matcher: Option<crate::account::AccountId>,
-    /// Optional platform policy matcher (applies only to settled events with platform snapshots).
-    pub(super) platform_policy_matcher: Option<crate::offline::AndroidIntegrityPolicy>,
+pub struct OfflineNoteEventFilter {
+    /// Optional note commitment matcher.
+    pub(super) note_matcher: Option<iroha_crypto::Hash>,
+    /// Optional account matcher.
+    pub(super) account_matcher: Option<crate::account::AccountId>,
     /// Matched event-set.
-    pub(super) event_set: super::offline::OfflineTransferEventSet,
+    pub(super) event_set: super::offline::OfflineNoteEventSet,
 }
 
 /// Filter for oracle feed aggregation events.
@@ -635,48 +721,40 @@ impl OracleEventFilter {
     }
 }
 
-impl OfflineTransferEventFilter {
-    /// Creates a new [`OfflineTransferEventFilter`] accepting all events.
+impl OfflineNoteEventFilter {
+    /// Creates a new [`OfflineNoteEventFilter`] accepting all events.
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            bundle_matcher: None,
-            receiver_matcher: None,
-            platform_policy_matcher: None,
-            event_set: super::offline::OfflineTransferEventSet::all(),
+            note_matcher: None,
+            account_matcher: None,
+            event_set: super::offline::OfflineNoteEventSet::all(),
         }
     }
 
-    /// Restricts matches to the provided bundle identifier.
+    /// Restricts matches to the provided note commitment.
     #[must_use]
-    pub fn for_bundle(mut self, bundle_id: iroha_crypto::Hash) -> Self {
-        self.bundle_matcher = Some(bundle_id);
+    pub fn for_note(mut self, note_commitment: iroha_crypto::Hash) -> Self {
+        self.note_matcher = Some(note_commitment);
         self
     }
 
-    /// Restricts matches to settled events targeting the given receiver.
+    /// Restricts matches to events tied to the given account.
     #[must_use]
-    pub fn for_receiver(mut self, receiver: crate::account::AccountId) -> Self {
-        self.receiver_matcher = Some(receiver);
-        self
-    }
-
-    /// Restricts matches to settled events capturing the provided platform token policy.
-    #[must_use]
-    pub fn for_platform_policy(mut self, policy: crate::offline::AndroidIntegrityPolicy) -> Self {
-        self.platform_policy_matcher = Some(policy);
+    pub fn for_account(mut self, account: crate::account::AccountId) -> Self {
+        self.account_matcher = Some(account);
         self
     }
 
     /// Restricts matches to the provided event-set.
     #[must_use]
-    pub const fn for_events(mut self, event_set: super::offline::OfflineTransferEventSet) -> Self {
+    pub const fn for_events(mut self, event_set: super::offline::OfflineNoteEventSet) -> Self {
         self.event_set = event_set;
         self
     }
 }
 
-impl Default for OfflineTransferEventFilter {
+impl Default for OfflineNoteEventFilter {
     fn default() -> Self {
         Self::new()
     }
@@ -964,55 +1042,83 @@ impl super::EventFilter for SpaceDirectoryEventFilter {
 }
 
 #[cfg(feature = "transparent_api")]
-impl super::EventFilter for OfflineTransferEventFilter {
-    type Event = super::offline::OfflineTransferEvent;
+impl super::EventFilter for EscrowEventFilter {
+    type Event = super::escrow::EscrowEvent;
 
     fn matches(&self, event: &Self::Event) -> bool {
         if !self.event_set.matches(event) {
             return false;
         }
 
-        if let Some(expected_bundle) = &self.bundle_matcher {
-            let actual_bundle = match event {
-                super::offline::OfflineTransferEvent::Settled(payload) => &payload.bundle_id,
-                super::offline::OfflineTransferEvent::Archived(payload) => &payload.bundle_id,
-                super::offline::OfflineTransferEvent::Pruned(payload) => &payload.bundle_id,
-                super::offline::OfflineTransferEvent::RevocationImported(_)
-                | super::offline::OfflineTransferEvent::AllowanceReclaimed(_) => return false,
+        let escrow = event.escrow();
+
+        if let Some(expected) = self.escrow_matcher
+            && escrow.id != expected
+        {
+            return false;
+        }
+
+        if let Some(expected) = self.seller_matcher.as_ref()
+            && &escrow.seller != expected
+        {
+            return false;
+        }
+
+        if let Some(expected) = self.buyer_matcher.as_ref()
+            && escrow.buyer.as_ref() != Some(expected)
+        {
+            return false;
+        }
+
+        if let Some(expected) = self.status_matcher
+            && escrow.status != expected
+        {
+            return false;
+        }
+
+        true
+    }
+}
+
+#[cfg(feature = "transparent_api")]
+impl super::EventFilter for OfflineNoteEventFilter {
+    type Event = super::offline::OfflineNoteEvent;
+
+    fn matches(&self, event: &Self::Event) -> bool {
+        if !self.event_set.matches(event) {
+            return false;
+        }
+
+        if let Some(expected_note) = &self.note_matcher {
+            let actual_note = match event {
+                super::offline::OfflineNoteEvent::NoteIssued(payload) => &payload.note_commitment,
+                super::offline::OfflineNoteEvent::NoteRedeemed(payload) => {
+                    &payload.source_note_commitment
+                }
+                super::offline::OfflineNoteEvent::AuditRecorded(_) => return false,
             };
-            if actual_bundle != expected_bundle {
+            if actual_note != expected_note {
                 return false;
             }
         }
 
-        if let Some(expected_receiver) = &self.receiver_matcher {
+        if let Some(expected_account) = &self.account_matcher {
             match event {
-                super::offline::OfflineTransferEvent::Settled(payload) => {
-                    if &payload.receiver != expected_receiver {
+                super::offline::OfflineNoteEvent::NoteIssued(payload) => {
+                    if &payload.account != expected_account {
                         return false;
                     }
                 }
-                super::offline::OfflineTransferEvent::Archived(_)
-                | super::offline::OfflineTransferEvent::Pruned(_)
-                | super::offline::OfflineTransferEvent::RevocationImported(_)
-                | super::offline::OfflineTransferEvent::AllowanceReclaimed(_) => return false,
-            }
-        }
-
-        if let Some(expected_policy) = self.platform_policy_matcher {
-            match event {
-                super::offline::OfflineTransferEvent::Settled(payload) => {
-                    let Some(snapshot) = payload.platform_snapshot.as_ref() else {
-                        return false;
-                    };
-                    if snapshot.policy() != Some(expected_policy) {
+                super::offline::OfflineNoteEvent::NoteRedeemed(payload) => {
+                    if &payload.recipient != expected_account {
                         return false;
                     }
                 }
-                super::offline::OfflineTransferEvent::Archived(_)
-                | super::offline::OfflineTransferEvent::Pruned(_)
-                | super::offline::OfflineTransferEvent::RevocationImported(_)
-                | super::offline::OfflineTransferEvent::AllowanceReclaimed(_) => return false,
+                super::offline::OfflineNoteEvent::AuditRecorded(payload) => {
+                    if &payload.account != expected_account {
+                        return false;
+                    }
+                }
             }
         }
 
@@ -1139,6 +1245,7 @@ impl AssetEventFilter {
     pub const fn new() -> Self {
         Self {
             id_matcher: None,
+            asset_definition_matcher: None,
             event_set: AssetEventSet::all(),
         }
     }
@@ -1147,6 +1254,13 @@ impl AssetEventFilter {
     #[must_use]
     pub fn for_asset(mut self, id_matcher: AssetId) -> Self {
         self.id_matcher = Some(id_matcher);
+        self
+    }
+
+    /// Modifies an [`AssetEventFilter`] to accept only [`AssetEvent`]s whose assets belong to `asset_definition_matcher`.
+    #[must_use]
+    pub fn for_asset_definition(mut self, asset_definition_matcher: AssetDefinitionId) -> Self {
+        self.asset_definition_matcher = Some(asset_definition_matcher);
         self
     }
 
@@ -1172,6 +1286,10 @@ impl super::EventFilter for AssetEventFilter {
         self.id_matcher
             .as_ref()
             .is_none_or(|id| id == event.origin())
+            && self
+                .asset_definition_matcher
+                .as_ref()
+                .is_none_or(|definition| definition == &event.origin().definition)
             && self.event_set.matches(event)
     }
 }
@@ -1251,6 +1369,48 @@ impl Default for NftEventFilter {
 #[cfg(feature = "transparent_api")]
 impl EventFilter for NftEventFilter {
     type Event = NftEvent;
+
+    fn matches(&self, event: &Self::Event) -> bool {
+        self.id_matcher
+            .as_ref()
+            .is_none_or(|id| id == event.origin())
+            && self.event_set.matches(event)
+    }
+}
+
+impl RwaEventFilter {
+    /// Creates a new [`RwaEventFilter`] accepting all [`RwaEvent`]s.
+    pub const fn new() -> Self {
+        Self {
+            id_matcher: None,
+            event_set: RwaEventSet::all(),
+        }
+    }
+
+    /// Modifies a [`RwaEventFilter`] to accept only events originating from `id_matcher`.
+    #[must_use]
+    pub fn for_rwa(mut self, id_matcher: RwaId) -> Self {
+        self.id_matcher = Some(id_matcher);
+        self
+    }
+
+    /// Modifies a [`RwaEventFilter`] to accept only [`RwaEvent`]s in `event_set`.
+    #[must_use]
+    pub const fn for_events(mut self, event_set: RwaEventSet) -> Self {
+        self.event_set = event_set;
+        self
+    }
+}
+
+impl Default for RwaEventFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "transparent_api")]
+impl EventFilter for RwaEventFilter {
+    type Event = RwaEvent;
 
     fn matches(&self, event: &Self::Event) -> bool {
         self.id_matcher
@@ -1480,8 +1640,15 @@ impl EventFilter for DataEventFilter {
                 DataEventFilter::AssetDefinition(filter),
                 DataEvent::Domain(DomainEvent::AssetDefinition(asset_definition_event)),
             ) => filter.matches(asset_definition_event),
+            (
+                DataEventFilter::AssetDefinition(filter),
+                DataEvent::AssetDefinitionStandalone(asset_definition_event),
+            ) => filter.matches(&asset_definition_event.event),
             (DataEventFilter::Nft(filter), DataEvent::Domain(DomainEvent::Nft(nft_event))) => {
                 filter.matches(nft_event)
+            }
+            (DataEventFilter::Rwa(filter), DataEvent::Domain(DomainEvent::Rwa(rwa_event))) => {
+                filter.matches(rwa_event)
             }
             (DataEventFilter::Trigger(filter), DataEvent::Trigger(trigger_event)) => {
                 filter.matches(trigger_event)
@@ -1519,6 +1686,9 @@ impl EventFilter for DataEventFilter {
             }
             (DataEventFilter::SpaceDirectory(filter), DataEvent::SpaceDirectory(space_event)) => {
                 filter.matches(space_event)
+            }
+            (DataEventFilter::Escrow(filter), DataEvent::Escrow(escrow_event)) => {
+                filter.matches(escrow_event)
             }
             (DataEventFilter::Offline(filter), DataEvent::Offline(offline_event)) => {
                 filter.matches(offline_event)
@@ -1591,10 +1761,10 @@ pub mod prelude {
     pub use super::{
         AccountEventFilter, AssetDefinitionEventFilter, AssetEventFilter, BridgeEventFilter,
         ConfidentialEventFilter, ConfigurationEventFilter, DataEventFilter, DomainEventFilter,
-        ExecutorEventFilter, NftEventFilter, OfflineTransferEventFilter, OracleEventFilter,
-        PeerEventFilter, ProofEventFilter, RoleEventFilter, SocialEventFilter,
-        SoradnsDirectoryEventFilter, SorafsGatewayEventFilter, TriggerEventFilter,
-        VerifyingKeyEventFilter,
+        EscrowEventFilter, ExecutorEventFilter, NftEventFilter, OfflineNoteEventFilter,
+        OracleEventFilter, PeerEventFilter, ProofEventFilter, RoleEventFilter, RwaEventFilter,
+        SocialEventFilter, SoradnsDirectoryEventFilter, SorafsGatewayEventFilter,
+        TriggerEventFilter, VerifyingKeyEventFilter,
     };
 }
 #[cfg(test)]
@@ -1609,11 +1779,11 @@ mod tests {
     #[test]
     #[cfg(feature = "transparent_api")]
     fn entity_scope() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = AccountId::new(KeyPair::random().into_parts().0);
         let definition_id: crate::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let asset_id = AssetId::new(definition_id, account_id.clone());
@@ -1625,7 +1795,7 @@ mod tests {
             metadata: Metadata::default(),
             owned_by: domain_owner_id,
         };
-        let account = Account::new(account_id.to_account_id(domain_id.clone())).into_account();
+        let account = Account::new(account_id.clone()).into_account();
         let asset = Asset::new(asset_id.clone(), 0_u32);
 
         // Create three events with three levels of nesting
@@ -1664,6 +1834,159 @@ mod tests {
     }
 
     #[test]
+    fn asset_filter_matches_by_asset_definition_only() {
+        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let matching_definition = crate::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let other_definition = crate::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "tulip".parse().unwrap(),
+        );
+        let matching_asset = AssetId::new(matching_definition.clone(), account_id.clone());
+        let other_asset = AssetId::new(other_definition, account_id);
+        let matching_event = AssetEvent::Added(AssetChanged {
+            asset: matching_asset,
+            amount: Numeric::new(10, 0),
+        });
+        let other_event = AssetEvent::Added(AssetChanged {
+            asset: other_asset,
+            amount: Numeric::new(10, 0),
+        });
+
+        let filter = AssetEventFilter::new()
+            .for_events(AssetEventSet::Added)
+            .for_asset_definition(matching_definition);
+        assert!(filter.matches(&matching_event));
+        assert!(!filter.matches(&other_event));
+    }
+
+    #[test]
+    fn asset_filter_matches_by_asset_id_only() {
+        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let definition = crate::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let matching_asset = AssetId::new(definition.clone(), account_id.clone());
+        let other_asset =
+            AssetId::new(definition, AccountId::new(KeyPair::random().into_parts().0));
+        let matching_event = AssetEvent::Added(AssetChanged {
+            asset: matching_asset.clone(),
+            amount: Numeric::new(5, 0),
+        });
+        let other_event = AssetEvent::Added(AssetChanged {
+            asset: other_asset,
+            amount: Numeric::new(5, 0),
+        });
+
+        let filter = AssetEventFilter::new()
+            .for_events(AssetEventSet::Added)
+            .for_asset(matching_asset);
+        assert!(filter.matches(&matching_event));
+        assert!(!filter.matches(&other_event));
+    }
+
+    #[test]
+    fn asset_filter_matches_with_asset_and_asset_definition_matchers() {
+        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let matching_definition = crate::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let other_definition = crate::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "tulip".parse().unwrap(),
+        );
+        let matching_asset = AssetId::new(matching_definition.clone(), account_id.clone());
+        let mismatched_asset = AssetId::new(other_definition, account_id);
+        let matching_event = AssetEvent::Added(AssetChanged {
+            asset: matching_asset.clone(),
+            amount: Numeric::new(3, 0),
+        });
+        let mismatched_event = AssetEvent::Added(AssetChanged {
+            asset: mismatched_asset,
+            amount: Numeric::new(3, 0),
+        });
+
+        let filter = AssetEventFilter::new()
+            .for_events(AssetEventSet::Added)
+            .for_asset(matching_asset)
+            .for_asset_definition(matching_definition);
+        assert!(filter.matches(&matching_event));
+        assert!(!filter.matches(&mismatched_event));
+    }
+
+    #[test]
+    fn asset_filter_behavior_is_unchanged_without_asset_definition_matcher() {
+        let account_id = AccountId::new(KeyPair::random().into_parts().0);
+        let definition = crate::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
+        let asset_id = AssetId::new(definition.clone(), account_id);
+        let added = AssetEvent::Added(AssetChanged {
+            asset: asset_id,
+            amount: Numeric::new(7, 0),
+        });
+        let created = AssetEvent::Created(Asset::new(
+            AssetId::new(definition, AccountId::new(KeyPair::random().into_parts().0)),
+            0_u32,
+        ));
+
+        let filter = AssetEventFilter::new().for_events(AssetEventSet::Added);
+        assert!(filter.matches(&added));
+        assert!(!filter.matches(&created));
+    }
+
+    #[test]
+    fn escrow_filter_matches_by_scope_status_and_event_kind() {
+        let seller = AccountId::new(KeyPair::random().into_parts().0);
+        let buyer = AccountId::new(KeyPair::random().into_parts().0);
+        let asset_definition = crate::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
+        let escrow_id = crate::escrow::EscrowId::new(Hash::new("escrow-filter"));
+        let record = crate::escrow::AssetEscrowRecord {
+            id: escrow_id,
+            seller: seller.clone(),
+            buyer: Some(buyer.clone()),
+            asset_definition,
+            amount: Numeric::new(7, 0),
+            custody: AccountId::new(KeyPair::random().into_parts().0),
+            status: crate::escrow::AssetEscrowStatus::PaymentSent,
+            evidence_hashes: vec![Hash::new("paid")],
+            created_at_ms: 1,
+            accepted_at_ms: Some(2),
+            payment_sent_at_ms: Some(3),
+            disputed_at_ms: None,
+            closed_at_ms: None,
+            resolution: None,
+        };
+        let event = DataEvent::Escrow(crate::events::data::escrow::EscrowEvent::PaymentSent(
+            record,
+        ));
+
+        let filter = DataEventFilter::Escrow(
+            EscrowEventFilter::new()
+                .for_escrow(escrow_id)
+                .for_seller(seller)
+                .for_buyer(buyer)
+                .for_status(crate::escrow::AssetEscrowStatus::PaymentSent)
+                .for_events(crate::events::data::escrow::EscrowEventSet::PaymentSent),
+        );
+        assert!(filter.matches(&event));
+
+        let wrong_kind = DataEventFilter::Escrow(
+            EscrowEventFilter::new()
+                .for_events(crate::events::data::escrow::EscrowEventSet::Released),
+        );
+        assert!(!wrong_kind.matches(&event));
+    }
+
+    #[test]
     #[cfg(feature = "transparent_api")]
     fn verifying_key_filter_matches_by_id() {
         use crate::{
@@ -1695,82 +2018,6 @@ mod tests {
             VerifyingKeyEventFilter::new().for_verifying_key(other_id),
         );
         assert!(!bad_filter.matches(&ev));
-    }
-
-    #[test]
-    #[cfg(feature = "transparent_api")]
-    fn offline_filter_matches_platform_policy() {
-        use crate::{
-            account::AccountId,
-            asset::AssetDefinitionId,
-            events::data::offline::{
-                OfflineTransferArchived, OfflineTransferEvent, OfflineTransferSettled,
-            },
-            offline::{AndroidIntegrityPolicy, OfflinePlatformTokenSnapshot},
-        };
-
-        let controller =
-            AccountId::parse_encoded("6cmzPVPX5jDQFNfiz6KgmVfm1fhoAqjPhoPFn4nx9mBWaFMyUCwq4cw")
-                .map(crate::account::ParsedAccountId::into_account_id)
-                .unwrap();
-        let receiver = AccountId::new(
-            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
-                .parse()
-                .expect("public key"),
-        );
-        let deposit_account = AccountId::new(
-            "ed0120ED77765E503B45FF9C059A1C19BF1DDE82C60432B7C2D01F7FCD75F5F9F3C07C"
-                .parse()
-                .expect("public key"),
-        );
-        let asset_definition =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "xor".parse().unwrap());
-        let platform_snapshot = OfflinePlatformTokenSnapshot {
-            policy: AndroidIntegrityPolicy::PlayIntegrity.as_str().to_string(),
-            attestation_jws_b64: "token".into(),
-        };
-        let settled = OfflineTransferEvent::Settled(OfflineTransferSettled {
-            bundle_id: Hash::new([1; 32]),
-            controller: controller.clone(),
-            receiver: receiver.clone(),
-            deposit_account: deposit_account.clone(),
-            asset_definition,
-            amount: Numeric::new(100, 0),
-            receipt_count: 1,
-            recorded_at_ms: 1_700_000_000,
-            platform_snapshot: Some(platform_snapshot),
-        });
-        let filter = OfflineTransferEventFilter::new()
-            .for_platform_policy(AndroidIntegrityPolicy::PlayIntegrity);
-        assert!(filter.matches(&settled));
-
-        let mismatch_filter = OfflineTransferEventFilter::new()
-            .for_platform_policy(AndroidIntegrityPolicy::HmsSafetyDetect);
-        assert!(!mismatch_filter.matches(&settled));
-
-        let missing_snapshot = OfflineTransferEvent::Settled(OfflineTransferSettled {
-            bundle_id: Hash::new([2; 32]),
-            controller,
-            receiver,
-            deposit_account: deposit_account.clone(),
-            asset_definition: AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
-                "usd".parse().unwrap(),
-            ),
-            amount: Numeric::new(25, 0),
-            receipt_count: 2,
-            recorded_at_ms: 1_700_000_100,
-            platform_snapshot: None,
-        });
-        assert!(!filter.matches(&missing_snapshot));
-
-        let archived = OfflineTransferEvent::Archived(OfflineTransferArchived {
-            bundle_id: Hash::new([1; 32]),
-            recorded_at_height: 10,
-            archived_at_height: 20,
-            archived_at_ms: 1_700_100_000,
-        });
-        assert!(!filter.matches(&archived));
     }
 
     #[test]
@@ -1838,8 +2085,8 @@ mod tests {
     #[test]
     #[cfg(feature = "transparent_api")]
     fn nft_filter_matches_nested_events() {
-        let domain_id: DomainId = "genesis".parse().unwrap();
-        let domain_label = domain_id.name().as_ref();
+        let domain_id: DomainId = DomainId::try_new("genesis", "universal").unwrap();
+        let domain_label = domain_id.to_string();
         let nft_id: NftId = format!("dragon${domain_label}").parse().unwrap();
         let other_nft_id: NftId = format!("phoenix${domain_label}").parse().unwrap();
 
@@ -1855,6 +2102,24 @@ mod tests {
         let domain_filter =
             DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id.clone()));
         assert!(domain_filter.matches(&nft_event));
+    }
+
+    #[test]
+    fn asset_definition_filter_matches_standalone_opaque_event() {
+        let domain_id: DomainId = DomainId::try_new("reward", "universal").unwrap();
+        let scoped_definition =
+            AssetDefinitionId::new(domain_id, "fee".parse().expect("asset name"));
+        let opaque_definition: AssetDefinitionId = scoped_definition
+            .to_string()
+            .parse()
+            .expect("opaque canonical id");
+        let event = DataEvent::from(AssetDefinitionEvent::Deleted(opaque_definition.clone()));
+
+        let filter = DataEventFilter::AssetDefinition(
+            AssetDefinitionEventFilter::new().for_asset_definition(opaque_definition),
+        );
+        assert!(filter.matches(&event));
+        assert!(matches!(event, DataEvent::AssetDefinitionStandalone(_)));
     }
 
     #[test]

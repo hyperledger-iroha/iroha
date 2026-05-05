@@ -1,0 +1,39 @@
+# Example mixed-host acceptance inventory for:
+# - one unprivileged PortableVm validator
+# - one Linux/KVM Firecracker validator
+# - one proxy-only validator
+#
+# Each host runs the same repo checkout and receives a repo-local command.
+
+[portable_host]
+ssh_target = "validator@portable-host.example"
+repo_path = "/srv/iroha"
+command = "cargo xtask soracloud-inrou-smoke portable"
+
+[portable_host.env]
+IROHA_INROU_PORTABLE_KERNEL_IMAGE = "/var/lib/inrou/vmlinux"
+IROHA_INROU_PORTABLE_ROOTFS_IMAGE = "/var/lib/inrou/debian-slim.ext4"
+IROHA_INROU_PORTABLE_INITRD_IMAGE = "/var/lib/inrou/initrd.img"
+
+[firecracker_host]
+ssh_target = "validator@linux-kvm-host.example"
+repo_path = "/srv/iroha"
+command = "sudo cargo xtask soracloud-inrou-smoke firecracker"
+
+[firecracker_host.env]
+IROHA_INROU_LINUX_KVM_KERNEL_IMAGE = "/var/lib/inrou/vmlinux"
+IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE = "/var/lib/inrou/debian-slim.ext4"
+IROHA_INROU_LINUX_KVM_INITRD_IMAGE = "/var/lib/inrou/initrd.img"
+
+[proxy_only_host]
+ssh_target = "validator@proxy-only-host.example"
+repo_path = "/srv/iroha"
+command = "cargo test -p irohad --features embedded-soracloud-runtime --bin irohad proxy_only_inrou_host -- --nocapture"
+
+[proxy_only_host.env]
+IROHA_INROU_PROXY_ONLY = "true"
+
+[status_gate]
+ssh_target = "validator@portable-host.example"
+repo_path = "/srv/iroha"
+command = "curl -fsS http://127.0.0.1:8080/status"

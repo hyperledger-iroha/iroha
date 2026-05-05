@@ -55,11 +55,14 @@ fn ensure_connect_layout(flags: u8) -> Result<(), Error> {
     if flags == CONNECT_LAYOUT_FLAGS {
         Ok(())
     } else {
-        Err(Error::UnsupportedFeature("connect layout flags"))
+        Err(Error::Message(format!(
+            "connect layout flags mismatch: expected 0x{CONNECT_LAYOUT_FLAGS:02x}, got 0x{flags:02x}"
+        )))
     }
 }
 
 fn encode_field<T: Encode>(value: &T) -> Result<Vec<u8>, Error> {
+    let _flags = DecodeFlagsGuard::enter(CONNECT_LAYOUT_FLAGS);
     let (payload, flags) = norito::codec::encode_with_header_flags(value);
     ensure_connect_layout(flags)?;
     Ok(payload)
@@ -193,7 +196,7 @@ fn encode_frame_kind_payload(kind: &FrameKind) -> Result<Vec<u8>, Error> {
             Ok(out)
         }
         FrameKind::Ciphertext(ct) => {
-            let cipher = encode_field(ct)?;
+            let cipher = encode_connect_ciphertext_payload(ct)?;
             let mut out = Vec::with_capacity(4 + 8 + cipher.len());
             out.extend(&1u32.to_le_bytes());
             out.extend(&(cipher.len() as u64).to_le_bytes());
@@ -203,18 +206,41 @@ fn encode_frame_kind_payload(kind: &FrameKind) -> Result<Vec<u8>, Error> {
     }
 }
 
+fn encode_raw_bytes_field(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    let len = u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?;
+    let _flags = DecodeFlagsGuard::enter(CONNECT_LAYOUT_FLAGS);
+    let mut out = Vec::with_capacity(norito::core::len_prefix_len(bytes.len()) + bytes.len());
+    norito::core::write_len_to_vec(&mut out, len);
+    out.extend_from_slice(bytes);
+    Ok(out)
+}
+
+fn encode_connect_ciphertext_payload(ciphertext: &ConnectCiphertextV1) -> Result<Vec<u8>, Error> {
+    let mut body = Vec::new();
+    let dir = encode_field(&ciphertext.dir)
+        .map_err(|err| Error::Message(format!("ciphertext.dir: {err}")))?;
+    body.extend(&(dir.len() as u64).to_le_bytes());
+    body.extend(dir);
+    let aead = encode_raw_bytes_field(&ciphertext.aead)
+        .map_err(|err| Error::Message(format!("ciphertext.aead: {err}")))?;
+    body.extend(&(aead.len() as u64).to_le_bytes());
+    body.extend(aead);
+    Ok(body)
+}
+
 fn encode_connect_frame_payload(frame: &ConnectFrameV1) -> Result<Vec<u8>, Error> {
     let mut payload = Vec::new();
-    let sid = encode_field(&frame.sid)?;
+    let sid = encode_field(&frame.sid).map_err(|err| Error::Message(format!("sid: {err}")))?;
     payload.extend(&(sid.len() as u64).to_le_bytes());
     payload.extend(sid);
-    let dir = encode_field(&frame.dir)?;
+    let dir = encode_field(&frame.dir).map_err(|err| Error::Message(format!("dir: {err}")))?;
     payload.extend(&(dir.len() as u64).to_le_bytes());
     payload.extend(dir);
-    let seq = encode_field(&frame.seq)?;
+    let seq = encode_field(&frame.seq).map_err(|err| Error::Message(format!("seq: {err}")))?;
     payload.extend(&(seq.len() as u64).to_le_bytes());
     payload.extend(seq);
-    let kind = encode_frame_kind_payload(&frame.kind)?;
+    let kind = encode_frame_kind_payload(&frame.kind)
+        .map_err(|err| Error::Message(format!("kind: {err}")))?;
     payload.extend(&(kind.len() as u64).to_le_bytes());
     payload.extend(kind);
     Ok(payload)
@@ -269,6 +295,109 @@ pub fn decode_connect_frame_framed(bytes: &[u8]) -> Result<ConnectFrameV1, Error
     let payload = view.as_bytes();
     let _flags = DecodeFlagsGuard::enter_with_hint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS);
     decode_connect_frame_payload(payload)
+}
+
+/// Encode an encrypted Connect envelope with the canonical v1 Norito header.
+///
+/// # Errors
+/// Returns [`Error`] if serialization fails or produces non-Connect layout flags.
+pub fn encode_connect_envelope_framed(envelope: &EnvelopeV1) -> Result<Vec<u8>, Error> {
+    disable_packed_struct_layout_for_connect();
+    let _flags = DecodeFlagsGuard::enter(CONNECT_LAYOUT_FLAGS);
+    let (payload, flags) = norito::codec::encode_with_header_flags(envelope);
+    ensure_connect_layout(flags)?;
+    norito::core::frame_bare_with_header_flags::<EnvelopeV1>(&payload, CONNECT_LAYOUT_FLAGS)
+}
+
+/// Decode an encrypted Connect envelope with the canonical v1 Norito header.
+///
+/// # Errors
+/// Returns [`Error`] if the header is missing, advertises non-Connect layout
+/// flags, or the payload does not decode as [`EnvelopeV1`].
+pub fn decode_connect_envelope_framed(bytes: &[u8]) -> Result<EnvelopeV1, Error> {
+    disable_packed_struct_layout_for_connect();
+    let header_flags = *bytes.get(Header::SIZE - 1).ok_or(Error::LengthMismatch)?;
+    ensure_connect_layout(header_flags)?;
+    let view = norito::core::from_bytes_view(bytes)?;
+    let _flags = DecodeFlagsGuard::enter_with_hint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS);
+    view.decode::<EnvelopeV1>()
+}
+
+/// Authenticated P2P relay envelope for Connect frames.
+///
+/// The inner frame remains the canonical Connect frame; `ttl` bounds P2P
+/// rebroadcast, and `mac` authenticates `frame` plus `ttl` with the session
+/// relay key before Torii applies dedupe or sequence checks.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(decode_from_slice)]
+#[allow(clippy::size_of_ref)]
+pub struct ConnectRelayEnvelopeV1 {
+    /// Connect frame being relayed.
+    pub frame: ConnectFrameV1,
+    /// Remaining relay hops.
+    pub ttl: u8,
+    /// HMAC-SHA256 tag over the canonical relay transcript.
+    pub mac: [u8; 32],
+}
+
+/// Session metadata gossiped between Torii peers for Connect rendezvous.
+///
+/// The claim intentionally carries token authentication hashes, not raw role
+/// or management tokens. The relay MAC key is shared with authenticated Iroha
+/// P2P peers so they can verify and forward relay envelopes for this session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(decode_from_slice)]
+#[allow(clippy::size_of_ref)]
+pub struct ConnectSessionClaimV1 {
+    /// Connect session identifier.
+    pub sid: [u8; 32],
+    /// Hash authorizing the application role's one-time token.
+    pub token_app_hash: [u8; 32],
+    /// Hash authorizing the wallet role's one-time token.
+    pub token_wallet_hash: [u8; 32],
+    /// Hash authorizing the stable management token.
+    pub token_management_hash: [u8; 32],
+    /// Relay MAC key used to authenticate P2P relay envelopes.
+    pub relay_mac_key: [u8; 32],
+    /// Wall-clock expiry timestamp in Unix milliseconds.
+    pub expires_at_ms: u64,
+}
+
+/// Notification that a one-time Connect role token was consumed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(decode_from_slice)]
+#[allow(clippy::size_of_ref)]
+pub struct ConnectSessionRoleConsumedV1 {
+    /// Connect session identifier.
+    pub sid: [u8; 32],
+    /// Role whose one-time token was consumed.
+    pub role: Role,
+}
+
+/// Notification that a Connect session was terminated on a Torii peer.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(decode_from_slice)]
+#[allow(clippy::size_of_ref)]
+pub struct ConnectSessionTerminatedV1 {
+    /// Connect session identifier.
+    pub sid: [u8; 32],
+    /// Stable machine-readable termination reason.
+    pub reason: String,
+}
+
+/// Versioned Connect control-plane message carried over Iroha P2P.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(decode_from_slice)]
+#[allow(clippy::size_of_ref, clippy::large_enum_variant)]
+pub enum ConnectP2pMessageV1 {
+    /// Authenticated frame relay envelope.
+    RelayEnvelope(ConnectRelayEnvelopeV1),
+    /// Session claim enabling multi-Torii rendezvous.
+    SessionClaim(ConnectSessionClaimV1),
+    /// Consumed one-time role token notification.
+    RoleConsumed(ConnectSessionRoleConsumedV1),
+    /// Session termination notification.
+    SessionTerminated(ConnectSessionTerminatedV1),
 }
 
 #[cfg(test)]
@@ -339,6 +468,7 @@ fn decode_field_with_len<T: Decode + Encode>(
     label: &'static str,
 ) -> Result<T, Error> {
     let slice = read_slice(body, *offset, len)?;
+    let _flags = DecodeFlagsGuard::enter_with_hint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS);
     let (value, used) = norito::core::decode_field_canonical::<T>(slice)
         .map_err(|err| Error::Message(format!("{label} decode failed: {err}")))?;
     if used != len {
@@ -358,11 +488,6 @@ fn decode_connect_control_payload(bytes: &[u8]) -> Result<(ConnectControlV1, usi
     let tag = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
     let payload_len = usize::try_from(u64::from_le_bytes(bytes[4..12].try_into().unwrap()))
         .expect("connect payload length fits in usize");
-    #[cfg(test)]
-    eprintln!(
-        "decode_connect_control_payload tag={tag} payload_len={payload_len} total_bytes={}",
-        bytes.len()
-    );
     let body_start = 12usize;
     let body_end = body_start
         .checked_add(payload_len)
@@ -407,11 +532,6 @@ fn decode_connect_control_payload(bytes: &[u8]) -> Result<(ConnectControlV1, usi
         }
         1 => {
             let wallet_pk_len = read_len(body, &mut offset)?;
-            #[cfg(test)]
-            eprintln!(
-                "approve decode wallet_pk_len={wallet_pk_len} body_len={}",
-                body.len()
-            );
             let wallet_pk =
                 decode_field_with_len::<[u8; 32]>(body, &mut offset, wallet_pk_len, "wallet_pk")?;
             let account_id_len = read_len(body, &mut offset)?;
@@ -499,10 +619,6 @@ fn decode_connect_control_payload(bytes: &[u8]) -> Result<(ConnectControlV1, usi
         }
     };
     if offset != payload_len {
-        #[cfg(test)]
-        eprintln!(
-            "ConnectControlV1 decode mismatch: tag={tag} expected={payload_len} used={offset}"
-        );
         return Err(Error::Message(format!(
             "ConnectControlV1 length mismatch: expected {payload_len} used {offset}"
         )));
@@ -544,9 +660,7 @@ fn decode_frame_kind_payload(bytes: &[u8]) -> Result<(FrameKind, usize), Error> 
         if body_end > bytes.len() {
             return Err(Error::LengthMismatch);
         }
-        let (cipher, used) = norito::core::decode_field_canonical::<ConnectCiphertextV1>(
-            &bytes[body_start..body_end],
-        )?;
+        let (cipher, used) = decode_connect_ciphertext_payload(&bytes[body_start..body_end])?;
         if used != len {
             return Err(Error::Message(format!(
                 "FrameKind::Ciphertext length mismatch: expected {len} used {used}"
@@ -556,6 +670,36 @@ fn decode_frame_kind_payload(bytes: &[u8]) -> Result<(FrameKind, usize), Error> 
     }
     let tag_u8 = u8::try_from(tag).unwrap_or(u8::MAX);
     Err(Error::invalid_tag("FrameKind", tag_u8))
+}
+
+fn decode_raw_bytes_field(bytes: &[u8]) -> Result<Vec<u8>, Error> {
+    let _flags = DecodeFlagsGuard::enter_with_hint(CONNECT_LAYOUT_FLAGS, CONNECT_LAYOUT_FLAGS);
+    let (len, used) = norito::core::read_len_from_slice(bytes)?;
+    let end = used.checked_add(len).ok_or(Error::LengthMismatch)?;
+    if end != bytes.len() {
+        return Err(Error::Message(format!(
+            "raw bytes length mismatch: expected {end} available={}",
+            bytes.len()
+        )));
+    }
+    Ok(bytes[used..end].to_vec())
+}
+
+fn decode_connect_ciphertext_payload(bytes: &[u8]) -> Result<(ConnectCiphertextV1, usize), Error> {
+    let mut offset = 0usize;
+    let dir_len = read_len(bytes, &mut offset)?;
+    let dir = decode_field_with_len::<Dir>(bytes, &mut offset, dir_len, "ciphertext.dir")?;
+    let aead_len = read_len(bytes, &mut offset)?;
+    let aead_slice = read_slice(bytes, offset, aead_len)?;
+    let aead = decode_raw_bytes_field(aead_slice)?;
+    offset = offset.checked_add(aead_len).ok_or(Error::LengthMismatch)?;
+    if offset != bytes.len() {
+        return Err(Error::Message(format!(
+            "ConnectCiphertextV1 length mismatch: used={offset} available={}",
+            bytes.len()
+        )));
+    }
+    Ok((ConnectCiphertextV1 { dir, aead }, offset))
 }
 
 fn decode_connect_frame_payload(bytes: &[u8]) -> Result<ConnectFrameV1, Error> {
@@ -871,6 +1015,10 @@ pub struct SignInProofV1 {
 pub type WalletSignature = WalletSignatureV1;
 /// Top-level Connect frame routed over transport channels.
 pub type ConnectFrame = ConnectFrameV1;
+/// Top-level authenticated Connect P2P relay envelope.
+pub type ConnectRelayEnvelope = ConnectRelayEnvelopeV1;
+/// Top-level Connect P2P control-plane message.
+pub type ConnectP2pMessage = ConnectP2pMessageV1;
 /// Plaintext control channel payload used during session lifecycle.
 pub type ConnectControl = ConnectControlV1;
 /// Ciphertext envelope metadata carried in a frame.
@@ -958,7 +1106,7 @@ mod tests {
     }
 
     fn sample_approve_control() -> ConnectControlV1 {
-        let domain: DomainId = "wonderland".parse().expect("domain parses");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain parses");
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -1006,16 +1154,10 @@ mod tests {
     }
 
     #[test]
-    fn frame_kind_roundtrip_debug_payload_decode() {
+    fn frame_kind_roundtrip_payload_decode() {
         norito::disable_packed_struct_layout();
         let fk = FrameKind::Control(ConnectControlV1::Ping { nonce: 7 });
         let payload = encode_frame_kind_payload(&fk).expect("encode");
-        eprintln!(
-            "[debug] payload_len={} tag_le={} head={:02x?}",
-            payload.len(),
-            u32::from_le_bytes(payload[0..4].try_into().unwrap()),
-            &payload[..payload.len().min(32)]
-        );
         let framed =
             norito::core::frame_bare_with_header_flags::<FrameKind>(&payload, CONNECT_LAYOUT_FLAGS)
                 .expect("frame payload");
@@ -1029,10 +1171,6 @@ mod tests {
     fn connect_control_roundtrip_header() {
         norito::disable_packed_struct_layout();
         let ctrl = sample_approve_control();
-        if let ConnectControlV1::Approve { wallet_pk, .. } = &ctrl {
-            let enc = encode_field(wallet_pk).expect("encode wallet_pk");
-            eprintln!("wallet_pk encoded len={}", enc.len());
-        }
         let payload = encode_connect_control_payload(&ctrl).expect("encode control");
         let framed = norito::core::frame_bare_with_header_flags::<ConnectControlV1>(
             &payload,
@@ -1040,11 +1178,9 @@ mod tests {
         )
         .expect("frame control");
         let view = norito::core::from_bytes_view(&framed).expect("view");
-        let decoded = decode_connect_control_payload(view.as_bytes());
-        if let Err(err) = &decoded {
-            eprintln!("connect_control_roundtrip_header decode error: {err}");
-        }
-        let decoded = decoded.expect("decode control").0;
+        let decoded = decode_connect_control_payload(view.as_bytes())
+            .expect("decode control")
+            .0;
         assert_eq!(decoded, ctrl);
     }
 
@@ -1057,13 +1193,7 @@ mod tests {
             .expect("view")
             .as_bytes()
             .to_vec();
-        eprintln!(
-            "array payload len={} head={:02x?}",
-            payload.len(),
-            &payload[..payload.len().min(64)]
-        );
         let decoded_field = norito::core::decode_field_canonical::<[u8; 32]>(&payload);
-        eprintln!("array decode_field_canonical: {decoded_field:?}");
         let (decoded_field, used) = decoded_field.expect("field decode");
         assert_eq!(used, payload.len());
         assert_eq!(decoded_field, arr);
@@ -1089,10 +1219,24 @@ mod tests {
                 bytes: vec![1, 2, 3, 4],
             },
         };
-        let buf = norito::to_bytes(&env).expect("encode");
-        let view = norito::core::from_bytes_view(&buf).expect("decode view");
-        let back: EnvelopeV1 = view.decode().expect("decode framed");
+        let buf = encode_connect_envelope_framed(&env).expect("encode");
+        assert_eq!(buf[Header::SIZE - 1], CONNECT_LAYOUT_FLAGS);
+        let back = decode_connect_envelope_framed(&buf).expect("decode framed");
         assert_eq!(env, back);
+    }
+
+    #[test]
+    fn ciphertext_envelope_rejects_non_connect_flags() {
+        let env = EnvelopeV1 {
+            seq: 42,
+            payload: ConnectPayloadV1::SignRequestRaw {
+                domain_tag: "iroha-connect|test".into(),
+                bytes: vec![1, 2, 3, 4],
+            },
+        };
+        let mut buf = encode_connect_envelope_framed(&env).expect("encode");
+        buf[Header::SIZE - 1] = norito::core::header_flags::COMPACT_LEN;
+        assert!(decode_connect_envelope_framed(&buf).is_err());
     }
 
     #[test]
@@ -1112,6 +1256,48 @@ mod tests {
     }
 
     #[test]
+    fn ping_frame_roundtrip_bare() {
+        let frame = ConnectFrameV1 {
+            sid: [0x33; 32],
+            dir: Dir::WalletToApp,
+            seq: 2,
+            kind: FrameKind::Control(ConnectControlV1::Ping { nonce: 7 }),
+        };
+        let bytes = encode_connect_frame_bare(&frame).expect("encode bare");
+        let decoded = decode_connect_frame_bare(&bytes).expect("decode bare");
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn ciphertext_frame_roundtrip_bare() {
+        let frame = ConnectFrameV1 {
+            sid: [0x55; 32],
+            dir: Dir::WalletToApp,
+            seq: 9,
+            kind: FrameKind::Ciphertext(ConnectCiphertextV1 {
+                dir: Dir::WalletToApp,
+                aead: (0u8..96).collect(),
+            }),
+        };
+        let bytes = encode_connect_frame_bare(&frame).expect("encode bare");
+        let decoded = decode_connect_frame_bare(&bytes).expect("decode bare");
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn ciphertext_payload_uses_raw_aead_bytes() {
+        let ciphertext = ConnectCiphertextV1 {
+            dir: Dir::AppToWallet,
+            aead: (0u8..96).collect(),
+        };
+        let payload = encode_connect_ciphertext_payload(&ciphertext).expect("encode ciphertext");
+        let (decoded, used) =
+            decode_connect_ciphertext_payload(&payload).expect("decode ciphertext");
+        assert_eq!(used, payload.len());
+        assert_eq!(decoded, ciphertext);
+    }
+
+    #[test]
     fn server_event_block_proof_roundtrip() {
         let frame = ConnectFrameV1 {
             sid: [9u8; 32],
@@ -1127,6 +1313,25 @@ mod tests {
         };
         let bytes = encode_connect_frame_framed(&frame).expect("encode framed");
         let decoded = decode_connect_frame_framed(&bytes).expect("decode framed");
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn server_event_block_proof_roundtrip_bare() {
+        let frame = ConnectFrameV1 {
+            sid: [0x44; 32],
+            dir: Dir::AppToWallet,
+            seq: 8,
+            kind: FrameKind::Control(ConnectControlV1::ServerEvent {
+                event: ServerEventV1::BlockProofs {
+                    height: 6,
+                    entry_hash: "cd34".into(),
+                    proofs_json: r#"{"baz":"qux"}"#.into(),
+                },
+            }),
+        };
+        let bytes = encode_connect_frame_bare(&frame).expect("encode bare");
+        let decoded = decode_connect_frame_bare(&bytes).expect("decode bare");
         assert_eq!(decoded, frame);
     }
 
@@ -1197,7 +1402,7 @@ mod tests {
         let idx = Header::SIZE - 1;
         bytes[idx] = header_flags::PACKED_SEQ;
         let result = decode_connect_frame_framed(&bytes);
-        assert!(matches!(result, Err(Error::UnsupportedFeature(_))));
+        assert!(matches!(result, Err(Error::Message(_))));
     }
 
     #[test]

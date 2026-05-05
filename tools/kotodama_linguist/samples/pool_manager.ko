@@ -1,0 +1,31 @@
+// Representative liquidity-pool contract for Kotodama grammar validation.
+seiyaku PoolManager {
+  state PoolAccount: Map<Name, AccountId>;
+  state ReserveA: Map<Name, int>;
+  state ReserveB: Map<Name, int>;
+
+  fn min(a: int, b: int) -> int {
+    if (a < b) { return a; } else { return b; }
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn quote_or_deposit(
+    trader: AccountId,
+    pool: Name,
+    amount_a: int,
+    amount_b: int
+  ) -> int permission(Admin) {
+    let reserve_a = get_or_insert_default(ReserveA, pool, 0);
+    let reserve_b = get_or_insert_default(ReserveB, pool, 0);
+    let quoted = (reserve_a == 0) ? amount_b : min((amount_a * reserve_b) / reserve_a, amount_b);
+
+    if (quoted > 0) {
+      transfer_asset(trader, PoolAccount[pool], asset_definition!("asset#a"), amount_a);
+      transfer_asset(trader, PoolAccount[pool], asset_definition!("asset#b"), quoted);
+    }
+
+    ReserveA[pool] = reserve_a + amount_a;
+    ReserveB[pool] = reserve_b + quoted;
+    return quoted;
+  }
+}

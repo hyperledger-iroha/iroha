@@ -3,6 +3,8 @@ import XCTest
 @testable import IrohaSwift
 
 final class BridgeAvailabilityTests: XCTestCase {
+    private let canonicalAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+
     override func tearDown() {
         NoritoNativeBridge.shared.overrideBridgeAvailabilityForTests(nil)
         NoritoNativeBridge.shared.overrideConnectCodecAvailabilityForTests(nil)
@@ -28,7 +30,7 @@ final class BridgeAvailabilityTests: XCTestCase {
         let authority = AccountId.make(publicKey: keypair.publicKey)
         let request = TransferRequest(chainId: "chain",
                                       authority: authority,
-                                      assetDefinitionId: "xor#test",
+                                      assetDefinitionId: canonicalAssetDefinitionId,
                                       quantity: "1",
                                       destination: authority,
                                       description: nil,

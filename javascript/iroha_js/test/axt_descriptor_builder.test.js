@@ -79,10 +79,7 @@ test("computeAxtBinding hashes Norito descriptor bytes to the fixture binding", 
   assert.equal(binding.toString("hex"), fixture.binding_hex);
 });
 
-test("buildAxtDescriptor canonicalises without the native binding", () => {
-  const previous = process.env.IROHA_JS_DISABLE_NATIVE;
-  process.env.IROHA_JS_DISABLE_NATIVE = "1";
-
+maybeNativeTest("buildAxtDescriptor canonicalises through the native binding", () => {
   const result = buildAxtDescriptor({
     dsids: [2, 2],
     touches: [{ dsid: 2, read: ["alpha", "alpha"], write: ["beta"] }],
@@ -96,22 +93,12 @@ test("buildAxtDescriptor canonicalises without the native binding", () => {
   assert.deepEqual(result.touchManifest, [
     { dsid: 2, manifest: { read: ["alpha/x"], write: ["beta/y"] } },
   ]);
-  assert.equal(result.bindingHex, null);
-  assert.equal(result.binding, null);
-  assert.equal(result.descriptorBytes, null);
-  assert.equal(result.native, false);
-
-  if (previous === undefined) {
-    delete process.env.IROHA_JS_DISABLE_NATIVE;
-  } else {
-    process.env.IROHA_JS_DISABLE_NATIVE = previous;
-  }
+  assert.equal(result.binding?.length, 32);
+  assert.ok(Buffer.isBuffer(result.descriptorBytes));
+  assert.equal(result.native, true);
 });
 
-test("buildAxtDescriptor accepts array-like iterables", () => {
-  const previous = process.env.IROHA_JS_DISABLE_NATIVE;
-  process.env.IROHA_JS_DISABLE_NATIVE = "1";
-
+maybeNativeTest("buildAxtDescriptor accepts array-like iterables", () => {
   const dsids = { 0: 5, length: 1 };
   const touches = {
     0: {
@@ -139,10 +126,4 @@ test("buildAxtDescriptor accepts array-like iterables", () => {
   assert.deepEqual(result.touchManifest, [
     { dsid: 5, manifest: { read: ["alpha/x"], write: ["beta/y"] } },
   ]);
-
-  if (previous === undefined) {
-    delete process.env.IROHA_JS_DISABLE_NATIVE;
-  } else {
-    process.env.IROHA_JS_DISABLE_NATIVE = previous;
-  }
 });

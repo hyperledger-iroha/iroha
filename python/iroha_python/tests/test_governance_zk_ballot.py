@@ -22,7 +22,7 @@ def _noncanonical_owner_literal(domain: str = "wonderland") -> str:
     return address.canonical_hex()
 
 
-def test_governance_submit_zk_ballot_rejects_deprecated_public_inputs() -> None:
+def test_governance_submit_zk_ballot_rejects_unsupported_public_inputs() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
@@ -105,7 +105,7 @@ def test_governance_submit_zk_ballot_v1_rejects_noncanonical_owner() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="canonical I105 account id"):
+    with pytest.raises(ValueError, match="canonical I105"):
         client.governance_submit_zk_ballot_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
@@ -139,7 +139,7 @@ def test_governance_submit_zk_ballot_proof_v1_rejects_noncanonical_owner() -> No
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="canonical I105 account id"):
+    with pytest.raises(ValueError, match="canonical I105"):
         client.governance_submit_zk_ballot_proof_v1(
             {
                 "authority": CANONICAL_AUTHORITY,
@@ -241,7 +241,7 @@ def test_governance_submit_zk_ballot_rejects_noncanonical_owner() -> None:
     session = RecordingSession(StubResponse(payload={"ok": True}))
     client = ToriiClient("http://node.test", session=session)
 
-    with pytest.raises(ValueError, match="canonical I105 account id"):
+    with pytest.raises(ValueError, match="canonical I105"):
         client.governance_submit_zk_ballot(
             {
                 "authority": CANONICAL_AUTHORITY,

@@ -84,7 +84,7 @@ Swift SDK は、特注の JSON グルーを使用してシールド命令を発�
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -218,7 +218,7 @@ Swift SDK は、特注の JSON グルーを使用してシールド命令を発�
 - アカウントごとのキー導出階層:
   - `sk_spend` → `nk` (無効化キー)、`ivk` (受信表示キー)、`ovk` (送信表示キー)、`fvk`。
 - 暗号化されたメモのペイロード AEAD 暗号化された ECDH 由来の共有鍵 ہوتے ہیں؛オプションの監査人ビュー キー資産ポリシー 出力 接続 添付
-- CLI の追加: `confidential create-keys`、`confidential send`、`confidential export-view-key`、メモ復号化、監査ツール、`iroha app zk envelope` ヘルパー、Norito メモ エンベロープのオフライン生産/検査Torii `POST /v1/confidential/derive-keyset` 導出フロー فراہم کرتا ہے اور hex/base64 フォーム واپس دیتا ہے تاکہ ウォレットプログラム的にキー階層を取得する
+- CLI の追加: `confidential create-keys`、`confidential send`、`confidential export-view-key`、メモ復号化、監査ツール、`iroha app zk envelope` ヘルパー、Norito メモ エンベロープのオフライン生産/検査
 
 ## ガス、制限、および DoS 制御
 - 決定的なガススケジュール:

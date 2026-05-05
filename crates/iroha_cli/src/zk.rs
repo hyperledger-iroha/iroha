@@ -73,7 +73,7 @@ pub enum Command {
 
 #[derive(clap::Args, Debug)]
 pub struct RootsArgs {
-    /// `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
+    /// Canonical unprefixed Base58 `AssetDefinitionId`
     #[arg(long, value_name = "ASSET_ID")]
     asset_id: String,
     /// Maximum number of roots to return (0 = server cap)
@@ -1422,7 +1422,7 @@ mod attachments_cleanup_tests {
 
 #[derive(clap::Args, Debug)]
 pub struct ShieldArgs {
-    /// `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
+    /// Canonical unprefixed Base58 `AssetDefinitionId`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
     /// Account identifier to debit (canonical I105 account literal)
@@ -1541,7 +1541,7 @@ impl Run for ShieldArgs {
             confidential::ConfidentialEncryptedPayload,
             prelude::{AccountId, AssetDefinitionId, InstructionBox},
         };
-        let asset: AssetDefinitionId = self.asset.parse()?;
+        let asset = AssetDefinitionId::parse_address_literal(&self.asset)?;
         let from =
             crate::resolve_account_id(context, &self.from).wrap_err("failed to resolve --from")?;
         let note_commitment = parse_hex32(&self.note_commitment)?;
@@ -1610,7 +1610,7 @@ impl Run for EnvelopeArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct UnshieldArgs {
-    /// `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
+    /// Canonical unprefixed Base58 `AssetDefinitionId`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
     /// Recipient account identifier to credit (canonical I105 account literal)
@@ -1782,7 +1782,7 @@ mod tests {
 impl Run for UnshieldArgs {
     fn run<C: RunContext>(self, context: &mut C) -> eyre::Result<()> {
         use iroha::data_model::prelude::{AccountId, AssetDefinitionId, InstructionBox};
-        let asset: AssetDefinitionId = self.asset.parse()?;
+        let asset = AssetDefinitionId::parse_address_literal(&self.asset)?;
         let to = crate::resolve_account_id(context, &self.to).wrap_err("failed to resolve --to")?;
         let inputs = parse_inputs_csv(&self.inputs)?;
         let proof_json_str = std::fs::read_to_string(&self.proof_json)?;
@@ -1816,7 +1816,7 @@ impl Run for UnshieldArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ZkRegisterAssetArgs {
-    /// `AssetDefinitionId` like `aid:2f17c72466f84a4bb8a8e24884fdcd2f`
+    /// Canonical unprefixed Base58 `AssetDefinitionId`
     #[arg(long, value_name = "ASSET_ID")]
     asset: String,
     /// Allow shielding from public to shielded (default: true)
@@ -1849,7 +1849,7 @@ impl Run for ZkRegisterAssetArgs {
         use iroha::data_model::isi::zk::{RegisterZkAsset, ZkAssetMode};
         use iroha::data_model::prelude::{AssetDefinitionId, InstructionBox};
 
-        let asset: AssetDefinitionId = self.asset.parse()?;
+        let asset = AssetDefinitionId::parse_address_literal(&self.asset)?;
         let vk_transfer = match self.vk_transfer {
             Some(s) => Some(parse_vk_id_pair(&s)?),
             None => None,
@@ -1903,13 +1903,207 @@ pub struct VkRegisterArgs {
     json: std::path::PathBuf,
 }
 
+#[derive(Debug, Clone, norito::json::JsonDeserialize)]
+struct VkSubmissionJson {
+    authority: iroha::data_model::account::AccountId,
+    private_key: iroha::data_model::prelude::ExposedPrivateKey,
+    backend: String,
+    name: String,
+    version: u32,
+    circuit_id: String,
+    public_inputs_schema_hex: String,
+    #[norito(default)]
+    curve: Option<String>,
+    #[norito(default)]
+    gas_schedule_id: Option<String>,
+    #[norito(default)]
+    vk_len: Option<u32>,
+    #[norito(default)]
+    max_proof_bytes: Option<u32>,
+    #[norito(default)]
+    metadata_uri_cid: Option<String>,
+    #[norito(default)]
+    vk_bytes_cid: Option<String>,
+    #[norito(default)]
+    activation_height: Option<u64>,
+    #[norito(default)]
+    withdraw_height: Option<u64>,
+    #[norito(default)]
+    commitment_hex: Option<String>,
+    #[norito(default)]
+    vk_bytes: Option<String>,
+    #[norito(default)]
+    status: Option<iroha::data_model::confidential::ConfidentialStatus>,
+}
+
+struct PreparedVkSubmission {
+    authority: iroha::data_model::account::AccountId,
+    private_key: iroha::data_model::prelude::ExposedPrivateKey,
+    id: iroha::data_model::proof::VerifyingKeyId,
+    record: iroha::data_model::proof::VerifyingKeyRecord,
+}
+
+fn parse_hex32_str(value: &str, field: &str) -> Result<[u8; 32]> {
+    let trimmed = value.trim_start_matches("0x");
+    let bytes = hex::decode(trimmed).wrap_err_with(|| format!("invalid {field}"))?;
+    if bytes.len() != 32 {
+        eyre::bail!("{field} must be 32 bytes");
+    }
+    let mut out = [0_u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+fn parse_commitment_hex(value: &str) -> Result<[u8; 32]> {
+    parse_hex32_str(value, "commitment_hex")
+}
+
+fn build_vk_record(payload: &VkSubmissionJson) -> Result<iroha::data_model::proof::VerifyingKeyRecord> {
+    use iroha::data_model::{
+        confidential::ConfidentialStatus,
+        proof::{VerifyingKeyBox, VerifyingKeyRecord},
+        zk::BackendTag,
+    };
+    use iroha_core::zk::hash_vk;
+
+    if let Some(ref status_value) = payload.status {
+        if !matches!(*status_value, ConfidentialStatus::Active | ConfidentialStatus::Proposed) {
+            eyre::bail!("status must be Active or Proposed");
+        }
+    }
+
+    let vk_bytes = match payload.vk_bytes.as_deref() {
+        Some(value) => Some(
+            base64::engine::general_purpose::STANDARD
+                .decode(value.as_bytes())
+                .wrap_err("failed to decode vk_bytes base64")?,
+        ),
+        None => None,
+    };
+
+    let mut key_opt = None;
+    let commitment;
+    let vk_len_value;
+    if let Some(bytes) = vk_bytes {
+        let vk = VerifyingKeyBox::new(payload.backend.as_str().into(), bytes);
+        let actual_commitment = hash_vk(&vk);
+        if let Some(hex) = payload.commitment_hex.as_deref() {
+            let parsed = parse_commitment_hex(hex)?;
+            if parsed != actual_commitment {
+                eyre::bail!("commitment mismatch with provided vk_bytes");
+            }
+        }
+        commitment = actual_commitment;
+        let actual_len = vk.bytes.len() as u32;
+        if let Some(explicit_len) = payload.vk_len {
+            if explicit_len != actual_len {
+                eyre::bail!("vk_len mismatch with provided vk_bytes");
+            }
+        }
+        vk_len_value = actual_len;
+        key_opt = Some(vk);
+    } else if let Some(hex) = payload.commitment_hex.as_deref() {
+        commitment = parse_commitment_hex(hex)?;
+        let explicit_len = payload
+            .vk_len
+            .ok_or_else(|| eyre::eyre!("vk_len required when vk_bytes omitted"))?;
+        if explicit_len == 0 {
+            eyre::bail!("vk_len must be > 0");
+        }
+        vk_len_value = explicit_len;
+    } else {
+        eyre::bail!("provide either vk_bytes or commitment_hex");
+    }
+
+    let backend_tag = match payload.backend.as_str() {
+        b if b.contains("halo2") && (b.contains("pasta") || b.contains("ipa")) => {
+            BackendTag::Halo2IpaPasta
+        }
+        b if b.contains("groth16") => BackendTag::Groth16,
+        b if b.contains("stark") => BackendTag::Stark,
+        _ => BackendTag::Unsupported,
+    };
+    let schema_hash =
+        parse_hex32_str(&payload.public_inputs_schema_hex, "public_inputs_schema_hex")?;
+    let gas_schedule_id = payload
+        .gas_schedule_id
+        .clone()
+        .ok_or_else(|| eyre::eyre!("gas_schedule_id is required"))?;
+    if gas_schedule_id.trim().is_empty() {
+        eyre::bail!("gas_schedule_id must not be empty");
+    }
+    if let (Some(activation_height), Some(withdraw_height)) =
+        (payload.activation_height, payload.withdraw_height)
+    {
+        if activation_height > withdraw_height {
+            eyre::bail!("withdraw_height must be >= activation_height");
+        }
+    }
+
+    let mut record = VerifyingKeyRecord::new_with_owner(
+        payload.version,
+        payload.circuit_id.clone(),
+        None,
+        "core",
+        backend_tag,
+        payload.curve.clone().unwrap_or_else(|| "unknown".into()),
+        schema_hash,
+        commitment,
+    );
+    record.vk_len = vk_len_value;
+    record.max_proof_bytes = payload.max_proof_bytes.unwrap_or(0);
+    record.status = payload.status.unwrap_or(ConfidentialStatus::Active);
+    record.metadata_uri_cid = payload.metadata_uri_cid.clone();
+    record.vk_bytes_cid = payload.vk_bytes_cid.clone();
+    record.activation_height = payload.activation_height;
+    record.withdraw_height = payload.withdraw_height;
+    record.key = key_opt;
+    record.gas_schedule_id = Some(gas_schedule_id);
+    Ok(record)
+}
+
+fn load_vk_submission(path: &std::path::Path) -> Result<PreparedVkSubmission> {
+    let raw = std::fs::read_to_string(path)
+        .wrap_err_with(|| format!("failed to read {}", path.display()))?;
+    let payload: VkSubmissionJson =
+        norito::json::from_str(&raw).wrap_err("failed to parse VK submission JSON")?;
+    let id = iroha::data_model::proof::VerifyingKeyId::new(
+        payload.backend.clone(),
+        payload.name.clone(),
+    );
+    let record = build_vk_record(&payload)?;
+    Ok(PreparedVkSubmission {
+        authority: payload.authority,
+        private_key: payload.private_key,
+        id,
+        record,
+    })
+}
+
 impl Run for VkRegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        use iroha::data_model::{isi::verifying_keys, prelude::TransactionBuilder};
+
         let client: Client = context.client_from_config();
-        let s = std::fs::read_to_string(&self.json)?;
-        let v: norito::json::Value = norito::json::from_str(&s)?;
-        client.post_zk_vk_register(&v)?;
-        context.println("VK register submitted (202 Accepted)")?;
+        let prepared = load_vk_submission(&self.json)?;
+        let metadata = context.transaction_metadata().cloned().unwrap_or_default();
+        let tx = TransactionBuilder::new(
+            context.config().chain.clone(),
+            prepared.authority.clone().into(),
+        )
+        .with_metadata(metadata)
+        .with_instructions(core::iter::once(InstructionBox::from(
+            verifying_keys::RegisterVerifyingKey {
+                id: prepared.id,
+                record: prepared.record,
+            },
+        )))
+        .sign(&prepared.private_key.0);
+        let hash = tx.hash();
+        client
+            .submit_transaction(&tx)
+            .wrap_err("failed to submit VK register transaction")?;
+        context.println(format!("VK register submitted: {hash}"))?;
         Ok(())
     }
 }
@@ -1923,11 +2117,28 @@ pub struct VkUpdateArgs {
 
 impl Run for VkUpdateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        use iroha::data_model::{isi::verifying_keys, prelude::TransactionBuilder};
+
         let client: Client = context.client_from_config();
-        let s = std::fs::read_to_string(&self.json)?;
-        let v: norito::json::Value = norito::json::from_str(&s)?;
-        client.post_zk_vk_update(&v)?;
-        context.println("VK update submitted (202 Accepted)")?;
+        let prepared = load_vk_submission(&self.json)?;
+        let metadata = context.transaction_metadata().cloned().unwrap_or_default();
+        let tx = TransactionBuilder::new(
+            context.config().chain.clone(),
+            prepared.authority.clone().into(),
+        )
+        .with_metadata(metadata)
+        .with_instructions(core::iter::once(InstructionBox::from(
+            verifying_keys::UpdateVerifyingKey {
+                id: prepared.id,
+                record: prepared.record,
+            },
+        )))
+        .sign(&prepared.private_key.0);
+        let hash = tx.hash();
+        client
+            .submit_transaction(&tx)
+            .wrap_err("failed to submit VK update transaction")?;
+        context.println(format!("VK update submitted: {hash}"))?;
         Ok(())
     }
 }

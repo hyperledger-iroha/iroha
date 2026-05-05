@@ -117,7 +117,7 @@ seiyaku Name {
 Семантика
 - `meta { ... }` переопределяет значения компилятора по умолчанию для заголовка IVM: `abi_version`, `vector_length` (0 означает не задано), `max_cycles` (0 означает дефолт компилятора), `features` включает биты фич (ZK‑трассировка, объявление вектора). Неподдерживаемые фичи игнорируются с предупреждением. Если `meta {}` отсутствует, компилятор эмитит `abi_version = 1` и использует дефолты опций для остальных полей заголовка.
 - `features: ["zk", "simd"]` (алиасы: `"vector"`) явно запрашивает соответствующие биты заголовка. Неизвестные строки фич теперь вызывают ошибку парсера, а не игнорируются.
-- `state` объявляет долговечные переменные контракта. Компилятор понижает обращения в syscalls `STATE_GET/STATE_SET/STATE_DEL`, а хост хранит их в overlay на транзакцию (checkpoint/restore для rollback, flush при commit в WSV). Access hints выпускаются для литеральных путей; динамические ключи падают в конфликты уровня map. Для явных чтений/записей через хост используйте `state_get/state_set/state_del` и map-helpers `get_or_insert_default`; они проходят через Norito TLV и сохраняют стабильные имена/порядок полей.
+- `state` объявляет долговечные переменные контракта. Компилятор понижает обращения в syscalls `STATE_GET/STATE_SET/STATE_DEL`, а хост хранит их в overlay на транзакцию (checkpoint/restore для rollback, flush при commit в WSV). Access hints выпускаются для литеральных путей; динамические ключи падают в конфликты уровня map. Для явных чтений/записей через хост используйте `state_get/state_set/state_del` и map-helpers `map.ensure(...)`; они проходят через Norito TLV и сохраняют стабильные имена/порядок полей.
 - Идентификаторы `state` зарезервированы; затенение имени `state` в параметрах или `let` запрещено (`E_STATE_SHADOWED`).
 - Значения state‑карт не являются первоклассными: используйте идентификатор состояния напрямую для операций карты и итерации. Привязка или передача state‑карт в пользовательские функции запрещена (`E_STATE_MAP_ALIAS`).
 - Durable state‑карты сейчас поддерживают только ключи типов `int` и pointer‑ABI; другие типы ключей отклоняются при компиляции.
@@ -216,8 +216,8 @@ register_trigger wake {
 - `proof_blob(string|0xhex) -> ProofBlob*`
 
 Макросы прелюда дают более короткие алиасы и inline‑валидацию для этих конструкторов:
-- `account!("i105...")`, `account_id!("i105...")`
-- `asset_definition!("rose#wonderland")`, `asset_id!("rose#wonderland")`
+- `account!("<i105-account-id>")`, `account_id!("<i105-account-id>")`
+- `asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`
 - `domain!("wonderland")`, `domain_id!("wonderland")`
 - `name!("example")`
 - `json!("{\"hello\":\"world\"}")` или структурированные литералы типа `json!{ hello: "world" }`

@@ -4,12 +4,11 @@ use ivm::{Memory, PointerType};
 mod common;
 
 fn valid_account_id_literal() -> Vec<u8> {
-    let domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("valid domain");
     let public_key: PublicKey =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("valid public key");
-    ivm::mock_wsv::ScopedAccountId::new(domain, public_key)
+    ivm::mock_wsv::AccountId::new(public_key)
         .to_string()
         .into_bytes()
 }
@@ -30,7 +29,10 @@ fn validate_known_types_ok() {
     let valid_account = valid_account_id_literal();
     let cases: Vec<(PointerType, &[u8])> = vec![
         (PointerType::AccountId, valid_account.as_slice()),
-        (PointerType::AssetDefinitionId, b"rose#wonderland"),
+        (
+            PointerType::AssetDefinitionId,
+            b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+        ),
         (PointerType::Name, b"cursor"),
         (PointerType::Json, br#"{"q":1}"#),
         (PointerType::NftId, b"rose$wonderland"),

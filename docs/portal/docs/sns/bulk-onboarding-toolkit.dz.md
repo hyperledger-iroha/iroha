@@ -88,18 +88,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -125,7 +125,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -145,7 +145,7 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- གྲོགས་རམ་འབད་མི་གིས་ ཞུ་བ་རེ་ལུ་ `POST /v1/sns/registrations` གཅིག་དང་ མངལ་སྟོངམ་བཏོན་མི་ཚུ་ལུ་ བཀོདཔ་ཨིན།
+- གྲོགས་རམ་འབད་མི་གིས་ ཞུ་བ་རེ་ལུ་ `POST /v1/sns/names` གཅིག་དང་ མངལ་སྟོངམ་བཏོན་མི་ཚུ་ལུ་ བཀོདཔ་ཨིན།
   ཨེཆ་ཊི་ཊི་པི་འཛོལ་བ་འགོ་དང་པ་འདི་ཨིན། ལན་ཚུ་ དྲན་ཐོ་འགྲུལ་ལམ་ལུ་ NDJSON སྦེ་ མཐུད་ཡོདཔ་ཨིན།
   དྲན་ཐོ་ཚུ།
 - I18NI000000064X འདི་གི་ཤུལ་ལས་ I18NI0000000065X འདི་ རེ་རེ་ལུ་འདྲི་དཔྱད་འབདཝ་ཨིན།
@@ -235,7 +235,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -258,7 +258,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   གཞི་བསྟུན་ཚུ་ སི་ཨེསི་ཝི་གནས་ཁོངས་ལུ་འབྲེལ་བའི་སེལ་འཐུ་འབད་ཡོདཔ་ཨིན། དངོས་པོའི་མེ་ཊ་ཌེ་ཊ་
   བདེན་དཔྱད་ཀྱི་འཛོལ་བ་ཅིག་བཏོནམ་ཨིན།
 - **ཚད་འཛིན་:** ནང་ཐིག་སྟོངམ་གུའི་གུས་ཞབས་ `--default-controllers`. གསལ་སྟོན་
-  ཚད་འཛིན་ཐོ་ཡིག་ཚུ་ (དཔེར་ན་ `i105...;i105...`) ཇོ་བདག་མེན་མི་ལུ་སྤྲོད་པའི་སྐབས་ཨིན།
+  ཚད་འཛིན་ཐོ་ཡིག་ཚུ་ (དཔེར་ན་ `<i105-account-id>;<i105-account-id>`) ཇོ་བདག་མེན་མི་ལུ་སྤྲོད་པའི་སྐབས་ཨིན།
   འཁྲབ་རྩེདཔ་ཚུ།
 
 འཐུས་ཤོར་ཚུ་ སྐབས་དོན་གྲལ་ཐིག་ཨང་གྲངས་ཚུ་དང་གཅིག་ཁར་སྙན་ཞུ་འབདཝ་ཨིན།(དཔེར་ན་ (དཔེར་ན་ )

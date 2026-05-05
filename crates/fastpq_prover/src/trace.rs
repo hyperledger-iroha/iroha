@@ -783,6 +783,69 @@ pub fn build_trace(batch: &TransitionBatch) -> Result<Trace> {
     })
 }
 
+/// Return the canonical FASTPQ column layout for a transition batch without materialising rows.
+///
+#[must_use]
+pub(crate) fn column_names_for_batch(batch: &TransitionBatch) -> Vec<String> {
+    let mut canonical = batch.clone();
+    canonical.sort();
+
+    let mut max_key_limbs = 0usize;
+    let mut max_value_old = 0usize;
+    let mut max_value_new = 0usize;
+    let mut max_asset_limbs = 0usize;
+    for transition in &canonical.transitions {
+        let asset_id_bytes = match &transition.operation {
+            crate::OperationKind::MetaSet => transition.key.clone(),
+            _ => extract_asset_id(&transition.key),
+        };
+        max_key_limbs = max_key_limbs.max(pack_bytes(&transition.key).limbs.len());
+        max_value_old = max_value_old.max(pack_bytes(&transition.pre_value).limbs.len());
+        max_value_new = max_value_new.max(pack_bytes(&transition.post_value).limbs.len());
+        max_asset_limbs = max_asset_limbs.max(pack_bytes(&asset_id_bytes).limbs.len());
+    }
+
+    let mut columns = [
+        "s_active",
+        "s_transfer",
+        "s_mint",
+        "s_burn",
+        "s_role_grant",
+        "s_role_revoke",
+        "s_meta_set",
+        "s_perm",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    columns.extend((0..max_key_limbs).map(|idx| format!("key_limb_{idx}")));
+    columns.extend((0..max_value_old).map(|idx| format!("value_old_limb_{idx}")));
+    columns.extend((0..max_value_new).map(|idx| format!("value_new_limb_{idx}")));
+    columns.extend((0..max_asset_limbs).map(|idx| format!("asset_id_limb_{idx}")));
+    columns.extend(
+        [
+            "delta",
+            "running_asset_delta",
+            "metadata_hash",
+            "supply_counter",
+            "perm_hash",
+            "neighbour_leaf",
+            "dsid",
+            "slot",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
+    for level in 0..SMT_HEIGHT {
+        columns.push(format!("path_bit_{level}"));
+        columns.push(format!("sibling_{level}"));
+        columns.push(format!("node_in_{level}"));
+        columns.push(format!("node_out_{level}"));
+    }
+
+    columns
+}
+
 impl TraceColumn {
     fn new(name: impl Into<String>, values: impl Iterator<Item = u64>) -> Self {
         Self {
@@ -1119,6 +1182,31 @@ pub fn hash_columns_gpu_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
 }
 
 #[cfg(feature = "fastpq-gpu")]
+/// Hash the supplied domains and coefficient columns through the canonical CPU Poseidon path.
+///
+/// Returns `None` when the domain and column shapes do not match, mirroring the
+/// validation performed by [`PoseidonColumnBatch::from_domains_and_columns`].
+pub fn hash_columns_cpu_batch_inputs(domains: &[&str], columns: &[Vec<u64>]) -> Option<Vec<u64>> {
+    if domains.len() != columns.len() {
+        return None;
+    }
+    if columns.is_empty() {
+        return Some(Vec::new());
+    }
+    let column_len = columns[0].len();
+    if !columns.iter().all(|column| column.len() == column_len) {
+        return None;
+    }
+    Some(
+        domains
+            .iter()
+            .zip(columns.iter())
+            .map(|(domain, values)| hash_field_with_domain(domain.as_bytes(), values))
+            .collect(),
+    )
+}
+
+#[cfg(feature = "fastpq-gpu")]
 fn hash_columns_gpu_pipelined_batch(batch: &PoseidonColumnBatch) -> Option<Vec<u64>> {
     let backend = backend::current_gpu_backend()?;
     if batch.is_empty() {
@@ -1392,10 +1480,11 @@ fn hash_columns_gpu_overlap(trace: &Trace, planner: &Planner) -> Option<ColumnDi
             .map(|column| column.values.clone())
             .collect();
         planner.ifft_columns(&mut coeff_chunk);
-        let domain_refs: Vec<&str> = trace.columns[chunk_start..chunk_end]
+        let domain_names: Vec<String> = trace.columns[chunk_start..chunk_end]
             .iter()
-            .map(|column| column.name.as_str())
+            .map(|column| format!("{TRACE_COLUMN_DOMAIN_PREFIX}{}", column.name))
             .collect();
+        let domain_refs: Vec<&str> = domain_names.iter().map(String::as_str).collect();
         let Some(batch) = PoseidonColumnBatch::from_domains_and_columns(&domain_refs, &coeff_chunk)
         else {
             warn!(
@@ -1659,8 +1748,8 @@ pub(crate) fn trace_coefficients(
 pub(crate) fn hash_columns_from_coefficients(
     trace: &Trace,
     coefficients: &[Vec<u64>],
-    planner: &Planner,
-    mode: ExecutionMode,
+    _planner: &Planner,
+    _mode: ExecutionMode,
     poseidon_policy: PoseidonPipelinePolicy,
 ) -> ColumnDigests {
     assert_eq!(
@@ -1680,11 +1769,12 @@ pub(crate) fn hash_columns_from_coefficients(
 
     #[cfg(feature = "fastpq-gpu")]
     {
-        let domain_refs: Vec<&str> = trace
+        let domain_names: Vec<String> = trace
             .columns
             .iter()
-            .map(|column| column.name.as_str())
+            .map(|column| format!("{TRACE_COLUMN_DOMAIN_PREFIX}{}", column.name))
             .collect();
+        let domain_refs: Vec<&str> = domain_names.iter().map(String::as_str).collect();
         if let Some(batch) =
             PoseidonColumnBatch::from_domains_and_columns(&domain_refs, coefficients)
         {
@@ -1918,6 +2008,7 @@ mod tests {
     use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use iroha_crypto::Hash;
     use iroha_data_model::{
+        DomainId,
         asset::id::AssetDefinitionId,
         fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
     };
@@ -1998,6 +2089,19 @@ mod tests {
                 .iter()
                 .all(|col| col.values.len() == trace.padded_len)
         );
+    }
+
+    #[test]
+    fn column_names_for_batch_matches_trace_layout() {
+        let batch = sample_batch();
+        let trace = build_trace(&batch).expect("build trace");
+        let expected = trace
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(column_names_for_batch(&batch), expected);
     }
 
     #[test]
@@ -2181,7 +2285,7 @@ mod tests {
         let trace = build_trace(&sample_batch()).expect("build trace");
         let params = CANONICAL_PARAMETER_SETS[0];
         let planner = Planner::new(&params);
-        let mut data = derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
+        let data = derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
         let cpu_hashes = hash_columns_from_coefficients(
             &trace,
             &data.coefficients,
@@ -2189,11 +2293,12 @@ mod tests {
             ExecutionMode::Cpu,
             PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
         );
-        let domains: Vec<&str> = trace
+        let domain_names: Vec<String> = trace
             .columns
             .iter()
-            .map(|column| column.name.as_str())
+            .map(|column| format!("{TRACE_COLUMN_DOMAIN_PREFIX}{}", column.name))
             .collect();
+        let domains: Vec<&str> = domain_names.iter().map(String::as_str).collect();
         let batch = PoseidonColumnBatch::from_domains_and_columns(&domains, &data.coefficients)
             .expect("gpu batch");
         let gpu_hashes = match hash_columns_gpu_batch(&batch) {
@@ -2207,6 +2312,66 @@ mod tests {
             cpu_hashes.leaves(),
             gpu_hashes.as_slice(),
             "gpu hashes diverged from cpu"
+        );
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn poseidon_cpu_batch_inputs_match_scalar_reference() {
+        let domains = vec!["fastpq:v1:trace:column:a", "fastpq:v1:trace:column:b"];
+        let columns = vec![vec![1u64, 2, 3, 4], vec![5u64, 6, 7, 8]];
+        let hashes =
+            hash_columns_cpu_batch_inputs(&domains, &columns).expect("cpu poseidon batch hashes");
+        let expected: Vec<u64> = domains
+            .iter()
+            .zip(columns.iter())
+            .map(|(domain, values)| hash_field_with_domain(domain.as_bytes(), values))
+            .collect();
+        assert_eq!(hashes, expected);
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn poseidon_gpu_repeated_dispatches_match_cpu_when_backend_available() {
+        if backend::current_gpu_backend().is_none() {
+            eprintln!("skipping repeated poseidon gpu parity test; backend unavailable");
+            return;
+        }
+        let trace = build_trace(&sample_batch()).expect("build trace");
+        let params = CANONICAL_PARAMETER_SETS[0];
+        let planner = Planner::new(&params);
+        let data = derive_polynomial_data(&trace, &planner, ExecutionMode::Cpu);
+        let cpu_hashes = hash_columns_from_coefficients(
+            &trace,
+            &data.coefficients,
+            &planner,
+            ExecutionMode::Cpu,
+            PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
+        );
+        let domain_names: Vec<String> = trace
+            .columns
+            .iter()
+            .map(|column| format!("{TRACE_COLUMN_DOMAIN_PREFIX}{}", column.name))
+            .collect();
+        let domains: Vec<&str> = domain_names.iter().map(String::as_str).collect();
+        let batch = PoseidonColumnBatch::from_domains_and_columns(&domains, &data.coefficients)
+            .expect("gpu batch");
+        let first = match hash_columns_gpu_batch(&batch) {
+            Some(values) => values,
+            None => {
+                eprintln!("skipping repeated poseidon gpu parity test; dispatch declined");
+                return;
+            }
+        };
+        let second = hash_columns_gpu_batch(&batch).expect("second gpu hash dispatch");
+        assert_eq!(
+            first, second,
+            "reused gpu workspace changed poseidon batch output between dispatches"
+        );
+        assert_eq!(
+            cpu_hashes.leaves(),
+            first.as_slice(),
+            "reused gpu workspace diverged from cpu reference"
         );
     }
 
@@ -2240,11 +2405,12 @@ mod tests {
             ExecutionMode::Cpu,
             PoseidonPipelinePolicy::for_mode(ExecutionMode::Cpu),
         );
-        let domains: Vec<&str> = trace
+        let domain_names: Vec<String> = trace
             .columns
             .iter()
-            .map(|column| column.name.as_str())
+            .map(|column| format!("{TRACE_COLUMN_DOMAIN_PREFIX}{}", column.name))
             .collect();
+        let domains: Vec<&str> = domain_names.iter().map(String::as_str).collect();
         let batch =
             PoseidonColumnBatch::from_domains_and_columns(&domains, &coefficients).expect("batch");
         let fused = match hash_columns_gpu_fused(&batch, ExecutionMode::Gpu) {
@@ -2443,7 +2609,7 @@ mod tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
             amount: Numeric::from(42u32),

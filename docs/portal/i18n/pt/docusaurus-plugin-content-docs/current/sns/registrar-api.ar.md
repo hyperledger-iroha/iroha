@@ -106,17 +106,17 @@ Struct ReservedAssignmentRequestV1 {
 
 | نقطة النهاية | الطريقة | الحمولة | الوصف |
 |---------|---------|---------|-------|
-| `/v1/sns/registrations` | POSTAR | `RegisterNameRequestV1` | تسجيل او اعادة فتح اسم. Não se preocupe, você pode usar um dispositivo de segurança/recuperação de energia. |
-| `/v1/sns/registrations/{selector}/renew` | POSTAR | `RenewNameRequestV1` | يمدد المدة. يفرض نوافذ graça/redenção من السياسة. |
-| `/v1/sns/registrations/{selector}/transfer` | POSTAR | `TransferNameRequestV1` | ينقل الملكية بعد ارفاق موافقات الحوكمة. |
-| `/v1/sns/registrations/{selector}/controllers` | COLOCAR | `UpdateControllersRequestV1` | Controladores de controle remoto; يتحقق من عناوين الحساب الموقعة. |
-| `/v1/sns/registrations/{selector}/freeze` | POSTAR | `FreezeNameRequestV1` | تجميد guardião/conselho. يتطلب تذكرة guardião e مرجع دفتر حوكمة. |
-| `/v1/sns/registrations/{selector}/freeze` | EXCLUIR | `GovernanceHookV1` | فك التجميد بعد المعالجة؛ Você não pode substituir o valor. |
+| `/v1/sns/names` | POSTAR | `RegisterNameRequestV1` | تسجيل او اعادة فتح اسم. Não se preocupe, você pode usar um dispositivo de segurança/recuperação de energia. |
+| `/v1/sns/names/{namespace}/{literal}/renew` | POSTAR | `RenewNameRequestV1` | يمدد المدة. يفرض نوافذ graça/redenção من السياسة. |
+| `/v1/sns/names/{namespace}/{literal}/transfer` | POSTAR | `TransferNameRequestV1` | ينقل الملكية بعد ارفاق موافقات الحوكمة. |
+| `/v1/sns/names/{namespace}/{literal}/controllers` | COLOCAR | `UpdateControllersRequestV1` | Controladores de controle remoto; يتحقق من عناوين الحساب الموقعة. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | POSTAR | `FreezeNameRequestV1` | تجميد guardião/conselho. يتطلب تذكرة guardião e مرجع دفتر حوكمة. |
+| `/v1/sns/names/{namespace}/{literal}/freeze` | EXCLUIR | `GovernanceHookV1` | فك التجميد بعد المعالجة؛ Você não pode substituir o valor. |
 | `/v1/sns/reserved/{selector}` | POSTAR | `ReservedAssignmentRequestV1` | تعين اسماء محجوزة بواسطة mordomo/conselho. |
 | `/v1/sns/policies/{suffix_id}` | OBTER | -- | Selecione `SuffixPolicyV1` (para o caso). |
-| `/v1/sns/registrations/{selector}` | OBTER | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Ativo, Graça, الخ). |
+| `/v1/sns/names/{namespace}/{literal}` | OBTER | -- | يعيد `NameRecordV1` الحالي + الحالة الفعلية (Ativo, Graça, الخ). |
 
-**Seletor de extensão:** مقطع `{selector}` يقبل I105 او مضغوط او hex قياسي حسب ADDR-5; Torii é igual a `NameSelectorV1`.
+**Seletor de extensão:** مقطع `{selector}` يقبل i105 او مضغوط او hex قياسي حسب ADDR-5; Torii é igual a `NameSelectorV1`.
 
 **Nome do arquivo:** Para definir o valor do Norito JSON como `code`, `message`, `details`. Verifique o código `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
 
@@ -129,7 +129,7 @@ iroha sns register \
   --label makoto \
   --suffix-id 1 \
   --term-years 2 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 240 \
   --payment-settlement '"settlement-tx-hash"' \
   --payment-signature '"steward-signature"'
@@ -152,7 +152,7 @@ iroha sns policy --suffix-id 1
 iroha sns renew \
   --selector makoto.sora \
   --term-years 1 \
-  --payment-asset-id xor#sora \
+  --payment-asset-id 61CtjvNd9T3THAR65GsMVHr82Bjc \
   --payment-gross 120 \
   --payment-settlement '"renewal-settlement"' \
   --payment-signature '"steward-signature"'
@@ -160,7 +160,7 @@ iroha sns renew \
 # Transfer ownership once governance approves
 iroha sns transfer \
   --selector makoto.sora \
-  --new-owner i105... \
+  --new-owner <i105-account-id> \
   --governance-json /path/to/hook.json
 
 # Freeze/unfreeze flows
@@ -175,7 +175,7 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` é um nome de usuário do `GovernanceHookV1` (id da proposta, hashes de voto, administrador/guardião). كل امر يعكس ببساطة نقطة النهاية `/v1/sns/registrations/{selector}/...` مقابلة حتى يتمكن مشغلو البيتا من تمرين اسطح Torii é compatível com SDKs.
+`--governance-json` é um nome de usuário do `GovernanceHookV1` (id da proposta, hashes de voto, administrador/guardião). كل امر يعكس ببساطة نقطة النهاية `/v1/sns/names/{namespace}/{literal}/...` مقابلة حتى يتمكن مشغلو البيتا من تمرين اسطح Torii é compatível com SDKs.
 
 ## 4. Como gRPC
 
@@ -222,7 +222,7 @@ O código é `sns_err_governance_missing`.
 
 1. Use o `/v1/sns/policies/{suffix_id}` para obter a graça e a graça.
 2. Código `RegisterNameRequestV1`:
-   - `selector` é compatível com a etiqueta I105 (I105) e I105 (I105).
+   - `selector` é compatível com a etiqueta i105 (i105) e i105 (i105).
    - `term_years` é um problema.
    - `payment` é um divisor de divisão/steward.
 3. Torii Descrição:
@@ -245,7 +245,7 @@ O código é `sns_err_governance_missing`.
 
 ### 6.3 Guardião e substituição do guardião1. guardião يرسل `FreezeNameRequestV1` مع تذكرة تشير الى id حادث.
 2. Torii é compatível com `NameStatus::Frozen`, e `NameFrozen`.
-3. بعد المعالجة, يصدر المجلس substituição; Execute DELETE `/v1/sns/registrations/{selector}/freeze` em `GovernanceHookV1`.
+3. بعد المعالجة, يصدر المجلس substituição; Execute DELETE `/v1/sns/names/{namespace}/{literal}/freeze` em `GovernanceHookV1`.
 4. Torii é substituído por `NameUnfrozen`.
 
 ## 7. التحقق واكواد الخطا

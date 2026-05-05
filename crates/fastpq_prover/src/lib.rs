@@ -9,12 +9,14 @@
 //! The public API is intentionally narrow and uses Norito-friendly types so
 //! callers can persist artifacts without pulling in Serde.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![allow(unexpected_cfgs)]
 
+mod axt_binding;
 mod backend;
 mod batch;
+mod bn254;
 mod cyclotomic;
 mod digest;
 mod error;
@@ -23,7 +25,6 @@ pub mod gadgets;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 mod metal;
 mod metal_config;
-mod offline_merge;
 pub mod ordering;
 pub(crate) mod overrides;
 pub mod packing;
@@ -41,6 +42,10 @@ mod gpu;
 
 mod fft;
 
+pub use axt_binding::{
+    AXT_FASTPQ_BINDING_METADATA_KEY, DEFAULT_PARAMETER as AXT_DEFAULT_PARAMETER,
+    batch_manifest_sha256, build_batch_from_binding, canonicalize_binding,
+};
 pub use backend::{
     Backend, BackendConfig, ExecutionMode, PoseidonExecutionMode, clear_execution_mode_observer,
     set_execution_mode_observer,
@@ -52,7 +57,9 @@ pub use backend::{
 pub use batch::{OperationKind, PublicInputs, StateTransition, TransitionBatch};
 pub use digest::trace_commitment;
 pub use error::{Error, Result};
-pub use fastpq_cuda::{CudaBackendError, fastpq_fft, fastpq_ifft, fastpq_lde};
+pub use fastpq_cuda::{
+    CudaBackendError, fastpq_bn254_fft, fastpq_bn254_lde, fastpq_fft, fastpq_ifft, fastpq_lde,
+};
 pub use fft::Planner;
 #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
 pub use metal::{
@@ -67,15 +74,11 @@ pub use metal::{
     take_queue_depth_stats, take_twiddle_cache_stats,
 };
 pub use metal_config::{FftTuning, PoseidonTuning};
-pub use offline_merge::{
-    OfflineMergeArtifact, OfflineMergeLeaf, OfflineMergeWitness, build_offline_merge_artifact,
-    verify_offline_merge_artifact,
-};
 pub use ordering::ordering_hash;
 pub use overrides::{MetalOverrides, apply_metal_overrides};
 pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes, unpack_bytes};
 pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
-pub use proof::{Proof, Prover, verify};
+pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
 pub use trace::{
     ColumnDigests, PoseidonPipelinePolicy, RowUsage, Trace, TraceColumn, build_trace,
     clear_poseidon_pipeline_observer, column_hashes, merkle_root, merkle_root_with_first_level,

@@ -129,6 +129,10 @@ pub mod settlement;
 pub mod smartcontracts;
 /// World state snapshots.
 pub mod snapshot;
+/// Ledger-backed SNS ownership helpers.
+pub mod sns;
+/// Shared Soracloud runtime snapshot types and traits.
+pub mod soracloud_runtime;
 /// SoraNet relay incentive calculator and treasury helpers.
 pub mod soranet_incentives;
 /// In-memory state and view types.
@@ -142,6 +146,8 @@ pub mod telemetry;
 pub mod time;
 /// Shared Torii helpers (query surfaces, filters).
 pub mod torii;
+/// Peer-to-peer Torii ingress proxy envelopes.
+pub mod torii_proxy;
 pub mod tx;
 /// Zero-knowledge verification helpers (backend dispatch + envelope validation).
 pub mod zk;
@@ -240,12 +246,35 @@ pub enum NetworkMessage {
     TimePing(Box<crate::time::TimePing>),
     /// Network Time Service: time synchronization pong.
     TimePong(Box<crate::time::TimePong>),
-    /// Iroha Connect (WalletConnect-style) frame relay.
-    Connect(Box<connect_proto::ConnectFrame>),
+    /// Iroha Connect (WalletConnect-style) authenticated P2P control message.
+    Connect(Box<connect_proto::ConnectP2pMessage>),
+    /// Soracloud local-read proxy request routed to the authoritative primary host.
+    SoracloudLocalReadProxyRequest(Box<soracloud_runtime::SoracloudLocalReadProxyRequestV1>),
+    /// Soracloud local-read proxy response returned to the ingress node.
+    SoracloudLocalReadProxyResponse(Box<soracloud_runtime::SoracloudLocalReadProxyResponseV1>),
+    /// Torii proxy request routed across bounded Torii ingress proxy hops.
+    ToriiProxyRequest(Box<torii_proxy::ToriiProxyRequestV2>),
+    /// Torii proxy response returned to the ingress node.
+    ToriiProxyResponse(Box<torii_proxy::ToriiProxyResponseV1>),
     /// Norito Streaming control-plane frame.
     StreamingControl(Box<ControlFrame>),
     /// Gossip for `SoraNet` `PoW`/puzzle runtime configuration (Norito-encoded bytes).
     SoranetPowConfig(Vec<u8>),
+}
+
+impl NetworkMessage {
+    /// Returns `true` when the message is handled by Torii's proxy-plane P2P
+    /// subscribers instead of the generic `irohad` relay path.
+    #[must_use]
+    pub const fn is_torii_proxy_control_message(&self) -> bool {
+        matches!(
+            self,
+            Self::SoracloudLocalReadProxyRequest(_)
+                | Self::SoracloudLocalReadProxyResponse(_)
+                | Self::ToriiProxyRequest(_)
+                | Self::ToriiProxyResponse(_)
+        )
+    }
 }
 
 impl<'a> norito::core::DecodeFromSlice<'a> for NetworkMessage {
@@ -278,23 +307,34 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         match self {
             NetworkMessage::SumeragiBlock(msg) => match msg.as_ref().as_ref() {
                 BlockMessage::BlockCreated(_)
+                | BlockMessage::FetchBlockBody(_)
                 | BlockMessage::FetchPendingBlock(_)
+                | BlockMessage::RbcInitRequest(_)
+                | BlockMessage::RbcChunkRequest(_)
                 | BlockMessage::RbcInit(_)
                 | BlockMessage::RbcReady(_)
                 | BlockMessage::RbcDeliver(_)
                 | BlockMessage::ConsensusParams(_)
+                | BlockMessage::KuraReplicaAdvert(_)
                 | BlockMessage::ExecWitness(_)
                 | BlockMessage::ProposalHint(_)
+                | BlockMessage::Proposal(_)
                 | BlockMessage::Qc(_)
                 | BlockMessage::QcVote(_)
                 | BlockMessage::VrfCommit(_)
                 | BlockMessage::VrfReveal(_) => T::Consensus,
-                BlockMessage::BlockSyncUpdate(_) | BlockMessage::Proposal(_) => T::ConsensusPayload,
+                BlockMessage::BlockSyncUpdate(_) | BlockMessage::BlockBodyResponse(_) => {
+                    T::ConsensusPayload
+                }
                 BlockMessage::RbcChunk(_) | BlockMessage::RbcChunkCompact(_) => T::ConsensusChunk,
             },
             NetworkMessage::SumeragiControlFlow(_)
             | NetworkMessage::LaneRelay(_)
             | NetworkMessage::MergeCommitteeSignature(_)
+            | NetworkMessage::SoracloudLocalReadProxyRequest(_)
+            | NetworkMessage::SoracloudLocalReadProxyResponse(_)
+            | NetworkMessage::ToriiProxyRequest(_)
+            | NetworkMessage::ToriiProxyResponse(_)
             | NetworkMessage::StreamingControl(_)
             | NetworkMessage::GenesisRequest(_)
             | NetworkMessage::GenesisResponse(_) => T::Control,
@@ -484,7 +524,13 @@ pub mod prelude {
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp::Ordering, collections::BTreeSet, num::NonZeroU64, sync::Arc, time::Duration};
+    use std::{
+        cmp::Ordering,
+        collections::{BTreeMap, BTreeSet},
+        num::NonZeroU64,
+        sync::Arc,
+        time::Duration,
+    };
 
     use iroha_crypto::{Hash, KeyPair, SignatureOf};
     use iroha_data_model::block::{BlockHeader, BlockSignature, builder::BlockBuilder};
@@ -495,21 +541,45 @@ mod tests {
     use iroha_data_model::{ChainId, Level, isi::Log};
     use iroha_p2p::{ClassifyTopic, network::message::Topic as NetworkTopic};
     use iroha_test_samples::gen_account_in;
-    use norito::codec::{Decode, Encode};
     use norito::json;
+    use norito::{
+        codec::{Decode, Encode},
+        core as ncore,
+    };
 
     use crate::{
         NetworkMessage, PeerTrustGossip, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
         gossiper::{GossipPlane, GossipRoute, GossipTransaction, TransactionGossip},
         role::RoleIdWithOwner,
+        soracloud_runtime::{
+            SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
+            SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1, SoracloudLocalReadProxyOutcomeV1,
+            SoracloudLocalReadProxyRequestV1, SoracloudLocalReadProxyResponseV1,
+            SoracloudLocalReadRequest,
+        },
         sumeragi::{
-            consensus::{RbcChunk, RbcDeliver, RbcInit, RbcReady},
+            consensus::{
+                ConsensusBlockHeader, Phase, Proposal, QcHeaderRef, RbcChunk, RbcDeliver, RbcInit,
+                RbcReady,
+            },
             message::{
                 BlockCreated, BlockMessage, BlockMessageWire, BlockSyncUpdate,
                 ConsensusParamsAdvert, FetchPendingBlock,
             },
         },
+        torii_proxy::{
+            TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV2,
+            ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
+            ToriiReadProxyRequestV1, ToriiRouteHintV1,
+        },
     };
+
+    fn canonical_signed_transaction_payload(
+        signed: &iroha_data_model::transaction::SignedTransaction,
+    ) -> Arc<Vec<u8>> {
+        Arc::new(ncore::to_bytes(signed).expect("encode signed transaction"))
+    }
 
     #[test]
     fn trust_gossip_classifies_to_trust_topic() {
@@ -580,6 +650,76 @@ mod tests {
     }
 
     #[test]
+    fn torii_proxy_control_message_classification_covers_shared_proxy_variants() {
+        let soracloud_request = NetworkMessage::SoracloudLocalReadProxyRequest(Box::new(
+            SoracloudLocalReadProxyRequestV1 {
+                schema_version: SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
+                request_id: Hash::prehashed([0x11; 32]),
+                request: SoracloudLocalReadRequest {
+                    observed_height: 1,
+                    observed_block_hash: None,
+                    service_name: "svc".to_owned(),
+                    service_version: "1.0.0".to_owned(),
+                    handler_name: "read".to_owned(),
+                    handler_class: crate::soracloud_runtime::SoracloudLocalReadKind::Query,
+                    request_method: "GET".to_owned(),
+                    request_path: "/v1/soracloud/test".to_owned(),
+                    handler_path: "/test".to_owned(),
+                    request_query: None,
+                    request_headers: BTreeMap::new(),
+                    request_body: Vec::new(),
+                    request_commitment: Hash::prehashed([0x12; 32]),
+                },
+            },
+        ));
+        let soracloud_response = NetworkMessage::SoracloudLocalReadProxyResponse(Box::new(
+            SoracloudLocalReadProxyResponseV1 {
+                schema_version: SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1,
+                request_id: Hash::prehashed([0x13; 32]),
+                outcome: SoracloudLocalReadProxyOutcomeV1::Err(
+                    crate::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                        crate::soracloud_runtime::SoracloudRuntimeExecutionErrorKind::Unavailable,
+                        "proxy unavailable",
+                    ),
+                ),
+            },
+        ));
+        let torii_request = NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV2 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: Hash::prehashed([0x14; 32]),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
+                endpoint: ToriiReadEndpointV1::AccountsList,
+                expected_route: ToriiRouteHintV1 {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                },
+                path_args: Vec::new(),
+                query_string: None,
+                body: Vec::new(),
+                response_format: ToriiProxyResponseFormatV1::Json,
+            }),
+        }));
+        let torii_response = NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
+            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+            request_id: Hash::prehashed([0x15; 32]),
+            response: ToriiProxyHttpResponseV1 {
+                status_code: 200,
+                headers: Vec::new(),
+                body: Vec::new(),
+            },
+        }));
+
+        assert!(soracloud_request.is_torii_proxy_control_message());
+        assert!(soracloud_response.is_torii_proxy_control_message());
+        assert!(torii_request.is_torii_proxy_control_message());
+        assert!(torii_response.is_torii_proxy_control_message());
+        assert!(!NetworkMessage::Health.is_torii_proxy_control_message());
+    }
+
+    #[test]
     fn sumeragi_block_classifies_topics() {
         let params = ConsensusParamsAdvert {
             collectors_k: 1,
@@ -604,6 +744,7 @@ mod tests {
         let created = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
             BlockMessage::BlockCreated(BlockCreated {
                 block: block.clone(),
+                frontier: None,
             }),
         )));
         assert_eq!(created.topic(), NetworkTopic::Consensus);
@@ -637,6 +778,11 @@ mod tests {
             roster: Vec::new(),
             roster_hash,
             total_chunks: 0,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            chunk_size_bytes: 0,
+            payload_size_bytes: 0,
+            data_shards: 0,
+            parity_shards: 0,
             chunk_digests: Vec::new(),
             payload_hash,
             chunk_root,
@@ -660,6 +806,30 @@ mod tests {
             BlockMessage::RbcChunk(chunk),
         )));
         assert_eq!(payload.topic(), NetworkTopic::ConsensusChunk);
+
+        let proposal = Proposal {
+            header: ConsensusBlockHeader {
+                parent_hash: block_hash,
+                tx_root: Hash::new(b"tx"),
+                state_root: Hash::new(b"state"),
+                proposer: 0,
+                height: 1,
+                view: 0,
+                epoch: 0,
+                highest_qc: QcHeaderRef {
+                    height: 0,
+                    view: 0,
+                    epoch: 0,
+                    subject_block_hash: block_hash,
+                    phase: Phase::Prepare,
+                },
+            },
+            payload_hash,
+        };
+        let proposal_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
+            BlockMessage::Proposal(proposal),
+        )));
+        assert_eq!(proposal_msg.topic(), NetworkTopic::Consensus);
 
         let sync = BlockSyncUpdate::from(&block);
         let sync_msg = NetworkMessage::SumeragiBlock(Box::new(BlockMessageWire::new(
@@ -708,6 +878,7 @@ mod tests {
         };
         let msg = BlockMessage::ConsensusParams(params);
         let encoded = BlockMessageWire::encode_message(&msg);
+        assert!(encoded.starts_with(&norito::core::MAGIC));
         let wire = BlockMessageWire::with_encoded(Arc::new(msg), Arc::new(encoded));
         let network = NetworkMessage::SumeragiBlock(Box::new(wire));
 
@@ -739,7 +910,7 @@ mod tests {
         let signed = builder
             .with_instructions([Log::new(Level::INFO, "ping".to_owned())])
             .sign(keypair.private_key());
-        let payload = Arc::new(signed.encode());
+        let payload = canonical_signed_transaction_payload(&signed);
         let gossip = TransactionGossip {
             txs: vec![GossipTransaction::with_encoded(
                 signed.clone(),
@@ -747,7 +918,7 @@ mod tests {
             )],
             routes: vec![GossipRoute {
                 lane_id: LaneId::SINGLE,
-                dataspace_id: DataSpaceId::GLOBAL,
+                dataspace_id: DataSpaceId::UNIVERSAL,
             }],
             plane: GossipPlane::Public,
         };
@@ -761,12 +932,67 @@ mod tests {
             NetworkMessage::TransactionGossiper(gossip) => {
                 assert_eq!(gossip.txs.len(), 1);
                 assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
+                let wire = gossip.txs[0].encode();
+                assert_eq!(wire.as_slice(), payload.as_slice());
+                assert!(wire.starts_with(&ncore::MAGIC));
                 assert_eq!(gossip.routes.len(), 1);
                 assert_eq!(gossip.routes[0].lane_id, LaneId::SINGLE);
-                assert_eq!(gossip.routes[0].dataspace_id, DataSpaceId::GLOBAL);
+                assert_eq!(gossip.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
             }
             other => panic!("expected transaction gossip, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn network_message_roundtrip_cached_transaction_gossip_is_context_free() {
+        let (account, keypair) = gen_account_in("wonderland");
+        let chain_id: ChainId = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("valid chain id");
+        let mut builder = TransactionBuilder::new(chain_id, account);
+        builder.set_creation_time(Duration::from_millis(0));
+        let signed = builder
+            .with_instructions([Log::new(Level::INFO, "pong".to_owned())])
+            .sign(keypair.private_key());
+        let canonical_payload = canonical_signed_transaction_payload(&signed);
+        let payload = {
+            let _guard = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
+            Arc::new(ncore::to_bytes(&signed).expect("encode signed transaction"))
+        };
+        std::thread::spawn(move || {
+            let gossip = TransactionGossip {
+                txs: vec![GossipTransaction::with_encoded(
+                    signed.clone(),
+                    Arc::clone(&payload),
+                )],
+                routes: vec![GossipRoute {
+                    lane_id: LaneId::SINGLE,
+                    dataspace_id: DataSpaceId::UNIVERSAL,
+                }],
+                plane: GossipPlane::Public,
+            };
+            let msg = NetworkMessage::TransactionGossiper(Arc::new(gossip));
+
+            let bytes = msg.encode();
+            let decoded: NetworkMessage =
+                Decode::decode(&mut bytes.as_slice()).expect("decode gossip network");
+
+            match decoded {
+                NetworkMessage::TransactionGossiper(gossip) => {
+                    assert_eq!(gossip.txs.len(), 1);
+                    assert_eq!(gossip.txs[0].as_signed().hash(), signed.hash());
+                    let wire = gossip.txs[0].encode();
+                    assert_eq!(wire.as_slice(), canonical_payload.as_slice());
+                    assert!(wire.starts_with(&ncore::MAGIC));
+                    assert_eq!(gossip.routes.len(), 1);
+                    assert_eq!(gossip.routes[0].lane_id, LaneId::SINGLE);
+                    assert_eq!(gossip.routes[0].dataspace_id, DataSpaceId::UNIVERSAL);
+                }
+                other => panic!("expected transaction gossip, got {other:?}"),
+            }
+        })
+        .join()
+        .expect("context-free network gossip thread");
     }
 
     #[test]

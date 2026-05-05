@@ -8,7 +8,7 @@ name = "iroha_python_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
-iroha_crypto = { path = "../../../crates/iroha_crypto", features = ["sm"] }
+iroha_crypto = { path = "../../../crates/iroha_crypto", features = ["bls", "gost", "sm"] }
 iroha_data_model = { path = "../../../crates/iroha_data_model", features = ["json"] }
 iroha_primitives = { path = "../../../crates/iroha_primitives" }
 iroha_schema = { path = "../../../crates/iroha_schema" }

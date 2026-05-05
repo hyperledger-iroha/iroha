@@ -156,7 +156,7 @@ determinista y multiplataforma; no depende de tooling ad hoc.
 
 Puedes generar el bundle de reporte/atestación localmente con `cargo xtask sorafs-gateway-attest`.
 El comando acepta `--signing-key <path>` (private key en hex),
-`--signer-account <i105...>` (AccountId codificado sin dominio; sufijo `@domain` rechazado), y `--gateway <url>` más `--out <dir>` opcional.
+`--signer-account <<i105-account-id>>` (AccountId codificado sin dominio; sufijo `@domain` rechazado), y `--gateway <url>` más `--out <dir>` opcional.
 Los artefactos se guardan por defecto en `artifacts/sorafs_gateway_attest/`.
 
 Al mantener el hook de firma dentro del binario del harness, los runs nightly de CI pueden
@@ -194,7 +194,7 @@ contiene:
 - una entrada `cid` codificada en base64 junto a una ventana de expiración.
 - una entrada `url` para bloqueo a nivel de URL.
 - una entrada `account_id` usando el encoding hex canónico de AccountAddress para reflejar suspensiones de gobernanza.
-- una entrada `account_alias` que bloquea un alias de ruteo (`alias@domain`).
+- una entrada `account_alias` que bloquea un alias de ruteo (`name@dataspace` or `name@domain.dataspace`).
 - una entrada `perceptual_family` que empareja un UUID de familia/variante con metadata de hash perceptual (`perceptual_hash_hex`, `perceptual_hamming_radius`) para que los gateways bloqueen clusters de contenido casi duplicado.
 
 Cada registro sigue el mismo layout Norito JSON que usa el loader, incluyendo campos opcionales

@@ -37,6 +37,7 @@ pub struct BenchManifestOptions {
     pub matrix_manifest: Option<PathBuf>,
     pub label_max_operation_ms: BTreeMap<String, BTreeMap<String, f64>>,
     pub label_min_operation_speedup: BTreeMap<String, BTreeMap<String, f64>>,
+    pub label_operation_filters: BTreeMap<String, BTreeSet<String>>,
 }
 
 impl Default for BenchManifestOptions {
@@ -51,6 +52,7 @@ impl Default for BenchManifestOptions {
             matrix_manifest: None,
             label_max_operation_ms: BTreeMap::new(),
             label_min_operation_speedup: BTreeMap::new(),
+            label_operation_filters: BTreeMap::new(),
         }
     }
 }
@@ -101,6 +103,12 @@ struct BenchEntry {
     padded_rows: Option<u64>,
     iterations: Option<u64>,
     warmups: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    operation_filter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    matrix_operation_filters: Option<Vec<String>>,
     gpu_backend: Option<String>,
     gpu_available: Option<bool>,
     poseidon_microbench: Option<PoseidonMicrobenchSummary>,
@@ -240,6 +248,9 @@ struct MatrixDeviceEntry {
     label: String,
     #[serde(default)]
     #[norito(default)]
+    operation_filters: Vec<String>,
+    #[serde(default)]
+    #[norito(default)]
     max_operation_ms: BTreeMap<String, f64>,
     #[serde(default)]
     #[norito(default)]
@@ -276,6 +287,12 @@ fn apply_matrix_manifest(options: &mut BenchManifestOptions, manifest_path: &Pat
             options
                 .label_min_operation_speedup
                 .insert(device.label.clone(), device.min_operation_speedup.clone());
+        }
+        if !device.operation_filters.is_empty() {
+            options.label_operation_filters.insert(
+                device.label.clone(),
+                device.operation_filters.iter().cloned().collect(),
+            );
         }
     }
     Ok(())
@@ -446,6 +463,14 @@ fn parse_bench_entry(bench: &BenchInput, constraints: &BenchManifestOptions) -> 
         padded_rows: benchmarks_value.get("padded_rows").and_then(|v| v.as_u64()),
         iterations: benchmarks_value.get("iterations").and_then(|v| v.as_u64()),
         warmups: benchmarks_value.get("warmups").and_then(|v| v.as_u64()),
+        operation_filter: benchmarks_value
+            .get("operation_filter")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+        matrix_operation_filters: constraints
+            .label_operation_filters
+            .get(&bench.label)
+            .map(|filters| filters.iter().cloned().collect()),
         gpu_backend,
         gpu_available: benchmarks_value
             .get("gpu_available")
@@ -677,6 +702,10 @@ impl StageKind {
                 dir: "poseidon",
             },
         }
+    }
+
+    fn cuda_operation(self) -> &'static str {
+        self.spec().operation
     }
 }
 
@@ -930,6 +959,7 @@ pub struct CudaSuiteOptions {
     pub warmups: usize,
     pub iterations: usize,
     pub column_count: usize,
+    pub operation: Option<StageKind>,
     pub require_gpu: bool,
     pub output: PathBuf,
     pub raw_output: PathBuf,
@@ -958,6 +988,7 @@ impl Default for CudaSuiteOptions {
             warmups: 1,
             iterations: 5,
             column_count: 16,
+            operation: None,
             require_gpu: false,
             output,
             raw_output,
@@ -1005,9 +1036,12 @@ struct CudaSuiteSummary {
     warmups: usize,
     iterations: usize,
     columns: usize,
+    operation: String,
     require_gpu: bool,
-    require_lde_mean_ms: f64,
-    require_poseidon_mean_ms: f64,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    require_lde_mean_ms: Option<f64>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    require_poseidon_mean_ms: Option<f64>,
     #[norito(skip_serializing_if = "Option::is_none")]
     row_usage: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -1022,6 +1056,22 @@ struct CudaSuiteSummary {
 struct CommandPlan {
     record: RecordedCommand,
     command: Command,
+}
+
+impl CudaSuiteOptions {
+    fn operation_arg(&self) -> &'static str {
+        self.operation
+            .map(StageKind::cuda_operation)
+            .unwrap_or("all")
+    }
+
+    fn requires_lde_threshold(&self) -> bool {
+        self.operation.is_none() || self.operation == Some(StageKind::Lde)
+    }
+
+    fn requires_poseidon_threshold(&self) -> bool {
+        self.operation.is_none() || self.operation == Some(StageKind::Poseidon)
+    }
 }
 
 pub fn run_cuda_suite(options: &CudaSuiteOptions) -> Result<CudaSuiteResult> {
@@ -1108,9 +1158,14 @@ fn write_cuda_suite_summary(
         warmups: options.warmups,
         iterations: options.iterations,
         columns: options.column_count,
+        operation: options.operation_arg().to_owned(),
         require_gpu: options.require_gpu,
-        require_lde_mean_ms: options.require_lde_mean_ms,
-        require_poseidon_mean_ms: options.require_poseidon_mean_ms,
+        require_lde_mean_ms: options
+            .requires_lde_threshold()
+            .then_some(options.require_lde_mean_ms),
+        require_poseidon_mean_ms: options
+            .requires_poseidon_threshold()
+            .then_some(options.require_poseidon_mean_ms),
         row_usage: options.row_usage.as_deref().map(display_path),
         device: options.device.clone(),
         notes: options.notes.clone(),
@@ -1151,6 +1206,8 @@ fn build_cuda_bench_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
         options.warmups.to_string(),
         "--column-count".to_owned(),
         options.column_count.to_string(),
+        "--operation".to_owned(),
+        options.operation_arg().to_owned(),
         "--output".to_owned(),
         display_path(&options.raw_output),
     ];
@@ -1193,13 +1250,15 @@ fn build_cuda_bench_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
 }
 
 fn build_wrap_command(options: &CudaSuiteOptions) -> Result<CommandPlan> {
-    let mut args = vec![
-        display_path(&options.wrapper),
-        "--require-lde-mean-ms".to_owned(),
-        options.require_lde_mean_ms.to_string(),
-        "--require-poseidon-mean-ms".to_owned(),
-        options.require_poseidon_mean_ms.to_string(),
-    ];
+    let mut args = vec![display_path(&options.wrapper)];
+    if options.requires_lde_threshold() {
+        args.push("--require-lde-mean-ms".to_owned());
+        args.push(options.require_lde_mean_ms.to_string());
+    }
+    if options.requires_poseidon_threshold() {
+        args.push("--require-poseidon-mean-ms".to_owned());
+        args.push(options.require_poseidon_mean_ms.to_string());
+    }
     if let Some(row_usage) = &options.row_usage {
         args.push("--row-usage".to_owned());
         args.push(display_path(row_usage));
@@ -1260,13 +1319,18 @@ fn plan_summary_path(output: &Path) -> PathBuf {
 }
 
 pub fn default_cuda_bench_output_path() -> PathBuf {
+    default_cuda_bench_output_path_for_operation(None)
+}
+
+pub fn default_cuda_bench_output_path_for_operation(operation: Option<StageKind>) -> PathBuf {
+    let stem = operation
+        .map(StageKind::cuda_operation)
+        .map(|operation| format!("fastpq_cuda_bench_{operation}"))
+        .unwrap_or_else(|| "fastpq_cuda_bench".to_owned());
     workspace_root()
         .join("artifacts")
         .join("fastpq_benchmarks")
-        .join(format!(
-            "fastpq_cuda_bench_{}.json",
-            stage_profile_timestamp()
-        ))
+        .join(format!("{stem}_{}.json", stage_profile_timestamp()))
 }
 
 pub fn default_cuda_raw_output(output: &Path) -> PathBuf {
@@ -1312,6 +1376,7 @@ mod tests {
                 "padded_rows": 32768,
                 "iterations": 3,
                 "warmups": 1,
+                "operation_filter": "all",
                 "gpu_backend": "metal",
                 "gpu_available": true,
                 "poseidon_microbench": {
@@ -1414,6 +1479,7 @@ mod tests {
             matrix_manifest: None,
             label_max_operation_ms: BTreeMap::new(),
             label_min_operation_speedup: BTreeMap::new(),
+            label_operation_filters: BTreeMap::new(),
         };
         options.max_operation_ms.extend([("fft".into(), 500.0)]);
 
@@ -1435,6 +1501,13 @@ mod tests {
                 .and_then(|v| v.as_str())
                 .expect("bench label"),
             "metal"
+        );
+        assert_eq!(
+            benches[0]
+                .get("operation_filter")
+                .and_then(|v| v.as_str())
+                .expect("operation filter"),
+            "all"
         );
         assert_eq!(
             manifest
@@ -1463,6 +1536,7 @@ mod tests {
             matrix_manifest: None,
             label_max_operation_ms: BTreeMap::new(),
             label_min_operation_speedup: BTreeMap::new(),
+            label_operation_filters: BTreeMap::new(),
         };
         let err = write_bench_manifest(options).expect_err("rows threshold fails");
         assert!(
@@ -1481,6 +1555,7 @@ mod tests {
             "require_rows": 20000,
             "devices": [{
                 "label": "metal",
+                "operation_filters": ["all", "lde"],
                 "max_operation_ms": { "lde": 1600.0 },
                 "min_operation_speedup": { "fft": 1.05 }
             }]
@@ -1504,6 +1579,7 @@ mod tests {
             matrix_manifest: Some(manifest_path.clone()),
             label_max_operation_ms: BTreeMap::new(),
             label_min_operation_speedup: BTreeMap::new(),
+            label_operation_filters: BTreeMap::new(),
         };
         write_bench_manifest(options).expect("matrix constraints pass");
 
@@ -1543,11 +1619,102 @@ mod tests {
             matrix_manifest: Some(manifest_path),
             label_max_operation_ms: BTreeMap::new(),
             label_min_operation_speedup: BTreeMap::new(),
+            label_operation_filters: BTreeMap::new(),
         };
         let err = write_bench_manifest(failing).expect_err("matrix threshold should fail");
         assert!(
             err.to_string().contains("exceeded max gpu_mean_ms"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn manifest_records_focused_operation_filter() {
+        let temp = TempDir::new().expect("tempdir");
+        let path = temp.path().join("cuda_lde.json");
+        let mut bundle = sample_bundle(20_000);
+        if let Some(map) = bundle.get_mut("benchmarks").and_then(Value::as_object_mut) {
+            map.insert("operation_filter".into(), norito::json!("lde"));
+            map.insert(
+                "operations".into(),
+                norito::json!([{
+                    "operation": "lde",
+                    "gpu_mean_ms": 800.0,
+                    "speedup_ratio": 1.05
+                }]),
+            );
+        }
+        fs::write(&path, norito::json::to_vec_pretty(&bundle).unwrap()).unwrap();
+
+        let options = BenchManifestOptions {
+            benches: vec![BenchInput {
+                label: "cuda-lde".into(),
+                path,
+            }],
+            output: temp.path().join("manifest.json"),
+            signing_key: None,
+            require_rows: None,
+            max_operation_ms: BTreeMap::new(),
+            min_operation_speedup: BTreeMap::new(),
+            matrix_manifest: None,
+            label_max_operation_ms: BTreeMap::new(),
+            label_min_operation_speedup: BTreeMap::new(),
+            label_operation_filters: BTreeMap::new(),
+        };
+        write_bench_manifest(options).expect("manifest succeeds");
+
+        let manifest_text =
+            fs::read_to_string(temp.path().join("manifest.json")).expect("read manifest");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&manifest_text).expect("manifest json");
+        let bench = manifest["payload"]["benches"][0].clone();
+        assert_eq!(bench["label"], norito::json!("cuda-lde"));
+        assert_eq!(bench["operation_filter"], norito::json!("lde"));
+    }
+
+    #[test]
+    fn manifest_records_matrix_operation_filters() {
+        let temp = TempDir::new().expect("tempdir");
+        let bench_path = write_bundle(&temp, "cuda.json", 20_000);
+        let manifest_path = temp.path().join("matrix_manifest.json");
+        let manifest_value = norito::json!({
+            "version": 1,
+            "devices": [{
+                "label": "cuda",
+                "operation_filters": ["fft", "lde", "poseidon_hash_columns"]
+            }]
+        });
+        fs::write(
+            &manifest_path,
+            norito::json::to_vec_pretty(&manifest_value).unwrap(),
+        )
+        .unwrap();
+
+        let options = BenchManifestOptions {
+            benches: vec![BenchInput {
+                label: "cuda".into(),
+                path: bench_path,
+            }],
+            output: temp.path().join("manifest.json"),
+            signing_key: None,
+            require_rows: None,
+            max_operation_ms: BTreeMap::new(),
+            min_operation_speedup: BTreeMap::new(),
+            matrix_manifest: Some(manifest_path),
+            label_max_operation_ms: BTreeMap::new(),
+            label_min_operation_speedup: BTreeMap::new(),
+            label_operation_filters: BTreeMap::new(),
+        };
+        write_bench_manifest(options).expect("manifest succeeds");
+
+        let manifest_text =
+            fs::read_to_string(temp.path().join("manifest.json")).expect("read manifest");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&manifest_text).expect("manifest json");
+        let bench = manifest["payload"]["benches"][0].clone();
+        assert_eq!(
+            bench["matrix_operation_filters"],
+            norito::json!(["fft", "lde", "poseidon_hash_columns"])
         );
     }
 
@@ -1575,6 +1742,16 @@ mod tests {
     }
 
     #[test]
+    fn filtered_cuda_default_output_includes_operation_name() {
+        let output = default_cuda_bench_output_path_for_operation(Some(StageKind::Poseidon));
+        let output = display_path(&output);
+        assert!(
+            output.contains("artifacts/fastpq_benchmarks/fastpq_cuda_bench_poseidon_hash_columns_"),
+            "unexpected filtered output path: {output}"
+        );
+    }
+
+    #[test]
     fn cuda_bench_command_builds_expected_args() {
         let temp = TempDir::new().expect("tempdir");
         let options = CudaSuiteOptions {
@@ -1582,6 +1759,7 @@ mod tests {
             warmups: 0,
             iterations: 2,
             column_count: 4,
+            operation: Some(StageKind::Ifft),
             require_gpu: true,
             output: temp.path().join("wrapped.json"),
             raw_output: temp.path().join("raw.json"),
@@ -1611,6 +1789,8 @@ mod tests {
         assert!(args.contains(&"--rows".to_string()));
         assert!(args.contains(&"128".to_string()));
         assert!(args.contains(&"--require-gpu".to_string()));
+        assert!(args.contains(&"--operation".to_string()));
+        assert!(args.contains(&"ifft".to_string()));
         assert!(
             plan.record
                 .env
@@ -1645,6 +1825,42 @@ mod tests {
     }
 
     #[test]
+    fn cuda_wrap_command_skips_irrelevant_thresholds_for_filtered_runs() {
+        let temp = TempDir::new().expect("tempdir");
+        let options = CudaSuiteOptions {
+            output: temp.path().join("wrapped.json"),
+            raw_output: temp.path().join("raw.json"),
+            operation: Some(StageKind::Fft),
+            require_lde_mean_ms: 777.0,
+            require_poseidon_mean_ms: 888.0,
+            ..CudaSuiteOptions::default()
+        };
+
+        let plan = build_wrap_command(&options).expect("wrap plan");
+        let args = plan.record.args.join(" ");
+        assert!(!args.contains("--require-lde-mean-ms"));
+        assert!(!args.contains("--require-poseidon-mean-ms"));
+    }
+
+    #[test]
+    fn cuda_wrap_command_keeps_selected_threshold_for_poseidon_only() {
+        let temp = TempDir::new().expect("tempdir");
+        let options = CudaSuiteOptions {
+            output: temp.path().join("wrapped.json"),
+            raw_output: temp.path().join("raw.json"),
+            operation: Some(StageKind::Poseidon),
+            require_lde_mean_ms: 777.0,
+            require_poseidon_mean_ms: 888.0,
+            ..CudaSuiteOptions::default()
+        };
+
+        let plan = build_wrap_command(&options).expect("wrap plan");
+        let args = plan.record.args.join(" ");
+        assert!(!args.contains("--require-lde-mean-ms"));
+        assert!(args.contains("--require-poseidon-mean-ms 888"));
+    }
+
+    #[test]
     fn cuda_suite_dry_run_writes_summary() {
         let temp = TempDir::new().expect("tempdir");
         let options = CudaSuiteOptions {
@@ -1655,6 +1871,7 @@ mod tests {
             rows: 16,
             iterations: 1,
             warmups: 0,
+            operation: Some(StageKind::Lde),
             dry_run: true,
             ..CudaSuiteOptions::default()
         };
@@ -1672,5 +1889,8 @@ mod tests {
             value["commands"].as_array().map(|array| array.len()),
             Some(1)
         );
+        assert_eq!(value["operation"], norito::json!("lde"));
+        assert_eq!(value["require_lde_mean_ms"], norito::json!(950.0));
+        assert!(value.get("require_poseidon_mean_ms").is_none());
     }
 }

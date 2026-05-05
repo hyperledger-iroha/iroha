@@ -32,10 +32,10 @@ Grafana + Alertmanager သို့ လွှဲပြောင်းမှု�
 
   sorafs reserve ledger \
     --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
-    --provider-account i105... \
-    --treasury-account i105... \
-    --reserve-account i105... \
-    --asset-definition xor#sora \
+    --provider-account <i105-account-id> \
+    --treasury-account <i105-account-id> \
+    --reserve-account <i105-account-id> \
+    --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    လယ်ဂျာအကူအညီပေးသူက `ledger_projection` ဘလောက်တစ်ခုကို ပူးတွဲပါရှိသည် (ငှားရမ်းခ၊ အရန်၊

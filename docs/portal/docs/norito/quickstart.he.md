@@ -4,9 +4,9 @@ direction: rtl
 source: docs/portal/docs/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7c9a8e27bb8f586eac6bf4925cc69357dfa6d3f94c3dcf9e032b916c27fadf21
-source_last_modified: "2025-11-07T12:25:50.867928+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -17,13 +17,13 @@ slug: /norito/quickstart
 
 המדריך הזה משקף את הזרימה שאנו מצפים שמפתחים יבצעו כאשר הם לומדים Norito ו-Kotodama בפעם הראשונה: להרים רשת דטרמיניסטית עם צומת יחיד, לקמפל חוזה, להריץ אותו מקומית כ-dry-run ואז לשלוח אותו דרך Torii עם ה-CLI הייחוסי.
 
-חוזה הדוגמה כותב זוג מפתח/ערך לחשבון של הקורא כדי שתוכלו לוודא את תופעת הלוואי מיד בעזרת `iroha_cli`.
+חוזה הדוגמה כותב זוג מפתח/ערך לחשבון של הקורא כדי שתוכלו לוודא את תופעת הלוואי מיד בעזרת `iroha`.
 
 ## דרישות מקדימות
 
 - [Docker](https://docs.docker.com/engine/install/) עם Compose V2 פעיל (משמש להפעלת ה-peer לדוגמה שמוגדר ב-`defaults/docker-compose.single.yml`).
 - Rust toolchain (1.76+) לבניית הבינארים המסייעים אם אינכם מורידים את המפורסמים.
-- בינארים `koto_compile`, `ivm_run` ו-`iroha_cli`. אפשר לבנות אותם מה-checkout של ה-workspace כפי שמוצג למטה או להוריד את release artifacts המתאימים:
+- בינארים `koto_compile`, `ivm_run` ו-`iroha`. אפשר לבנות אותם מה-checkout של ה-workspace כפי שמוצג למטה או להוריד את release artifacts המתאימים:
 
 ```sh
 cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
@@ -58,8 +58,14 @@ seiyaku Hello {
     info("Hello from Kotodama");
   }
 
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
   // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),
@@ -91,7 +97,7 @@ ivm_run target/quickstart/hello.to --args '{}'
 
 כאשר הצומת עדיין רץ, שלחו את הבייטקוד המקומפל ל-Torii באמצעות ה-CLI. הזהות הדיפולטית לפיתוח נגזרת מהמפתח הציבורי ב-`defaults/client.toml`, כך שמזהה החשבון הוא
 ```
-i105...
+<i105-account-id>
 ```
 
 השתמשו בקובץ ההגדרות כדי לספק את כתובת Torii, chain ID ומפתח החתימה:
@@ -111,7 +117,7 @@ iroha --config defaults/client.toml \
 ```sh
 iroha --config defaults/client.toml \
   account meta get \
-  --id i105... \
+  --id <i105-account-id> \
   --key example | jq .
 ```
 

@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: a91fc8841580a836c80129942df7f79f5bc5dd5f6a72dccf1394b740d02536a5
-source_last_modified: "2025-11-23T15:30:33.687233+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 4d7cdc798ae9f1b69608c2b287a76a06a3d8d51116185ff6a5326e755b7b05bd
+source_last_modified: "2026-04-08T09:19:38.794575+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -20,9 +20,9 @@ Kotodama のエントリポイントがホストの `transfer_asset` 命令を�
 
 ## 台帳ウォークスルー
 
-- コントラクトの権限者（例: `i105...`）に転送対象の資産を用意し、権限者に `CanTransfer` ロールまたは同等の権限を付与します。
-- `call_transfer_asset` エントリポイントを呼び出して、コントラクトアカウントから `i105...` に 5 単位を転送します。オンチェーン自動化がホスト呼び出しをラップする方法を反映しています。
-- `FindAccountAssets` または `iroha_cli ledger assets list --account i105...` で残高を確認し、イベントを調べてメタデータガードが転送コンテキストを記録したことを確かめます。
+- コントラクトの権限者（例: `<i105-account-id>`）に転送対象の資産を用意し、権限者に `CanTransfer` ロールまたは同等の権限を付与します。
+- `call_transfer_asset` エントリポイントを呼び出して、コントラクトアカウントから `<i105-account-id>` に 5 単位を転送します。オンチェーン自動化がホスト呼び出しをラップする方法を反映しています。
+- `FindAccountAssets` または `iroha ledger asset list all --verbose` で残高を確認し、イベントを調べてメタデータガードが転送コンテキストを記録したことを確かめます。
 
 ## 関連 SDK ガイド
 
@@ -37,9 +37,9 @@ Kotodama のエントリポイントがホストの `transfer_asset` 命令を�
 seiyaku TransferCall {
   kotoage fn pay() permission(AssetTransferRole) {
     transfer_asset(
-      account!("i105..."),
-      account!("i105..."),
-      asset_definition!("rose#wonderland"),
+      account!("<i105-account-id>"),
+      account!("<i105-account-id>"),
+      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       10
     );
   }

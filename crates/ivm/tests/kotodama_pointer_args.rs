@@ -9,10 +9,8 @@ use ivm::{
     validate_tlv_bytes,
 };
 
-fn parse_account_literal(literal: &str) -> AccountId {
-    AccountId::parse_encoded(literal)
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .expect("account literal must be canonical I105")
+fn account_from_public_key(public_key: &str) -> AccountId {
+    AccountId::new(public_key.parse().expect("public key must be valid"))
 }
 
 fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>> {
@@ -30,17 +28,13 @@ fn resolve_state_value(host: &WsvHost, base: &Name, key: i64) -> Option<Vec<u8>>
 
 #[test]
 fn pointer_map_default_roundtrip() {
-    const ACCOUNT_A: &str = "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+    const AUTHORITY_PUBLIC_KEY: &str =
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
     let src = r#"
         seiyaku PointerFFI {
             state Owners: Map<int, AccountId>;
             fn hajimari() {
-                let default_owner = account_id("6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn");
-                let stored = get_or_insert_default(Owners, 7, default_owner);
-                assert(stored == default_owner);
-                let alt = account_id("6cmzPVPX8dTmJWnCc8X5MpcZLb7UjrvR5Y1VdRmfj9pbb93hFbJfpLb");
-                let again = get_or_insert_default(Owners, 7, alt);
-                assert(again == default_owner);
+                Owners[7] = authority();
             }
         }
     "#;
@@ -52,7 +46,7 @@ fn pointer_map_default_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.load_program(&bytecode).expect("load program");
     let wsv = MockWorldStateView::new();
-    let authority = parse_account_literal(ACCOUNT_A);
+    let authority = account_from_public_key(AUTHORITY_PUBLIC_KEY);
     let host = WsvHost::new_with_subject(wsv, authority, HashMap::new());
     vm.set_host(host);
     vm.run().expect("execute hajimari");
@@ -70,7 +64,7 @@ fn pointer_map_default_roundtrip() {
 
     let decoded_account: AccountId =
         norito::decode_from_bytes(inner.payload).expect("decode account id");
-    let expected: AccountId = parse_account_literal(ACCOUNT_A);
+    let expected: AccountId = account_from_public_key(AUTHORITY_PUBLIC_KEY);
     assert_eq!(decoded_account, expected);
 
     // Ensure payload hash matches expected data (sanity check).
@@ -82,4 +76,49 @@ fn pointer_map_default_roundtrip() {
     );
     let stored_hash = &outer.payload[hash_offset..hash_offset + hash.len()];
     assert_eq!(stored_hash, hash.as_ref());
+}
+
+#[test]
+fn pointer_asset_state_storage_wraps_inner_pointer() {
+    const ASSET_DEFINITION: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+
+    let src = format!(
+        r#"
+        seiyaku PointerAssetStorage {{
+            state Assets: Map<int, AssetDefinitionId>;
+
+            fn main() {{
+                Assets[7] = asset_definition("{asset_definition}");
+            }}
+        }}
+    "#,
+        asset_definition = ASSET_DEFINITION,
+    );
+
+    let bytecode = Compiler::new()
+        .compile_source(&src)
+        .expect("compile asset storage contract");
+    let asset: AssetDefinitionId = ASSET_DEFINITION.parse().expect("asset definition literal");
+    let authority = account_from_public_key(
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
+    );
+    let host = WsvHost::new_with_subject(MockWorldStateView::new(), authority, HashMap::new());
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(host);
+    vm.load_program(&bytecode).expect("load program");
+    vm.run().expect("store asset pointer");
+
+    let host_ref = vm.host_mut_any().expect("host access");
+    let host = host_ref.downcast_ref::<WsvHost>().expect("wsv host");
+    let base = Name::from_str("Assets").expect("valid state name");
+    let stored = resolve_state_value(host, &base, 7).expect("state entry present");
+
+    let outer = validate_tlv_bytes(&stored).expect("outer TLV");
+    assert_eq!(outer.type_id, PointerType::NoritoBytes);
+    let inner = validate_tlv_bytes(outer.payload).expect("inner TLV");
+    assert_eq!(inner.type_id, PointerType::AssetDefinitionId);
+
+    let decoded_asset: AssetDefinitionId =
+        norito::decode_from_bytes(inner.payload).expect("decode asset definition");
+    assert_eq!(decoded_asset, asset);
 }

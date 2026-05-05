@@ -27,6 +27,8 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
                 iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -41,18 +43,18 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     // Minimal world: one domain, two accounts, one asset def
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
         NumericSpec::default(),
     )
     .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
-    let acc_b = Account::new(bob_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
+    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
+    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     #[cfg(feature = "telemetry")]
     let state = State::new(
@@ -67,7 +69,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     // Build a block with two txs (independent)
     let chain_id = ChainId::from("chain");
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
@@ -154,6 +156,8 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
                 iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -168,18 +172,18 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     // Minimal world: one domain, two accounts, one asset def
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
         NumericSpec::default(),
     )
     .build(&alice_id);
-    let acc_a = Account::new(alice_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
-    let acc_b = Account::new(bob_id.clone().to_account_id(domain_id.clone())).build(&alice_id);
+    let acc_a = Account::new(alice_id.clone()).build(&alice_id);
+    let acc_b = Account::new(bob_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     #[cfg(feature = "telemetry")]
     let state = State::new(
@@ -194,7 +198,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     // Build a block with two txs (independent)
     let chain_id = ChainId::from("chain");
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());

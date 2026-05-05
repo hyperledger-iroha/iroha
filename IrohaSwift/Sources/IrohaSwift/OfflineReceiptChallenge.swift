@@ -31,50 +31,15 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
         try validateAmount(amount, expectedScale: expectedScale)
         _ = try parseHashHex(senderCertificateIdHex, field: "senderCertificateIdHex")
         _ = try parseHashHex(nonceHex, field: "nonceHex")
-        do {
-            guard let native = try NoritoNativeBridge.shared.offlineReceiptChallenge(
-                chainId: chainId,
-                invoiceId: invoiceId,
-                receiverId: receiverAccountId,
-                assetId: assetId,
-                amount: amount,
-                issuedAtMs: issuedAtMs,
-                senderCertificateIdHex: senderCertificateIdHex,
-                nonceHex: nonceHex
-            ) else {
-                throw Error.bridgeUnavailable
-            }
-            return Result(
-                preimage: native.preimage,
-                irohaHash: native.irohaHash,
-                clientDataHash: native.clientHash
-            )
-        } catch let bridgeError as NoritoNativeBridge.OfflineReceiptChallengeBridgeError {
-            switch bridgeError {
-            case .callFailed(let code):
-                return try computeCanonical(chainId: chainId,
-                                            invoiceId: invoiceId,
-                                            receiverAccountId: receiverAccountId,
-                                            assetId: assetId,
-                                            amount: amount,
-                                            issuedAtMs: issuedAtMs,
-                                            senderCertificateIdHex: senderCertificateIdHex,
-                                            nonceHex: nonceHex,
-                                            status: code)
-            }
-        } catch Error.bridgeUnavailable {
-            return try computeCanonical(chainId: chainId,
-                                        invoiceId: invoiceId,
-                                        receiverAccountId: receiverAccountId,
-                                        assetId: assetId,
-                                        amount: amount,
-                                        issuedAtMs: issuedAtMs,
-                                        senderCertificateIdHex: senderCertificateIdHex,
-                                        nonceHex: nonceHex,
-                                        status: nil)
-        } catch {
-            throw error
-        }
+        return try computeCanonical(chainId: chainId,
+                                    invoiceId: invoiceId,
+                                    receiverAccountId: receiverAccountId,
+                                    assetId: assetId,
+                                    amount: amount,
+                                    issuedAtMs: issuedAtMs,
+                                    senderCertificateIdHex: senderCertificateIdHex,
+                                    nonceHex: nonceHex,
+                                    status: nil)
     }
 
     private static func computeCanonical(
@@ -170,4 +135,28 @@ public struct OfflineReceiptChallenge: Sendable, Equatable {
             throw Error.invalidInput("amount must use scale \(expectedScale): \(value)")
         }
     }
+}
+
+struct OfflineReceiptChallengePreimage {
+    let invoiceId: String
+    let receiverAccountId: String
+    let assetId: String
+    let amount: String
+    let issuedAtMs: UInt64
+    let senderCertificateId: Data
+    let nonce: Data
+
+    func noritoPayload() throws -> Data {
+        var writer = OfflineNoritoWriter()
+        writer.writeField(OfflineNorito.encodeString(invoiceId))
+        writer.writeField(try OfflineNorito.encodeAccountId(receiverAccountId))
+        writer.writeField(try OfflineNorito.encodeAssetId(assetId))
+        writer.writeField(try OfflineNorito.encodeNumeric(amount))
+        writer.writeField(OfflineNorito.encodeUInt64(issuedAtMs))
+        writer.writeField(try OfflineNorito.encodeHash(senderCertificateId))
+        writer.writeField(try OfflineNorito.encodeHash(nonce))
+        return writer.data
+    }
+
+    static let noritoTypeName = "iroha_data_model::offline::OfflineReceiptChallengePreimage"
 }

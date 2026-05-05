@@ -10,8 +10,6 @@ use libfuzzer_sys::fuzz_target;
     norito::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
-    norito::derive::FastJson,
-    norito::derive::FastJsonWrite,
 )]
 struct Inner {
     count: u32,
@@ -22,13 +20,10 @@ struct Inner {
     Clone,
     Debug,
     PartialEq,
-    Eq,
     norito::NoritoSerialize,
     norito::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
-    norito::derive::FastJson,
-    norito::derive::FastJsonWrite,
 )]
 struct Outer {
     id: u64,

@@ -41,17 +41,7 @@ from iroha_torii_client.client import (
     NetworkTimeSample,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    OfflineAllowanceDeadline,
-    OfflineAllowanceListItem,
-    OfflineAllowanceListPage,
-    OfflineAllowanceRegisterResponse,
-    OfflineCertificateIssueResponse,
-    OfflineSummaryListItem,
-    OfflineSummaryListPage,
-    OfflineTopUpResponse,
-    OfflineTransferHistoryEntry,
-    OfflineTransferListItem,
-    OfflineTransferListPage,
+    OfflineV2Readiness,
     SubscriptionActionResult,
     SubscriptionCreateResult,
     SubscriptionListItem,
@@ -72,6 +62,7 @@ from .query import (
     asset_definitions_query_envelope,
     asset_holders_query_envelope,
     domain_query_envelope,
+    rwa_query_envelope,
 )
 from .repo import RepoAgreementListPage
 from .sorafs import (
@@ -88,7 +79,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from .connect import _ConnectControlBase as ConnectControlBase  # noqa: F401
     from .crypto import Instruction, SignedTransactionEnvelope  # noqa: F401
     from .tx import TransactionDraft
-else:  # pragma: no cover - runtime fallback when extension is absent
+else:  # pragma: no cover - runtime type aliases
     Instruction = Any  # type: ignore[assignment]
     SignedTransactionEnvelope = Any  # type: ignore[assignment]
     ConnectControlBase = Any  # type: ignore[assignment]
@@ -171,6 +162,42 @@ def _normalize_optional_string(value: Any, context: str) -> Optional[str]:
     if value is None:
         return None
     return _require_non_empty_string(value, context)
+
+
+def _normalize_canonical_account_id(value: Any, context: str) -> str:
+    literal = _require_non_empty_string(value, context)
+    if any(ch.isspace() for ch in literal):
+        raise ValueError(
+            f"{context} must be a canonical I105 account id or on-chain account alias"
+        )
+    if "@" in literal:
+        label, separator, scope = literal.partition("@")
+        scope_parts = scope.split(".") if separator else []
+        if (
+            not label
+            or not separator
+            or not scope
+            or len(scope_parts) not in (1, 2)
+            or any(not part for part in scope_parts)
+        ):
+            raise ValueError(
+                f"{context} must use canonical I105 account id or account alias `name@dataspace` / `name@domain.dataspace`"
+            )
+        return literal
+    try:
+        address = AccountAddress.parse_encoded(
+            literal, expected_discriminant=DEFAULT_I105_DISCRIMINANT
+        )
+    except AccountAddressError as exc:
+        raise ValueError(
+            f"{context} must be a canonical I105 account id or on-chain account alias"
+        ) from exc
+    canonical = address.to_i105(DEFAULT_I105_DISCRIMINANT)
+    if canonical != literal:
+        raise ValueError(
+            f"{context} must use canonical I105 account id form when not using an alias"
+        )
+    return canonical
 
 
 def _normalize_string_list(value: Any, context: str) -> List[str]:
@@ -631,10 +658,10 @@ def _parse_optional_duration_ms_field(value: Any, context: str) -> Optional[int]
 
 def _normalize_base64_payload(
     explicit_b64: Optional[Any],
-    fallback_payload: Optional[Any],
+    default_payload: Optional[Any],
     context: str,
 ) -> str:
-    source = explicit_b64 if explicit_b64 is not None else fallback_payload
+    source = explicit_b64 if explicit_b64 is not None else default_payload
     if source is None:
         raise ValueError(f"{context} must be provided")
     if isinstance(source, str):
@@ -1317,6 +1344,140 @@ class ExplorerAccountQrSnapshot:
 
 
 @dataclass(frozen=True)
+class ExplorerPaginationMeta:
+    """Pagination metadata returned by explorer list endpoints."""
+
+    page: int
+    per_page: int
+    total_pages: int
+    total_items: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerPaginationMeta":
+        if not isinstance(payload, Mapping):
+            raise TypeError("explorer pagination payload must be an object")
+        page = _coerce_int(payload.get("page"), "explorer_pagination.page")
+        per_page = _coerce_int(payload.get("per_page"), "explorer_pagination.per_page")
+        total_pages = _coerce_int(
+            payload.get("total_pages"),
+            "explorer_pagination.total_pages",
+            allow_zero=True,
+        )
+        total_items = _coerce_int(
+            payload.get("total_items"),
+            "explorer_pagination.total_items",
+            allow_zero=True,
+        )
+        if page is None:
+            raise TypeError("explorer pagination missing numeric `page` field")
+        if per_page is None:
+            raise TypeError("explorer pagination missing numeric `per_page` field")
+        if total_pages is None:
+            raise TypeError("explorer pagination missing numeric `total_pages` field")
+        if total_items is None:
+            raise TypeError("explorer pagination missing numeric `total_items` field")
+        return cls(
+            page=page,
+            per_page=per_page,
+            total_pages=total_pages,
+            total_items=total_items,
+        )
+
+
+@dataclass(frozen=True)
+class ExplorerRwaRecord:
+    """Explorer RWA lot projection returned by `/v1/explorer/rwas`."""
+
+    id: str
+    owned_by: str
+    quantity: str
+    held_quantity: str
+    primary_reference: str
+    status: Optional[str]
+    is_frozen: bool
+    metadata: Dict[str, Any]
+    raw: Dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerRwaRecord":
+        if not isinstance(payload, Mapping):
+            raise TypeError("explorer RWA record must be an object")
+
+        def _require_string(key: str, label: str) -> str:
+            raw = payload.get(key)
+            if not isinstance(raw, str) or not raw.strip():
+                raise TypeError(f"{label} must be a non-empty string")
+            return raw.strip()
+
+        identifier = _require_string("id", "explorer_rwa.id")
+        owned_by = _require_string("owned_by", "explorer_rwa.owned_by")
+        quantity = _require_string("quantity", "explorer_rwa.quantity")
+        held_quantity = _require_string("held_quantity", "explorer_rwa.held_quantity")
+        primary_reference = _require_string(
+            "primary_reference",
+            "explorer_rwa.primary_reference",
+        )
+
+        is_frozen = payload.get("is_frozen")
+        if not isinstance(is_frozen, bool):
+            raise TypeError("explorer_rwa.is_frozen must be a boolean")
+
+        status_raw = payload.get("status")
+        if status_raw is None:
+            status = None
+        elif isinstance(status_raw, str) and status_raw.strip():
+            status = status_raw.strip()
+        else:
+            raise TypeError("explorer_rwa.status must be a string when present")
+
+        metadata_payload = payload.get("metadata", {})
+        if metadata_payload is None:
+            metadata: Dict[str, Any] = {}
+        elif isinstance(metadata_payload, Mapping):
+            metadata = dict(metadata_payload)
+        else:
+            raise TypeError("explorer_rwa.metadata must be an object when present")
+
+        return cls(
+            id=identifier,
+            owned_by=owned_by,
+            quantity=quantity,
+            held_quantity=held_quantity,
+            primary_reference=primary_reference,
+            status=status,
+            is_frozen=is_frozen,
+            metadata=metadata,
+            raw=dict(payload),
+        )
+
+
+@dataclass(frozen=True)
+class ExplorerRwasPage:
+    """Paginated explorer RWA list returned by `/v1/explorer/rwas`."""
+
+    pagination: ExplorerPaginationMeta
+    items: List[ExplorerRwaRecord]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ExplorerRwasPage":
+        if not isinstance(payload, Mapping):
+            raise TypeError("explorer RWA page payload must be an object")
+        pagination_payload = payload.get("pagination")
+        if not isinstance(pagination_payload, Mapping):
+            raise TypeError("explorer RWA page missing object `pagination` field")
+        items_payload = payload.get("items", [])
+        if items_payload is None:
+            items_payload = []
+        if not isinstance(items_payload, list):
+            raise TypeError("explorer RWA page `items` must be a list")
+        items = [ExplorerRwaRecord.from_payload(entry) for entry in items_payload]
+        return cls(
+            pagination=ExplorerPaginationMeta.from_payload(pagination_payload),
+            items=items,
+        )
+
+
+@dataclass(frozen=True)
 class IsoSubmissionRecord:
     """Normalized ISO 20022 bridge status payload."""
 
@@ -1851,8 +2012,7 @@ class GovernanceProposalStatus(str, Enum):
 class GovernanceProposalDeployContract:
     """`DeployContract` payload embedded in governance proposals."""
 
-    namespace: str
-    contract_id: str
+    contract_address: str
     code_hash_hex: str
     abi_hash_hex: str
     abi_version: str
@@ -1867,17 +2027,46 @@ class GovernanceProposalDeployContract:
                 raise TypeError(f"DeployContract payload missing string `{field_name}` field")
             return value
 
-        namespace = _require_str("namespace")
-        contract_id = _require_str("contract_id")
+        contract_address = _require_str("contract_address")
         code_hash_hex = _require_str("code_hash_hex")
         abi_hash_hex = _require_str("abi_hash_hex")
         abi_version = _require_str("abi_version")
         return cls(
-            namespace=namespace,
-            contract_id=contract_id,
+            contract_address=contract_address,
             code_hash_hex=code_hash_hex,
             abi_hash_hex=abi_hash_hex,
             abi_version=abi_version,
+        )
+
+
+@dataclass(frozen=True)
+class GovernanceContractRecord:
+    """Governance binding returned by `GET /v1/gov/contracts/{contract_address}`."""
+
+    found: bool
+    contract_address: str
+    dataspace: Optional[str]
+    code_hash_hex: Optional[str]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceContractRecord":
+        if not isinstance(payload, Mapping):
+            raise TypeError("governance contract payload must be an object")
+        found = bool(payload.get("found", False))
+        contract_address = payload.get("contract_address")
+        if not isinstance(contract_address, str):
+            raise TypeError("governance contract payload missing string `contract_address` field")
+        dataspace = payload.get("dataspace")
+        if dataspace is not None and not isinstance(dataspace, str):
+            raise TypeError("governance contract payload `dataspace` must be a string or null")
+        code_hash_hex = payload.get("code_hash_hex")
+        if code_hash_hex is not None and not isinstance(code_hash_hex, str):
+            raise TypeError("governance contract payload `code_hash_hex` must be a string or null")
+        return cls(
+            found=found,
+            contract_address=contract_address,
+            dataspace=dataspace,
+            code_hash_hex=code_hash_hex,
         )
 
 
@@ -2090,66 +2279,6 @@ class GovernanceUnlockStats:
             expired_locks_now=expired_locks_now,
             referenda_with_expired=referenda_with_expired,
             last_sweep_height=last_sweep_height,
-        )
-
-
-@dataclass(frozen=True)
-class ContractInstance:
-    """Contract instance metadata returned by Torii listings."""
-
-    contract_id: str
-    code_hash_hex: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractInstance":
-        if not isinstance(payload, Mapping):
-            raise TypeError("instance payload must be an object")
-        contract_id = payload.get("contract_id")
-        code_hash_hex = payload.get("code_hash_hex")
-        if not isinstance(contract_id, str):
-            raise TypeError("instance payload missing string `contract_id` field")
-        if not isinstance(code_hash_hex, str):
-            raise TypeError("instance payload missing string `code_hash_hex` field")
-        return cls(contract_id=contract_id, code_hash_hex=code_hash_hex)
-
-
-@dataclass(frozen=True)
-class ContractInstancesPage:
-    """Paginated response for contract instance listings."""
-
-    namespace: str
-    instances: List[ContractInstance]
-    total: int
-    offset: int
-    limit: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractInstancesPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("instances response must be an object")
-        namespace = payload.get("namespace")
-        if not isinstance(namespace, str):
-            raise TypeError("instances response missing string `namespace` field")
-        instances_payload = payload.get("instances")
-        if not isinstance(instances_payload, list):
-            raise TypeError("instances response missing list `instances` field")
-        instances: List[ContractInstance] = []
-        for item in instances_payload:
-            if not isinstance(item, Mapping):
-                raise TypeError("instance entry must be an object")
-            instances.append(ContractInstance.from_payload(item))
-        try:
-            total = int(payload.get("total", 0))
-            offset = int(payload.get("offset", 0))
-            limit = int(payload.get("limit", len(instances)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("instances response pagination fields must be numeric") from exc
-        return cls(
-            namespace=namespace,
-            instances=instances,
-            total=total,
-            offset=offset,
-            limit=limit,
         )
 
 
@@ -2941,6 +3070,47 @@ class AssetHolderListPage:
         except (TypeError, ValueError) as exc:
             raise TypeError("asset holder query `total` must be numeric") from exc
         items = [AssetHolderRecord.from_payload(entry) for entry in items_payload]
+        return cls(items=items, total=total)
+
+
+@dataclass(frozen=True)
+class RwaListItem:
+    """Chain-state RWA lot entry returned by `/v1/rwas` and `/v1/rwas/query`."""
+
+    id: str
+    raw: Dict[str, Any]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "RwaListItem":
+        if not isinstance(payload, Mapping):
+            raise TypeError("RWA list item must be an object")
+        identifier = payload.get("id")
+        if not isinstance(identifier, str) or not identifier.strip():
+            raise TypeError("RWA list item missing string `id` field")
+        return cls(id=identifier.strip(), raw=dict(payload))
+
+
+@dataclass(frozen=True)
+class RwaListPage:
+    """Paginated chain-state RWA lot list returned by `/v1/rwas` and `/v1/rwas/query`."""
+
+    items: List[RwaListItem]
+    total: int
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "RwaListPage":
+        if not isinstance(payload, Mapping):
+            raise TypeError("RWA list payload must be an object")
+        items_payload = payload.get("items", [])
+        if items_payload is None:
+            items_payload = []
+        if not isinstance(items_payload, list):
+            raise TypeError("RWA list `items` must be a list")
+        try:
+            total = int(payload.get("total", len(items_payload)))
+        except (TypeError, ValueError) as exc:
+            raise TypeError("RWA list `total` must be numeric") from exc
+        items = [RwaListItem.from_payload(entry) for entry in items_payload]
         return cls(items=items, total=total)
 
 
@@ -4464,7 +4634,6 @@ class SumeragiStatusSnapshot:
     commit_quorum: SumeragiCommitQuorumSummary
     tx_queue: SumeragiTxQueueStatus
     epoch: SumeragiEpochSchedule
-    gossip_fallback_total: int
     block_created_dropped_by_lock_total: int
     block_created_hint_mismatch_total: int
     block_created_proposal_mismatch_total: int
@@ -4506,7 +4675,6 @@ class SumeragiStatusSnapshot:
             )
             view_change_suggest_total = int(payload.get("view_change_suggest_total", 0))
             view_change_install_total = int(payload.get("view_change_install_total", 0))
-            gossip_fallback_total = int(payload.get("gossip_fallback_total", 0))
             block_drop_total = int(payload.get("block_created_dropped_by_lock_total", 0))
             block_hint_total = int(payload.get("block_created_hint_mismatch_total", 0))
             block_proposal_total = int(payload.get("block_created_proposal_mismatch_total", 0))
@@ -4622,7 +4790,6 @@ class SumeragiStatusSnapshot:
             commit_quorum=SumeragiCommitQuorumSummary.from_payload(commit_quorum_payload),
             tx_queue=SumeragiTxQueueStatus.from_payload(tx_queue_payload),
             epoch=SumeragiEpochSchedule.from_payload(epoch_payload),
-            gossip_fallback_total=gossip_fallback_total,
             block_created_dropped_by_lock_total=block_drop_total,
             block_created_hint_mismatch_total=block_hint_total,
             block_created_proposal_mismatch_total=block_proposal_total,
@@ -5670,6 +5837,10 @@ class ConnectPolicyStatusSnapshot:
     frame_max_bytes: int
     session_buffer_max_bytes: int
     relay_enabled: bool
+    relay_strategy: str
+    relay_effective_strategy: str
+    relay_p2p_attached: bool
+    p2p_ttl_hops: int
     heartbeat_interval_ms: int
     heartbeat_miss_tolerance: int
     heartbeat_min_interval_ms: int
@@ -5686,11 +5857,15 @@ class ConnectPolicyStatusSnapshot:
             frame_max_bytes = int(payload.get("frame_max_bytes", 0))
             session_buffer_max_bytes = int(payload.get("session_buffer_max_bytes", 0))
             relay_enabled = bool(payload.get("relay_enabled", False))
+            relay_strategy = str(payload.get("relay_strategy", ""))
+            relay_effective_strategy = str(payload.get("relay_effective_strategy", ""))
+            relay_p2p_attached = bool(payload.get("relay_p2p_attached", False))
+            p2p_ttl_hops = int(payload.get("p2p_ttl_hops", 0))
             heartbeat_interval_ms = int(payload.get("heartbeat_interval_ms", 0))
             heartbeat_miss_tolerance = int(payload.get("heartbeat_miss_tolerance", 0))
             heartbeat_min_interval_ms = int(payload.get("heartbeat_min_interval_ms", 0))
         except (TypeError, ValueError) as exc:
-            raise TypeError("connect policy fields must be numeric/boolean") from exc
+            raise TypeError("connect policy fields have invalid types") from exc
         return cls(
             ws_max_sessions=ws_max_sessions,
             ws_per_ip_max_sessions=ws_per_ip_max_sessions,
@@ -5699,6 +5874,10 @@ class ConnectPolicyStatusSnapshot:
             frame_max_bytes=frame_max_bytes,
             session_buffer_max_bytes=session_buffer_max_bytes,
             relay_enabled=relay_enabled,
+            relay_strategy=relay_strategy,
+            relay_effective_strategy=relay_effective_strategy,
+            relay_p2p_attached=relay_p2p_attached,
+            p2p_ttl_hops=p2p_ttl_hops,
             heartbeat_interval_ms=heartbeat_interval_ms,
             heartbeat_miss_tolerance=heartbeat_miss_tolerance,
             heartbeat_min_interval_ms=heartbeat_min_interval_ms,
@@ -5724,7 +5903,19 @@ class ConnectStatusSnapshot:
     buffer_drops_total: int
     plaintext_control_drops_total: int
     monotonic_drops_total: int
+    sequence_violation_closes_total: int
+    role_direction_mismatch_total: int
     ping_miss_total: int
+    p2p_rebroadcasts_total: int
+    p2p_rebroadcast_skipped_total: int
+    p2p_auth_failures_total: int
+    p2p_ttl_drops_total: int
+    p2p_unknown_session_drops_total: int
+    p2p_session_claims_in_total: int
+    p2p_session_claims_installed_total: int
+    p2p_session_claim_conflicts_total: int
+    p2p_role_consumed_total: int
+    p2p_session_terminated_total: int
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, Any]) -> "ConnectStatusSnapshot":
@@ -5765,7 +5956,19 @@ class ConnectStatusSnapshot:
             buffer_drops_total=_coerce_int_field("buffer_drops_total"),
             plaintext_control_drops_total=_coerce_int_field("plaintext_control_drops_total"),
             monotonic_drops_total=_coerce_int_field("monotonic_drops_total"),
+            sequence_violation_closes_total=_coerce_int_field("sequence_violation_closes_total"),
+            role_direction_mismatch_total=_coerce_int_field("role_direction_mismatch_total"),
             ping_miss_total=_coerce_int_field("ping_miss_total"),
+            p2p_rebroadcasts_total=_coerce_int_field("p2p_rebroadcasts_total"),
+            p2p_rebroadcast_skipped_total=_coerce_int_field("p2p_rebroadcast_skipped_total"),
+            p2p_auth_failures_total=_coerce_int_field("p2p_auth_failures_total"),
+            p2p_ttl_drops_total=_coerce_int_field("p2p_ttl_drops_total"),
+            p2p_unknown_session_drops_total=_coerce_int_field("p2p_unknown_session_drops_total"),
+            p2p_session_claims_in_total=_coerce_int_field("p2p_session_claims_in_total"),
+            p2p_session_claims_installed_total=_coerce_int_field("p2p_session_claims_installed_total"),
+            p2p_session_claim_conflicts_total=_coerce_int_field("p2p_session_claim_conflicts_total"),
+            p2p_role_consumed_total=_coerce_int_field("p2p_role_consumed_total"),
+            p2p_session_terminated_total=_coerce_int_field("p2p_session_terminated_total"),
         )
 
 
@@ -5860,8 +6063,7 @@ class GovernanceManifestQuorumSnapshot:
 
 @dataclass(frozen=True)
 class GovernanceManifestActivationSnapshot:
-    namespace: str
-    contract_id: str
+    contract_address: str
     code_hash_hex: str
     abi_hash_hex: Optional[str]
     height: int
@@ -6173,8 +6375,7 @@ class ToriiStatusPayload:
                     raise TypeError(
                         f"governance manifest activation at index {idx} must be an object"
                     )
-                namespace = item.get("namespace", "")
-                contract_id = item.get("contract_id", "")
+                contract_address = item.get("contract_address", "")
                 code_hash = item.get("code_hash_hex", "")
                 abi_hash = item.get("abi_hash_hex")
                 try:
@@ -6186,8 +6387,7 @@ class ToriiStatusPayload:
                     ) from exc
                 recent_activations.append(
                     GovernanceManifestActivationSnapshot(
-                        namespace=str(namespace),
-                        contract_id=str(contract_id),
+                        contract_address=str(contract_address),
                         code_hash_hex=str(code_hash),
                         abi_hash_hex=str(abi_hash) if abi_hash is not None else None,
                         height=height,
@@ -6458,7 +6658,7 @@ def resolve_torii_client_config(
         )
         timeout = _coerce_timeout_seconds(
             source.get("timeout_ms"),
-            fallback=source.get("timeout"),
+            default_value=source.get("timeout"),
         )
         if timeout is not None:
             state["timeout"] = timeout
@@ -6471,7 +6671,7 @@ def resolve_torii_client_config(
             state["max_retries"] = max_retries
         backoff_initial = _coerce_duration_seconds(
             source.get("backoff_initial_ms"),
-            fallback=source.get("backoff_initial"),
+            default_value=source.get("backoff_initial"),
         )
         if backoff_initial is not None:
             state["backoff_initial"] = backoff_initial
@@ -6484,7 +6684,7 @@ def resolve_torii_client_config(
             state["backoff_multiplier"] = max(backoff_multiplier, 1.0)
         max_backoff = _coerce_duration_seconds(
             source.get("max_backoff_ms"),
-            fallback=source.get("max_backoff"),
+            default_value=source.get("max_backoff"),
         )
         if max_backoff is not None:
             state["max_backoff"] = max_backoff
@@ -6638,19 +6838,19 @@ def _coerce_float(value: Any, name: str, *, allow_zero: bool = False) -> Optiona
     return number
 
 
-def _coerce_duration_seconds(value: Any, *, fallback: Any = None) -> Optional[float]:
+def _coerce_duration_seconds(value: Any, *, default_value: Any = None) -> Optional[float]:
     millis = _coerce_float(value, "duration_ms", allow_zero=True)
     if millis is not None:
         return millis / 1000.0
-    seconds = _coerce_float(fallback, "duration", allow_zero=True)
+    seconds = _coerce_float(default_value, "duration", allow_zero=True)
     return seconds
 
 
-def _coerce_timeout_seconds(value: Any, *, fallback: Any = None) -> Optional[float]:
+def _coerce_timeout_seconds(value: Any, *, default_value: Any = None) -> Optional[float]:
     result = _coerce_duration_seconds(value)
     if result is not None:
         return result
-    seconds = _coerce_float(fallback, "timeout", allow_zero=True)
+    seconds = _coerce_float(default_value, "timeout", allow_zero=True)
     return seconds
 
 
@@ -6723,7 +6923,7 @@ __all__ = [
     "ToriiClient",
     "create_torii_client",
     "TransactionStatusError",
-    "DataModelCompatibilityError",
+    "DataModelMismatchError",
     "signed_transaction_envelope_from_json",
     "resolve_torii_client_config",
     "ResolvedToriiClientConfig",
@@ -6762,14 +6962,7 @@ __all__ = [
     "AssetHolderListPage",
     "AccountPermissionRecord",
     "AccountPermissionListPage",
-    "OfflineAllowanceDeadline",
-    "OfflineAllowanceListItem",
-    "OfflineAllowanceListPage",
-    "OfflineTransferHistoryEntry",
-    "OfflineTransferListItem",
-    "OfflineTransferListPage",
-    "OfflineSummaryListItem",
-    "OfflineSummaryListPage",
+    "OfflineV2Readiness",
     "SubscriptionPlanCreateResult",
     "SubscriptionPlanListItem",
     "SubscriptionPlanListPage",
@@ -6845,7 +7038,7 @@ class TransactionStatusError(RuntimeError):
         super().__init__(f"transaction {hash_hex} reported failure status {status_repr}")
 
 
-class DataModelCompatibilityError(RuntimeError):
+class DataModelMismatchError(RuntimeError):
     """Raised when the node data model version does not match the SDK."""
 
     def __init__(self, expected: int, actual: Optional[int]) -> None:
@@ -6927,7 +7120,7 @@ class ToriiClient(_BaseToriiClient):
         )
         self._sorafs_alias_metrics: Dict[str, int] = {}
         self._last_sorafs_alias_evaluation: Optional[SorafsAliasEvaluation] = None
-        self._data_model_compatibility = "unknown"
+        self._data_model_validation = "unknown"
         self._data_model_actual: Optional[int] = None
 
     @property
@@ -6963,35 +7156,35 @@ class ToriiClient(_BaseToriiClient):
 
         return self._last_sorafs_alias_evaluation
 
-    def _ensure_data_model_compatibility(self) -> None:
-        if self._data_model_compatibility == "compatible":
+    def _ensure_data_model_validation(self) -> None:
+        if self._data_model_validation == "matched":
             return
-        if self._data_model_compatibility == "incompatible":
-            raise DataModelCompatibilityError(DATA_MODEL_VERSION, self._data_model_actual)
+        if self._data_model_validation == "mismatched":
+            raise DataModelMismatchError(DATA_MODEL_VERSION, self._data_model_actual)
 
         try:
             capabilities = self.get_node_capabilities()
         except RuntimeError as error:
             if "data_model_version" in str(error):
-                self._data_model_compatibility = "incompatible"
+                self._data_model_validation = "mismatched"
                 self._data_model_actual = None
-                raise DataModelCompatibilityError(DATA_MODEL_VERSION, None) from error
+                raise DataModelMismatchError(DATA_MODEL_VERSION, None) from error
             raise
         actual = capabilities.data_model_version
         if actual != DATA_MODEL_VERSION:
-            self._data_model_compatibility = "incompatible"
+            self._data_model_validation = "mismatched"
             self._data_model_actual = actual
-            raise DataModelCompatibilityError(DATA_MODEL_VERSION, actual)
-        self._data_model_compatibility = "compatible"
+            raise DataModelMismatchError(DATA_MODEL_VERSION, actual)
+        self._data_model_validation = "matched"
         self._data_model_actual = actual
 
     def submit_transaction(self, payload: bytes) -> Optional[Any]:
         """Submit a Norito-encoded transaction payload to `/v1/pipeline/transactions`.
 
-        Raises :class:`DataModelCompatibilityError` when the node data model version mismatches.
+        Raises :class:`DataModelMismatchError` when the node data model version mismatches.
         """
 
-        self._ensure_data_model_compatibility()
+        self._ensure_data_model_validation()
         response = self._request(
             "POST",
             "/v1/pipeline/transactions",
@@ -7268,9 +7461,12 @@ class ToriiClient(_BaseToriiClient):
     ) -> Mapping[str, Any]:
         """Fetch explorer QR metadata via `GET /v1/explorer/accounts/{account_id}/qr`."""
 
+        canonical_account_id = _normalize_canonical_account_id(
+            account_id, "account_id"
+        )
         payload = self.request_json(
             "GET",
-            f"/v1/explorer/accounts/{account_id}/qr",
+            f"/v1/explorer/accounts/{quote(canonical_account_id, safe='')}/qr",
             headers={"Accept": "application/json"},
             expected_status=(200,),
         )
@@ -7288,6 +7484,84 @@ class ToriiClient(_BaseToriiClient):
 
         payload = self.get_explorer_account_qr(account_id)
         return ExplorerAccountQrSnapshot.from_payload(payload)
+
+    def list_explorer_rwas(
+        self,
+        *,
+        page: Optional[int] = None,
+        per_page: Optional[int] = None,
+        owned_by: Optional[str] = None,
+        domain: Optional[str] = None,
+    ) -> Mapping[str, Any]:
+        """List explorer RWAs via `GET /v1/explorer/rwas`."""
+
+        params: Dict[str, Any] = {}
+        page_value = _coerce_int(page, "list_explorer_rwas.page")
+        if page_value is not None:
+            params["page"] = page_value
+        per_page_value = _coerce_int(per_page, "list_explorer_rwas.per_page")
+        if per_page_value is not None:
+            params["per_page"] = per_page_value
+        owned_by_value = _normalize_optional_string(owned_by, "list_explorer_rwas.owned_by")
+        if owned_by_value is not None:
+            params["owned_by"] = owned_by_value
+        domain_value = _normalize_optional_string(domain, "list_explorer_rwas.domain")
+        if domain_value is not None:
+            params["domain"] = domain_value
+        payload = self.request_json(
+            "GET",
+            "/v1/explorer/rwas",
+            params=params or None,
+            headers={"Accept": "application/json"},
+            expected_status=(200,),
+        )
+        if payload is None:
+            raise RuntimeError("explorer RWA endpoint returned no payload")
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("explorer RWA endpoint returned malformed payload")
+        return payload
+
+    def list_explorer_rwas_typed(
+        self,
+        *,
+        page: Optional[int] = None,
+        per_page: Optional[int] = None,
+        owned_by: Optional[str] = None,
+        domain: Optional[str] = None,
+    ) -> ExplorerRwasPage:
+        """Typed wrapper for :meth:`list_explorer_rwas`."""
+
+        payload = self.list_explorer_rwas(
+            page=page,
+            per_page=per_page,
+            owned_by=owned_by,
+            domain=domain,
+        )
+        return ExplorerRwasPage.from_payload(payload)
+
+    def get_explorer_rwa_detail(self, rwa_id: str) -> Mapping[str, Any]:
+        """Fetch a single explorer RWA detail via `GET /v1/explorer/rwas/{rwa_id}`."""
+
+        rwa_id_value = _normalize_optional_string(rwa_id, "get_explorer_rwa_detail.rwa_id")
+        if rwa_id_value is None:
+            raise ValueError("get_explorer_rwa_detail.rwa_id must be a non-empty string")
+        payload = self.request_json(
+            "GET",
+            f"/v1/explorer/rwas/{quote(rwa_id_value, safe='')}",
+            headers={"Accept": "application/json"},
+            expected_status=(200,),
+        )
+        if payload is None:
+            raise RuntimeError("explorer RWA detail endpoint returned no payload")
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("explorer RWA detail endpoint returned malformed payload")
+        return payload
+
+    def get_explorer_rwa_detail_typed(self, rwa_id: str) -> ExplorerRwaRecord:
+        """Typed wrapper for :meth:`get_explorer_rwa_detail`."""
+
+        payload = self.get_explorer_rwa_detail(rwa_id)
+        return ExplorerRwaRecord.from_payload(payload)
 
     # -------------------------
     # ISO 20022 bridge APIs
@@ -7531,25 +7805,6 @@ class ToriiClient(_BaseToriiClient):
             context="repo agreements query",
         )
         return RepoAgreementListPage.from_payload(payload)
-
-    # ------------------------------------------------------------------
-    # Offline allowances, transfers, and summaries
-    # ------------------------------------------------------------------
-
-    def list_offline_allowances(self, **params: Any) -> OfflineAllowanceListPage:
-        """List offline allowances (`GET /v1/offline/allowances`)."""
-
-        return super().list_offline_allowances(**params)
-
-    def list_offline_transfers(self, **params: Any) -> OfflineTransferListPage:
-        """List offline transfers (`GET /v1/offline/transfers`)."""
-
-        return super().list_offline_transfers(**params)
-
-    def list_offline_summaries(self, **params: Any) -> OfflineSummaryListPage:
-        """List offline counter summaries (`GET /v1/offline/summaries`)."""
-
-        return super().list_offline_summaries(**params)
 
     def get_sorafs_pin_manifest(
         self,
@@ -7804,7 +8059,7 @@ class ToriiClient(_BaseToriiClient):
         return self.request_json("GET", "/v1/health", expected_status=(200,))
 
     def get_configuration(self) -> Mapping[str, Any]:
-        """Return the current node configuration as a JSON-compatible mapping."""
+        """Return the current node configuration as a JSON mapping."""
 
         snapshot = self.get_configuration_typed()
         return _configuration_snapshot_to_dict(snapshot)
@@ -8029,10 +8284,10 @@ class ToriiClient(_BaseToriiClient):
     def get_kaigi_relay(self, relay_id: str) -> Optional[Any]:
         """Fetch metadata for a specific Kaigi relay (`GET /v1/kaigi/relays/{relay_id}`)."""
 
-        relay_literal = _require_non_empty_string(relay_id, "relay_id")
+        relay_literal = _normalize_canonical_account_id(relay_id, "relay_id")
         response = self._request(
             "GET",
-            f"/v1/kaigi/relays/{relay_literal}",
+            f"/v1/kaigi/relays/{quote(relay_literal, safe='')}",
             headers={"Accept": "application/json"},
         )
         self._expect_status(response, (200, 404))
@@ -8296,13 +8551,16 @@ class ToriiClient(_BaseToriiClient):
     ) -> Optional[Any]:
         """List account assets via `GET /v1/accounts/{account_id}/assets` (optional `asset_id`)."""
 
+        canonical_account_id = _normalize_canonical_account_id(
+            account_id, "account_id"
+        )
         params = self._pagination_params(limit=limit, offset=offset)
         asset_id_value = _normalize_optional_string(asset_id, "list_account_assets.asset_id")
         if asset_id_value is not None:
             params["asset_id"] = asset_id_value
         return self.request_json(
             "GET",
-            f"/v1/accounts/{account_id}/assets",
+            f"/v1/accounts/{quote(canonical_account_id, safe='')}/assets",
             params=params or None,
             expected_status=(200,),
         )
@@ -8339,6 +8597,9 @@ class ToriiClient(_BaseToriiClient):
     ) -> Optional[Any]:
         """List account transactions via `GET /v1/accounts/{account_id}/transactions` (optional `asset_id`)."""
 
+        canonical_account_id = _normalize_canonical_account_id(
+            account_id, "account_id"
+        )
         params = self._pagination_params(limit=limit, offset=offset)
         asset_id_value = _normalize_optional_string(
             asset_id,
@@ -8348,7 +8609,7 @@ class ToriiClient(_BaseToriiClient):
             params["asset_id"] = asset_id_value
         return self.request_json(
             "GET",
-            f"/v1/accounts/{account_id}/transactions",
+            f"/v1/accounts/{quote(canonical_account_id, safe='')}/transactions",
             params=params or None,
             expected_status=(200,),
         )
@@ -8389,6 +8650,9 @@ class ToriiClient(_BaseToriiClient):
     ) -> Dict[str, Any]:
         """POST `/v1/accounts/{account_id}/assets/query` with a Norito-style envelope."""
 
+        canonical_account_id = _normalize_canonical_account_id(
+            account_id, "account_id"
+        )
         if envelope is not None:
             self._ensure_no_query_args(
                 envelope=envelope,
@@ -8411,7 +8675,7 @@ class ToriiClient(_BaseToriiClient):
             )
         response = self._request(
             "POST",
-            f"/v1/accounts/{account_id}/assets/query",
+            f"/v1/accounts/{quote(canonical_account_id, safe='')}/assets/query",
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
@@ -8461,6 +8725,9 @@ class ToriiClient(_BaseToriiClient):
     ) -> Dict[str, Any]:
         """POST `/v1/accounts/{account_id}/transactions/query` with a Norito-style envelope."""
 
+        canonical_account_id = _normalize_canonical_account_id(
+            account_id, "account_id"
+        )
         if envelope is not None:
             self._ensure_no_query_args(
                 envelope=envelope,
@@ -8483,7 +8750,7 @@ class ToriiClient(_BaseToriiClient):
             )
         response = self._request(
             "POST",
-            f"/v1/accounts/{account_id}/transactions/query",
+            f"/v1/accounts/{quote(canonical_account_id, safe='')}/transactions/query",
             data=json.dumps(body).encode("utf-8"),
             headers={"Content-Type": "application/json"},
         )
@@ -8928,6 +9195,114 @@ class ToriiClient(_BaseToriiClient):
                 time.sleep(interval)
 
     # ------------------------------------------------------------------
+    # RWA queries
+    # ------------------------------------------------------------------
+
+    def query_rwas(
+        self,
+        *,
+        filter: Optional[Dict[str, Any]] = None,
+        sort: Optional[Any] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        fetch_size: Optional[int] = None,
+        query_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Execute POST `/v1/rwas/query` with a structured envelope."""
+
+        body = rwa_query_envelope(
+            filter=filter,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+            fetch_size=fetch_size,
+            query_name=query_name,
+        )
+        response = self._request(
+            "POST",
+            "/v1/rwas/query",
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        self._expect_status(response, {200})
+        payload = self._maybe_json(response)
+        if not isinstance(payload, dict):
+            raise RuntimeError("unexpected RWA query response")
+        return payload
+
+    def query_rwas_typed(
+        self,
+        *,
+        filter: Optional[Dict[str, Any]] = None,
+        sort: Optional[Any] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        fetch_size: Optional[int] = None,
+        query_name: Optional[str] = None,
+    ) -> RwaListPage:
+        """Typed wrapper for :meth:`query_rwas`."""
+
+        payload = self.query_rwas(
+            filter=filter,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+            fetch_size=fetch_size,
+            query_name=query_name,
+        )
+        return RwaListPage.from_payload(payload)
+
+    def list_rwas(
+        self,
+        *,
+        filter: Optional[Any] = None,
+        sort: Optional[Any] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> Optional[Any]:
+        """List chain-state RWAs via `GET /v1/rwas`."""
+
+        params: Dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = int(limit)
+        if offset is not None:
+            params["offset"] = int(offset)
+        filter_arg = _encode_filter_arg(filter)
+        if filter_arg is not None:
+            params["filter"] = filter_arg
+        sort_arg = _encode_sort_arg(sort)
+        if sort_arg is not None:
+            params["sort"] = sort_arg
+        return self.request_json(
+            "GET",
+            "/v1/rwas",
+            params=params or None,
+            expected_status=(200,),
+        )
+
+    def list_rwas_typed(
+        self,
+        *,
+        filter: Optional[Any] = None,
+        sort: Optional[Any] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+    ) -> RwaListPage:
+        """Typed wrapper for :meth:`list_rwas`."""
+
+        payload = self.list_rwas(
+            filter=filter,
+            sort=sort,
+            limit=limit,
+            offset=offset,
+        )
+        if payload is None:
+            return RwaListPage(items=[], total=0)
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("RWA list endpoint returned non-object payload")
+        return RwaListPage.from_payload(payload)
+
+    # ------------------------------------------------------------------
     # Account queries
     # ------------------------------------------------------------------
     def query_accounts(
@@ -9358,10 +9733,13 @@ class ToriiClient(_BaseToriiClient):
     ) -> Optional[Any]:
         """List account permissions via `GET /v1/accounts/{account_id}/permissions`."""
 
+        canonical_account_id = _normalize_canonical_account_id(
+            account_id, "account_id"
+        )
         params = self._pagination_params(limit=limit, offset=offset)
         return self.request_json(
             "GET",
-            f"/v1/accounts/{account_id}/permissions",
+            f"/v1/accounts/{quote(canonical_account_id, safe='')}/permissions",
             params=params or None,
             expected_status=(200,),
         )
@@ -9431,20 +9809,6 @@ class ToriiClient(_BaseToriiClient):
         self._expect_status(response, {200, 404})
         return self._maybe_json(response)
 
-    def list_contract_instances(
-        self,
-        namespace: str,
-        *,
-        params: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Any]:
-        response = self._request(
-            "GET",
-            f"/v1/contracts/instances/{namespace}",
-            params=params,
-        )
-        self._expect_status(response, {200})
-        return self._maybe_json(response)
-
     # ------------------------------------------------------------------
     # Connect API
     # ------------------------------------------------------------------
@@ -9511,12 +9875,18 @@ class ToriiClient(_BaseToriiClient):
             payload=payload,
         )
 
-    def delete_connect_session(self, sid: str) -> bool:
+    def delete_connect_session(self, sid: str, token_management: str) -> bool:
         """DELETE `/v1/connect/session/{sid}` and return True when the session existed."""
 
         if not isinstance(sid, str) or not sid:
             raise TypeError("sid must be a non-empty string")
-        response = self._request("DELETE", f"/v1/connect/session/{sid}")
+        if not isinstance(token_management, str) or not token_management:
+            raise TypeError("token_management must be a non-empty string")
+        response = self._request(
+            "DELETE",
+            f"/v1/connect/session/{sid}",
+            headers={"Authorization": f"Bearer {token_management}"},
+        )
         self._expect_status(response, (204, 404))
         return response.status_code == 204
 
@@ -10172,94 +10542,30 @@ class ToriiClient(_BaseToriiClient):
             expected_status=(200,),
         )
 
-    def list_governance_instances(
+    def get_governance_contract(
         self,
-        namespace: str,
-        *,
-        contains: Optional[str] = None,
-        hash_prefix: Optional[str] = None,
-        offset: Optional[int] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
+        contract_address: str,
     ) -> Optional[Any]:
-        """List contract instances tracked by governance (`GET /v1/gov/instances/{namespace}`)."""
+        """Fetch one governance-managed contract binding (`GET /v1/gov/contracts/{contract_address}`)."""
 
-        params: Dict[str, Any] = {}
-        if contains is not None:
-            params["contains"] = contains
-        if hash_prefix is not None:
-            params["hash_prefix"] = hash_prefix
-        if offset is not None:
-            params["offset"] = int(offset)
-        if limit is not None:
-            params["limit"] = int(limit)
-        if order is not None:
-            params["order"] = order
         return self.request_json(
             "GET",
-            f"/v1/gov/instances/{namespace}",
-            params=params or None,
+            f"/v1/gov/contracts/{contract_address}",
             expected_status=(200,),
         )
 
-    def list_governance_instances_typed(
+    def get_governance_contract_typed(
         self,
-        namespace: str,
-        *,
-        contains: Optional[str] = None,
-        hash_prefix: Optional[str] = None,
-        offset: Optional[int] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> ContractInstancesPage:
-        """Typed wrapper for :meth:`list_governance_instances`."""
+        contract_address: str,
+    ) -> GovernanceContractRecord:
+        """Typed wrapper for :meth:`get_governance_contract`."""
 
-        payload = self.list_governance_instances(
-            namespace,
-            contains=contains,
-            hash_prefix=hash_prefix,
-            offset=offset,
-            limit=limit,
-            order=order,
-        )
+        payload = self.get_governance_contract(contract_address)
         if payload is None:
-            raise RuntimeError("governance instances endpoint returned no payload")
+            raise RuntimeError("governance contract endpoint returned no payload")
         if not isinstance(payload, Mapping):
-            raise RuntimeError("governance instances endpoint returned non-object payload")
-        return ContractInstancesPage.from_payload(payload)
-
-    def list_contract_instances_typed(
-        self,
-        namespace: str,
-        *,
-        contains: Optional[str] = None,
-        hash_prefix: Optional[str] = None,
-        offset: Optional[int] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> ContractInstancesPage:
-        """Typed wrapper for :meth:`list_contract_instances`."""
-
-        payload = self.list_contract_instances(
-            namespace,
-            params={
-                key: value
-                for key, value in {
-                    "contains": contains,
-                    "hash_prefix": hash_prefix,
-                    "offset": None if offset is None else int(offset),
-                    "limit": None if limit is None else int(limit),
-                    "order": order,
-                }.items()
-                if value is not None
-            }
-            or None,
-        )
-        if payload is None:
-            raise RuntimeError("contract instances endpoint returned no payload")
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("contract instances endpoint returned non-object payload")
-        return ContractInstancesPage.from_payload(payload)
+            raise RuntimeError("governance contract endpoint returned non-object payload")
+        return GovernanceContractRecord.from_payload(payload)
 
     def governance_deploy_contract_proposal(self, payload: Mapping[str, Any]) -> Optional[Any]:
         """POST `/v1/gov/proposals/deploy-contract`."""

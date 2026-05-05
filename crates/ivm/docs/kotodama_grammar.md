@@ -24,7 +24,7 @@ Legend: ✅ Implemented, 🟨 Parsed, 💤 Planned
 | Upgrade hook `kaizen`/`改善` + `permission` |  🟨    | parsed; governance/dispatch enforced by runtime |
 | `kotoba {…}` translations                    |  🟩    | parsed; emitted in manifest |
 | Access hints `#[access(read=..., write=...)]`|  ✅    | collected into manifest/entrypoint hints |
-| Trigger declarations `register_trigger {…}`  |  ✅    | time/execute trigger DSL; metadata recorded in entrypoint manifests and auto-registered on activation |
+| Trigger declarations `register_trigger {…}`  |  ✅    | time/execute/data/pipeline trigger DSL with metadata and explicit authority; manifest triggers auto-register on activation |
 | `state Type name;`                           |  ✅    | host-backed durable overlays (Norito TLV persistence + checkpoint/restore rollback) |
 | `struct Name { … }`                          |  ✅    | lowered to tuple layout; field access compiled |
 | `let name[: Type] = expr;`                   |  ✅    | optional type annotation |
@@ -109,19 +109,70 @@ MetaEntry  = ( "abi_version" | "abi" ) ":" Number
 
 TriggerDecl = ("register_trigger" | "trigger") Ident "{" { TriggerField } "}" ;
 TriggerField = "call" CallTarget ";"                         // callback target
-             | "on" TriggerFilter ";"                        // event filter
+             | "on" TriggerFilter [ ";" ]                    // event filter
              | "repeats" Repeats ";"                         // repetition policy
+             | "authority" (Ident | String) ";"             // explicit trigger authority
              | "metadata" "{" { MetadataEntry ";" } "}" [ ";" ] ;
 CallTarget = Ident [ "::" Ident ] ;
 TriggerFilter = "time" ("pre_commit" | "schedule" "(" Number [ "," Number ] ")")
-              | "execute" "trigger" (Ident | String) ;
+              | "execute" "trigger" (Ident | String)
+              | "data" "any"
+              | "data" DataFamily DataEventKind DataMatcherBlock
+              | "pipeline" ("transaction" | "block" | "merge" | "witness") ;
+DataFamily = "peer"
+           | "domain"
+           | "account"
+           | "asset"
+           | "asset_definition"
+           | "nft"
+           | "trigger"
+           | "role"
+           | "configuration"
+           | "executor" ;
+DataEventKind = Ident | "any" ;
+DataMatcherBlock = "{" { DataMatcher ";" } "}" ;
+DataMatcher = "peer" (Ident | String)
+            | "domain" (Ident | String)
+            | "account" (Ident | String)
+            | "asset" (Ident | String)
+            | "asset_definition" (Ident | String)
+            | "nft" (Ident | String)
+            | "trigger" (Ident | String)
+            | "role" (Ident | String) ;
 Repeats = "indefinitely" | Number ;
 MetadataEntry = (Ident | String) ":" Literal ;               // JSON literal (string/number/bool/null/json!)
 
 FunctionSignature = Ident "(" [ ParamList ] ")" ;                  // see Parameters
 ```
 
-Contract-level forms and `kotoage fn` are parsed. Contract metadata declared via `meta {}` influences IVM header fields (ABI version, vector length, max cycles) and mode bits (ZK/VECTOR). Trigger declarations attach metadata to entrypoint manifests and are auto-registered when a contract instance is activated (removed on deactivation); cross-contract callbacks are currently rejected. Free functions are fully compiled end-to-end today. See Gap Analysis for details.
+Contract-level forms and `kotoage fn` are parsed. Contract metadata declared via `meta {}` influences IVM header fields (ABI version, vector length, max cycles) and mode bits (ZK/VECTOR). Trigger declarations attach filters, metadata, and optional explicit authority to entrypoint manifests and are auto-registered when a contract instance is activated (removed on deactivation); cross-contract callbacks are currently rejected. Free functions are fully compiled end-to-end today. See Gap Analysis for details.
+
+Structured data-trigger example:
+```kotodama
+register_trigger cbuae_aed_to_pkr_asset_added {
+  call run;
+  on data asset added {
+    asset_definition "66owaQmAQMuHxPzxUN3bqZ6FJfDa";
+  }
+}
+```
+
+Notes:
+- `asset` data filters may combine both `asset` and `asset_definition` matchers; both apply with logical AND semantics.
+- `configuration` and `executor` filters currently expose event-kind selection only and do not accept matcher fields.
+- The DSL covers the core ledger data families above. Specialized product-specific event families still use the lower-level filter APIs when needed.
+
+Accepted data event kinds by family:
+- `peer`: `any`, `added`, `removed`
+- `domain`: `any`, `created`, `deleted`, `asset_definition`, `nft`, `account`, `account_linked`, `account_unlinked`, `metadata_inserted`, `metadata_removed`, `owner_changed`, `kaigi_roster_summary`, `kaigi_relay_registered`, `kaigi_relay_manifest_updated`, `kaigi_usage_summary`, `kaigi_relay_health_updated`, `streaming_ticket_ready`, `streaming_ticket_revoked`
+- `account`: `any`, `created`, `deleted`, `asset`, `permission_added`, `permission_removed`, `role_granted`, `role_revoked`, `metadata_inserted`, `metadata_removed`, `repo`
+- `asset`: `any`, `created`, `deleted`, `added`, `removed`, `metadata_inserted`, `metadata_removed`
+- `asset_definition`: `any`, `created`, `deleted`, `metadata_inserted`, `metadata_removed`, `mintability_changed`, `mintability_changed_detailed`, `total_quantity_changed`, `owner_changed`
+- `nft`: `any`, `created`, `deleted`, `metadata_inserted`, `metadata_removed`, `owner_changed`
+- `trigger`: `any`, `created`, `deleted`, `extended`, `shortened`, `metadata_inserted`, `metadata_removed`
+- `role`: `any`, `created`, `deleted`, `permission_added`, `permission_removed`
+- `configuration`: `any`, `changed`
+- `executor`: `any`, `upgraded`
 
 ### Parameters & Returns [Parsed/Enforced]
 ```
@@ -207,16 +258,16 @@ ArgList = Expr { "," Expr } ;
 Built-in calls recognized by the semantic layer (arity and types enforced):
 - ZK/crypto: `poseidon2(a, b)`, `poseidon6(a,b,c,d,e,f)`, `pubkgen(s)`, `valcom(v, r)`, `assert_eq(x, y)`.
 - Vector helpers: `setvl(n)` (compile-time int `0..=255`).
-- Iroha syscalls: `mint_asset(acc, asset, amount)`, `burn_asset(acc, asset, amount)`, `transfer_asset(from, to, asset, amount)`, `register_asset(name, symbol, quantity, mintable)`, `create_new_asset(name, symbol, quantity, account, mintable)`, `nft_mint_asset(id, owner)`, `nft_transfer_asset(from, id, to)`, `nft_set_metadata(id, json)`, `nft_burn_asset(id)`.
+- Iroha syscalls: `mint_asset(acc, asset, amount)`, `burn_asset(acc, asset, amount)`, `transfer_asset(from, to, asset, amount)`, `register_asset(asset, symbol, quantity, mintable)`, `create_new_asset(asset, symbol, quantity, account, mintable)`, `nft_mint_asset(id, owner)`, `nft_transfer_asset(from, id, to)`, `nft_set_metadata(id, json)`, `nft_burn_asset(id)`.
 - Trigger syscalls: `create_trigger(json)`, `register_trigger(json)` (alias), `remove_trigger(name)`/`unregister_trigger(name)`, `set_trigger_enabled(name, enabled)`.
  - Iroha helpers (samples/dev): `create_nfts_for_all_users()`, `set_execution_depth(value)`, `set_account_detail(account, key, value)`.
  - Durable state helpers (host): `host::state_get(name_path) -> Blob`, `host::state_set(name_path, norito_bytes_value)`, `host::state_del(name_path)`.
  - Encoding helpers (WIP): `encode_int(int) -> Blob`, `decode_int(Blob) -> int`.
 - Inline ZK ISI builders (literal-only): `build_submit_ballot_inline(election_id, ciphertext, nullifier32, backend, proof, vk)`, `build_unshield_inline(asset, to, amount, inputs32, backend, proof, vk)`. All arguments must be compile-time literals (string literals or pointer constructors from literals). `nullifier32` and `inputs32` must be exactly 32 bytes (raw string or `0x` hex), and `amount` must be non-negative.
-- Path builder (host): `host::path_map_key(base: Name, key: int) -> Name` builds canonical `"<base>/<key>"`.
+- Path builder (method): `base.path(key) -> Name` builds canonical `"<base>/<key>"`.
  - VRF helpers: `vrf_verify(input, pk, proof, variant) -> Blob`, `vrf_verify_batch(batch: Blob) -> Blob` (returns 0 on failure). [Implemented]
  - Pointer utilities: `schema_info(schema: Name) -> Json {id,version}`, `pointer_to_norito(ptr)` (wrap any pointer-ABI TLV into NoritoBytes for state storage or replay). [Implemented]
- - Typed constructors for pointer-ABI values: `account_id("6cmzPVPX...")`, `asset_definition("rose#wonderland")`, `asset_id("norito:<hex-asset-id>")`, `nft_id("n0$wonderland")`, `name("cursor")`, `json("{\"k\":\"v\"}")`, `blob("...")`, `norito_bytes("...")`, plus AXT/Nexus types `dataspace_id("0x…")`, `axt_descriptor("0x…")`, `asset_handle("0x…")`, and `proof_blob("0x…")`. String literals (plain or `0x`-hex) emit typed Norito TLVs into the data section; passing a `Blob`/`NoritoBytes` decodes the TLV at runtime via `pointer_from_norito`.
+ - Typed constructors for pointer-ABI values: `account_id("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")`, `asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `asset_id("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")`, `nft_id("n0$wonderland")`, `name("cursor")`, `json("{\"k\":\"v\"}")`, `blob("...")`, `norito_bytes("...")`, plus AXT/Nexus types `dataspace_id("0x…")`, `axt_descriptor("0x…")`, `asset_handle("0x…")`, and `proof_blob("0x…")`. Canonical `account_id("...")` literals emit static `AccountId` TLVs into the data section; alias-shaped `account_id("merchant@paynet")` / `account_id("merchant@bank.paynet")` literals lower to the runtime `RESOLVE_ACCOUNT_ALIAS` host syscall. Passing a `Blob`/`NoritoBytes` decodes the TLV at runtime via `pointer_from_norito`.
  - AXT helpers: `axt_begin(AxtDescriptor)`, `axt_touch(DataSpaceId[, manifest: Blob])`, `verify_ds_proof(DataSpaceId[, ProofBlob])`, `use_asset_handle(AssetHandle, Blob intent[, ProofBlob])`, `axt_commit()`. [Implemented]
  - Contextual value: `authority()` returns the current `AccountId` under which the contract executes.
 

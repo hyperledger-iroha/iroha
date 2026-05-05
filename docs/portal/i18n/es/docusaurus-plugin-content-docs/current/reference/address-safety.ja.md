@@ -1,57 +1,73 @@
 ---
-lang: ja
-direction: ltr
-source: docs/portal/i18n/es/docusaurus-plugin-content-docs/current/reference/address-safety.md
-status: complete
-generator: scripts/sync_docs_i18n.py
-source_hash: 689f36e02c2ddca55c2198d2e03895ff6656c0fd7505b1c7b471cdb0d943b90e
-source_last_modified: "2026-01-28T17:58:57+00:00"
-translation_last_reviewed: 2026-01-30
+title: Address Safety & Accessibility
+description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
 ---
 
----
-lang: es
-direction: ltr
-source: docs/portal/docs/reference/address-safety.md
-status: complete
-generator: docs/portal/scripts/sync-i18n.mjs
----
+This page captures the ADDR-6c documentation deliverable. Apply these
+constraints to wallets, explorers, SDK tooling, and any portal surface that
+renders or accepts human-facing addresses. The canonical data model lives in
+`docs/account_structure.md`; the checklist below explains how to expose those
+formats without compromising safety or accessibility.
 
----
-title: Seguridad y accesibilidad de direcciones
-description: Requisitos de UX para presentar y compartir direcciones de Iroha con seguridad (ADDR-6c).
----
+## Safe sharing flows
 
-Esta pagina captura el entregable de documentacion ADDR-6c. Aplica estas restricciones a wallets, explorers, herramientas de SDK y cualquier superficie del portal que renderice o acepte direcciones orientadas a personas. El modelo de datos canonico vive en `docs/account_structure.md`; la checklist de abajo explica como exponer esos formatos sin comprometer seguridad o accesibilidad.
+- Default every copy/share action to the canonical I105 account id.
+  If an on-chain alias is present, display it as supporting metadata in a
+  separate labeled field.
+- Offer a “Share” affordance that bundles the full plain-text address and a QR
+  code derived from the same payload. Let users inspect both before committing.
+- When space requires truncation (tiny cards, notifications), keep the leading
+  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+  the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
+  string without truncation.
+- Prevent clipboard desync by emitting a confirmation toast that previews the
+  exact i105 string that was copied. Where telemetry is available, count copy
+  attempts versus share actions so UX regressions surface quickly.
 
-## Flujos seguros de comparticion
+## IME & input safeguards
 
-- Por defecto, cada accion de copiar/compartir debe usar la direccion I105. Muestra el dominio resuelto como contexto de apoyo para que la cadena con checksum permanezca al frente.
-- Ofrece una accion "Compartir" que incluya la direccion en texto plano y un QR derivado del mismo payload. Permite que las personas inspeccionen ambos antes de confirmar.
-- Cuando el espacio obligue a truncar (tarjetas pequenas, notificaciones), conserva el prefijo legible, muestra puntos suspensivos y reten los ultimos 4-6 caracteres para que sobreviva el ancla del checksum. Provee un toque/atajo de teclado para copiar la cadena completa sin truncamiento.
-- Evita la desincronizacion del portapapeles emitiendo un toast de confirmacion que previsualice la cadena I105 exacta que se copio. Donde haya telemetria, cuenta intentos de copia versus acciones de compartir para detectar regresiones de UX rapido.
+- Validate account-id fields as canonical I105 only. Validate alias
+  entry fields separately as `name@dataspace` or `name@domain.dataspace`.
+- When IME composition artefacts or zero-width characters appear, surface an
+  inline warning instead of coercing the input into a different account-id
+  format.
+- Provide a plain-text paste zone that preserves the canonical i105 literal as
+  pasted while still stripping obviously invalid stealth code points before
+  validation.
+- Harden validation against zero-width joiners, variation selectors, and other
+  stealth Unicode code points. Log the rejected code point category so fuzzing
+  suites can import the telemetry.
 
-## IME y salvaguardas de entrada
+## Assistive technology expectations
 
-- Rechaza entradas no ASCII en campos de direccion. Cuando aparezcan artefactos de composicion IME (full width, Kana, marcas de tono), muestra una advertencia inline que explique como cambiar el teclado a entrada en latin antes de reintentar.
-- Provee una zona de pegado en texto plano que elimine marcas combinantes y reemplace espacios en blanco por espacios ASCII antes de validar. Esto evita que la persona pierda progreso cuando desactiva el IME a mitad de flujo.
-- Endurece la validacion contra zero-width joiners, variation selectors y otros puntos de codigo Unicode sigilosos. Registra la categoria del punto de codigo rechazado para que los fuzzing suites puedan importar la telemetria.
+- Annotate every address block with `aria-label` or `aria-describedby` that
+  spells out the human-readable prefix and chunks the payload in 4–8 character
+  groups (“ih dash b three two …”). This stops screen readers from producing an
+  unintelligible stream of characters.
+- Announce successful copy/share events via a polite live region update. Include
+  the destination (clipboard, share sheet, QR) so the user knows the action
+  completed without moving focus.
+- Supply descriptive `alt` text for QR previews (e.g., “i105 address for
+  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
+  fallback adjacent to the QR canvas for low-vision users.
 
-## Expectativas de tecnologia asistiva
+## Single-format policy
 
-- Anota cada bloque de direccion con `aria-label` o `aria-describedby` que deletree el prefijo legible y agrupe el payload en bloques de 4-8 caracteres ("ih dash b three two ..."). Esto evita que los lectores de pantalla produzcan un flujo ininteligible de caracteres.
-- Anuncia los eventos de copia/comparticion exitosos mediante una actualizacion de live region en modo polite. Incluye el destino (portapapeles, hoja de compartir, QR) para que la persona sepa que la accion se completo sin mover el foco.
-- Provee texto `alt` descriptivo para las vistas previas de QR (p. ej., "Direccion I105 para `<account>` en la cadena `0x1234`"). Incluye un fallback "Copiar direccion como texto" junto al canvas de QR para personas con baja vision.
-
-## Direcciones comprimidas solo Sora
-
-- Gating: oculta la cadena comprimida `sora...` detras de una confirmacion explicita. La confirmacion debe reiterar que el formato solo funciona en cadenas Sora Nexus.
-- Etiquetado: cada aparicion debe incluir una insignia visible "Solo Sora" y un tooltip que explique por que otras redes requieren la forma I105.
-- Guardrails: si el discriminante de cadena activo no es la asignacion de Nexus, rechaza generar la direccion comprimida y dirige a la persona de vuelta a I105.
-- Telemetria: registra con que frecuencia se solicita y se copia la forma comprimida para que el playbook de incidentes detecte picos de comparticion accidental.
+- Keep canonical I105 as the only user-facing account-id format for
+  copy, share, and QR surfaces.
+- Treat `name@dataspace` and `name@domain.dataspace` as on-chain aliases that
+  point to canonical i105 account ids.
+- Do not expose alternate account-literal encodings in production wallet or
+  explorer UX.
+- Telemetry should track i105 copy/share usage, alias-resolution usage, and
+  validation failures only.
 
 ## Quality gates
 
-- Extiende las pruebas UI automatizadas (o suites de a11y en storybook) para afirmar que los componentes de direcciones exponen la metadata ARIA requerida y que los mensajes de rechazo por IME aparecen.
-- Incluye escenarios de QA manual para entrada IME (kana, pinyin), pase de lector de pantalla (VoiceOver/NVDA) y copia de QR en temas de alto contraste antes del release.
-- Refleja estas comprobaciones en las checklists de release junto a las pruebas de paridad I105 para que las regresiones sigan bloqueadas hasta corregirse.
+- Extend automated UI tests (or storybook a11y suites) to assert that address
+  components expose the required ARIA metadata and that IME rejection messages
+  appear.
+- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
+  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
+- Surface these checks in release checklists alongside the i105 parity tests
+  so regressions remain blocked until corrected.

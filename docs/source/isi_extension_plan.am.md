@@ -1,12 +1,14 @@
+<!-- Auto-generated stub for Amharic (Ethiopian) (am) translation. Replace this content with the full translation. -->
+
 ---
 lang: am
 direction: ltr
 source: docs/source/isi_extension_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f3502fc6de75095282d44ce778b00d1b0d554773de1861d1b92f7dc573dfafa2
-source_last_modified: "2025-12-29T18:16:35.969398+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 9648381ac7cc1716ffd3c48aca425ed17a6afe1ac73bdeff866ebbbd9147cf68
+source_last_modified: "2026-03-30T18:22:55.972718+00:00"
+translation_last_reviewed: 2026-04-02
 translator: machine-google-reviewed
 ---
 
@@ -34,17 +36,15 @@ translator: machine-google-reviewed
 - Emit `AssetEvent::MetadataInserted` / `AssetEvent::MetadataRemoved` ከተጎዳው `AssetId` ጋር።
 - እንደ ነባር የንብረት ሜታዳታ አርትዖቶች ተመሳሳይ የፍቃድ ማስመሰያዎች ያስፈልጉ (የፍቺ ባለቤት ወይም
   `CanModifyAssetMetadata`-style ስጦታዎች)።
-- የንብረቱ መዝገብ ከጠፋ ማቋረጥ (የተዘዋዋሪ ፈጠራ የለም)።
-
-### አሽከርክር መለያ ፈራሚ
-- የመለያ ሜታዳታ እና ተያያዥነት ባለው መልኩ በ `AccountId` ውስጥ የፈራሚውን አቶሚክ መለዋወጥ
+- የንብረቱ መዝገብ ከጠፋ ማቋረጥ (የተዘዋዋሪ ፈጠራ የለም)።### አሽከርክር መለያ ፈራሚ
+- የመለያ ሜታዳታ እና ተያያዥነት ባለው መልኩ በ`AccountId` ውስጥ የፈራሚውን አቶሚክ መለዋወጥ
   ግብዓቶች (ንብረት፣ ቀስቅሴዎች፣ ሚናዎች፣ ፈቃዶች፣ በመጠባበቅ ላይ ያሉ ክስተቶች)።
 - አሁን ያለው ፈራሚ ከደዋዩ (ወይንም የተወከለው ባለስልጣን በግልፅ ማስመሰያ) የሚዛመድ መሆኑን ያረጋግጡ።
-- አዲሱ የአደባባይ ቁልፍ አስቀድሞ በተመሳሳይ ጎራ ውስጥ ያለ ሌላ መለያ የሚደግፍ ከሆነ ውድቅ ያድርጉ።
+- አዲሱ የህዝብ ቁልፍ ቀድሞውንም ሌላ ቀኖናዊ መለያ የሚደግፍ ከሆነ ውድቅ ያድርጉ።
 - ከመግባትዎ በፊት የመለያ መታወቂያውን ያካተቱ ሁሉንም ቀኖናዊ ቁልፎች ያዘምኑ እና መሸጎጫዎችን ያበላሹ።
 - የተወሰነ `AccountEvent::SignatoryRotated` ለኦዲት መንገዶች ከአሮጌ/አዲስ ቁልፎች ጋር ያውጡ።
-- የስደት ስካፎል፡ `AccountLabel` + `AccountRekeyRecord` ያስተዋውቁ (`account::rekey` ይመልከቱ) ስለዚህ
-  ያለ ሃሽ መግቻዎች በሚሽከረከርበት ጊዜ ነባር መለያዎች በተረጋጋ መለያዎች ሊቀረጹ ይችላሉ።
+- የፍልሰት ስካፎል: በ `AccountAlias` + `AccountRekeyRecord` ላይ መታመን (`account::rekey` ይመልከቱ) ስለዚህ
+  ያለሃሽ መግቻዎች በሚሽከረከርበት ጊዜ ነባር መለያዎች የተረጋጋ ተለዋጭ ስም ማሰር ይችላሉ።
 
 ### የኮንትራት ሁኔታን አቦዝን
 - የፕሮቬንቴንስ መረጃን በሚቀጥልበት ጊዜ የ `(namespace, contract_id)` ማሰሪያውን ያስወግዱ ወይም ይቀብሩ
@@ -72,14 +72,12 @@ translator: machine-google-reviewed
   ወይም የተሰጠው ችሎታ) ከስቴት ሚውቴሽን በፊት.
 - የአማካሪ መዳረሻ ስብስቦች ብሩህ ተስፋን ለመጠበቅ ሁሉንም የተነበበ/የመፃፍ ቁልፎችን አንድ ማድረግ አለባቸው።
 
-## የትግበራ ስካፎልዲንግ
-
-- የውሂብ ሞዴል አሁን `SetAssetKeyValue` / `RemoveAssetKeyValue` ስካፎልዶችን ለተመጣጣኝ ሜታዳታ ይይዛል
+## የትግበራ ስካፎልዲንግ- የውሂብ ሞዴል አሁን `SetAssetKeyValue` / `RemoveAssetKeyValue` ስካፎልዶችን ለተመጣጣኝ ሜታዳታ ይይዛል
   አርትዖቶች (`transparent.rs`)።
 - አስፈፃሚ ጎብኝዎች የወልና መሬቶችን አንዴ ካስተናገዱ ፈቃዶችን የሚከፍሉ ቦታ ያዥዎችን ያጋልጣሉ
   (`default/mod.rs`)።
 - የሪኪ ፕሮቶታይፕ አይነቶች (`account::rekey`) ለሚሽከረከሩ ፍልሰቶች የማረፊያ ዞን ይሰጣሉ።
-- የአለም ግዛት `account_rekey_records` በ `AccountLabel` የተቆለፈውን ያካትታል ስለዚህ የመድረክ መለያ →
+- የዓለም ግዛት በ `AccountAlias` የተቆለፈውን `account_rekey_records` ያካትታል ስለዚህ ተለዋጭ ስም እንድንሆን →
   ታሪካዊውን `AccountId` ኢንኮዲንግ ሳይነኩ የፈራሚ ፍልሰት።
 
 ## IVM Syscall ረቂቅ

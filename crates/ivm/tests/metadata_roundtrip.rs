@@ -5,7 +5,7 @@ fn metadata_encode_parse_roundtrip() {
     let cases = vec![
         ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0x03,
             vector_length: 0,
             max_cycles: 12345,
@@ -13,7 +13,7 @@ fn metadata_encode_parse_roundtrip() {
         },
         ProgramMetadata {
             version_major: 1,
-            version_minor: 0,
+            version_minor: 1,
             mode: 0x01,
             vector_length: 8,
             max_cycles: u32::MAX as u64 + 1,

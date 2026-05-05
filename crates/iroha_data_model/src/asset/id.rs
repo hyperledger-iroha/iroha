@@ -1,43 +1,48 @@
 //! Asset identifiers.
 
 use std::{
-    fmt, format,
+    array, fmt, format,
     hash::{Hash, Hasher},
     str::FromStr,
     string::String,
 };
 
-use getset::Getters;
+use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
-    to_bytes,
 };
 
 pub use self::model::*;
 use crate::{Name, account::prelude::*, domain::prelude::*, error::ParseError, nexus::DataSpaceId};
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+pub(crate) struct AssetDefinitionProjection {
+    domain: DomainId,
+    name: Name,
+}
+
 #[model]
 mod model {
     use super::*;
 
-    /// Canonical asset definition identifier.
+    /// Canonical public asset identifier.
     ///
-    /// Textual form is always `aid:<32-lower-hex-no-dash>` where the 16 bytes
-    /// satisfy `UUIDv4` version/variant constraints.
-    #[derive(Debug, Clone, Getters, IntoSchema)]
-    #[getset(get = "pub")]
+    /// Textual form is an unprefixed Base58 address over canonical `UUIDv4` bytes
+    /// plus a version byte and checksum. On-chain asset aliases resolve to this
+    /// identifier only.
+    #[derive(Debug, Clone, CopyGetters, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetDefinitionId {
-        /// Canonical `UUIDv4` bytes (no textual separators).
+        /// Canonical `UUIDv4` bytes.
         #[getset(get_copy = "pub")]
         pub aid_bytes: [u8; 16],
-        /// Deterministic domain component derived from canonical bytes.
-        pub domain: DomainId,
-        /// Deterministic name component derived from canonical bytes.
-        pub name: Name,
+        /// Optional domain/name projection carried only for IDs constructed from
+        /// explicit domain-scoped components.
+        pub(crate) projection: Option<AssetDefinitionProjection>,
     }
 
     /// Balance partition used for a concrete asset ownership bucket.
@@ -69,7 +74,7 @@ mod model {
         Dataspace(DataSpaceId),
     }
 
-    /// Identification of an asset combines the entity identifier ([`AssetId`]) with the owner [`AccountId`].
+    /// Internal balance-bucket identifier for a concrete owner/scope bucket.
     #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Getters, Decode, Encode, IntoSchema)]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -86,7 +91,8 @@ mod model {
 
 string_id!(AssetDefinitionId);
 
-const AID_PREFIX: &str = "aid:";
+const ASSET_DEFINITION_ADDRESS_VERSION: u8 = 1;
+const ASSET_DEFINITION_ADDRESS_LEN: usize = 1 + 16 + 4;
 
 impl PartialEq for AssetDefinitionId {
     fn eq(&self, other: &Self) -> bool {
@@ -146,7 +152,7 @@ impl<'de> NoritoDeserialize<'de> for AssetDefinitionId {
 #[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for AssetId {
     fn write_json(&self, out: &mut String) {
-        let literal = self.canonical_encoded();
+        let literal = self.canonical_literal();
         norito::json::JsonSerialize::json_serialize(&literal, out);
     }
 }
@@ -157,7 +163,7 @@ impl norito::json::JsonDeserialize for AssetId {
         parser: &mut norito::json::Parser<'_>,
     ) -> Result<Self, norito::json::Error> {
         let value = parser.parse_string()?;
-        AssetId::parse_encoded(&value).map_err(|err| norito::json::Error::Message(err.to_string()))
+        AssetId::parse_literal(&value).map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
 
@@ -189,55 +195,71 @@ impl AssetId {
         }
     }
 
-    /// Parse an encoded asset identifier from `norito:<hex>`.
+    /// Render this identifier in the canonical internal balance-bucket literal form.
+    ///
+    /// Public asset ids remain bare Base58 asset-definition ids. Global balance
+    /// buckets use `<base58-asset-definition-id>#<i105-account-id>`.
+    /// Dataspace-scoped balances append `#dataspace:<id>`.
+    #[must_use]
+    pub fn canonical_literal(&self) -> String {
+        let base = format!("{}#{}", self.definition, self.account);
+        match self.scope {
+            AssetBalanceScope::Global => base,
+            AssetBalanceScope::Dataspace(dataspace) => {
+                format!("{base}#dataspace:{}", dataspace.as_u64())
+            }
+        }
+    }
+
+    /// Parse the canonical internal balance-bucket literal.
     ///
     /// # Errors
     ///
-    /// Returns [`ParseError`] when the value is empty, not prefixed with
-    /// `norito:`, contains invalid hex, or does not decode into [`AssetId`].
-    pub fn parse_encoded(input: &str) -> Result<Self, ParseError> {
+    /// Returns [`ParseError`] when the literal is empty, not in internal
+    /// `<base58-asset-definition-id>#<i105-account-id>` form, or uses an invalid
+    /// dataspace scope suffix.
+    pub fn parse_literal(input: &str) -> Result<Self, ParseError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
-            return Err(ParseError {
-                reason: "Asset ID must not be empty",
-            });
-        }
-        if trimmed.contains('#') {
-            return Err(ParseError {
-                reason: "Asset ID textual forms are not supported; use encoded `norito:<hex>`",
-            });
+            return Err(ParseError::new(
+                "Asset balance bucket literal must not be empty",
+            ));
         }
 
-        let prefix = "norito:";
-        let Some(payload_hex) = trimmed
-            .get(..prefix.len())
-            .filter(|head| head.eq_ignore_ascii_case(prefix))
-            .map(|_| &trimmed[prefix.len()..])
-        else {
-            return Err(ParseError {
-                reason: "Asset ID must use encoded `norito:<hex>` format",
-            });
-        };
-        if payload_hex.is_empty() {
-            return Err(ParseError {
-                reason: "Asset ID must include hex payload after `norito:`",
-            });
-        }
-
-        let payload = hex::decode(payload_hex).map_err(|_| ParseError {
-            reason: "Asset ID `norito:` payload must be valid hex",
+        let mut parts = trimmed.split('#');
+        let definition_literal = parts.next().ok_or_else(|| {
+            ParseError::new("Asset balance bucket literal must include an asset definition id")
         })?;
-        norito::decode_from_bytes::<Self>(&payload).map_err(|_| ParseError {
-            reason: "Asset ID `norito:` payload is invalid",
-        })
-    }
+        let account_literal = parts.next().ok_or_else(|| {
+            ParseError::new("Asset balance bucket literal must include an account id")
+        })?;
+        let scope_literal = parts.next();
+        if parts.next().is_some() {
+            return Err(ParseError::new(
+                "Asset balance bucket literal must use `<base58-asset-definition-id>#<i105-account-id>` with optional `#dataspace:<id>` suffix; canonical asset-definition ids are Base58",
+            ));
+        }
 
-    /// Render this identifier in the canonical encoded `norito:<hex>` form.
-    #[must_use]
-    pub fn canonical_encoded(&self) -> String {
-        // `parse_encoded` expects header-framed Norito bytes.
-        let payload = to_bytes(self).expect("asset id encoding should not fail");
-        format!("norito:{}", hex::encode(payload))
+        let definition = AssetDefinitionId::parse_address_literal(definition_literal)?;
+        let account = AccountId::parse_encoded(account_literal)
+            .map(ParsedAccountId::into_account_id)
+            .map_err(|_| ParseError::new("Asset ID account is invalid"))?;
+        let scope = match scope_literal {
+            None => AssetBalanceScope::Global,
+            Some(raw) => {
+                let Some(dataspace) = raw.strip_prefix("dataspace:") else {
+                    return Err(ParseError::new(
+                        "Asset ID scope must use `dataspace:<id>` when present",
+                    ));
+                };
+                let dataspace = dataspace
+                    .parse::<u64>()
+                    .map(DataSpaceId::new)
+                    .map_err(|_| ParseError::new("Asset ID dataspace scope must be a u64"))?;
+                AssetBalanceScope::Dataspace(dataspace)
+            }
+        };
+        Ok(Self::with_scope(definition, account, scope))
     }
 }
 
@@ -253,26 +275,25 @@ impl AssetDefinitionId {
                 "Asset Definition ID must encode UUIDv4 bytes",
             ));
         }
-        let (domain, name) = synthetic_components(aid_bytes);
         Ok(Self {
             aid_bytes,
-            domain,
-            name,
+            projection: None,
         })
     }
 
     /// Construct from UUID bytes without validation.
     #[must_use]
     pub fn from_uuid_bytes_unchecked(aid_bytes: [u8; 16]) -> Self {
-        let (domain, name) = synthetic_components(aid_bytes);
         Self {
             aid_bytes,
-            domain,
-            name,
+            projection: None,
         }
     }
 
-    /// Deterministically derive canonical `aid` bytes from component labels.
+    /// Deterministically derive canonical UUID bytes from component labels.
+    ///
+    /// This is an internal construction helper. Public textual identifiers remain the
+    /// Base58 address returned by [`Self::canonical_address`].
     #[must_use]
     pub fn new(domain: DomainId, name: Name) -> Self {
         let literal = format!("{name}#{domain}");
@@ -284,62 +305,95 @@ impl AssetDefinitionId {
         aid_bytes[8] = (aid_bytes[8] & 0x3f) | 0x80;
         Self {
             aid_bytes,
-            domain,
-            name,
+            projection: Some(AssetDefinitionProjection { domain, name }),
         }
     }
 
-    /// Canonical textual literal (`aid:<32-lower-hex>`).
+    /// Domain projection for domain-scoped identifiers constructed via [`Self::new`].
     #[must_use]
-    pub fn canonical_literal(&self) -> String {
-        format!("{AID_PREFIX}{}", hex::encode(self.aid_bytes))
+    pub fn try_domain(&self) -> Option<&DomainId> {
+        self.projection
+            .as_ref()
+            .map(|projection| &projection.domain)
     }
 
-    /// Returns `true` when this identifier is a canonical opaque `aid:<32-hex>`
-    /// literal rather than a domain-scoped asset definition synthesized from
-    /// business domain/name components.
+    /// Name projection for domain-scoped identifiers constructed via [`Self::new`].
+    #[must_use]
+    pub fn try_name(&self) -> Option<&Name> {
+        self.projection.as_ref().map(|projection| &projection.name)
+    }
+
+    /// Domain projection for a domain-scoped identifier.
+    ///
+    /// # Panics
+    /// Panics when called on an opaque canonical ID parsed from raw bytes or
+    /// canonical Base58 without an explicit domain-scoped projection.
+    #[must_use]
+    pub fn domain(&self) -> &DomainId {
+        self.try_domain().expect(
+            "opaque canonical asset definition ids do not carry a domain projection; use an asset alias or the stored asset definition metadata instead",
+        )
+    }
+
+    /// Name projection for a domain-scoped identifier.
+    ///
+    /// # Panics
+    /// Panics when called on an opaque canonical ID parsed from raw bytes or
+    /// canonical Base58 without an explicit domain-scoped projection.
+    #[must_use]
+    pub fn name(&self) -> &Name {
+        self.try_name().expect(
+            "opaque canonical asset definition ids do not carry a synthetic name; use the stored asset definition name or an asset alias instead",
+        )
+    }
+
+    /// Canonical textual address (unprefixed Base58 with version and checksum).
+    #[must_use]
+    pub fn canonical_address(&self) -> String {
+        let payload = self.address_payload();
+        bs58::encode(payload).into_string()
+    }
+
+    /// Returns `true` when this identifier is an opaque canonical ID without an
+    /// explicit domain/name projection.
     #[must_use]
     pub fn is_opaque_canonical(&self) -> bool {
-        self.domain.name.as_ref() == "aid" && self.name.as_ref() == hex::encode(self.aid_bytes)
+        self.projection.is_none()
     }
 
-    /// Parse strictly canonical `aid:<32-lower-hex-no-dash>` literals.
+    /// Parse the canonical unprefixed Base58 address.
     ///
     /// # Errors
-    /// Returns [`ParseError`] when the textual form is not canonical or bytes
-    /// do not satisfy `UUIDv4` constraints.
-    pub fn parse_aid_literal(input: &str) -> Result<Self, ParseError> {
+    /// Returns [`ParseError`] when the textual form is not canonical, fails
+    /// checksum verification, or bytes do not satisfy `UUIDv4` constraints.
+    pub fn parse_address_literal(input: &str) -> Result<Self, ParseError> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Err(ParseError::new("Asset Definition ID must not be empty"));
         }
-        let Some(payload) = trimmed.strip_prefix(AID_PREFIX) else {
+        if trimmed.contains(':') {
             return Err(ParseError::new(
-                "Asset Definition ID must use `aid:<32-lower-hex>` format",
-            ));
-        };
-        if payload.contains('-') {
-            return Err(ParseError::new(
-                "Asset Definition ID must not include dashes",
+                "Asset Definition ID must use unprefixed Base58 format",
             ));
         }
-        if payload.len() != 32 {
+        let payload = bs58::decode(trimmed)
+            .into_vec()
+            .map_err(|_| ParseError::new("Asset Definition ID must be valid Base58"))?;
+        if payload.len() != ASSET_DEFINITION_ADDRESS_LEN {
             return Err(ParseError::new(
-                "Asset Definition ID must contain exactly 32 hex characters",
+                "Asset Definition ID must contain exactly 21 decoded bytes",
             ));
         }
-        if !payload
-            .as_bytes()
-            .iter()
-            .all(|ch| ch.is_ascii_digit() || (b'a'..=b'f').contains(ch))
-        {
+        if payload[0] != ASSET_DEFINITION_ADDRESS_VERSION {
             return Err(ParseError::new(
-                "Asset Definition ID must be lowercase hexadecimal",
+                "Asset Definition ID version is not supported",
             ));
         }
-        let mut aid_bytes = [0u8; 16];
-        hex::decode_to_slice(payload, &mut aid_bytes)
-            .map_err(|_| ParseError::new("Asset Definition ID payload must be valid hex"))?;
+        let expected_checksum = address_checksum(&payload[..17]);
+        if payload[17..] != expected_checksum {
+            return Err(ParseError::new("Asset Definition ID checksum is invalid"));
+        }
+        let aid_bytes = array::from_fn(|index| payload[index + 1]);
         Self::from_uuid_bytes(aid_bytes)
     }
 
@@ -347,26 +401,67 @@ impl AssetDefinitionId {
     pub fn of(domain: DomainId, name: Name) -> Self {
         Self::new(domain, name)
     }
+
+    fn address_payload(&self) -> [u8; ASSET_DEFINITION_ADDRESS_LEN] {
+        let checksum = address_checksum(&[
+            ASSET_DEFINITION_ADDRESS_VERSION,
+            self.aid_bytes[0],
+            self.aid_bytes[1],
+            self.aid_bytes[2],
+            self.aid_bytes[3],
+            self.aid_bytes[4],
+            self.aid_bytes[5],
+            self.aid_bytes[6],
+            self.aid_bytes[7],
+            self.aid_bytes[8],
+            self.aid_bytes[9],
+            self.aid_bytes[10],
+            self.aid_bytes[11],
+            self.aid_bytes[12],
+            self.aid_bytes[13],
+            self.aid_bytes[14],
+            self.aid_bytes[15],
+        ]);
+        [
+            ASSET_DEFINITION_ADDRESS_VERSION,
+            self.aid_bytes[0],
+            self.aid_bytes[1],
+            self.aid_bytes[2],
+            self.aid_bytes[3],
+            self.aid_bytes[4],
+            self.aid_bytes[5],
+            self.aid_bytes[6],
+            self.aid_bytes[7],
+            self.aid_bytes[8],
+            self.aid_bytes[9],
+            self.aid_bytes[10],
+            self.aid_bytes[11],
+            self.aid_bytes[12],
+            self.aid_bytes[13],
+            self.aid_bytes[14],
+            self.aid_bytes[15],
+            checksum[0],
+            checksum[1],
+            checksum[2],
+            checksum[3],
+        ]
+    }
 }
 
 fn is_uuid_v4_bytes(bytes: &[u8; 16]) -> bool {
     (bytes[6] >> 4) == 0b0100 && (bytes[8] & 0b1100_0000) == 0b1000_0000
 }
 
-fn synthetic_components(aid_bytes: [u8; 16]) -> (DomainId, Name) {
-    let domain: DomainId = "aid"
-        .parse()
-        .expect("static `aid` domain label must remain valid");
-    let name_literal = hex::encode(aid_bytes);
-    let name: Name = name_literal
-        .parse()
-        .expect("lowercase hex must remain a valid name literal");
-    (domain, name)
+fn address_checksum(payload: &[u8]) -> [u8; 4] {
+    let digest = blake3::hash(payload);
+    let mut checksum = [0_u8; 4];
+    checksum.copy_from_slice(&digest.as_bytes()[..4]);
+    checksum
 }
 
 impl fmt::Display for AssetDefinitionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.canonical_literal())
+        f.write_str(&self.canonical_address())
     }
 }
 
@@ -379,19 +474,19 @@ impl FromStr for AssetDefinitionId {
         if trimmed.is_empty() {
             return Err(ParseError::new("Asset Definition ID must not be empty"));
         }
-        Self::parse_aid_literal(trimmed)
+        Self::parse_address_literal(trimmed)
     }
 }
 
 impl fmt::Display for AssetId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.canonical_encoded())
+        f.write_str(&self.canonical_literal())
     }
 }
 
 impl fmt::Debug for AssetId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.canonical_encoded())
+        f.write_str(&self.canonical_literal())
     }
 }
 
@@ -399,7 +494,7 @@ impl FromStr for AssetId {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse_encoded(s)
+        Self::parse_literal(s)
     }
 }
 
@@ -413,106 +508,151 @@ mod tests {
     #[test]
     fn debug_formats_without_recursion() {
         let kp = KeyPair::random();
-        let domain: DomainId = "domain".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
         let name: Name = "xor".parse().unwrap();
         let account: AccountId = AccountId::new(kp.public_key().clone());
         let def = AssetDefinitionId::new(domain, name);
         let id = AssetId::new(def, account);
         let s = format!("{id:?}");
-        // Should be the canonical encoded literal and not recurse.
-        assert!(s.starts_with("norito:"));
+        assert_eq!(s, id.canonical_literal());
     }
 
     #[test]
     fn asset_definition_id_parses_canonical_aid() {
-        let parsed: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
-            .parse()
-            .expect("aid should parse");
-        assert_eq!(
-            parsed.to_string(),
-            "aid:2f17c72466f84a4bb8a8e24884fdcd2f".to_string()
-        );
+        let expected = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .expect("uuid v4 bytes");
+        let literal = expected.to_string();
+        let parsed: AssetDefinitionId = literal.parse().expect("address should parse");
+        assert_eq!(parsed, expected);
+        assert_eq!(parsed.to_string(), literal);
     }
 
     #[test]
     fn asset_definition_id_distinguishes_opaque_from_domain_scoped_ids() {
-        let opaque: AssetDefinitionId = "aid:2f17c72466f84a4bb8a8e24884fdcd2f"
-            .parse()
-            .expect("opaque aid should parse");
+        let opaque = AssetDefinitionId::from_uuid_bytes([
+            0x2f, 0x17, 0xc7, 0x24, 0x66, 0xf8, 0x4a, 0x4b, 0xb8, 0xa8, 0xe2, 0x48, 0x84, 0xfd,
+            0xcd, 0x2f,
+        ])
+        .expect("opaque bytes should parse");
         assert!(opaque.is_opaque_canonical());
+        assert!(opaque.try_domain().is_none());
+        assert!(opaque.try_name().is_none());
 
         let domain_scoped = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("name"),
         );
         assert!(!domain_scoped.is_opaque_canonical());
-    }
-
-    #[test]
-    fn asset_id_parse_encoded_roundtrips() {
-        let kp = KeyPair::random();
-        let account = AccountId::new(kp.public_key().clone());
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let name: Name = "xor".parse().expect("name");
-        let definition = AssetDefinitionId::new(domain, name);
-        let id = AssetId::new(definition, account);
-
-        let encoded = id.canonical_encoded();
-        let parsed = AssetId::parse_encoded(&encoded).expect("encoded asset id parses");
-        assert_eq!(parsed, id);
-    }
-
-    #[test]
-    fn asset_id_with_explicit_scope_roundtrips() {
-        let kp = KeyPair::random();
-        let account = AccountId::new(kp.public_key().clone());
-        let domain: DomainId = "wonderland".parse().expect("domain");
-        let name: Name = "xor".parse().expect("name");
-        let definition = AssetDefinitionId::new(domain, name);
-        let id = AssetId::with_scope(
-            definition,
-            account,
-            AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
-        );
-
-        let encoded = id.canonical_encoded();
-        let parsed = AssetId::parse_encoded(&encoded).expect("encoded asset id parses");
-        assert_eq!(parsed, id);
         assert_eq!(
-            parsed.scope(),
-            &AssetBalanceScope::Dataspace(DataSpaceId::new(7))
+            domain_scoped
+                .try_domain()
+                .expect("domain-scoped projection"),
+            &DomainId::try_new("wonderland", "universal").expect("domain"),
+        );
+        assert_eq!(
+            domain_scoped.try_name().expect("name projection"),
+            &"xor".parse::<Name>().expect("name"),
         );
     }
 
     #[test]
-    fn asset_id_parse_encoded_rejects_textual_literal() {
+    fn asset_id_parse_literal_roundtrips_global() {
         let kp = KeyPair::random();
         let account = AccountId::new(kp.public_key().clone());
-        let literal = format!("xor#wonderland#{account}");
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "xor".parse().expect("name"),
+        );
+        let literal = format!("{definition}#{account}");
 
-        let err = AssetId::parse_encoded(&literal).expect_err("textual literal must fail");
+        let parsed = AssetId::parse_literal(&literal).expect("text literal should parse");
+        assert_eq!(parsed, AssetId::new(definition, account));
+        assert_eq!(parsed.to_string(), literal);
+    }
+
+    #[test]
+    fn asset_id_parse_literal_roundtrips_scoped() {
+        let kp = KeyPair::random();
+        let account = AccountId::new(kp.public_key().clone());
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "xor".parse().expect("name"),
+        );
+        let literal = format!("{definition}#{account}#dataspace:7");
+
+        let parsed = AssetId::parse_literal(&literal).expect("scoped literal should parse");
+        assert_eq!(
+            parsed,
+            AssetId::with_scope(
+                definition,
+                account,
+                AssetBalanceScope::Dataspace(DataSpaceId::new(7))
+            )
+        );
+        assert_eq!(parsed.to_string(), literal);
+    }
+
+    #[test]
+    fn asset_id_parse_literal_rejects_malformed_colon_literal() {
+        let err =
+            AssetId::parse_literal("not:an-asset").expect_err("malformed asset literal must fail");
         assert!(
-            err.reason().contains("textual forms are not supported"),
+            err.reason().contains("account id"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn asset_definition_id_parse_aid_rejects_legacy_and_dashed_literals() {
-        assert!(AssetDefinitionId::parse_aid_literal("usd#wonderland").is_err());
+    fn asset_definition_id_parse_address_rejects_non_canonical_literals() {
+        assert!(AssetDefinitionId::parse_address_literal("usd#wonderland").is_err());
         assert!(
-            AssetDefinitionId::parse_aid_literal("aid:2f17c724-66f8-4a4b-b8a8-e24884fdcd2f")
+            AssetDefinitionId::parse_address_literal("prefix:2f17c72466f84a4bb8a8e24884fdcd2f")
                 .is_err()
         );
     }
 
     #[test]
-    fn asset_definition_id_from_str_rejects_legacy_literal() {
+    fn asset_definition_id_from_str_rejects_textual_seed_literal() {
         let err = "usd#wonderland"
             .parse::<AssetDefinitionId>()
-            .expect_err("legacy literal must be rejected");
+            .expect_err("textual seed literal must be rejected");
         assert!(
-            err.to_string().contains("aid:<32-lower-hex>"),
+            err.to_string().contains("Base58"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn asset_definition_id_rejects_invalid_checksum() {
+        let mut literal = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "xor".parse().expect("name"),
+        )
+        .to_string()
+        .into_bytes();
+        let last = literal.len() - 1;
+        literal[last] = if literal[last] == b'1' { b'2' } else { b'1' };
+        let literal = String::from_utf8(literal).expect("utf8");
+
+        let err = literal
+            .parse::<AssetDefinitionId>()
+            .expect_err("checksum must fail");
+        assert!(
+            err.to_string().contains("checksum"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn asset_definition_id_rejects_prefixed_literal() {
+        let err =
+            AssetDefinitionId::parse_address_literal("prefix:2f17c72466f84a4bb8a8e24884fdcd2f")
+                .expect_err("prefixed format must fail");
+        assert!(
+            err.to_string().contains("Base58"),
             "unexpected error: {err}"
         );
     }

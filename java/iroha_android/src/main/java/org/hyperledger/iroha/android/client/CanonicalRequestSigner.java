@@ -10,10 +10,12 @@ import java.security.Signature;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HexFormat;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.security.SecureRandom;
 
 /**
  * Builds canonical request signatures for Torii app endpoints.
@@ -22,6 +24,9 @@ public final class CanonicalRequestSigner {
 
   public static final String HEADER_ACCOUNT = "X-Iroha-Account";
   public static final String HEADER_SIGNATURE = "X-Iroha-Signature";
+  public static final String HEADER_TIMESTAMP_MS = "X-Iroha-Timestamp-Ms";
+  public static final String HEADER_NONCE = "X-Iroha-Nonce";
+  private static final SecureRandom NONCE_RANDOM = new SecureRandom();
 
   private CanonicalRequestSigner() {}
 
@@ -87,7 +92,28 @@ public final class CanonicalRequestSigner {
   }
 
   /**
-   * Build canonical signing headers (`X-Iroha-Account`/`X-Iroha-Signature`).
+   * Build canonical request bytes for signing with freshness metadata.
+   */
+  public static byte[] canonicalRequestSignatureMessage(
+      final String method,
+      final URI uri,
+      final byte[] body,
+      final long timestampMs,
+      final String nonce) {
+    if (nonce == null || nonce.isBlank()) {
+      throw new IllegalArgumentException("nonce is required");
+    }
+    final String rendered =
+        new String(canonicalRequestMessage(method, uri, body), StandardCharsets.UTF_8)
+            + "\n"
+            + timestampMs
+            + "\n"
+            + nonce;
+    return rendered.getBytes(StandardCharsets.UTF_8);
+  }
+
+  /**
+   * Build canonical signing headers including freshness metadata.
    */
   public static Map<String, String> buildHeaders(
       final String method,
@@ -95,13 +121,38 @@ public final class CanonicalRequestSigner {
       final byte[] body,
       final String accountId,
       final PrivateKey privateKey) {
+    return buildHeaders(
+        method,
+        uri,
+        body,
+        accountId,
+        privateKey,
+        System.currentTimeMillis(),
+        randomNonce());
+  }
+
+  /**
+   * Build canonical signing headers with explicit freshness metadata.
+   */
+  public static Map<String, String> buildHeaders(
+      final String method,
+      final URI uri,
+      final byte[] body,
+      final String accountId,
+      final PrivateKey privateKey,
+      final long timestampMs,
+      final String nonce) {
     if (accountId == null || accountId.isBlank()) {
       throw new IllegalArgumentException("accountId is required");
     }
     if (privateKey == null) {
       throw new IllegalArgumentException("privateKey is required");
     }
-    final byte[] message = canonicalRequestMessage(method, uri, body);
+    if (nonce == null || nonce.isBlank()) {
+      throw new IllegalArgumentException("nonce is required");
+    }
+    final byte[] message =
+        canonicalRequestSignatureMessage(method, uri, body, timestampMs, nonce);
     final byte[] signatureBytes;
     try {
       final Signature signer = Signature.getInstance("Ed25519");
@@ -114,7 +165,15 @@ public final class CanonicalRequestSigner {
     final Map<String, String> headers = new HashMap<>();
     headers.put(HEADER_ACCOUNT, accountId);
     headers.put(HEADER_SIGNATURE, Base64.getEncoder().encodeToString(signatureBytes));
+    headers.put(HEADER_TIMESTAMP_MS, Long.toString(timestampMs));
+    headers.put(HEADER_NONCE, nonce);
     return headers;
+  }
+
+  private static String randomNonce() {
+    final byte[] bytes = new byte[16];
+    NONCE_RANDOM.nextBytes(bytes);
+    return HexFormat.of().formatHex(bytes);
   }
 
   private static String urlEncode(final String value) {

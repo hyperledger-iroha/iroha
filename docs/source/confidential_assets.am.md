@@ -89,7 +89,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ SPDX-License-Identifier: Apache-2.0
 - በየመለያ ቁልፍ የማውጫ ተዋረድ፡
   - `sk_spend` → `nk` (የማስሻሻ ቁልፍ)፣ `ivk` (መጪ መመልከቻ ቁልፍ)፣ `ovk` (የወጪ መመልከቻ ቁልፍ)፣ `fvk`።
 - የተመሰጠረ የማስታወሻ ጭነት AEAD ከ ECDH-የተገኙ የጋራ ቁልፎች ጋር ይጠቀማሉ; አማራጭ የኦዲተር እይታ ቁልፎች በንብረት ፖሊሲ ከውጤቶች ጋር ሊጣበቁ ይችላሉ።
-- CLI ተጨማሪዎች፡- `confidential create-keys`፣ `confidential send`፣ `confidential export-view-key`፣የኦዲተር ማስታዎሻዎችን ለመፍታት እና የ`iroha app zk envelope` ረዳት `iroha app zk envelope` ረዳት ከመስመር ውጭ ኢንቬሎፕን ለመስራት። Torii በ `POST /v1/confidential/derive-keyset` በኩል ተመሳሳይ የመነሻ ፍሰት ያጋልጣል፣ ሁለቱንም ሄክስ እና ቤዝ64 ቅጾችን በመመለስ የኪስ ቦርሳ ቁልፍ ተዋረዶችን በፕሮግራማዊ መንገድ ማምጣት ይችላል።
+- CLI ተጨማሪዎች፡- `confidential create-keys`፣ `confidential send`፣ `confidential export-view-key`፣የኦዲተር ማስታዎሻዎችን ለመፍታት እና የ`iroha app zk envelope` ረዳት `iroha app zk envelope` ረዳት ከመስመር ውጭ ኢንቬሎፕን ለመስራት።
 
 ## ጋዝ፣ ገደቦች እና የዶኤስ መቆጣጠሪያዎች
 - የሚወስን የጋዝ መርሃ ግብር;
@@ -391,7 +391,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -423,8 +423,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -455,7 +455,7 @@ Grafana ከመሳመርዎ በፊት መለኪያዎችን በአገር ውስ�
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 ጥልቀት በአዲስ ቃል ኪዳኖች እንደሚያድግ ለማረጋገጥ ይህንን ከ`rg 'iroha_confidential_tree_depth'` ጋር በማጣመር የማባረር ቆጣሪዎች የሚጨምሩት ታሪኩ ሲዘጋ ብቻ ነው። እነዚህ እሴቶች ከአስተዳደር ማስረጃ ቅርቅቦች ጋር ካያያዙት የGrafana ዳሽቦርድ ኤክስፖርት ጋር መመሳሰል አለባቸው።

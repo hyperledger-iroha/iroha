@@ -94,7 +94,7 @@ os pools de bônus por prova sem a necessidade de código de orquestração pers
 
 ### Gerando planos de contabilidade de aluguel
 
-Execute `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition xor#sora`
+Execute `iroha app da rent-ledger --quote <path> --payer-account <id> --treasury-account <id> --protocol-reserve-account <id> --provider-account <id> --pdp-bonus-account <id> --potr-bonus-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc`
 para converter uma cotação de aluguel persistente em transferências contábeis executáveis. O comando
 analisa o `ledger_projection` incorporado, emite instruções Norito `Transfer`
 que arrecadam a renda base para o tesouro, encaminha a reserva/provedor

@@ -3,17 +3,17 @@
 Swift SDK targeting Hyperledger Iroha v2 and Sora Nexus (Iroha v3) nodes on Apple platforms.
 
 Features:
-- Torii HTTP client (balances, transactions, explorer instructions/transactions, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
-- Offline allowance top-up helpers (`ToriiClient.topUpOfflineAllowance`, `ToriiClient.topUpOfflineAllowanceRenewal`, `OfflineWallet.topUpAllowance`, `OfflineWallet.topUpAllowanceRenewal`) plus registration/renewal endpoints for `/v1/offline/allowances`; top-up/renew helpers accept optional `attestationNonce` for iOS App Attest challenge-hash forwarding, direct build-claim issuance via `ToriiClient.issueOfflineBuildClaim` (`/v1/offline/build-claims/issue`), typed claim decoding via `ToriiOfflineBuildClaimIssueResponse.buildClaimObject()`, and settlement submit+poll convenience (`ToriiClient.submitOfflineSettlementAndWait`)
+- Torii HTTP client (balances, transactions, explorer instructions/transactions/RWAs, subscriptions, pipeline recovery, time service, ZK attachments, prover reports, contracts)
+- Offline V2 note models, transaction builders, proof binding helpers, and readiness discovery through `/v1/offline/v2/readiness`
 - Health & metrics helpers (fetch `/v1/health` text probe and `/v1/metrics` Prometheus/JSON payloads)
 - Norito envelope encoder (header + CRC64-XZ)
-- Native NoritoBridge integration (auto-enabled when `dist/NoritoBridge.xcframework` is present, otherwise Swift-only fallback) powering transfer/mint/burn builders and JSON inspection helpers
+- Required Native NoritoBridge integration (`dist/NoritoBridge.xcframework`) powering transfer/mint/burn builders and JSON inspection helpers
 - Norito RPC HTTP helper (`NoritoRpcClient`) with binary header/query/timeout handling
 - Pipeline submission helpers (POST `/v1/pipeline/transactions` with configurable retries + status polling)
-- Ed25519 key management & signing via CryptoKit (iOS 15+)
-- Confidential key derivation (`ConfidentialKeyset.derive`) mirroring the Rust HKDF so wallets can obtain `sk_spend`, `nk`, `ivk`, `ovk`, and `fvk` locally, plus Torii wrappers for `/v1/confidential/derive-keyset`
+- Ed25519 signing with CryptoKit plus native-bridge secp256k1, ML-DSA, GOST R 34.10-2012, BLS normal/small, and SM2 support
+- Confidential key derivation (`ConfidentialKeyset.derive`) mirroring the Rust HKDF so wallets can obtain `sk_spend`, `nk`, `ivk`, `ovk`, and `fvk` locally
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
-- Verifying key registry helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, register/update) covering `/v1/zk/vk` operations
+- Verifying key registry read/event helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`) covering `/v1/zk/vk` operations
 
 ## Installation
 
@@ -51,9 +51,9 @@ instead of the Git URL so Xcode consumes the local sources.
 
 #### NoritoBridge policy (SwiftPM)
 
-`Package.swift` checks for `dist/NoritoBridge.xcframework` next to the repository root. If present, the native bridge is linked; if missing, the package builds with Swift-only fallback and emits a warning with the expected path. Runtime errors such as `ConnectCodecError.bridgeUnavailable` and `SwiftTransactionEncoderError.nativeBridgeUnavailable` include the same bridge-location hint.
+`Package.swift` checks for `dist/NoritoBridge.xcframework` next to the repository root and fails package resolution when the bridge is missing. Runtime errors such as `ConnectCodecError.bridgeUnavailable` and `SwiftTransactionEncoderError.nativeBridgeUnavailable` include the same bridge-location hint for broken or unloaded bridge symbols.
 
-CI runs `.github/workflows/swift-packaging.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to verify bridge packaging and fallback build coverage.
+CI runs `.github/workflows/swift-packaging.yml` (see `ci/check_swift_spm_validation.sh` and `ci/check_swift_pod_bridge.sh`) to verify bridge packaging.
 
 ### CocoaPods
 
@@ -69,16 +69,30 @@ Usage:
 ```swift
 import IrohaSwift
 
-let torii = ToriiClient(baseURL: URL(string: "http://127.0.0.1:8080")!)
-let sdk = IrohaSDK(baseURL: torii.baseURL)
+let toriiURL = URL(string: "https://torii.example")!
+let sdk = IrohaSDK(baseURL: toriiURL)
+let pqSDK = IrohaSDK(baseURL: toriiURL, defaultSigningAlgorithm: .mlDsa)
+let gostSDK = IrohaSDK(baseURL: toriiURL, defaultSigningAlgorithm: .gost2012_256A)
 
-// Generate Ed25519 keypair (CryptoKit)
-let kp = try Keypair.generate()
-let accountId = AccountId.make(publicKey: kp.publicKey)
-let assetId = "norito:<hex-encoded-asset-id>"
+// Generate a signing key using the SDK default (Ed25519 unless overridden)
+let signingKey = try sdk.generateSigningKey()
+let accountId = AccountId.make(publicKey: try signingKey.publicKey())
+let asset = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
-// Fetch balances
-sdk.getAssets(accountId: accountId, assetId: assetId) { result in
+let walletToken = "<wallet-session-token>"
+let toriiAuth = try ToriiClientAuthentication.bearerToken(
+    walletToken,
+    accountId: accountId,
+    dataspaceId: "mibank.bpng"
+)
+let torii = ToriiClient(baseURL: toriiURL, authentication: toriiAuth)
+
+// Or opt into any native-bridge signing algorithm explicitly.
+let pqSigningKey = try pqSDK.generateSigningKey()
+let gostSigningKey = try gostSDK.signingKey(fromSeed: Data("seed".utf8))
+
+// Fetch balances through the credentialed Torii client
+torii.getAssets(accountId: accountId, asset: asset, scope: "global") { result in
     print(result)
 }
 
@@ -91,13 +105,13 @@ torii.listAttachments { result in
 let transfer = TransferRequest(
     chainId: "00000000-0000-0000-0000-000000000000",
     authority: accountId,
-    assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
     quantity: "1.23",
     destination: "<destination_account_i105>",
     description: "demo",
     ttlMs: 60_000
 )
-let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: kp)
+let envelope = try sdk.buildSignedTransfer(transfer: transfer, signingKey: signingKey)
 sdk.submit(envelope: envelope) { err in
     print(err as Any)
 }
@@ -107,17 +121,23 @@ torii.getTransactionStatus(hashHex: envelope.hashHex) { status in
     print(status)
 }
 
-// Await pipeline completion using the helper (falls back to immediate success when
-// the endpoint returns no status payload).
+// Await pipeline completion using the helper.
 sdk.submitAndWait(envelope: envelope) { result in
     print("pipeline status:", result)
 }
 ```
 
-`TransferRequest`, `MintRequest`, `BurnRequest`, `ShieldRequest`, and `UnshieldRequest` expect
-canonical `aid:<32-lower-hex-no-dash>` asset-definition IDs on the Swift surface.
+Wallet-scoped Torii deployments commonly require the `Authorization`,
+`X-Account-Id`, and `X-Dataspace-Id` headers on every request. Use
+`ToriiClientAuthentication` or `defaultHeaders` on `ToriiClient` so the SDK
+attaches those headers centrally instead of repeating them at each call site.
+Credential-bearing headers are rejected over plain HTTP or host-mismatched
+requests by the shared transport-security check.
 
-`IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows.
+`TransferRequest`, `MintRequest`, `BurnRequest`, `ShieldRequest`, and `UnshieldRequest` expect
+canonical unprefixed Base58 asset-definition IDs on the Swift surface.
+
+`IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs are Ed25519-only while native-backed algorithms use `NoritoBridge`.
 
 ### Subscriptions
 
@@ -127,7 +147,7 @@ last month) or `next_period` for fixed-price plans billed in advance.
 
 ```swift
 let plan: ToriiSubscriptionPlan = [
-    "provider": .string("aws@commerce"),
+    "provider": .string("<provider_account_i105>"),
     "billing": .object([
         "cadence": .object([
             "kind": .string("monthly_calendar"),
@@ -154,41 +174,20 @@ let plan: ToriiSubscriptionPlan = [
     ])
 ]
 
-let planRequest = ToriiSubscriptionPlanCreateRequest(
-    authority: "<provider_account_i105>",
-    privateKey: "provider-private-key-hex",
-    planId: "aws_compute#commerce",
-    plan: plan
-)
-try await torii.createSubscriptionPlan(planRequest)
-
-let subscriptionRequest = ToriiSubscriptionCreateRequest(
-    authority: "<subscriber_account_i105>",
-    privateKey: "subscriber-private-key-hex",
-    subscriptionId: "sub-001",
-    planId: "aws_compute#commerce"
-)
-try await torii.createSubscription(subscriptionRequest)
-
-let usageRequest = ToriiSubscriptionUsageRequest(
-    authority: "<provider_account_i105>",
-    privateKey: "provider-private-key-hex",
-    unitKey: "compute_ms",
-    delta: "3600000"
-)
-try await torii.recordSubscriptionUsage(subscriptionId: "sub-001", requestBody: usageRequest)
-
-let actionRequest = ToriiSubscriptionActionRequest(
-    authority: "<provider_account_i105>",
-    privateKey: "provider-private-key-hex"
-)
-try await torii.chargeSubscriptionNow(subscriptionId: "sub-001", requestBody: actionRequest)
 ```
+
+The direct subscription mutation helpers now fail closed instead of accepting
+embedded private keys. Build the equivalent subscription instructions locally,
+sign them with your wallet key material, and submit the resulting transaction
+through `submitTransaction` or `/v1/pipeline/transactions`.
 
 ### Canonical request signing
 
-App-facing Torii endpoints accept optional `X-Iroha-Account` /
-`X-Iroha-Signature` headers. Use `ToriiCanonicalRequest` to build them:
+App-facing Torii endpoints accept optional `X-Iroha-Account`,
+`X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and `X-Iroha-Nonce` headers.
+Use `ToriiCanonicalRequest` to build them; it signs the canonical request plus
+the freshness metadata and auto-generates timestamp/nonce values when you do not
+pass them explicitly:
 
 ```swift
 let url = URL(string: "https://torii.example/v1/accounts/<account_i105>/assets?limit=5")!
@@ -204,7 +203,7 @@ headers.forEach { key, value in
 }
 ```
 
-> **Hard-cut account parser:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept only canonical I105 account IDs. `@domain` suffixes and other legacy literals are rejected.
+> **Account selectors:** Account-scoped helpers (`ToriiClient.getAssets`, `getTransactions`, and matching `IrohaSDK` shortcuts) accept canonical I105 account ids or on-chain account aliases (`name@dataspace` / `name@domain.dataspace`). Torii resolves aliases to canonical account ids before serving the response.
 
 ### Explorer instruction history
 
@@ -216,14 +215,14 @@ if #available(iOS 15.0, macOS 12.0, *) {
     let params = ToriiExplorerInstructionsParams(page: 1,
                                                  perPage: 50,
                                                  kind: "Transfer",
-                                                 assetId: "norito:<hex-encoded-asset-id>")
+                                                 assetDefinitionId: "<base58-asset-definition-id>")
     let transfers = try await torii.getExplorerTransfers(params: params,
                                                          matchingAccount: "<account_i105>")
     for record in transfers {
         switch record.details {
         case .asset(let asset):
             print("transfer:", asset.amount,
-                  asset.assetDefinitionId ?? asset.sourceAssetId,
+                  asset.assetDefinitionId ?? "unknown asset",
                   "from:", asset.senderAccountId ?? "unknown",
                   "to:", asset.destinationAccountId)
         case .assetBatch(let entries):
@@ -252,19 +251,15 @@ if #available(iOS 15.0, macOS 12.0, *) {
 }
 ```
 
-Transfer summaries also expose `sourceAssetId` and `destinationAssetId` when they can be
-constructed from the asset definition and account ids. For batch transfers, `transferIndex`
-tracks the entry position within the instruction payload. Convenience flags `isIncoming`,
-`isOutgoing`, and `isSelfTransfer` help with UI direction labels.
+For batch transfers, `transferIndex` tracks the entry position within the instruction payload.
+Convenience flags `isIncoming`, `isOutgoing`, and `isSelfTransfer` help with UI direction labels.
 If you need to recompute direction for another account or show counterparties, use
 `direction(relativeTo:)` and `counterpartyAccountId(relativeTo:)`. Direction helpers also accept
 `isIncoming(relativeTo:)`, `isOutgoing(relativeTo:)`, and `isSelfTransfer(relativeTo:)`.
-To resolve asset ids relative to a specific account, use `assetId(relativeTo:)` and
-`counterpartyAssetId(relativeTo:)`.
 Use `signedAmount(relativeTo:)` when you need a simple +/‑ string for UI totals.
 Summaries conform to `Identifiable`, using `transactionHash|instructionIndex|transferIndex` as the
 stable identifier.
-Use `matchingAccount`, `assetDefinitionId`, or `assetId` to filter transfer records and summaries.
+Use `matchingAccount` or `assetDefinitionId` to filter transfer records and summaries.
 
 For a one-shot transaction history helper, use `getTransactionHistory` (alias of
 `getAccountTransferHistory`):
@@ -281,7 +276,8 @@ if #available(iOS 15.0, macOS 12.0, *) {
 ```
 
 You can also pass `assetDefinitionId` or `assetId` to narrow results. The `assetId` filter matches
-the source asset id literal (definition + sender account) as reported by explorer transfers.
+the source internal asset balance-bucket literal (`<base58-asset-definition-id>#<canonical-i105-account-id>`) as reported by explorer
+transfers.
 Transaction-scoped helpers (`getExplorerTransactionTransferSummaries`,
 `streamTransactionTransferSummaries`) accept the same filters.
 
@@ -317,6 +313,61 @@ If you need transfer details for a specific transaction, call
 `getExplorerTransactionTransferSummaries(hashHex:matchingAccount:)`.
 Use `streamTransactionTransferSummaries` or `transactionTransferSummariesPublisher` to keep
 receiving live transfer updates for that transaction.
+
+For RWA lots, use the dedicated explorer and chain-state helpers:
+
+```swift
+if #available(iOS 15.0, macOS 12.0, *) {
+    let lots = try await torii.getExplorerRwas(
+        params: ToriiExplorerRwasParams(
+            page: 1,
+            perPage: 25,
+            ownedBy: "<account_i105>",
+            domain: "commodities"
+        )
+    )
+    if let first = lots.items.first {
+        let detail = try await torii.getExplorerRwaDetail(rwaId: first.id)
+        print(detail.quantity, detail.heldQuantity, detail.primaryReference)
+    }
+
+    let rwaIds = try await torii.listRwas(options: ToriiListOptions(limit: 10))
+    print(rwaIds.items.map(\.id))
+}
+```
+
+For local instruction composition, `RwaInstructionBuilders` and the matching
+`IrohaSDK` convenience methods now cover the dedicated RWA instruction family.
+The richer registration/merge/control-policy payloads stay as `NoritoJSON`
+objects so callers can pass canonical Rust-side JSON shapes directly:
+
+```swift
+let newRwa = try NoritoJSON.fromJSONObject([
+    "domain": "commodities",
+    "quantity": "10.5",
+    "spec": ["scale": 1],
+    "primary_reference": "vault-cert-001",
+    "metadata": ["origin": "AE"],
+    "parents": [],
+    "controls": ["freeze_enabled": true]
+])
+let registerRwa = try sdk.buildRegisterRwa(rwa: newRwa)
+let transferRwa = try sdk.buildTransferRwa(
+    sourceAccountId: "<source_i105>",
+    rwaId: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities",
+    quantity: "1.5",
+    destinationAccountId: "<destination_i105>"
+)
+
+let metadata = try NoritoJSON(["serial": "vault-01"])
+let setMetadata = SetMetadataRequest(
+    chainId: "00000000-0000-0000-0000-000000000000",
+    authority: "<source_i105>",
+    target: .rwa("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities"),
+    key: "serial",
+    value: metadata
+)
+```
 
 To react to new blocks as they commit, subscribe to the explorer SSE streams:
 
@@ -396,19 +447,20 @@ If you need the immediate submission receipt without waiting for a terminal stat
 call `torii.submitTransaction(data: envelope.norito)` directly. The returned
 `ToriiSubmitTransactionResponse` includes the receipt payload and signature; use
 `receipt.hash` (or `receipt.payload.txHash`) to poll with `torii.getTransactionStatus(hashHex:)`.
-`submitTransaction` validates `data_model_version` from `/v1/node/capabilities` and throws
-`ToriiClientError.incompatibleDataModel` if the node was built from a different release.
+`submitTransaction` validates the transaction submit schema from `/v1/node/capabilities`
+(`data_model_version` + `signed_transaction_schema_hash_hex`) and throws
+`ToriiClientError.dataModelMismatch` or
+`ToriiClientError.transactionSchemaMismatch` if the node was built from a mismatched release.
 
-`ToriiClient.getMetrics()` automatically decodes JSON payloads even when Torii forgets to
-set `Content-Type: application/json`, falling back to the Prometheus/text response only
-when JSON decoding fails. Pass `asText: true` to force the text variant.
+`ToriiClient.getMetrics()` requests JSON and requires `Content-Type: application/json`.
+Pass `asText: true` to request the text/Prometheus variant.
 
 Swift concurrency wrappers are available on iOS 15/macOS 12 and newer:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
     Task {
-        let balances = try await torii.getAssets(accountId: accountId, assetId: assetId)
+        let balances = try await torii.getAssets(accountId: accountId, asset: asset, scope: "global")
         print("balances:", balances)
 
         try await sdk.submit(transfer: transfer, keypair: kp)
@@ -440,9 +492,9 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-`PipelineTransactionState` covers the common Torii status strings (`.queued`, `.approved`,
-`.committed`, `.applied`, `.rejected`, `.expired`) and falls back to `.other("NAME")` for
-future values.
+`PipelineTransactionState` covers Torii status strings (`.queued`, `.approved`,
+`.committed`, `.applied`, `.rejected`, `.expired`) and maps unrecognized values to
+`.other("NAME")`.
 
 Completion-based variants return a `Task<Void, Never>` so callers can cancel outstanding
 polls. Failures bubble up as `PipelineStatusError.failure` (rejected/expired) or
@@ -463,24 +515,7 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-For offline settlement flows, `ToriiClient.submitOfflineSettlementAndWait` combines
-`/v1/offline/settlements` submit with pipeline status polling and raises
-`PipelineStatusError.failure` on terminal rejection (including `rejectionReason` when present):
-
-```swift
-if #available(iOS 15, macOS 12, *) {
-    let request = ToriiOfflineSettlementSubmitRequest(
-        authority: authorityId,
-        privateKey: privateKeyHex,
-        transfer: transferPayload
-    )
-    var poll = PipelineStatusPollOptions.default
-    poll.pollInterval = 0.25
-    poll.maxAttempts = 40
-    let settlement = try await torii.submitOfflineSettlementAndWait(request, pollOptions: poll)
-    print("bundle", settlement.bundleIdHex, "tx", settlement.txHashHex ?? "<missing>")
-}
-```
+Offline V2 note issuance, redemption, and audit payloads are submitted as transaction instructions. Torii HTTP discovery is limited to the Offline V2 readiness endpoint; the Swift SDK no longer publishes non-V2 offline HTTP helpers.
 
 ### Offline transaction queue
 
@@ -500,211 +535,47 @@ operators can archive or inspect them later. When Torii rejects a replayed trans
 SDK surfaces `IrohaSDKError.toriiRejected` and leaves the remaining entries untouched so
 apps can decide how to remediate.
 
-### Offline receipts and bundles
+### Offline V2 APIs
 
-When you need a full `norito:<hex>` asset id from textual parts, use the new builders:
-
-```swift
-let canonicalAssetId = try ToriiClient.buildCanonicalAssetIdLiteralOffline(
-    assetDefinitionId: "usd#wonderland",
-    accountId: "<account_i105>"
-)
-```
-
-For alias inputs, resolve online and encode in one call:
-
-```swift
-if #available(iOS 15.0, macOS 12.0, *) {
-    let assetId = try await torii.buildAssetIdLiteralResolvingAliases(
-        assetDefinitionIdOrAlias: "usd#issuer@main",
-        accountIdOrAlias: "alice"
-    )
-    print(assetId) // norito:<hex>
-}
-```
-
-Offline-only encoding is canonical-only. Alias-shaped inputs are rejected unless you call the async resolver path above.
-The async resolver path also falls back to `/v1/assets/aliases/resolve` when a non-alias asset definition is invalid.
-Component-based asset-id building requires the native bridge symbol `connect_norito_encode_asset_id_literal`.
-
-Use `OfflineReceiptBuilder` to validate offline spend receipts and bundle submissions (spend-key
-signature verification, policy enforcement, platform snapshot binding, and aggregate proof root
-checks), and `OfflineWallet.buildSignedReceipt` to sign with the spend key while persisting to the
-audit log or journal:
-
-```swift
-let chainId = "testnet"
-let journal = try OfflineJournal(url: journalURL, key: OfflineJournalKey.derive(from: seed))
-let receipt = try wallet.buildSignedReceipt(
-    chainId: chainId,
-    receiverAccountId: certificate.controller,
-    amount: "10",
-    invoiceId: "inv-001",
-    platformProof: proof,
-    senderCertificate: certificate,
-    signingKey: spendKey,
-    journal: journal
-)
-
-let claimedDelta = try OfflineReceiptBuilder.aggregateAmount(receipts: [receipt])
-let resultingValue = "90" // current balance minus claimedDelta
-let initialBlindingHex = "<current-blinding-hex>"
-let resultingBlindingHex = "<next-blinding-hex>"
-let artifacts = try OfflineBalanceProofBuilder.advanceCommitment(
-    chainId: chainId,
-    claimedDelta: claimedDelta,
-    resultingValue: resultingValue,
-    initialCommitmentHex: certificate.allowance.commitment.hexUppercased(),
-    initialBlindingHex: initialBlindingHex,
-    resultingBlindingHex: resultingBlindingHex
-)
-let balanceProof = OfflineBalanceProof(
-    initialCommitment: certificate.allowance,
-    resultingCommitment: artifacts.resultingCommitment,
-    claimedDelta: claimedDelta,
-    zkProof: artifacts.proof
-)
-let transfer = try OfflineReceiptBuilder.buildTransfer(
-    chainId: chainId,
-    receiver: certificate.controller,
-    depositAccount: certificate.controller,
-    receipts: [receipt],
-    balanceProof: balanceProof
-)
-```
-
-`OfflineReceiptBuilder` sorts receipts by `(counter, tx_id)` unless you set `sortReceipts: false`,
-and bundles must not mix counter scopes (App Attest key id vs. marker/provisioned).
-
-Balance proofs are mandatory for settlement; the builder emits the versioned 12,385-byte v1 proof
-blob (delta + range proofs) that Torii validates.
-
-To include proof attachments (for example, regulator receipts), build attachments and pass them
-into the transfer:
-
-```swift
-let chainId = "testnet"
-let attachment = try ProofAttachment(
-    backend: "halo2/ipa",
-    proof: proofBytes,
-    verifyingKey: .reference(.init(backend: "halo2/ipa", name: "transfer_v1")),
-    verifyingKeyCommitment: vkCommitment,
-    envelopeHash: envelopeHash
-)
-let attachments = OfflineProofAttachmentList(attachments: [attachment])
-let transfer = try OfflineReceiptBuilder.buildTransfer(
-    chainId: chainId,
-    receiver: certificate.controller,
-    depositAccount: certificate.controller,
-    receipts: [receipt],
-    balanceProof: balanceProof,
-    attachments: attachments
-)
-```
-
-If you are composing receipts without `OfflineWallet`, `OfflineReceiptRecorder` wires the journal
-and audit logger into `OfflineReceiptBuilder` while still enforcing spend-key and account-id
-validation:
-
-```swift
-let logger = try OfflineAuditLogger(isEnabled: true)
-let recorder = OfflineReceiptRecorder(journal: journal, auditLogger: logger)
-let chainId = "testnet"
-let seed = Data("receipt-seed".utf8)
-let bundleSeed = Data("bundle-seed".utf8)
-let receipt = try OfflineReceiptBuilder.buildSignedReceipt(
-    txIdSeed: seed,
-    chainId: chainId,
-    receiverAccountId: certificate.controller,
-    amount: "10",
-    invoiceId: "inv-002",
-    platformProof: proof,
-    senderCertificate: certificate,
-    signingKey: spendKey,
-    recorder: recorder,
-    timestampMs: 123
-)
-
-let transfer = try OfflineReceiptBuilder.buildTransfer(
-    bundleIdSeed: bundleSeed,
-    chainId: chainId,
-    receiver: certificate.controller,
-    depositAccount: certificate.controller,
-    receipts: [receipt],
-    balanceProof: balanceProof,
-    sortReceipts: true
-)
-```
-
-When attaching aggregate proofs, compute the Poseidon receipts root with
-`OfflineReceiptBuilder.computeReceiptsRoot` and populate the envelope before submission. Use
-`OfflineAggregateProofMetadataKey` to tag the FASTPQ parameter set and circuit identifiers:
-
-```swift
-let metadata: [String: ToriiJSONValue] = [
-    OfflineAggregateProofMetadataKey.parameterSet: .string("fastpq-offline-v1"),
-    OfflineAggregateProofMetadataKey.sumCircuit: .string("fastpq/offline_sum/v1"),
-    OfflineAggregateProofMetadataKey.counterCircuit: .string("fastpq/offline_counter/v1"),
-    OfflineAggregateProofMetadataKey.replayCircuit: .string("fastpq/offline_replay/v1"),
-]
-```
-
-Torii builds FASTPQ witness payloads from the transfer payload
-(`POST /v1/offline/transfers/proof`). Use the native bridge helper to derive proof bytes:
-
-```swift
-let sumRequest = try await torii.requestOfflineTransferProof(
-    .init(transfer: transfer, kind: "sum")
-)
-let counterRequest = try await torii.requestOfflineTransferProof(
-    .init(transfer: transfer, kind: "counter", counterCheckpoint: counterCheckpoint)
-)
-let replayRequest = try await torii.requestOfflineTransferProof(
-    .init(transfer: transfer,
-          kind: "replay",
-          replayLogHeadHex: replayHeadHex,
-          replayLogTailHex: replayTailHex)
-)
-
-let proofs = try OfflineReceiptBuilder.generateAggregateProofs(
-    sumRequest: sumRequest,
-    counterRequest: counterRequest,
-    replayRequest: replayRequest
-)
-let envelope = try OfflineReceiptBuilder.buildAggregateProofEnvelope(
-    receipts: receipts,
-    proofSum: proofs.sum,
-    proofCounter: proofs.counter,
-    proofReplay: proofs.replay,
-    metadata: metadata
-)
-```
-
-Note: the native bridge emits deterministic sum/counter/replay proofs (Norito-encoded
-`OfflineFastpq*Proof`), and the core verifier enforces them when `proof_mode = "required"`.
-
-`OfflineWallet.syncOfflineState()` refreshes revocations, counter checkpoints, and verdict metadata
-from the state snapshot so wallets can enforce policy deadlines without re-fetching each list.
+Torii exposes only `/v1/offline/v2/readiness` for offline HTTP discovery. Offline V2 note
+issuance, redemption, and audit payloads are submitted as transaction instructions; the legacy
+non-V2 offline HTTP routes are no longer published.
+Swift exposes `OfflineNoteIssueV2`, `OfflineNoteRedeemV2`, and `OfflineNoteAuditBundleV2`
+models plus `buildIssueOfflineNoteV2`, `buildRedeemOfflineNoteV2`, and
+`buildAuditOfflineNoteV2` transaction builders on `IrohaSDK`. Redeem and audit builders verify
+that the recursive proof's public-input hash matches the canonical Swift/Rust Norito payload
+before signing, so callers pass real prover output instead of mock-proof placeholders.
+Issuance is accepted only from an offline escrow manager with `CanManageOfflineEscrow`, and the
+one-use key certificate must be signed over its canonical payload. Redemption proofs bind the
+source note commitment, nullifiers, certified key payload, recipient, asset, and amount to a
+previously issued note claim before escrowed value is released. Optional audit bundles bind their
+token id, observed nullifiers, output commitments, and certified key payload to the proof, and the
+certified key must have been issued on-ledger first.
+Recursive proofs must name an active `offline_note_v2` verifier key in WSV, carry an
+`OpenVerifyEnvelope`, match `offline_note_v2_recursive_public_inputs_schema_hash()`, and expose the
+semantic Offline V2 instance columns advertised by `/v1/offline/v2/readiness`. The readiness
+payload includes the canonical `halo2/ipa` verifier key id for `offline-note-v2-recursive-v1`;
+wallets should submit only real prover output for that verifier.
 
 Submission retries can be tuned with `PipelineSubmitOptions` (default: 3 retries, 0.5s
 backoff, retrying 429/5xx responses and transport errors). For example:
 
 ### Confidential key derivation
 
-Wallets can build the confidential key hierarchy locally or request it from Torii:
+Wallets derive the confidential key hierarchy locally:
 
 ```swift
 let seed = Data(repeating: 0x42, count: 32)
 let localKeyset = try ConfidentialKeyset.derive(from: seed)
 
 if #available(iOS 15, macOS 12, *) {
-    let remoteKeyset = try await sdk.deriveConfidentialKeyset(seedHex: localKeyset.spendKeyHex)
-    assert(remoteKeyset == localKeyset)
+    let sdkKeyset = try await sdk.deriveConfidentialKeyset(seedHex: localKeyset.spendKeyHex)
+    assert(sdkKeyset == localKeyset)
 }
 ```
 
-`IrohaSDK.deriveConfidentialKeyset` mirrors `POST /v1/confidential/derive-keyset` and wraps
-the response so apps receive a fully populated `ConfidentialKeyset`. Provide either
+`IrohaSDK.deriveConfidentialKeyset` is a local convenience wrapper around
+`ConfidentialKeyset.derive`. No Torii request is made. Provide either
 `seedHex` or `seedBase64`; inputs are trimmed automatically, and invalid encodings surface
 as `ConfidentialKeyDerivationError`.
 
@@ -774,7 +645,7 @@ let payload = try ConfidentialEncryptedPayload(
 let request = try ShieldRequest(
     chainId: chainId,
     authority: AccountId.make(publicKey: keypair.publicKey),
-    assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
     fromAccountId: "<account_i105>",
     amount: "42",
     noteCommitment: noteCommitmentBytes, // 32 bytes
@@ -803,7 +674,7 @@ let proof = try ProofAttachment(
 let request = try UnshieldRequest(
     chainId: chainId,
     authority: AccountId.make(publicKey: keypair.publicKey),
-    assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f",
+    assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa",
     toAccountId: "<recipient_account_i105>",
     publicAmount: "50",
     inputs: [Data(repeating: 0x10, count: 32)],
@@ -889,7 +760,7 @@ transition metadata via `/v1/confidential/assets/{definition_id}/transitions`:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let policy = try await torii.getConfidentialAssetPolicy(assetDefinitionId: "aid:2f17c72466f84a4bb8a8e24884fdcd2f")
+    let policy = try await torii.getConfidentialAssetPolicy(assetDefinitionId: "66owaQmAQMuHxPzxUN3bqZ6FJfDa")
     if let pending = policy.pendingTransition {
         print("Next mode:", pending.newMode, "opens at", pending.windowOpenHeight ?? pending.effectiveHeight)
     }
@@ -903,27 +774,13 @@ on callback-first code.
 
 ### Verifying key registry
 
-Register, update, and list verifying keys via the Torii helpers:
+Inspect verifying keys via the Torii helpers:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
-    let vkBytes = Data(repeating: 0xAA, count: 32)
-    var request = ToriiVerifyingKeyRegisterRequest(
-        authority: "<account_i105>",
-        privateKey: "ed25519:...",
-        backend: "halo2/ipa",
-        name: "payments_v1",
-        version: 1,
-        circuitId: "payments:v1",
-        publicInputsSchemaHashHex: String(repeating: "0a", count: 32),
-        gasScheduleId: "halo2-default",
-        verifyingKeyBytes: vkBytes
-    )
-    request.metadataUriCid = "ipfs://example-metadata"
-    try await torii.registerVerifyingKey(request)
-
+    let detail = try await torii.getVerifyingKey(backend: "halo2/ipa", name: "payments_v1")
     let current = try await torii.listVerifyingKeys(query: ToriiVerifyingKeyListQuery(backend: "halo2/ipa"))
-    print("vk count:", current.count)
+    print("vk status:", detail.record.status, "count:", current.count)
 }
 ```
 
@@ -937,6 +794,7 @@ if #available(iOS 15, macOS 12, *) {
     let metrics = try await torii.getRuntimeMetrics()
     let abiActive = try await torii.getRuntimeAbiActive()
     print("abi:", capabilities.abiVersion,
+          "signed_tx_schema:", capabilities.signedTransactionSchemaHashHex ?? "missing",
           "active:", abiActive.abiVersion,
           "upgrades:", metrics.upgradeEventsTotal)
 }
@@ -979,7 +837,7 @@ Pipeline submissions always use `/v1/pipeline/transactions` and `/v1/pipeline/tr
 
 ### Verifying key registry
 
-Interact with the Torii verifying-key endpoints to inspect and manage Halo2 verifier metadata:
+Interact with the Torii verifying-key endpoints to inspect and monitor Halo2 verifier metadata:
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
@@ -993,44 +851,14 @@ if #available(iOS 15, macOS 12, *) {
 }
 ```
 
-Submit verifier lifecycle transactions with the typed request bodies. When embedding inline
-bytes supply base64 data and let the helper compute `vk_len` automatically:
+The typed register/update/deprecate request DTOs remain useful when you are
+assembling locally signed transactions, but the direct Torii mutation helpers
+now fail closed instead of accepting embedded private keys. Submit those
+verifier-management transactions through the pipeline helpers after local
+signing.
 
-```swift
-if #available(iOS 15, macOS 12, *) {
-    guard let vkBytes = Data(base64Encoded: "AQID") else { return }
-
-    var register = ToriiVerifyingKeyRegisterRequest(
-        authority: "<account_i105>",
-        privateKey: "ed0120...",
-        backend: "halo2/ipa",
-        name: "vk_main",
-        version: 1,
-        circuitId: "halo2/ipa::transfer_v1",
-        publicInputsSchemaHashHex: "fae4cbe786f280b4e2184dbb06305fe46b7aee20464c0be96023ffd8eac064d3",
-        gasScheduleId: "halo2_default",
-        verifyingKeyBytes: vkBytes
-    )
-    register.maxProofBytes = 8_192
-    try await torii.registerVerifyingKey(register)
-
-    var update = ToriiVerifyingKeyUpdateRequest(
-        authority: register.authority,
-        privateKey: register.privateKey,
-        backend: register.backend,
-        name: register.name,
-        version: register.version + 1,
-        circuitId: register.circuitId,
-        publicInputsSchemaHashHex: register.publicInputsSchemaHashHex
-    )
-    update.commitmentHex = "20574662a58708e02e0000000000000000000000000000000000000000000000"
-    try await torii.updateVerifyingKey(update)
-}
-```
-
-Completion-style overloads mirror the async variants (`registerVerifyingKey(_:completion:)`,
-`updateVerifyingKey(_:completion:)`) and return a
-`Task<Void, Never>` so UI layers can cancel inflight submissions if needed.
+Completion-style overloads still mirror the async read and event-stream helpers
+so UI layers can cancel inflight work if needed.
 
 ```swift
 if #available(iOS 15, macOS 12, *) {
@@ -1127,12 +955,12 @@ platforms, CUDA disabled). Configure before encoding or interacting with the bri
 var accel = AccelerationSettings(enableMetal: true,
                                  merkleMinLeavesMetal: 256,
                                  preferCpuSha2MaxLeavesAarch64: 128)
-accel.apply() // No-op when the native bridge is not bundled.
+accel.apply() // Applies to the required native bridge.
 
 // Or initialize the SDK with explicit settings
 let tunedSDK = IrohaSDK(baseURL: torii.baseURL, accelerationSettings: accel)
 
-// Load the same structure from an iroha_config-compatible JSON file.
+// Load the same structure from an iroha_config JSON file.
 if let configURL = Bundle.main.url(forResource: "acceleration", withExtension: "json") {
     do {
         let configSettings = try AccelerationSettings.fromJSONFile(at: configURL)
@@ -1146,7 +974,7 @@ if let configURL = Bundle.main.url(forResource: "acceleration", withExtension: "
 
 Setting values to `nil` keeps the engine defaults; negative numbers are ignored. The
 bridge automatically applies the default configuration on startup so projects that do
-not call `apply()` retain the deterministic fallback behaviour.
+not call `apply()` use the same deterministic defaults.
 
 To surface telemetry and parity evidence in dashboards, read the runtime state before
 publishing metrics:
@@ -1163,8 +991,8 @@ if let state = AccelerationSettings.runtimeState() {
 
 `runtimeState()` returns both the applied configuration and the Metal/CUDA runtime
 status exposed by the bridge (`available` reflects whether the backend passed parity
-self-tests on the current host). The helper falls back to `nil` when the Norito
-bridge is not bundled, matching the behaviour of the setter.
+self-tests on the current host). The helper returns `nil` when the Norito bridge
+symbols are unavailable, matching the behaviour of the setter.
 
 ### Norito fixtures & parity
 
@@ -1240,6 +1068,7 @@ Task {
 ```swift
 let torii = ToriiClient(baseURL: URL(string: "https://torii.example")!)
 let session = try await torii.createConnectSession(sid: "demo-session")
+// Keep tokenManagement server-side for cleanup/status; wallet/app launch URIs carry tokenRelay.
 let apps = try await torii.listConnectApps()
 let manifest = try await torii.getConnectAdmissionManifest()
 let wsRequest = try ConnectClient.makeWebSocketRequest(baseURL: torii.baseURL,
@@ -1249,6 +1078,11 @@ let wsRequest = try ConnectClient.makeWebSocketRequest(baseURL: torii.baseURL,
 let connect = ConnectClient(request: wsRequest)
 ```
 
+Wallet approval code can derive the relay binding with
+`ConnectCrypto.relayAuthHash(sessionID:relayToken:)` before signing the approval
+preimage. Keep `session.tokenManagement` server-side for deletion and
+per-session status calls.
+
 Encryption/decryption of ciphertext envelopes is handled by the bridge-backed helpers:
 derive keys via `ConnectCrypto`, call `session.setDirectionKeys(_:)`, and `ConnectSession`
 will decrypt ciphertext frames into `ConnectEnvelope` instances automatically (use
@@ -1257,8 +1091,7 @@ will decrypt ciphertext frames into `ConnectEnvelope` instances automatically (u
 Persist Connect X25519 keys via `ConnectKeyStore` so wallet approvals can include the
 attestation bundle (SHA-256 digest + device label + created-at). The default store writes
 to Application Support; inject a custom directory if you need sandboxed storage. Integrity
-checks use a canonical JSON ordering, while legacy orderings remain accepted for backward
-compatibility.
+checks use a canonical JSON ordering; noncanonical HMAC orderings are rejected.
 > After deriving direction keys (e.g., via `ConnectCrypto.deriveDirectionKeys`), call
 > `ConnectSession.setDirectionKeys(_:)` to unlock automatic decryption of encrypted
 > control frames. Use `ConnectEnvelope.decrypt(frame:symmetricKey:)` for direct access
@@ -1290,8 +1123,7 @@ Status:
 `ToriiClient` now wraps the governance REST endpoints so apps can draft contract deployment proposals, submit ballots, and fetch referendum state without reimplementing the HTTP layer. The responses include Norito transaction skeletons (`tx_instructions`) that you can feed into the SDK transaction builders:
 
 ```swift
-let proposal = ToriiGovernanceDeployContractProposalRequest(namespace: "apps",
-                                                            contractId: "demo.contract.v1",
+let proposal = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
                                                             codeHashHex: "f0…",
                                                             abiHashHex: "e1…",
                                                             abiVersion: "1")
@@ -1354,16 +1186,12 @@ as the `norito` Rust crate.
 bridge version plus per-platform SHA-256 hashes.
 
 ### NoritoBridge policy and troubleshooting
-- Builds link `dist/NoritoBridge.xcframework` when it is present. When it is missing, the
-  package falls back to Swift-only paths and prints a warning with the expected location.
-- When the bridge is disabled or missing, SDK surfaces return
-  `bridgeUnavailable`/`nativeBridgeUnavailable` errors that include the expected
-  xcframework location.
-- Running without the bridge will skip native Norito encoding and Connect crypto helpers;
-  use the Swift-only encoder paths and expect Connect codec calls to throw
-  `ConnectCodecError.bridgeUnavailable`.
-- Example: `swift test --package-path IrohaSwift` will automatically use fallback on
-  machines where the xcframework is not present.
+- Builds require `dist/NoritoBridge.xcframework`; package resolution fails when the
+  artifact is missing or malformed.
+- Broken bridge symbols surface `bridgeUnavailable`/`nativeBridgeUnavailable` errors
+  that include the expected xcframework location.
+- Example: `swift test --package-path IrohaSwift` requires the bridge artifact to be
+  materialized first.
 
 ## SwiftUI demo and CI
 

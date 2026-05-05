@@ -89,7 +89,7 @@ Cavab nümunəsi:
 
 ```json
 {
-  "asset_id": "rose#wonderland",
+  "asset_id": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
   "block_height": 4217,
   "current_mode": "Convertible",
   "effective_mode": "Convertible",
@@ -238,7 +238,7 @@ kilid addımı.
 - Hər hesaba görə əsas törəmə iyerarxiyası:
   - `sk_spend` → `nk` (nülledici açar), `ivk` (daxil olan baxış açarı), `ovk` (gidən baxış açarı), `fvk`.
 - Şifrələnmiş qeyd yükləri ECDH-dən əldə edilən paylaşılan açarlarla AEAD-dan istifadə edir; isteğe bağlı auditor baxış açarları aktiv siyasətinə görə çıxışlara əlavə edilə bilər.
-- CLI əlavələri: `confidential create-keys`, `confidential send`, `confidential export-view-key`, qeydlərin şifrəsini açmaq üçün auditor aləti və Norito oflayn zərfləri hazırlamaq/yoxlamaq üçün `iroha app zk envelope` köməkçisi. Torii `POST /v1/confidential/derive-keyset` vasitəsilə eyni törəmə axınını ifşa edir, həm hex, həm də base64 formalarını qaytarır, beləliklə, pul kisələri proqramlı şəkildə əsas iyerarxiyaları əldə edə bilsin.
+- CLI əlavələri: `confidential create-keys`, `confidential send`, `confidential export-view-key`, qeydlərin şifrəsini açmaq üçün auditor aləti və Norito oflayn zərfləri hazırlamaq/yoxlamaq üçün `iroha app zk envelope` köməkçisi.
 
 ## Qaz, Limitlər və DoS Nəzarətləri
 - Deterministik qaz cədvəli:
@@ -391,7 +391,7 @@ let account = AccountId.make(publicKey: keypair.publicKey, domain: "wonderland")
 let request = RegisterZkAssetRequest(
     chainId: chainId,
     authority: account,
-    assetDefinitionId: "rose#wonderland",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: myZkParams,
     ttlMs: 60_000
 )
@@ -423,8 +423,8 @@ import {
 
 const unsigned = buildRegisterZkAssetTransaction({
   registration: {
-    authority: "i105...",
-    assetDefinitionId: "rose#wonderland",
+    authority: "<i105-account-id>",
+    assetDefinitionId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     zkParameters: {
       commit_params: "vk_shield",
       reveal_params: "vk_unshield",
@@ -455,7 +455,7 @@ Grafana kabelini çəkməzdən əvvəl yerli olaraq ölçüləri yoxlaya bilərs
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)|root_evictions_total|frontier_evictions_total){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Dərinliyin yeni öhdəliklərlə artdığını təsdiq etmək üçün bunu `rg 'iroha_confidential_tree_depth'` ilə birləşdirin, evakuasiya sayğacları isə yalnız tarixçə girişləri kəsəndə artır. Bu dəyərlər idarəetmə sübut paketlərinə əlavə etdiyiniz Grafana idarə paneli ixracına uyğun olmalıdır.

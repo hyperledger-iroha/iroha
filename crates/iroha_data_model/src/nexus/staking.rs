@@ -7,15 +7,17 @@ use iroha_primitives::numeric::Numeric;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
-use crate::{account::AccountId, asset::AssetId, metadata::Metadata, nexus::LaneId};
+use crate::{account::AccountId, asset::AssetId, metadata::Metadata, nexus::LaneId, peer::PeerId};
 
 /// Snapshot of a validator registered for a public Nexus lane.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct PublicLaneValidatorRecord {
     /// Lane that the validator services.
     pub lane_id: LaneId,
-    /// Account that participates in consensus for the lane.
+    /// Account that owns validator authority for the lane.
     pub validator: AccountId,
+    /// Peer identity that participates in consensus and receives routed traffic.
+    pub peer_id: PeerId,
     /// Account whose balance backs the bonded stake (can differ from `validator`).
     pub stake_account: AccountId,
     /// Total bonded stake attributed to the validator (self + nominators).

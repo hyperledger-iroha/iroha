@@ -28,14 +28,12 @@ use iroha_data_model::{
     },
     nexus::{DataSpaceId, LaneId},
     parameter::system::SumeragiConsensusMode,
-    prelude::ChainId,
 };
 use iroha_telemetry::metrics::{
     CryptoStatus, GovernanceManifestAdmissionCounters, GovernanceManifestQuorumCounters,
     GovernanceProposalCounters, GovernanceProtectedNamespaceCounters, GovernanceStatus,
     Halo2Status, Status as TelemetryStatus, TxGossipSnapshot, Uptime,
 };
-use mochi_core::default_manifest;
 use norito::json::{self, Value};
 use parking_lot::Mutex;
 use tokio::{
@@ -84,6 +82,7 @@ impl Default for MockToriiData {
         };
 
         let status = TelemetryStatus {
+            build: Default::default(),
             peers: 2,
             blocks: 5,
             blocks_non_empty: 3,
@@ -91,6 +90,8 @@ impl Default for MockToriiData {
             da_reschedule_total: 0,
             txs_approved: 7,
             txs_rejected: 1,
+            last_rejection_at_ms: None,
+            txs_rejected_recent_5m: 0,
             uptime: Uptime(Duration::from_secs(123)),
             view_changes: 0,
             queue_size: 4,
@@ -236,7 +237,7 @@ impl Default for MockToriiData {
                 manifest_ready: true,
                 manifest_path: Some("/etc/iroha/lanes/alpha.json".to_owned()),
                 validator_ids: vec![
-                    "6cmzPVPX9mKibcHVns59R11W7wkcZTg7r71RLbydDr2HGf5MdMCQRm9".to_owned(),
+                    "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D".to_owned(),
                 ],
                 quorum: Some(2),
                 protected_namespaces: vec!["finance".to_owned()],
@@ -661,18 +662,35 @@ fn binary_response(body: Vec<u8>, content_type: &'static str) -> Response<Body> 
 
 /// Utility used by the Kagami stub binary to emit default manifests.
 pub fn kagami_default_manifest_json(
-    genesis_public_key: &PublicKey,
+    _genesis_public_key: &PublicKey,
     ivm_dir: impl AsRef<Path>,
+    chain_id: impl AsRef<str>,
+    consensus_mode: SumeragiConsensusMode,
 ) -> Result<String> {
-    let manifest = default_manifest(
-        ChainId::from("mochi-mock-chain"),
-        genesis_public_key,
-        ivm_dir.as_ref(),
-        SumeragiConsensusMode::Permissioned,
-        None,
-    )?;
-    let value = json::to_value(&manifest)?;
-    Ok(json::to_string_pretty(&value)?)
+    let mut manifest = norito::json::Map::new();
+    manifest.insert(
+        "chain".to_string(),
+        Value::String(chain_id.as_ref().to_owned()),
+    );
+    manifest.insert(
+        "chain_discriminant".to_string(),
+        norito::json::value::to_value(&iroha_data_model::account::address::chain_discriminant())
+            .expect("serialize chain discriminant"),
+    );
+    manifest.insert("executor".to_string(), Value::Null);
+    manifest.insert(
+        "ivm_dir".to_string(),
+        Value::String(ivm_dir.as_ref().display().to_string()),
+    );
+    manifest.insert(
+        "consensus_mode".to_string(),
+        norito::json::value::to_value(&consensus_mode).expect("serialize consensus mode"),
+    );
+    manifest.insert(
+        "transactions".to_string(),
+        Value::Array(vec![Value::Object(norito::json::Map::new())]),
+    );
+    Ok(json::to_string_pretty(&Value::Object(manifest))?)
 }
 
 #[cfg(test)]
@@ -684,5 +702,28 @@ mod tests {
         let data = MockToriiData::default();
         assert_eq!(data.block_frame.as_slice(), CANONICAL_BLOCK_WIRE);
         assert_eq!(data.event_frame.as_slice(), CANONICAL_EVENT_MESSAGE);
+    }
+
+    #[test]
+    fn kagami_manifest_helper_preserves_requested_chain_and_consensus_mode() {
+        let key_pair = iroha_crypto::KeyPair::random();
+        let ivm_dir = tempfile::tempdir().expect("tempdir");
+        let manifest = kagami_default_manifest_json(
+            key_pair.public_key(),
+            ivm_dir.path(),
+            "mochi-test-chain",
+            SumeragiConsensusMode::Npos,
+        )
+        .expect("manifest json");
+        let value: Value = json::from_str(&manifest).expect("parse manifest json");
+
+        assert_eq!(
+            value.get("chain").and_then(Value::as_str),
+            Some("mochi-test-chain")
+        );
+        assert_eq!(
+            value.get("consensus_mode").and_then(Value::as_str),
+            Some("Npos")
+        );
     }
 }

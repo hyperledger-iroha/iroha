@@ -47,7 +47,7 @@ Torii ወይም CLI. ረዳቱ እያንዳንዱን ረድፍ ከፊት ለፊ�
 | `suffix_id` | አዎ | የቁጥር ቅጥያ ለዪ (አስርዮሽ ወይም `0x` ሄክስ)። |
 | `owner` | አዎ | AccountId string (domainless encoded literal; canonical I105 only; no `@<domain>` suffix). |
 | `term_years` | አዎ | ኢንቲጀር `1..=255`. |
-| `payment_asset_id` | አዎ | የሰፈራ ንብረት (ለምሳሌ `xor#sora`)። |
+| `payment_asset_id` | አዎ | የሰፈራ ንብረት (ለምሳሌ `61CtjvNd9T3THAR65GsMVHr82Bjc`)። |
 | `payment_gross` / `payment_net` | አዎ | የንብረት ተወላጅ ክፍሎችን የሚወክሉ ያልተፈረሙ ኢንቲጀሮች። |
 | `settlement_tx` | አዎ | የክፍያ ግብይቱን ወይም ሃሽን የሚገልጽ የJSON እሴት ወይም ቀጥተኛ ሕብረቁምፊ። |
 | `payment_payer` | አዎ | ክፍያውን የፈቀደ AccountId። |
@@ -86,18 +86,18 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   "requests": [
     {
       "selector": {"version":1,"suffix_id":1,"label":"alpha"},
-      "owner": "i105...",
+      "owner": "<i105-account-id>",
       "controllers": [
-        {"controller_type":{"kind":"Account"},"account_address":"i105...","resolver_template_id":null,"payload":{}}
+        {"controller_type":{"kind":"Account"},"account_address":"<i105-account-id>","resolver_template_id":null,"payload":{}}
       ],
       "term_years": 2,
       "pricing_class_hint": null,
       "payment": {
-        "asset_id":"xor#sora",
+        "asset_id":"61CtjvNd9T3THAR65GsMVHr82Bjc",
         "gross_amount":240,
         "net_amount":240,
         "settlement_tx":"alpha-settlement",
-        "payer":"i105...",
+        "payer":"<i105-account-id>",
         "signature":"alpha-signature"
       },
       "governance": null,
@@ -123,7 +123,7 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
     curl -H "Authorization: Bearer $TOKEN" \
          -H "Content-Type: application/json" \
          -d "$payload" \
-         https://torii.sora.net/v1/sns/registrations
+         https://torii.sora.net/v1/sns/names
   done
 ```
 
@@ -233,7 +233,7 @@ docs/portal/scripts/sns_bulk_release.sh \
 # TYPE sns_bulk_release_requests_total gauge
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
-sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
+sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="61CtjvNd9T3THAR65GsMVHr82Bjc"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
@@ -256,7 +256,7 @@ sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",succ
   ማጣቀሻዎች ከCSV አካባቢ አንፃር ተፈትተዋል። የነገር ያልሆነ ሜታዳታ
   የማረጋገጫ ስህተት ይፈጥራል.
 - ** ተቆጣጣሪዎች: ** ባዶ ሕዋሳት `--default-controllers` ያከብራሉ. በግልፅ ያቅርቡ
-  የመቆጣጠሪያ ዝርዝሮች (ለምሳሌ `i105...;i105...`) ባለቤት ላልሆኑ ውክልና ሲሰጡ
+  የመቆጣጠሪያ ዝርዝሮች (ለምሳሌ `<i105-account-id>;<i105-account-id>`) ባለቤት ላልሆኑ ውክልና ሲሰጡ
   ተዋናዮች.
 
 አለመሳካቶች በዐውደ-ጽሑፍ የረድፍ ቁጥሮች (ለምሳሌ፦

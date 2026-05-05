@@ -47,6 +47,8 @@ fn cli_binary() -> &'static str {
 
 const ALICE_PUBLIC_KEY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
+const ALICE_PRIVATE_KEY: &str =
+    "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
 const BOB_PUBLIC_KEY: &str =
     "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016";
 static ALICE_ACCOUNT_LITERAL: LazyLock<String> =
@@ -57,7 +59,10 @@ const SAMPLE_BUDGET_APPROVAL_ID: &str =
     "4f1a7b86d6c16245d9b5c0e9bd4732a6d01356f3172bbfa5ef5d9cde8790f221";
 
 fn xor_asset_id() -> AssetDefinitionId {
-    AssetDefinitionId::new("sora".parse().unwrap(), "xor".parse().unwrap())
+    AssetDefinitionId::new(
+        iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
+        "xor".parse().unwrap(),
+    )
 }
 
 fn micro_xor_from_value(value: &Value) -> u64 {
@@ -81,10 +86,11 @@ fn assert_numeric_micro(amount: &Numeric, expected_micro: u128) {
 }
 
 fn sample_reward_config_json() -> Value {
+    let bond_asset_id = xor_asset_id().to_string();
     norito::json!({
         "policy": {
             "minimum_exit_bond": "1000",
-            "bond_asset_id": "xor#sora",
+            "bond_asset_id": bond_asset_id,
             "uptime_floor_per_mille": 900,
             "slash_penalty_basis_points": 250,
             "activation_grace_epochs": 0
@@ -286,24 +292,21 @@ fn write_metrics_snapshot(dir: &Path, metrics: &RelayEpochMetricsV1, suffix: &st
     path
 }
 
-fn proposal_id_hex(namespace: &str, contract_id: &str, code: &[u8; 32], abi: &[u8; 32]) -> String {
+fn proposal_id_hex(contract_address: &str, code: &[u8; 32], abi: &[u8; 32]) -> String {
     use iroha_crypto::blake2::{Blake2b512, digest::Digest as _};
 
-    let namespace_len = u32::try_from(namespace.len()).expect("namespace length fits into u32");
-    let contract_len = u32::try_from(contract_id.len()).expect("contract id length fits into u32");
+    let contract_address_len =
+        u32::try_from(contract_address.len()).expect("contract address length fits into u32");
     let mut input = Vec::with_capacity(
         b"iroha:gov:proposal:v1|".len()
-            + std::mem::size_of::<u32>() * 2
-            + namespace.len()
-            + contract_id.len()
+            + std::mem::size_of::<u32>()
+            + contract_address.len()
             + code.len()
             + abi.len(),
     );
     input.extend_from_slice(b"iroha:gov:proposal:v1|");
-    input.extend_from_slice(&namespace_len.to_le_bytes());
-    input.extend_from_slice(namespace.as_bytes());
-    input.extend_from_slice(&contract_len.to_le_bytes());
-    input.extend_from_slice(contract_id.as_bytes());
+    input.extend_from_slice(&contract_address_len.to_le_bytes());
+    input.extend_from_slice(contract_address.as_bytes());
     input.extend_from_slice(code);
     input.extend_from_slice(abi);
     let digest = Blake2b512::digest(&input);
@@ -360,6 +363,56 @@ fn command() -> Command {
     cmd.env("NO_COLOR", "1");
     cmd.env("CLICOLOR", "0");
     cmd
+}
+
+fn write_contract_app_manifest(dir: &torii_mock_support::TempDir) -> PathBuf {
+    let contracts_dir = dir.path().join("contracts");
+    let artifacts_dir = dir.path().join("artifacts");
+    fs::create_dir_all(&contracts_dir).expect("create contracts dir");
+    fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
+
+    let contract_path = contracts_dir.join("greeter.ko");
+    fs::write(
+        &contract_path,
+        r#"
+            seiyaku Greeter {
+                kotoage fn init(value: int) {}
+                view fn status() -> int { return 7; }
+            }
+        "#,
+    )
+    .expect("write greeter contract");
+
+    let manifest_path = dir.path().join("iroha.app.toml");
+    fs::write(
+        &manifest_path,
+        r#"
+            bundle_name = "demo"
+            default_dataspace = "universal"
+
+            [[contracts]]
+            name = "demo.greeter"
+            alias = "greeter"
+            source = "contracts/greeter.ko"
+            artifact = "artifacts/greeter.to"
+
+            [[init]]
+            id = "seed"
+            contract = "demo.greeter"
+            entrypoint = "init"
+            gas_limit = 1000
+            payload = { value = 7 }
+
+            [[assertions]]
+            id = "status"
+            contract = "demo.greeter"
+            entrypoint = "status"
+            gas_limit = 1000
+            expected_result = 7
+        "#,
+    )
+    .expect("write contract app manifest");
+    manifest_path
 }
 
 #[test]
@@ -541,6 +594,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
 
     let reserve_account = account_id("reserve-sorafs");
     let reserve_account_label = account_literal(&reserve_account);
+    let asset_definition_arg = xor_asset_id().to_string();
 
     let provider_account = parse_account_literal(alice_account_literal());
     let treasury_account = parse_account_literal(bob_account_literal());
@@ -560,7 +614,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
             "--reserve-account",
             &reserve_account_label,
             "--asset-definition",
-            "xor#sora",
+            &asset_definition_arg,
         ])
         .output()
         .expect("execute sorafs reserve ledger");
@@ -670,10 +724,8 @@ fn gov_deploy_meta_outputs_metadata_stub() {
             "gov",
             "deploy",
             "meta",
-            "--namespace",
-            "apps",
-            "--contract-id",
-            "calc.v1",
+            "--contract-address",
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         ])
         .output()
         .expect("failed to execute iroha app gov deploy meta");
@@ -686,12 +738,8 @@ fn gov_deploy_meta_outputs_metadata_stub() {
     let value: norito::json::Value =
         norito::json::from_str(stdout.trim()).expect("parse deploy meta output");
     assert_eq!(
-        value.get("gov_namespace").and_then(|v| v.as_str()),
-        Some("apps")
-    );
-    assert_eq!(
-        value.get("gov_contract_id").and_then(|v| v.as_str()),
-        Some("calc.v1")
+        value.get("gov_contract_address").and_then(|v| v.as_str()),
+        Some("tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7")
     );
     assert!(
         value.get("gov_manifest_approvers").is_none(),
@@ -717,10 +765,8 @@ fn gov_deploy_meta_accepts_manifest_approvers() {
             "gov",
             "deploy",
             "meta",
-            "--namespace",
-            "apps",
-            "--contract-id",
-            "calc.v1",
+            "--contract-address",
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         ])
         .args(["--approver", validator.as_str(), "--approver", bob.as_str()])
         .output()
@@ -782,6 +828,7 @@ fn gov_propose_deploy_against_mock() {
 
     let code_hash = "00".repeat(32);
     let abi_hash = "11".repeat(32);
+    let contract_address = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
 
     let summary = command()
         .arg("--config")
@@ -793,10 +840,8 @@ fn gov_propose_deploy_against_mock() {
             "gov",
             "deploy",
             "propose",
-            "--namespace",
-            "apps",
-            "--contract-id",
-            "calc.v1",
+            "--contract-address",
+            contract_address,
             "--code-hash",
             code_hash.as_str(),
             "--abi-hash",
@@ -823,10 +868,8 @@ fn gov_propose_deploy_against_mock() {
             "gov",
             "deploy",
             "propose",
-            "--namespace",
-            "apps",
-            "--contract-id",
-            "calc.v1",
+            "--contract-address",
+            contract_address,
             "--code-hash",
             code_hash.as_str(),
             "--abi-hash",
@@ -1133,71 +1176,230 @@ fn gov_protected_namespaces_flow_against_mock() {
 }
 
 #[test]
-fn gov_instances_list_against_mock() {
-    use torii_mock_support::{
-        SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
-    };
+fn contract_app_plan_against_mock_uses_dry_run_bundle_route() {
+    use torii_mock_support::{SpawnError, TempDir, ToriiMockProcess, write_client_config};
 
     let mock = match ToriiMockProcess::spawn() {
         Ok(proc) => proc,
         Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!("skipping gov_instances_list_against_mock: mock server unavailable");
+            eprintln!(
+                "skipping contract_app_plan_against_mock_uses_dry_run_bundle_route: mock server unavailable"
+            );
             return;
         }
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
 
-    let config_payload = norito::json!({
-        "instances": {
-            "apps": {
-                "namespace": "apps",
-                "total": 2,
-                "offset": 0,
-                "limit": 10,
-                "instances": [
-                    {"contract_id": "calc.v1", "code_hash_hex": "0x11"},
-                    {"contract_id": "calc.v2", "code_hash_hex": "0x22"}
-                ]
-            }
-        }
-    });
-    configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-
-    let temp_dir = TempDir::new("gov_instances").expect("temp dir");
+    let temp_dir = TempDir::new("contract_app_plan").expect("temp dir");
     let config_path = temp_dir.path().join("client.toml");
+    let manifest_path = write_contract_app_manifest(&temp_dir);
     write_client_config(&config_path, mock.base_url()).expect("write config");
 
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["app", "gov", "instance", "list", "--namespace", "apps"])
+        .args([
+            "contract",
+            "app",
+            "plan",
+            "--manifest",
+            manifest_path.to_str().expect("utf8 path"),
+            "--authority",
+            alice_account_literal(),
+            "--private-key",
+            ALICE_PRIVATE_KEY,
+        ])
         .output()
-        .expect("invoke iroha app gov instance list");
+        .expect("invoke iroha contract app plan");
     assert!(
         output.status.success(),
-        "expected gov instance list to succeed, stderr: {}",
+        "expected contract app plan to succeed, stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let value: norito::json::Value =
-        norito::json::from_slice(&output.stdout).expect("parse gov instance list JSON");
+
+    let value: Value = norito::json::from_slice(&output.stdout).expect("parse plan JSON");
     assert_eq!(
-        value.get("total").and_then(norito::json::Value::as_u64),
-        Some(2)
+        value.get("bundle_name").and_then(Value::as_str),
+        Some("demo")
     );
-    let instances = value
-        .get("instances")
-        .and_then(norito::json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let ids: Vec<_> = instances
-        .iter()
-        .filter_map(|entry| {
-            entry
-                .get("contract_id")
-                .and_then(norito::json::Value::as_str)
-        })
-        .collect();
-    assert_eq!(ids, vec!["calc.v1", "calc.v2"]);
+    assert_eq!(value.get("dry_run").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        value
+            .get("completed_stages")
+            .and_then(Value::as_array)
+            .and_then(|stages| stages.first())
+            .and_then(Value::as_str),
+        Some("plan")
+    );
+    assert_eq!(
+        value
+            .get("contracts")
+            .and_then(Value::as_array)
+            .and_then(|contracts| contracts.first())
+            .and_then(|contract| contract.get("status"))
+            .and_then(Value::as_str),
+        Some("planned")
+    );
+}
+
+#[test]
+fn contract_app_resume_against_mock_uses_live_bundle_route() {
+    use torii_mock_support::{
+        SpawnError, TempDir, ToriiMockProcess, configure_contracts, write_client_config,
+    };
+
+    let mock = match ToriiMockProcess::spawn() {
+        Ok(proc) => proc,
+        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
+            eprintln!(
+                "skipping contract_app_resume_against_mock_uses_live_bundle_route: mock server unavailable"
+            );
+            return;
+        }
+        Err(err) => panic!("failed to start Torii mock: {err}"),
+    };
+
+    configure_contracts(
+        mock.base_url(),
+        &norito::json!({
+            "bundle_response": {
+                "bundle_digest": "resume-bundle-digest",
+                "completed_stages": ["plan", "deploy", "init_calls", "assertions"],
+            }
+        }),
+    )
+    .expect("configure contracts");
+
+    let temp_dir = TempDir::new("contract_app_resume").expect("temp dir");
+    let config_path = temp_dir.path().join("client.toml");
+    let manifest_path = write_contract_app_manifest(&temp_dir);
+    write_client_config(&config_path, mock.base_url()).expect("write config");
+
+    let output = command()
+        .arg("--config")
+        .arg(&config_path)
+        .args([
+            "contract",
+            "app",
+            "resume",
+            "--manifest",
+            manifest_path.to_str().expect("utf8 path"),
+            "--authority",
+            alice_account_literal(),
+            "--private-key",
+            ALICE_PRIVATE_KEY,
+        ])
+        .output()
+        .expect("invoke iroha contract app resume");
+    assert!(
+        output.status.success(),
+        "expected contract app resume to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let value: Value = norito::json::from_slice(&output.stdout).expect("parse resume JSON");
+    assert_eq!(
+        value.get("bundle_name").and_then(Value::as_str),
+        Some("demo")
+    );
+    assert_eq!(value.get("dry_run").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        value.get("bundle_digest").and_then(Value::as_str),
+        Some("resume-bundle-digest")
+    );
+    assert_eq!(
+        value
+            .get("completed_stages")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(4)
+    );
+    assert_eq!(
+        value
+            .get("contracts")
+            .and_then(Value::as_array)
+            .and_then(|contracts| contracts.first())
+            .and_then(|contract| contract.get("status"))
+            .and_then(Value::as_str),
+        Some("deployed")
+    );
+    assert!(
+        value
+            .get("contracts")
+            .and_then(Value::as_array)
+            .and_then(|contracts| contracts.first())
+            .and_then(|contract| contract.get("tx_hash_hex"))
+            .and_then(Value::as_str)
+            .is_some(),
+        "resume response should include deploy tx hash"
+    );
+}
+
+#[test]
+fn contract_app_plan_reports_protected_namespace_bundle_rejection() {
+    use torii_mock_support::{
+        SpawnError, TempDir, ToriiMockProcess, configure_contracts, write_client_config,
+    };
+
+    let mock = match ToriiMockProcess::spawn() {
+        Ok(proc) => proc,
+        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
+            eprintln!(
+                "skipping contract_app_plan_reports_protected_namespace_bundle_rejection: mock server unavailable"
+            );
+            return;
+        }
+        Err(err) => panic!("failed to start Torii mock: {err}"),
+    };
+
+    configure_contracts(
+        mock.base_url(),
+        &norito::json!({
+            "bundle_error": {
+                "status": 400,
+                "body": {
+                    "error": "protected namespace `apps` requires governance metadata"
+                }
+            }
+        }),
+    )
+    .expect("configure contracts");
+
+    let temp_dir = TempDir::new("contract_app_plan_protected").expect("temp dir");
+    let config_path = temp_dir.path().join("client.toml");
+    let manifest_path = write_contract_app_manifest(&temp_dir);
+    write_client_config(&config_path, mock.base_url()).expect("write config");
+
+    let output = command()
+        .arg("--config")
+        .arg(&config_path)
+        .args([
+            "contract",
+            "app",
+            "plan",
+            "--manifest",
+            manifest_path.to_str().expect("utf8 path"),
+            "--authority",
+            alice_account_literal(),
+            "--private-key",
+            ALICE_PRIVATE_KEY,
+        ])
+        .output()
+        .expect("invoke iroha contract app plan");
+    assert!(
+        !output.status.success(),
+        "expected contract app plan to fail for protected namespace rejection"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Failed to deploy contract bundle"),
+        "stderr should report bundle deploy failure, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("protected namespace `apps` requires governance metadata"),
+        "stderr should preserve protected namespace error body, got: {stderr}"
+    );
 }
 
 #[test]
@@ -1647,49 +1849,6 @@ fn gov_council_gen_vrf_outputs_expected_candidate() {
     );
     assert_eq!(pk_b64, expected.1);
     assert_eq!(proof_b64, expected.2);
-}
-
-#[test]
-fn gov_activate_instance_emits_skeleton() {
-    use torii_mock_support::{TempDir, write_client_config};
-
-    let temp_dir = TempDir::new("gov_activate_instance").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    write_client_config(&config_path, "http://localhost").expect("write config");
-
-    let code_hash = "00".repeat(32);
-    let output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args([
-            "app",
-            "gov",
-            "instance",
-            "activate",
-            "--namespace",
-            "apps",
-            "--contract-id",
-            "calc.v1",
-            "--code-hash",
-            code_hash.as_str(),
-        ])
-        .output()
-        .expect("invoke iroha app gov instance activate");
-    assert!(
-        output.status.success(),
-        "expected instance activate to succeed, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let value: norito::json::Value =
-        norito::json::from_slice(&output.stdout).expect("parse instance activate JSON");
-    assert_eq!(
-        value.get("action").and_then(norito::json::Value::as_str),
-        Some("ActivateContractInstance")
-    );
-    assert_eq!(
-        value.get("namespace").and_then(norito::json::Value::as_str),
-        Some("apps")
-    );
 }
 
 #[test]
@@ -2798,8 +2957,7 @@ fn gov_audit_deploy_reports_results_against_mock() {
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
 
-    let namespace = "apps";
-    let contract_id = "calc.v1";
+    let contract_address = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
     let code_bytes = b"mock-contract-code";
     let abi_bytes = b"mock-contract-abi";
     let code_hash = CryptoHash::new(code_bytes);
@@ -2811,7 +2969,7 @@ fn gov_audit_deploy_reports_results_against_mock() {
     code_arr.copy_from_slice(code_hash.as_ref());
     let mut abi_arr = [0u8; 32];
     abi_arr.copy_from_slice(abi_hash.as_ref());
-    let proposal_hex = proposal_id_hex(namespace, contract_id, &code_arr, &abi_arr);
+    let proposal_hex = proposal_id_hex(contract_address, &code_arr, &abi_arr);
 
     let manifest_body = {
         let mut manifest = json::Map::new();
@@ -2838,12 +2996,8 @@ fn gov_audit_deploy_reports_results_against_mock() {
     let proposal_body = {
         let mut deploy = json::Map::new();
         deploy.insert(
-            "namespace".to_string(),
-            json::Value::String(namespace.to_string()),
-        );
-        deploy.insert(
-            "contract_id".to_string(),
-            json::Value::String(contract_id.to_string()),
+            "contract_address".to_string(),
+            json::Value::String(contract_address.to_string()),
         );
         deploy.insert(
             "code_hash_hex".to_string(),
@@ -2867,17 +3021,14 @@ fn gov_audit_deploy_reports_results_against_mock() {
         json::Value::Object(root)
     };
 
-    let mut instances = json::Map::new();
-    instances.insert(
-        namespace.to_string(),
+    let mut gov_contracts = json::Map::new();
+    gov_contracts.insert(
+        contract_address.to_string(),
         norito::json!({
-            "total": 1,
-            "offset": 0,
-            "limit": 10,
-            "instances": [{
-                "contract_id": contract_id,
-                "code_hash_hex": code_hash_hex
-            }]
+            "found": true,
+            "contract_address": contract_address,
+            "dataspace": "universal",
+            "code_hash_hex": code_hash_hex
         }),
     );
     let mut manifests = json::Map::new();
@@ -2889,7 +3040,10 @@ fn gov_audit_deploy_reports_results_against_mock() {
 
     let mut root = json::Map::new();
     root.insert("referenda".to_string(), norito::json!([]));
-    root.insert("instances".to_string(), json::Value::Object(instances));
+    root.insert(
+        "gov_contracts".to_string(),
+        json::Value::Object(gov_contracts),
+    );
     root.insert("manifests".to_string(), json::Value::Object(manifests));
     root.insert(
         "code_bytes".to_string(),
@@ -2905,7 +3059,14 @@ fn gov_audit_deploy_reports_results_against_mock() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["app", "gov", "deploy", "audit", "--namespace", namespace])
+        .args([
+            "app",
+            "gov",
+            "deploy",
+            "audit",
+            "--contract-address",
+            contract_address,
+        ])
         .output()
         .expect("invoke iroha app gov deploy audit");
     assert!(
@@ -2916,14 +3077,14 @@ fn gov_audit_deploy_reports_results_against_mock() {
     let value: norito::json::Value =
         norito::json::from_slice(&output.stdout).expect("parse deploy audit JSON");
     assert_eq!(
-        value.get("namespace").and_then(norito::json::Value::as_str),
-        Some(namespace)
+        value
+            .get("contract_address")
+            .and_then(norito::json::Value::as_str),
+        Some(contract_address)
     );
     assert_eq!(
-        value
-            .get("with_issues")
-            .and_then(norito::json::Value::as_u64),
-        Some(0)
+        value.get("found").and_then(norito::json::Value::as_bool),
+        Some(true)
     );
     assert_eq!(
         value
@@ -2931,28 +3092,19 @@ fn gov_audit_deploy_reports_results_against_mock() {
             .and_then(norito::json::Value::as_u64),
         Some(0)
     );
-    let results = value
-        .get("results")
-        .and_then(norito::json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(results.len(), 1, "expected single audit record");
-    let record = results[0]
-        .as_object()
-        .expect("audit record to be an object");
     assert_eq!(
-        record
+        value
             .get("has_issues")
             .and_then(norito::json::Value::as_bool),
         Some(false)
     );
-    let issues = record
+    let issues = value
         .get("issues")
         .and_then(norito::json::Value::as_array)
         .cloned()
         .unwrap_or_default();
     assert!(issues.is_empty(), "expected no issues, found: {issues:?}");
-    let manifest = record
+    let manifest = value
         .get("manifest")
         .and_then(norito::json::Value::as_object)
         .expect("manifest section");
@@ -2968,7 +3120,7 @@ fn gov_audit_deploy_reports_results_against_mock() {
             .and_then(norito::json::Value::as_str),
         Some(abi_hash_hex.as_str())
     );
-    let proposal = record
+    let proposal = value
         .get("proposal")
         .and_then(norito::json::Value::as_object)
         .expect("proposal section");
@@ -3007,11 +3159,11 @@ fn repo_initiate_emits_instruction_payload() {
             "--counterparty",
             bob_account_literal(),
             "--cash-asset",
-            "usd#wonderland",
+            "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             "--cash-quantity",
             "1000",
             "--collateral-asset",
-            "bond#wonderland",
+            "4fEiy2n5VMFVfi6BzDJge519zAzg",
             "--collateral-quantity",
             "1050",
             "--rate-bps",
@@ -3568,6 +3720,7 @@ fn da_rent_ledger_emits_transfer_plan() {
     let provider_arg = account_literal(&provider_account);
     let pdp_arg = account_literal(&pdp_account);
     let potr_arg = account_literal(&potr_account);
+    let asset_definition_arg = xor_asset_id().to_string();
 
     let ledger_output = command()
         .args([
@@ -3589,7 +3742,7 @@ fn da_rent_ledger_emits_transfer_plan() {
             "--potr-bonus-account",
             &potr_arg,
             "--asset-definition",
-            "xor#sora",
+            &asset_definition_arg,
         ])
         .output()
         .expect("failed to execute iroha da rent-ledger");
@@ -3707,11 +3860,11 @@ fn repo_unwind_emits_instruction_payload() {
             "--counterparty",
             bob_account_literal(),
             "--cash-asset",
-            "usd#wonderland",
+            "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             "--cash-quantity",
             "1005",
             "--collateral-asset",
-            "bond#wonderland",
+            "4fEiy2n5VMFVfi6BzDJge519zAzg",
             "--collateral-quantity",
             "1055",
             "--settlement-timestamp-ms",
@@ -3760,7 +3913,7 @@ fn settlement_dvp_emits_instruction_payload() {
             "--settlement-id",
             "trade_dvp",
             "--delivery-asset",
-            "bond#wonderland",
+            "4fEiy2n5VMFVfi6BzDJge519zAzg",
             "--delivery-quantity",
             "10",
             "--delivery-from",
@@ -3768,7 +3921,7 @@ fn settlement_dvp_emits_instruction_payload() {
             "--delivery-to",
             bob_account_literal(),
             "--payment-asset",
-            "usd#wonderland",
+            "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             "--payment-quantity",
             "1000",
             "--payment-from",
@@ -3824,7 +3977,7 @@ fn settlement_pvp_emits_instruction_payload() {
             "--settlement-id",
             "trade_pvp",
             "--primary-asset",
-            "usd#wonderland",
+            "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             "--primary-quantity",
             "500",
             "--primary-from",
@@ -3832,7 +3985,7 @@ fn settlement_pvp_emits_instruction_payload() {
             "--primary-to",
             bob_account_literal(),
             "--counter-asset",
-            "eur#wonderland",
+            "5tPkFK6s2zUcd1qUHyTmY7fDVa2n",
             "--counter-quantity",
             "460",
             "--counter-from",
@@ -3885,7 +4038,7 @@ fn settlement_accepts_commit_atomicity() {
             "--settlement-id",
             "trade_dvp",
             "--delivery-asset",
-            "bond#wonderland",
+            "4fEiy2n5VMFVfi6BzDJge519zAzg",
             "--delivery-quantity",
             "10",
             "--delivery-from",
@@ -3893,7 +4046,7 @@ fn settlement_accepts_commit_atomicity() {
             "--delivery-to",
             bob_account_literal(),
             "--payment-asset",
-            "usd#wonderland",
+            "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
             "--payment-quantity",
             "1000",
             "--payment-from",
@@ -4308,6 +4461,155 @@ fn sumeragi_summary_commands_against_torii_mock() {
     );
 }
 
+#[test]
+fn tx_status_command_against_torii_mock() {
+    use torii_mock_support::{
+        SpawnError, TempDir, ToriiMockProcess, configure_pipeline, write_client_config,
+    };
+
+    let mock = match ToriiMockProcess::spawn() {
+        Ok(proc) => proc,
+        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
+            eprintln!("skipping tx_status_command_against_torii_mock: mock server unavailable");
+            return;
+        }
+        Err(err) => panic!("failed to start Torii mock: {err}"),
+    };
+
+    let temp_dir = TempDir::new("tx_status").expect("temp dir");
+    let config_path = temp_dir.path().join("client.toml");
+    write_client_config(&config_path, mock.base_url()).expect("write config");
+
+    let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    configure_pipeline(
+        mock.base_url(),
+        &norito::json!({
+            "hash": hash,
+            "repeat_last": true,
+            "statuses": [
+                {
+                    "kind": "Committed",
+                    "block_height": 42,
+                    "scope": "global",
+                    "resolved_from": "state"
+                }
+            ]
+        }),
+    )
+    .expect("configure pipeline");
+
+    let output = command()
+        .arg("--config")
+        .arg(&config_path)
+        .args(["tx", "status", "--hash", hash])
+        .output()
+        .expect("failed to run iroha tx status");
+    assert!(
+        output.status.success(),
+        "expected tx status to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: json::Value = json::from_slice(&output.stdout).expect("tx status JSON");
+    assert_eq!(payload["hash"].as_str(), Some(hash));
+    assert_eq!(payload["status"]["kind"].as_str(), Some("Committed"));
+    assert_eq!(payload["status"]["block_height"].as_u64(), Some(42));
+    assert_eq!(payload["scope"].as_str(), Some("global"));
+    assert_eq!(payload["resolved_from"].as_str(), Some("state"));
+
+    let missing_hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    let missing = command()
+        .arg("--config")
+        .arg(&config_path)
+        .args(["tx", "status", "--hash", missing_hash])
+        .output()
+        .expect("failed to run iroha tx status for missing hash");
+    assert!(
+        !missing.status.success(),
+        "expected missing tx status to fail, stdout: {}",
+        String::from_utf8_lossy(&missing.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("Transaction status not found"),
+        "missing tx status stderr mismatch: {}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+}
+
+#[test]
+fn account_get_command_against_torii_mock() {
+    use torii_mock_support::{
+        SpawnError, TempDir, ToriiMockProcess, configure_accounts, write_client_config,
+    };
+
+    let mock = match ToriiMockProcess::spawn() {
+        Ok(proc) => proc,
+        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
+            eprintln!("skipping account_get_command_against_torii_mock: mock server unavailable");
+            return;
+        }
+        Err(err) => panic!("failed to start Torii mock: {err}"),
+    };
+
+    let temp_dir = TempDir::new("account_get").expect("temp dir");
+    let config_path = temp_dir.path().join("client.toml");
+    write_client_config(&config_path, mock.base_url()).expect("write config");
+    let account_id = alice_account_literal();
+
+    configure_accounts(
+        mock.base_url(),
+        &norito::json!({
+            "accounts": [
+                {
+                    "account_id": account_id,
+                    "label": null,
+                    "uaid": null,
+                    "opaque_ids": []
+                }
+            ]
+        }),
+    )
+    .expect("configure accounts");
+
+    let output = command()
+        .arg("--config")
+        .arg(&config_path)
+        .args(["account", "get", "--id", account_id])
+        .output()
+        .expect("failed to run iroha account get");
+    assert!(
+        output.status.success(),
+        "expected account get to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: json::Value = json::from_slice(&output.stdout).expect("account get JSON");
+    assert_eq!(
+        payload["account_id"].as_str(),
+        Some(account_id),
+        "canonical account id mismatch"
+    );
+    assert!(
+        payload.get("linked_domains").is_none(),
+        "account get should not expose linked_domains"
+    );
+
+    let missing = command()
+        .arg("--config")
+        .arg(&config_path)
+        .args(["account", "get", "--id", bob_account_literal()])
+        .output()
+        .expect("failed to run iroha account get for missing account");
+    assert!(
+        !missing.status.success(),
+        "expected missing account get to fail, stdout: {}",
+        String::from_utf8_lossy(&missing.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("Failed to get account"),
+        "missing account stderr mismatch: {}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+}
+
 // Coverage: The `zk_attachments_flow_against_torii_mock` test below exercises the
 // upload/list/get/delete CLI paths against the lightweight Torii mock.
 
@@ -4690,7 +4992,8 @@ fn address_convert_json_summary_contains_i105_and_canonical_hex() {
 
 #[test]
 fn address_convert_rejects_domain_suffix() {
-    let domain: iroha::data_model::domain::DomainId = "sora".parse().expect("domain");
+    let domain: iroha::data_model::domain::DomainId =
+        iroha_data_model::domain::DomainId::try_new("sora", "universal").expect("domain");
     let key_pair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
@@ -4728,7 +5031,7 @@ fn address_convert_json_rejects_domain_suffix() {
     let key_pair = KeyPair::from_seed(vec![0xC4; 32], Algorithm::Ed25519);
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
-    let literal = format!("{i105}@nexus");
+    let literal = format!("{i105}@universal");
 
     let output = Command::new(cli_binary())
         .current_dir(workspace_root())
@@ -4858,7 +5161,7 @@ fn address_audit_rejects_domain_suffix() {
 
     let account = account_id_for_domain("wonderland", 0xE5);
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
-    let literal = format!("{i105}@hbl");
+    let literal = format!("{i105}@banka");
 
     let temp_dir = TempDir::new("address_audit_domain").expect("temp dir");
     let path = temp_dir.path().join("addresses.txt");
@@ -5305,23 +5608,29 @@ mod torii_mock_support {
     }
 
     pub fn write_client_config(path: &Path, base_url: &str) -> io::Result<()> {
+        let torii_url = format!("{}/", base_url.trim_end_matches('/'));
         let contents = format!(
             "chain = \"00000000-0000-0000-0000-000000000000\"\n\
-torii_url = \"{base_url}\"\n\
+torii_url = \"{torii_url}\"\n\
+\n\
+[basic_auth]\n\
+web_login = \"mad_hatter\"\n\
+password = \"ilovetea\"\n\
 \n\
 [account]\n\
-domain = \"wonderland\"\n\
+domain = \"wonderland.universal\"\n\
 public_key = \"ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03\"\n\
-private_key = \"802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53\"\n"
+private_key = \"{private_key}\"\n",
+            private_key = super::ALICE_PRIVATE_KEY,
         );
         fs::write(path, contents)
     }
 
-    pub fn configure_governance(base_url: &str, config: &json::Value) -> io::Result<()> {
+    fn post_mock_config(base_url: &str, endpoint: &str, config: &json::Value) -> io::Result<()> {
         let base =
             Url::parse(base_url).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
         let target = base
-            .join("__mock__/gov/config")
+            .join(endpoint)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
         let host = target
             .host_str()
@@ -5348,11 +5657,25 @@ private_key = \"802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C
         let mut response = String::new();
         stream.read_to_string(&mut response)?;
         if !(response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200")) {
-            return Err(io::Error::other(format!(
-                "mock governance config failed: {response}"
-            )));
+            return Err(io::Error::other(format!("mock config failed: {response}")));
         }
         Ok(())
+    }
+
+    pub fn configure_governance(base_url: &str, config: &json::Value) -> io::Result<()> {
+        post_mock_config(base_url, "__mock__/gov/config", config)
+    }
+
+    pub fn configure_pipeline(base_url: &str, config: &json::Value) -> io::Result<()> {
+        post_mock_config(base_url, "__mock__/pipeline/config", config)
+    }
+
+    pub fn configure_accounts(base_url: &str, config: &json::Value) -> io::Result<()> {
+        post_mock_config(base_url, "__mock__/accounts/config", config)
+    }
+
+    pub fn configure_contracts(base_url: &str, config: &json::Value) -> io::Result<()> {
+        post_mock_config(base_url, "__mock__/contracts/config", config)
     }
 
     fn workspace_root() -> PathBuf {

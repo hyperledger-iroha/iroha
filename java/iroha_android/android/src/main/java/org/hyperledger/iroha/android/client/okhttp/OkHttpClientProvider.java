@@ -8,8 +8,8 @@ import okhttp3.OkHttpClient;
  * Provides a shared {@link OkHttpClient} instance so Android transports reuse the same connection
  * pool by default.
  *
- * <p>Factories fall back to a lazily initialised singleton; tests may swap/reset the shared client
- * to inject instrumented instances.
+ * <p>Factories use a lazily initialised singleton; tests may swap/reset the shared client to inject
+ * instrumented instances.
  */
 public final class OkHttpClientProvider {
 
@@ -19,12 +19,16 @@ public final class OkHttpClientProvider {
 
   /** Returns the shared OkHttp client, creating it when missing. */
   public static OkHttpClient shared() {
-    final OkHttpClient existing = SHARED.get();
-    if (existing != null) {
-      return existing;
+    while (true) {
+      final OkHttpClient existing = SHARED.get();
+      if (isUsable(existing)) {
+        return existing;
+      }
+      final OkHttpClient created = new OkHttpClient();
+      if (SHARED.compareAndSet(existing, created)) {
+        return created;
+      }
     }
-    final OkHttpClient created = new OkHttpClient();
-    return SHARED.compareAndSet(null, created) ? created : SHARED.get();
   }
 
   /** Installs {@code client} as the shared instance, returning the previous value. */
@@ -35,5 +39,11 @@ public final class OkHttpClientProvider {
   /** Clears the shared client so the next lookup creates a fresh instance. */
   static void resetForTests() {
     SHARED.set(null);
+  }
+
+  private static boolean isUsable(final OkHttpClient client) {
+    return client != null
+        && !client.dispatcher().executorService().isShutdown()
+        && !client.dispatcher().executorService().isTerminated();
   }
 }

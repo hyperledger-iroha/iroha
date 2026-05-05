@@ -14,6 +14,30 @@ use iroha_primitives::addr::socket_addr;
 use nonzero_ext::nonzero;
 use tower::ServiceExt;
 
+fn request_with_loopback_connect_info(
+    request: Request<axum::body::Body>,
+) -> Request<axum::body::Body> {
+    let mut request = request;
+    request
+        .extensions_mut()
+        .insert(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            0,
+        ))));
+    request
+}
+
+fn spawn_test_server(listener: tokio::net::TcpListener, app: axum::Router) {
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap();
+    });
+}
+
 #[allow(clippy::too_many_lines)]
 fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::actual::Root {
     use iroha_config::parameters::actual as A;
@@ -81,7 +105,9 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             trust_penalty_bad_gossip: iroha_config::parameters::defaults::network::TRUST_PENALTY_BAD_GOSSIP,
             trust_penalty_unknown_peer: iroha_config::parameters::defaults::network::TRUST_PENALTY_UNKNOWN_PEER,
             trust_min_score: iroha_config::parameters::defaults::network::TRUST_MIN_SCORE,
-            trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
+            debug_packet_loss_inbound_percent: 0,
+            debug_packet_loss_outbound_percent: 0,
+trust_gossip: iroha_config::parameters::defaults::network::TRUST_GOSSIP,
             soranet_handshake: A::SoranetHandshake {
                 descriptor_commit: WithOrigin::inline(DEFAULT_DESCRIPTOR_COMMIT.to_vec()),
                 client_capabilities: WithOrigin::inline(DEFAULT_CLIENT_CAPABILITIES.to_vec()),
@@ -121,7 +147,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             quic_datagram_send_buffer_bytes: iroha_config::parameters::defaults::network::QUIC_DATAGRAM_SEND_BUFFER_BYTES.get(),
             scion: A::ScionConfig::default(),
             tls_enabled: false,
-            tls_fallback_to_plain: true,
+            tls_fallback_to_plain: false,
             tls_listen_address: None,
             tls_inbound_only: false,
             prefer_ws_fallback: false,
@@ -215,7 +241,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             receipt_signer: None,
             transport: A::ToriiTransport::default(),
             mcp: A::ToriiMcp::default(),
-            identifier_resolver: None,
+            ram_lfe: None,
+            tx_history: None,
             // minimal defaults
             query_rate_per_authority_per_sec: None,
             query_burst_per_authority: None,
@@ -223,6 +250,20 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             tx_burst_per_authority: None,
             deploy_rate_per_origin_per_sec: None,
             deploy_burst_per_origin: None,
+            soracloud_public_rate_per_ip_per_sec: iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC
+                .and_then(std::num::NonZeroU32::new),
+            soracloud_public_burst_per_ip: iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_BURST_PER_IP
+                .and_then(std::num::NonZeroU32::new),
+            soracloud_public_max_inflight: iroha_config::parameters::defaults::torii::SORACLOUD_PUBLIC_MAX_INFLIGHT,
+            soracloud_mutation_rate_per_account_origin_per_sec: iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC
+                .and_then(std::num::NonZeroU32::new),
+            soracloud_mutation_burst_per_account_origin: iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN
+                .and_then(std::num::NonZeroU32::new),
+            soracloud_mutation_max_inflight: iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_INFLIGHT,
+            soracloud_mutation_max_body_bytes:
+                iroha_config::parameters::defaults::torii::SORACLOUD_MUTATION_MAX_BODY_BYTES,
+            soracloud_upload_max_body_bytes:
+                iroha_config::parameters::defaults::torii::SORACLOUD_UPLOAD_MAX_BODY_BYTES,
             proof_api: A::ProofApi {
                 rate_per_minute: iroha_config::parameters::defaults::torii::PROOF_RATE_PER_MIN
                     .and_then(std::num::NonZeroU32::new),
@@ -274,6 +315,9 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             ws_message_timeout: std::time::Duration::from_millis(
                 iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
             ),
+            webhooks_enabled: iroha_config::parameters::defaults::torii::WEBHOOKS_ENABLED,
+            zk_attachments_enabled:
+                iroha_config::parameters::defaults::torii::ZK_ATTACHMENTS_ENABLED,
             app_api: iroha_config::parameters::actual::AppApi {
                 default_list_limit: std::num::NonZeroU32::new(
                     iroha_config::parameters::defaults::torii::APP_API_DEFAULT_LIST_LIMIT.max(1),
@@ -292,6 +336,17 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                         .max(1),
                 )
                 .expect("rate limit cost must be non-zero"),
+                request_signature_max_clock_skew: std::time::Duration::from_secs(
+                    iroha_config::parameters::defaults::torii::app_auth::MAX_CLOCK_SKEW_SECS,
+                ),
+                request_signature_nonce_ttl: std::time::Duration::from_secs(
+                    iroha_config::parameters::defaults::torii::app_auth::NONCE_TTL_SECS,
+                ),
+                request_signature_replay_cache_capacity: std::num::NonZeroUsize::new(
+                    iroha_config::parameters::defaults::torii::app_auth::REPLAY_CACHE_CAPACITY
+                        .max(1),
+                )
+                .expect("request signature replay cache must be non-zero"),
             },
             attachments_ttl_secs: 7 * 24 * 60 * 60,
             attachments_max_bytes: 4 * 1024 * 1024,
@@ -355,8 +410,10 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             sorafs_gateway: iroha_config::parameters::actual::SorafsGateway::default(),
             sorafs_por: iroha_config::parameters::actual::SorafsPor::default(),
             onboarding: None,
+            faucet: None,
             offline_issuer: None,
         },
+        soracloud_runtime: A::SoracloudRuntime::default(),
         kura: A::Kura {
             init_mode: iroha_config::kura::InitMode::Strict,
             store_dir: WithOrigin::inline(std::env::temp_dir()),
@@ -371,6 +428,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention:
                 iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas: iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
         },
         sumeragi: A::Sumeragi {
             role: A::NodeRole::Validator,
@@ -569,7 +627,12 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             },
             rbc: A::SumeragiRbc {
                 chunk_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_MAX_BYTES,
+                encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+                data_shards: iroha_config::parameters::defaults::sumeragi::RBC_RS16_DATA_SHARDS,
+                parity_shards:
+                    iroha_config::parameters::defaults::sumeragi::RBC_RS16_PARITY_SHARDS,
                 chunk_fanout: iroha_config::parameters::defaults::sumeragi::RBC_CHUNK_FANOUT,
+                rs16_initial_fanout: A::RbcRs16InitialFanout::Full,
                 pending_max_chunks:
                     iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_CHUNKS,
                 pending_max_bytes: iroha_config::parameters::defaults::sumeragi::RBC_PENDING_MAX_BYTES,
@@ -638,6 +701,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 use_stake_snapshot_roster:
                     iroha_config::parameters::defaults::sumeragi::USE_STAKE_SNAPSHOT_ROSTER,
             },
+            resilience: A::SumeragiResilience::default(),
             adaptive_observability:
                 iroha_config::parameters::actual::AdaptiveObservability::default(),
             debug: A::SumeragiDebug {
@@ -1297,24 +1361,24 @@ async fn connect_endpoints_hidden_when_disabled() {
     // /v1/connect/ws should be 404 when disabled
     let resp = app
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .uri(Uri::from_static("/v1/connect/ws?sid=AA&role=app"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 
     // /v1/connect/status should be 404 when disabled
     let resp = app
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .uri(Uri::from_static("/v1/connect/status"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -1724,14 +1788,14 @@ async fn connect_session_delete_endpoint_removes_tokens() {
     .expect("json serialization");
     let create_resp = app
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body.clone()))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(create_resp.status(), StatusCode::OK);
@@ -1745,14 +1809,36 @@ async fn connect_session_delete_endpoint_removes_tokens() {
         .and_then(|x| x.as_str())
         .expect("sid present")
         .to_owned();
+    let token_management = payload
+        .get("token_management")
+        .and_then(|x| x.as_str())
+        .expect("token_management present")
+        .to_owned();
 
     let delete_uri = format!("/v1/connect/session/{sid}");
+    let missing_token_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(delete_uri.as_str())
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_token_resp.status(), StatusCode::UNAUTHORIZED);
+
     let delete_resp = app
         .clone()
         .oneshot(
             Request::builder()
                 .method("DELETE")
                 .uri(delete_uri.as_str())
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {token_management}"),
+                )
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1765,12 +1851,97 @@ async fn connect_session_delete_endpoint_removes_tokens() {
             Request::builder()
                 .method("DELETE")
                 .uri(delete_uri.as_str())
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {token_management}"),
+                )
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(delete_again.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn connect_session_status_requires_management_token() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
+
+    let cfg = minimal_actual_config(true);
+    let torii = build_torii(&cfg);
+    let app = torii.api_router_for_tests();
+
+    let sid_fixed = B64.encode([0x34u8; 32]);
+    let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
+        ("sid", Some(sid_fixed.clone())),
+        ("node", Option::<String>::None),
+    ]))
+    .expect("json serialization");
+    let create_resp = app
+        .clone()
+        .oneshot(request_with_loopback_connect_info(
+            Request::builder()
+                .method("POST")
+                .uri(Uri::from_static("/v1/connect/session"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(req_body))
+                .unwrap(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(create_resp.status(), StatusCode::OK);
+    let bytes = http_body_util::BodyExt::collect(create_resp.into_body())
+        .await
+        .unwrap()
+        .to_bytes();
+    let payload: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
+    let sid = payload
+        .get("sid")
+        .and_then(|x| x.as_str())
+        .expect("sid present");
+    let token_management = payload
+        .get("token_management")
+        .and_then(|x| x.as_str())
+        .expect("token_management present");
+
+    let status_uri = format!("/v1/connect/status?sid={sid}");
+    let missing_token_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(status_uri.as_str())
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing_token_resp.status(), StatusCode::UNAUTHORIZED);
+
+    let status_resp = app
+        .oneshot(
+            Request::builder()
+                .uri(status_uri.as_str())
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {token_management}"),
+                )
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(status_resp.status(), StatusCode::OK);
+    let body = http_body_util::BodyExt::collect(status_resp.into_body())
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let payload: norito::json::Value =
+        norito::json::from_slice(&body).expect("session status should be JSON");
+    assert_eq!(payload.get("sid").and_then(|x| x.as_str()), Some(sid));
+    assert_eq!(
+        payload.get("app_attached").and_then(|x| x.as_bool()),
+        Some(false)
+    );
 }
 
 #[cfg(feature = "ws_integration_tests")]
@@ -1793,7 +1964,7 @@ async fn connect_session_delete_rejects_ws_attach() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     // Use a second router handle for in-process REST calls.
     let app2 = torii.api_router_for_tests();
@@ -1806,14 +1977,14 @@ async fn connect_session_delete_rejects_ws_attach() {
     .expect("json serialization");
     let create_resp = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(create_resp.status(), StatusCode::OK);
@@ -1831,6 +2002,10 @@ async fn connect_session_delete_rejects_ws_attach() {
         .get("token_app")
         .and_then(|x| x.as_str())
         .expect("token_app");
+    let token_management = payload
+        .get("token_management")
+        .and_then(|x| x.as_str())
+        .expect("token_management");
 
     // Delete the session through REST and ensure it reports success.
     let delete_uri = format!("/v1/connect/session/{sid}");
@@ -1840,6 +2015,10 @@ async fn connect_session_delete_rejects_ws_attach() {
             Request::builder()
                 .method("DELETE")
                 .uri(delete_uri.clone())
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {token_management}"),
+                )
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
@@ -1885,7 +2064,7 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     // Create a session via in-process router call to obtain tokens and sid
     let app2 = torii.api_router_for_tests();
@@ -1898,14 +2077,14 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -1956,7 +2135,7 @@ async fn connect_ws_accepts_protocol_token() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
 
@@ -1968,14 +2147,14 @@ async fn connect_ws_accepts_protocol_token() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -2029,7 +2208,7 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
 
@@ -2041,14 +2220,14 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -2191,7 +2370,7 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
 
@@ -2203,14 +2382,14 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -2390,7 +2569,7 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
     let sid_fixed = B64.encode([0xB4u8; 32]);
@@ -2401,14 +2580,14 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -2568,7 +2747,7 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
     let sid_fixed = B64.encode([0xC5u8; 32]);
@@ -2579,14 +2758,14 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -2713,7 +2892,7 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
     let sid_fixed = B64.encode([0xD6u8; 32]);
@@ -2724,14 +2903,14 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -2887,7 +3066,7 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let app2 = torii.api_router_for_tests();
     let sid_fixed = B64.encode([0xE7u8; 32]);
@@ -2898,14 +3077,14 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
     .expect("json serialization");
     let res = app2
         .clone()
-        .oneshot(
+        .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/connect/session"))
                 .header(axum::http::header::CONTENT_TYPE, "application/json")
                 .body(axum::body::Body::from(req_body))
                 .unwrap(),
-        )
+        ))
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -3055,7 +3234,7 @@ async fn connect_ws_rejects_query_token() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
 
     let sid = B64.encode([0x72u8; 32]);
     let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app&token=deadbeef");
@@ -3087,7 +3266,7 @@ async fn connect_ws_handshake_fails_when_disabled() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    spawn_test_server(listener, app);
     // Attempt WS connect directly; expect failure
     let url = format!(
         "ws://{}/v1/connect/ws?sid={}&role=app",

@@ -54,7 +54,7 @@ settlement = "xor_dual_fund"
 metadata.scheduler.teu_capacity = "1500"
 metadata.scheduler.starvation_bound_slots = "6"
 metadata.settlement.buffer_account = "buffer::cbdc_treasury"
-metadata.settlement.buffer_asset = "xor#sora"
+metadata.settlement.buffer_asset = "61CtjvNd9T3THAR65GsMVHr82Bjc"
 metadata.settlement.buffer_capacity_micro = "1500000000"
 metadata.telemetry.contact = "ops@cb.example"
 
@@ -104,10 +104,10 @@ Lane သည် `nexus.registry.manifest_directory` (`crates/iroha_config/src/par
   "version": 1,
   "governance": "central_bank_multisig",
   "validators": [
-    "i105...",
-    "i105...",
-    "i105...",
-    "i105..."
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" },
+    { "validator": "<i105-account-id>", "peer_id": "<peer-id>" }
   ],
   "quorum": 3,
   "protected_namespaces": [
@@ -141,7 +141,18 @@ Lane သည် `nexus.registry.manifest_directory` (`crates/iroha_config/src/par
 }
 ```
 
-အဓိကလိုအပ်ချက်များ-- အတည်ပြုပေးသူများသည် ** ကက်တလောက်တွင်ရှိသော I105 အကောင့် ID များ (`@domain` မပါ၀င်ပါ၊ `@domain` ကို ထပ်ဖြည့်ပါ)** ဖြစ်ရမည်** ဖြစ်ရမည်။ `quorum` ကို multisig threshold (≥2) သို့ သတ်မှတ်ပါ။
+အဓိကလိုအပ်ချက်များ--
+
+- Validators **must** be declared as explicit bindings with a canonical I105
+  authority account plus a concrete `peer_id`. Legacy string-only validator
+  arrays are rejected.
+- Each manifest `peer_id` must resolve to a registered runtime peer with a live
+  consensus key that is present in the current commit topology; Torii routes
+  only to those authoritative peer bindings and fails closed when the runtime
+  truth disagrees with the manifest.
+- Validator accounts should remain stable governance identities even if the
+  underlying host or peer keys rotate; update the manifest `peer_id` binding
+  when the serving peer changes. Set `quorum` to the multisig threshold (≥2).
 - Protected namespaces များကို `Queue::push` (`crates/iroha_core/src/queue.rs` တွင်ကြည့်ပါ) ဖြင့် ပြဋ္ဌာန်းထားသောကြောင့် CBDC စာချုပ်များအားလုံး `gov_namespace` + `gov_contract_id` ကို သတ်မှတ်ရပါမည်။
 - `composability_group` အကွက်များသည် `docs/source/nexus.md` §8.6 တွင်ဖော်ပြထားသော schema ကိုလိုက်နာသည်။ ပိုင်ရှင် (CBDC လမ်းသွား) သည် whitelist နှင့် quotas ကို ပေးဆောင်သည်။ Whitelisted DS manifests သည် `group_id_hex` + `activation_epoch` ကိုသာ သတ်မှတ်ပါသည်။
 - မန်နီးဖက်စ်ကို ကူးယူပြီးနောက်၊ `LaneManifestRegistry::from_config` တင်ကြောင်းအတည်ပြုရန် `cargo test -p integration_tests nexus::lane_registry -- --nocapture` ကိုဖွင့်ပါ။
@@ -246,7 +257,7 @@ UAID၊ dataspace id၊ activation/expiry ကို မှတ်တမ်းတ�
   curl -X POST https://torii.soranexus/v1/space-directory/manifests \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "i105...",
+            "authority": "<i105-account-id>",
             "private_key": "ed25519:CiC7…",
             "manifest": '"'"'$(cat fixtures/space_directory/capability/cbdc_wholesale.manifest.json)'"'"',
             "reason": "CBDC onboarding wave 4"
@@ -262,7 +273,7 @@ UAID၊ dataspace id၊ activation/expiry ကို မှတ်တမ်းတ�
   curl -X POST https://torii.soranexus/v1/space-directory/manifests/revoke \
        -H 'Content-Type: application/json' \
        -d '{
-            "authority": "i105...",
+            "authority": "<i105-account-id>",
             "private_key": "ed25519:CiC7…",
             "uaid": "uaid:0f4d…ab11",
             "dataspace": 11,

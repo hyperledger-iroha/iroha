@@ -8,13 +8,10 @@ use crate::{
     asset::{AssetDefinitionId, AssetId, definition::AssetDefinition, value::Asset},
     block::{BlockHeader, SignedBlock},
     domain::{Domain, DomainId},
+    escrow::{AnonymousAssetEscrowRecord, AssetEscrowRecord},
     metadata::Metadata,
     name::Name,
     nft::{Nft, NftId},
-    offline::{
-        OfflineAllowanceRecord, OfflineCounterSummary, OfflineToOnlineTransfer,
-        OfflineTransferRecord, OfflineVerdictRevocation,
-    },
     parameter::Parameter,
     peer::PeerId,
     permission::Permission,
@@ -22,6 +19,7 @@ use crate::{
     query::{CommittedTransaction, QueryOutputBatchBox, QueryOutputBatchBoxTuple},
     repo::RepoAgreement,
     role::{Role, RoleId},
+    rwa::{Rwa, RwaId},
     transaction::{TransactionEntrypoint, TransactionResult as TxResultType},
     trigger::{Trigger, TriggerId, action::Action},
 };
@@ -84,6 +82,8 @@ mod single_item {
         RepoAgreement,
         NftId,
         Nft,
+        RwaId,
+        Rwa,
         Role,
         Parameter,
         Permission,
@@ -101,11 +101,8 @@ mod single_item {
         BlockHeader,
         HashOf<BlockHeader>,
         ProofRecord,
-        OfflineAllowanceRecord,
-        OfflineCounterSummary,
-        OfflineToOnlineTransfer,
-        OfflineTransferRecord,
-        OfflineVerdictRevocation,
+        AssetEscrowRecord,
+        AnonymousAssetEscrowRecord,
     );
 }
 

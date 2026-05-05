@@ -61,7 +61,7 @@ listadas em `roadmap.md`, vinculando cada fluxo de trabalho в качестве 
 | Карта + дополнения KPI | `docs/source/sns/governance_addenda/` | Утвержденные карты с контролем за соблюдением правил, соглашения KPI и решения по управлению референсиадами для голосования в CLI. |
 | Регистрация | [`registry-schema.md`](./registry-schema.md) | Estruturas Norito canonicas (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
 | Договор с регистратором | [`registrar-api.md`](./registrar-api.md) | Полезные нагрузки REST/gRPC, метрики `sns_registrar_status_total` и ожидаемые возможности управления. |
-| Графический интерфейс UX | [`address-display-guidelines.md`](./address-display-guidelines.md) | Канонические изображения I105 (предпочтительно) и дополнительные (вторые лучшие функции) для кошельков/исследователей. |
+| Графический интерфейс UX | [`address-display-guidelines.md`](./address-display-guidelines.md) | Канонические изображения i105 (предпочтительно) и дополнительные (вторые лучшие функции) для кошельков/исследователей. |
 | Документы SoraDNS/ГАР | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Определение детерминированных хостов, изменение настроек прозрачности и регулировок оповещений. |
 | Нормативные памятки | `docs/source/sns/regulatory/` | Notas de entrada por jurisdicao (например, EU DSA), благодарности управляющему, приложения к шаблону. |
 | Журнал бурения | `ops/drill-log.md` | Регистр событий и IR требует предварительной проверки. |
@@ -97,11 +97,11 @@ acima para que audiores reconstruam или rastro de cisao em 24 часа.
 | Фаза | Ответственный | Acao и доказательства | соглашение об уровне обслуживания |
 |------|-------------|------------------|-----|
 | Мягкая заморозка | Стюард / поддержка | Отмените билет `SNS-DF-<id>` с подтверждением оплаты, ссылкой на залог по спору и селектором(ами) результатов. | <= 4 часа после входа. |
-| Билетный хранитель | Консельо опекун | `sns governance freeze --selector <I105> --reason <text> --until <ts>` продукт `GuardianFreezeTicketV1`. Armazene или JSON сделайте билет `artifacts/sns/guardian/<id>.json`. | <= 30 минут подтверждения, <= 2 часа выполнения. |
+| Билетный хранитель | Консельо опекун | `sns governance freeze --selector <i105> --reason <text> --until <ts>` продукт `GuardianFreezeTicketV1`. Armazene или JSON сделайте билет `artifacts/sns/guardian/<id>.json`. | <= 30 минут подтверждения, <= 2 часа выполнения. |
 | Ратификация согласия | Совет правительства | Подтверждая или возвращая замороженные продукты, документируйте решение со ссылкой на хранителя билетов и дайджеста для залога спора. | Proxima sessao do conselho или voto assincrono. |
 | Пейнель де арбитражем | Конформидад + стюард | Вызовите 7 участников (в соответствии с дорожной картой) с указанными сообщениями через `sns governance dispute ballot`. Анексар дает анонимные отзывы об инцидентах. | Veredito <=7 дней после депозита до облигации. |
 | Апеласао | Опекун + совет | Apelacoes dobram o Bond e repetem oprocesso de jurados; Манифест регистратора Norito `DisputeAppealV1` и первичный билет референта. | <=10 диам. |
-| Удаление и восстановление | Регистратор + оператор разрешения | Выполните `sns governance unfreeze --selector <I105> --ticket <id>`, настройте статус регистратора и распространите различия GAR/резольвера. | Немедленно после вередито. |
+| Удаление и восстановление | Регистратор + оператор разрешения | Выполните `sns governance unfreeze --selector <i105> --ticket <id>`, настройте статус регистратора и распространите различия GAR/резольвера. | Немедленно после вередито. |
 
 Каноны экстренной помощи (замороженные действия для опекуна <= 72 ч) в следующий раз или снова
 Fluxo, mas exigem revisao Retroativa do Conselho и uma nota de transparencia em

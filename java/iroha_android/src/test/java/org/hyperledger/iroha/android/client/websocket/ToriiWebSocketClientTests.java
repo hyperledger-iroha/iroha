@@ -15,6 +15,7 @@ public final class ToriiWebSocketClientTests {
 
   public static void main(final String[] args) {
     connectDeliversEvents();
+    connectRejectsInsecureCredentialedWebSocket();
     connectorFailuresPropagate();
     System.out.println("[IrohaAndroid] ToriiWebSocketClientTests passed.");
   }
@@ -50,7 +51,7 @@ public final class ToriiWebSocketClientTests {
         client.connect(
             "/ws",
             ToriiWebSocketOptions.builder()
-                .putHeader("Authorization", "Bearer token")
+                .putHeader("X-Debug", "1")
                 .addSubprotocol("torii")
                 .build(),
             listener);
@@ -85,6 +86,25 @@ public final class ToriiWebSocketClientTests {
     if (errors.isEmpty() || !(errors.get(0) instanceof IllegalStateException)) {
       throw new AssertionError("Expected connector exception to propagate");
     }
+  }
+
+  private static void connectRejectsInsecureCredentialedWebSocket() {
+    final ToriiWebSocketClient client =
+        ToriiWebSocketClient.builder()
+            .setBaseUri(URI.create("http://localhost:8080"))
+            .setWebSocketConnector(new RecordingConnector())
+            .build();
+    try {
+      client.connect(
+          "/ws",
+          ToriiWebSocketOptions.builder().putHeader("Authorization", "Bearer token").build(),
+          new ToriiWebSocketListener() {});
+    } catch (final IllegalArgumentException expected) {
+      assert expected.getMessage().contains("refuses insecure WebSocket protocol")
+          : "expected insecure websocket rejection";
+      return;
+    }
+    throw new AssertionError("Expected insecure credentialed WebSocket to be rejected");
   }
 
   private static final class RecordingConnector implements ToriiWebSocketClient.WebSocketConnector {

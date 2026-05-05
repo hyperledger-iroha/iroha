@@ -67,7 +67,7 @@ Configuration
 - `telemetry_profile` (default: `operator`): Capability bundle wiring both Torii routing and runtime sinks. Profiles toggle three capability flags — `metrics`, `expensive_metrics`, and `developer_outputs`. When `telemetry_enabled = false`, the effective profile is forced to `disabled`.
 - `torii.peer_telemetry_urls` (default: empty): Optional list of Torii base URLs used to fetch peer telemetry metadata. When unset, peer telemetry discovery is disabled to avoid probing P2P ports.
 - `torii.peer_geo.enabled` (default: false): Enable peer geo lookups for Torii telemetry (opt-in; requires network access to the configured endpoint).
-- `torii.peer_geo.endpoint` (default: unset): Optional ip-api compatible endpoint used for peer geo lookups; when unset and `torii.peer_geo.enabled = true`, Torii uses the built-in ip-api default.
+- `torii.peer_geo.endpoint` (default: unset): Required HTTPS ip-api compatible endpoint used for peer geo lookups when `torii.peer_geo.enabled = true`; when unset, Torii skips geo lookup and logs a warning.
 - Build-time ISI instrumentation: `#[metrics]` counters (`isi{kind="total|success"}`) and timing histograms (`isi_times`) require building `irohad` with `--features expensive-telemetry` (or `iroha_core` `expensive-telemetry`). The runtime still respects `telemetry_enabled` and `telemetry_profile` for exposure.
 
 Telemetry redaction and integrity
@@ -214,12 +214,12 @@ for the escalation tree that ties these metrics back to pager rotations.
   `allowed` / `rejected` whenever runtime upgrade submissions pass or fail manifest policy.
 - `governance_manifest_activations_total{event}` (counter): manifest lifecycle
   events emitted by `EnactReferendum`. `event="manifest_inserted"` counts new
-  manifests keyed by `code_hash`; `event="instance_bound"` counts namespace
-  bindings (contract instance activations).
+  manifests keyed by `code_hash`; `event="instance_bound"` counts canonical
+  contract activations.
 - `/status` now includes a `governance` object with proposal counts, protected
   namespace totals, aggregated manifest admission outcomes, and a
   `recent_manifest_activations` array listing the most
-  recent enactments (namespace, contract id, code/ABI hash, block height, and
+  recent enactments (contract address, code/ABI hash, block height, and
   activation timestamp in milliseconds).
 
 Example `governance` excerpt from `/status`:
@@ -251,8 +251,7 @@ Example `governance` excerpt from `/status`:
   },
 "recent_manifest_activations": [
     {
-      "namespace": "apps",
-      "contract_id": "demo.contract",
+      "contract_address": "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
       "code_hash_hex": "deadbeef",
       "abi_hash_hex": "cafebabe",
       "height": 42,
@@ -313,7 +312,7 @@ deploys flowed through the protected gate.
 When the alert triggers:
 1. Inspect `histogram_quantile(0.5/0.95/0.99, sum by (lane_id,endpoint,le)(rate(torii_lane_admission_latency_seconds_bucket[5m])))`
    to confirm whether the regression is confined to a single endpoint (e.g.
-   `/transaction` vs `/v1/contracts/instance/activate`).
+   `/transaction` vs `/v1/contracts/call`).
 2. Pull `/v1/sumeragi/status` and review `lane_activity` for the affected lane.
    A spike in `tx_vertices`, `overlay_bytes_total`, or `rbc_bytes_total` hints at
    admission pressure rather than infrastructure issues.
@@ -420,7 +419,7 @@ Torii integration
 - `Torii::new_with_handle` accepts a `routing::MaybeTelemetry` gate that pairs the runtime `Telemetry` handle with the active `TelemetryProfile`. Use `routing::MaybeTelemetry::from_profile(runtime_handle, profile)` to construct the gate, or `routing::MaybeTelemetry::disabled()` when telemetry is unavailable.
 - `Torii::new` (when the `telemetry` feature is enabled) remains as a convenience wrapper; it now forwards to `new_with_handle` with an operator profile by default. Tests can use `routing::MaybeTelemetry::for_tests()` to obtain an in-process telemetry handle.
 
-- `torii_address_invalid_total{endpoint,reason}` increments whenever HTTP routes reject an account identifier (invalid I105 payloads, domain mismatches, etc.). Keep the `<0.1%` SLO by watching the dedicated Grafana board in `dashboards/grafana/address_ingest.json`.
+- `torii_address_invalid_total{endpoint,reason}` increments whenever HTTP routes reject an account identifier (invalid i105 payloads, domain mismatches, etc.). Keep the `<0.1%` SLO by watching the dedicated Grafana board in `dashboards/grafana/address_ingest.json`.
 - `torii_address_collision_total{endpoint,kind="local12_digest"}` and `torii_address_collision_domain_total{endpoint,domain}` record Local‑12 selector collisions. Both feed the collision panel/alert in `dashboards/grafana/address_ingest.json` so operators can tie spikes to specific domains. Production should stay flat; any increment blocks manifest promotions until governance signs off on the fix.
 
 Pipeline metrics
@@ -911,7 +910,7 @@ Norito-RPC transport telemetry requirements are captured in `docs/source/torii/n
 - `torii_http_request_duration_seconds_bucket{content_type,method}` — latency histogram for content-type parity dashboards.
 - `torii_http_response_bytes_total{content_type,method,status}` — optional payload-size counter for regression detection.
 - `torii_norito_decode_failures_total{payload_kind,reason}` — bucketed Norito RPC decode failures (invalid magic, checksum mismatch, unsupported feature, etc.).
-- `torii_address_invalid_total{surface,reason}` — rejects grouped by Torii surface (e.g., `routing.source`, `iso_bridge.source`) and the stable address error code so SDK drift or malformed I105 literals are visible.
+- `torii_address_invalid_total{surface,reason}` — rejects grouped by Torii surface (e.g., `routing.source`, `iso_bridge.source`) and the stable address error code so SDK drift or malformed i105 literals are visible.
 - Local‑8 specific counters are retired; rely on `torii_address_invalid_total{surface,reason}` and `torii_address_collision_total{surface,kind}` to monitor address ingestion and Local‑12 safety.
 - Existing gauges (`torii_active_connections_total{scheme}`, `torii_pre_auth_reject_total{reason}`) must include `scheme="norito_rpc"` to track transport gating.
 
@@ -956,7 +955,7 @@ checkpoints churn faster than expected. Capture evidence with a simple scrape:
 
 ```bash
 curl -s http://127.0.0.1:8180/metrics \
-  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)){asset_id="xor#wonderland"}'
+  | rg 'iroha_confidential_(tree_(commitments|depth)|root_history_entries|frontier_(checkpoints|last_checkpoint_height|last_checkpoint_commitments)){asset_id="4cuvDVPuLBKJyN6dPbRQhmLh68sU"}'
 ```
 
 Pair this with `rg 'iroha_confidential_(root|frontier)_evictions_total'` to prove
@@ -1064,6 +1063,14 @@ pipeline summaries via `nexus_scheduler_lane_teu_status` responses. Each lane
 snapshot includes the scheduler graph counters (`tx_vertices`, `tx_edges`,
 `overlay_count`, `overlay_instr_total`, `overlay_bytes_total`, `rbc_chunks`,
 `rbc_bytes_total`) plus:
+
+The root `/status` payload also exposes a `build` object so operators can
+verify what binary is actually serving traffic. The object includes:
+
+- `version` — Cargo package version baked into the node binary.
+- `git_commit_sha` — source revision baked into the node binary.
+- `cargo_features` — enabled Cargo feature set used for the build.
+- `target_triple` — compilation target triple for the running binary.
 
 - `peak_layer_width`, `layer_count` — outer bounds of the scheduler layering
   that executed for the lane in the latest block.

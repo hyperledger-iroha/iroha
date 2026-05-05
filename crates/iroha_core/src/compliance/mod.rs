@@ -10,6 +10,7 @@ use std::{
 use iroha_crypto::privacy::LaneCommitmentId;
 use iroha_data_model::{
     account::AccountId,
+    domain::DomainId,
     nexus::{
         DataSpaceId, LaneCompliancePolicy, LaneCompliancePolicyId, LaneComplianceRule, LaneId,
         ParticipantSelector, UniversalAccountId,
@@ -173,11 +174,21 @@ fn selector_matches(selector: &ParticipantSelector, ctx: &LaneComplianceContext<
         return false;
     }
 
-    if selector.domain.is_some() {
+    if let Some(domain) = selector.domain.as_ref()
+        && !ctx
+            .authority_domains
+            .iter()
+            .any(|current| current == domain)
+    {
         return false;
     }
 
-    if selector.domain_prefix.is_some() {
+    if let Some(prefix) = selector.domain_prefix.as_deref()
+        && !ctx
+            .authority_domains
+            .iter()
+            .any(|current| current.to_string().starts_with(prefix))
+    {
         return false;
     }
 
@@ -231,6 +242,8 @@ pub struct LaneComplianceContext<'a> {
     pub dataspace_id: DataSpaceId,
     /// Transaction authority.
     pub authority: &'a AccountId,
+    /// Dataspace-qualified account domains attached to the authority via aliases.
+    pub authority_domains: &'a [DomainId],
     /// UAID derived for the authority (if known).
     pub uaid: Option<&'a UniversalAccountId>,
     /// Capability tags attached to the transaction or manifest.
@@ -249,6 +262,7 @@ impl<'a> LaneComplianceContext<'a> {
             lane_id,
             dataspace_id,
             authority,
+            authority_domains: &[],
             uaid: None,
             capability_tags: &[],
             lane_privacy_registry: None,
@@ -443,7 +457,7 @@ mod tests {
             id: LaneCompliancePolicyId::new(Hash::prehashed(hash_bytes)),
             version: 1,
             lane_id,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             jurisdiction: JurisdictionSet::default(),
             deny: deny
                 .iter()
@@ -488,8 +502,9 @@ mod tests {
 
         let ctx = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             authority: &alpha,
+            authority_domains: &[],
             uaid: None,
             capability_tags: &[],
             lane_privacy_registry: None,
@@ -502,8 +517,9 @@ mod tests {
 
         let ctx_beta = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             authority: &beta,
+            authority_domains: &[],
             uaid: None,
             capability_tags: &[],
             lane_privacy_registry: None,
@@ -549,7 +565,7 @@ mod tests {
         let statuses = vec![LaneManifestStatus {
             lane: LaneId::SINGLE,
             alias: "confidential".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
+            dataspace: DataSpaceId::UNIVERSAL,
             visibility: LaneVisibility::Public,
             storage: LaneStorageProfile::CommitmentOnly,
             governance: None,
@@ -563,8 +579,9 @@ mod tests {
         let registry = LanePrivacyRegistry::from_statuses(&statuses);
         let ctx = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             authority: &alpha,
+            authority_domains: &[],
             uaid: None,
             capability_tags: &[],
             lane_privacy_registry: Some(Arc::new(registry)),
@@ -612,8 +629,9 @@ mod tests {
 
         let ctx_missing_tag = LaneComplianceContext {
             lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::GLOBAL,
+            dataspace_id: DataSpaceId::UNIVERSAL,
             authority: &alpha,
+            authority_domains: &[],
             uaid: None,
             capability_tags: &[],
             lane_privacy_registry: None,
@@ -631,6 +649,90 @@ mod tests {
         };
         assert!(matches!(
             engine.evaluate(&ctx_with_tag),
+            LaneComplianceEvaluation::Allowed(_)
+        ));
+    }
+
+    #[test]
+    fn selector_matches_authority_domain() {
+        let alpha = account("alice", "wonderland");
+        let retail_domain =
+            iroha_data_model::domain::DomainId::try_new("hbl", "paynet").expect("domain id");
+        let other_domain =
+            iroha_data_model::domain::DomainId::try_new("ubl", "paynet").expect("domain id");
+        let policy = LaneCompliancePolicy {
+            allow: vec![LaneComplianceRule {
+                selector: ParticipantSelector {
+                    domain: Some(retail_domain.clone()),
+                    ..ParticipantSelector::default()
+                },
+                reason_code: Some("fi domain allowed".to_string()),
+                jurisdiction_override: JurisdictionSet::default(),
+            }],
+            deny: Vec::new(),
+            ..sample_policy(LaneId::SINGLE, &[], &[])
+        };
+        let engine = LaneComplianceEngine::from_policies(vec![policy], false).expect("engine");
+
+        let matched_domains = vec![retail_domain];
+        let matched_ctx = LaneComplianceContext {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            authority: &alpha,
+            authority_domains: &matched_domains,
+            uaid: None,
+            capability_tags: &[],
+            lane_privacy_registry: None,
+            verified_privacy_commitments: &EMPTY_PRIVACY_COMMITMENTS,
+        };
+        assert!(matches!(
+            engine.evaluate(&matched_ctx),
+            LaneComplianceEvaluation::Allowed(_)
+        ));
+
+        let mismatched_domains = vec![other_domain];
+        let mismatched_ctx = LaneComplianceContext {
+            authority_domains: &mismatched_domains,
+            ..matched_ctx
+        };
+        assert!(matches!(
+            engine.evaluate(&mismatched_ctx),
+            LaneComplianceEvaluation::Denied(_)
+        ));
+    }
+
+    #[test]
+    fn selector_matches_authority_domain_prefix() {
+        let alpha = account("alice", "wonderland");
+        let retail_domain =
+            iroha_data_model::domain::DomainId::try_new("hbl", "paynet").expect("domain id");
+        let policy = LaneCompliancePolicy {
+            allow: vec![LaneComplianceRule {
+                selector: ParticipantSelector {
+                    domain_prefix: Some("hbl.".to_string()),
+                    ..ParticipantSelector::default()
+                },
+                reason_code: Some("fi prefix allowed".to_string()),
+                jurisdiction_override: JurisdictionSet::default(),
+            }],
+            deny: Vec::new(),
+            ..sample_policy(LaneId::SINGLE, &[], &[])
+        };
+        let engine = LaneComplianceEngine::from_policies(vec![policy], false).expect("engine");
+
+        let authority_domains = vec![retail_domain];
+        let ctx = LaneComplianceContext {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            authority: &alpha,
+            authority_domains: &authority_domains,
+            uaid: None,
+            capability_tags: &[],
+            lane_privacy_registry: None,
+            verified_privacy_commitments: &EMPTY_PRIVACY_COMMITMENTS,
+        };
+        assert!(matches!(
+            engine.evaluate(&ctx),
             LaneComplianceEvaluation::Allowed(_)
         ));
     }

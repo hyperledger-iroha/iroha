@@ -57,6 +57,12 @@ const ISO_MAX_ATTEMPTS = parsePositiveIntegerEnv(
   process.env.IROHA_TORII_INTEGRATION_ISO_MAX_ATTEMPTS,
   5,
 );
+const INTEGRATION_ASSET_DEFINITION_IDS = Object.freeze([
+  "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
+  "61CtjvNd9T3THAR65GsMVHr82Bjc",
+  "5Pz9SwdN9eXPbiXPX9HRCpzCcE3o",
+]);
+let randomAssetDefinitionCounter = 0;
 const SORAFS_ENABLED = parseBooleanEnv(
   process.env.IROHA_TORII_INTEGRATION_SORAFS_ENABLED ?? "0",
 );
@@ -126,7 +132,7 @@ const CHAIN_ID =
   process.env.IROHA_TORII_INTEGRATION_CHAIN_ID ?? "00000000-0000-0000-0000-000000000000";
 const AUTHORITY_ACCOUNT_ID =
   process.env.IROHA_TORII_INTEGRATION_ACCOUNT_ID ??
-  "6cmzPVPX944pj7vVyADRpma2DCcBUsG1mhz8VrXArhXaGsjvRUcnbVn";
+  "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
 const PRIVATE_KEY_HEX =
   process.env.IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX ??
   "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
@@ -1095,7 +1101,7 @@ test(
     assertSuccessfulStatus(accountStatus, accountId);
 
     const assetDefinitionId = randomAssetDefinitionId(domainId);
-    const assetId = randomEncodedAssetId("mintasset");
+    const assetId = composeAssetId(assetDefinitionId, AUTHORITY_ACCOUNT_ID);
     const { signedTransaction: assetTx, hash: assetHash } =
       buildRegisterAssetDefinitionAndMintTransaction({
         chainId: CHAIN_ID,
@@ -1246,8 +1252,8 @@ test(
     const senderAccountId = randomAccountId(domainId);
     const receiverAccountId = randomAccountId(domainId);
     const assetDefinitionId = randomAssetDefinitionId(domainId);
-    const senderAssetId = randomEncodedAssetId("senderasset");
-    const receiverAssetId = randomEncodedAssetId("receiverasset");
+    const senderAssetId = composeAssetId(assetDefinitionId, senderAccountId);
+    const receiverAssetId = composeAssetId(assetDefinitionId, receiverAccountId);
     const mintedQuantity = "15";
     const transferQuantity = "6";
     const remainingQuantity = (BigInt(mintedQuantity) - BigInt(transferQuantity)).toString();
@@ -1886,7 +1892,7 @@ test(
     });
     const triggerId = randomTriggerId();
     const namespace = "apps";
-    const assetId = randomEncodedAssetId("triggerasset");
+    const assetId = composeAssetId(INTEGRATION_ASSET_DEFINITION_IDS[0], AUTHORITY_ACCOUNT_ID);
     const action = buildTimeTriggerAction({
       authority: AUTHORITY_ACCOUNT_ID,
       instructions: [
@@ -2499,7 +2505,7 @@ test(
 );
 
 test(
-  "offline allowance, summary, and transfer endpoints respond (optional)",
+  "offline v2 readiness responds (optional)",
   {
     skip: !!SKIP_REASON,
     timeout: 60_000,
@@ -2514,109 +2520,13 @@ test(
       apiToken: API_TOKEN,
     });
 
-    const allowances = await fetchOfflineListPage(
-      t,
-      "offline allowances list",
-      () => client.listOfflineAllowances({ limit: 5 }),
-    );
-    if (!allowances) {
-      return;
-    }
-    assertOfflineAllowanceResponse(allowances);
-
-    const summaries = await fetchOfflineListPage(
-      t,
-      "offline summaries list",
-      () => client.listOfflineSummaries({ limit: 5 }),
-    );
-    if (!summaries) {
-      return;
-    }
-    assertOfflineSummaryResponse(summaries);
-
-    const transfers = await fetchOfflineListPage(
-      t,
-      "offline transfers list",
-      () =>
-        client.listOfflineTransfers({
-          limit: 5,
-        }),
-    );
-    if (!transfers) {
-      return;
-    }
-    assertOfflineTransferResponse(transfers);
-  },
-);
-
-test(
-  "offline revocation endpoints respond (optional)",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 60_000,
-  },
-  async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-
-    const revocations = await fetchOfflineListPage(
-      t,
-      "offline revocations list",
-      () => client.listOfflineRevocations({ limit: 5 }),
-    );
-    if (!revocations) {
-      return;
-    }
-    assertOfflineRevocationResponse(revocations);
-
-    const revocationQuery = await fetchOfflineListPage(
-      t,
-      "offline revocations query",
-      () => client.queryOfflineRevocations({ limit: 5 }),
-    );
-    if (!revocationQuery) {
-      return;
-    }
-    assertOfflineRevocationResponse(revocationQuery);
-  },
-);
-
-test(
-  "offline rejection telemetry responds (optional)",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 60_000,
-  },
-  async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    let stats;
-    try {
-      stats = await client.getOfflineRejectionStats();
-    } catch (error) {
-      if (isOfflineApiUnavailableError(error)) {
-        t.diagnostic(`offline rejection telemetry unavailable on target node: ${error.message}`);
-        return;
-      }
-      throw error;
-    }
-    if (!stats) {
-      t.diagnostic("offline rejection telemetry disabled on target node");
-      return;
-    }
-    assertOfflineRejectionStatsResponse(stats);
+    const readiness = await client.getOfflineV2Readiness();
+    assert.equal(readiness.offline_note_v2, true);
+    assert.equal(readiness.offline_one_use_keys, true);
+    assert.equal(typeof readiness.offline_recursive_note_proof, "boolean");
+    assert.equal(readiness.offline_fountain_qr_v1, true);
+    assert.equal(readiness.offline_sync_optional, true);
+    assert.equal(readiness.offline_telemetry, true);
   },
 );
 
@@ -2644,15 +2554,25 @@ test(
       return;
     }
 
-    const namespace = (CONTRACT_CALL_OPTIONS.namespace ?? "").trim();
-    const contractId = (
-      CONTRACT_CALL_OPTIONS.contractId ??
-      CONTRACT_CALL_OPTIONS.contract_id ??
+    const contractAddress = (
+      CONTRACT_CALL_OPTIONS.contractAddress ??
+      CONTRACT_CALL_OPTIONS.contract_address ??
       ""
     ).trim();
-    if (!namespace || !contractId) {
+    const contractAlias = (
+      CONTRACT_CALL_OPTIONS.contractAlias ??
+      CONTRACT_CALL_OPTIONS.contract_alias ??
+      ""
+    ).trim();
+    if (!contractAddress && !contractAlias) {
       t.diagnostic(
-        "contract call payload must include non-empty `namespace` and `contractId` fields",
+        "contract call payload must include non-empty `contractAddress`/`contract_address` or `contractAlias`/`contract_alias`",
+      );
+      return;
+    }
+    if (contractAddress && contractAlias) {
+      t.diagnostic(
+        "contract call payload must not set both contractAddress and contractAlias",
       );
       return;
     }
@@ -2669,9 +2589,12 @@ test(
     const request = {
       authority,
       privateKey: privateKeyHex,
-      namespace,
-      contractId,
     };
+    if (contractAddress) {
+      request.contractAddress = contractAddress;
+    } else {
+      request.contractAlias = contractAlias;
+    }
 
     const entrypoint =
       CONTRACT_CALL_OPTIONS.entrypoint ?? CONTRACT_CALL_OPTIONS.entryPoint ?? null;
@@ -2724,16 +2647,13 @@ test(
       throw error;
     }
     assert.ok(response, "contract call should return a response payload");
-    assert.equal(
-      response.namespace,
-      namespace,
-      "contract call response must echo namespace",
-    );
-    assert.equal(
-      response.contract_id,
-      contractId,
-      "contract call response must echo contract id",
-    );
+    if (contractAddress) {
+      assert.equal(
+        response.contract_address,
+        contractAddress,
+        "contract call response must echo contract address",
+      );
+    }
     assertHexString(response.tx_hash_hex, "contract call response.tx_hash_hex");
     assertHexString(response.code_hash_hex, "contract call response.code_hash_hex");
     assertHexString(response.abi_hash_hex, "contract call response.abi_hash_hex");
@@ -3495,10 +3415,10 @@ test(
       );
       return;
     }
-    const fallbackEpoch =
+    const fixtureEpoch =
       coerceNonNegativeInteger(manifestPayload.expiry_epoch ?? manifestPayload.expiryEpoch) ??
       coerceNonNegativeInteger(manifestPayload.activation_epoch ?? manifestPayload.activationEpoch);
-    const revokedEpoch = SPACE_DIRECTORY_REVOKE_EPOCH ?? fallbackEpoch;
+    const revokedEpoch = SPACE_DIRECTORY_REVOKE_EPOCH ?? fixtureEpoch;
     if (revokedEpoch === null) {
       t.diagnostic(
         "set IROHA_TORII_INTEGRATION_SPACE_DIRECTORY_REVOKE_EPOCH=<epoch> or include activation/expiry epochs in the manifest fixture",
@@ -3876,6 +3796,7 @@ test(
       Object.keys(sanitizedSessionOptions).length === 0 ? undefined : sanitizedSessionOptions;
 
     let createdSid = null;
+    let createdManagementToken = null;
     try {
       const result = await bootstrapConnectPreviewSession(client, {
         chainId,
@@ -3884,6 +3805,7 @@ test(
         sessionOptions,
       });
       createdSid = result.preview.sidBase64Url;
+      createdManagementToken = result.session?.token_management ?? null;
       assert.ok(
         typeof result.preview.walletUri === "string" &&
           result.preview.walletUri.startsWith("iroha://connect"),
@@ -3906,6 +3828,16 @@ test(
         result.session.token_app,
         "app token helper output should match session payload",
       );
+      assert.equal(
+        result.tokens.management,
+        result.session.token_management,
+        "management token helper output should match session payload",
+      );
+      assert.equal(
+        result.tokens.relay,
+        result.session.token_relay,
+        "relay token helper output should match session payload",
+      );
       assert.ok(
         typeof result.session.wallet_uri === "string" &&
           result.session.wallet_uri.startsWith("iroha://connect"),
@@ -3920,9 +3852,12 @@ test(
         `bootstrapConnectPreviewSession registered sid=${result.preview.sidBase64Url}`,
       );
     } finally {
-      if (createdSid) {
+      if (createdSid && createdManagementToken) {
         try {
-          await client.deleteConnectSession(createdSid);
+          await client.deleteConnectSession({
+            sid: createdSid,
+            tokenManagement: createdManagementToken,
+          });
         } catch (error) {
           t.diagnostic(
             `failed to delete connect session ${createdSid}: ${error instanceof Error ? error.message : String(error)}`,
@@ -4527,154 +4462,6 @@ test(
 );
 
 test(
-  "governance instances listing responds for protected namespace",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 60_000,
-  },
-  async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    let namespacesResponse;
-    try {
-      namespacesResponse = await client.getProtectedNamespaces();
-    } catch (error) {
-      t.diagnostic(
-        `protected namespaces endpoint unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return;
-    }
-    const targetNamespace = namespacesResponse.namespaces?.[0];
-    if (!targetNamespace) {
-      t.diagnostic("protected namespaces list is empty; skipping governance instance assertions");
-      return;
-    }
-    let instancePage;
-    try {
-      instancePage = await client.listGovernanceInstances(targetNamespace, { limit: 5 });
-    } catch (error) {
-      t.diagnostic(
-        `governance instances endpoint unavailable for namespace ${targetNamespace}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return;
-    }
-    assert.equal(
-      instancePage.namespace,
-      targetNamespace,
-      "governance instance page should echo namespace",
-    );
-    assertNonNegativeInteger(instancePage.total, "governance instance page total");
-    assertNonNegativeInteger(instancePage.offset, "governance instance page offset");
-    assertNonNegativeInteger(instancePage.limit, "governance instance page limit");
-    assert.ok(
-      Array.isArray(instancePage.instances),
-      "governance instance page must include instances array",
-    );
-    if (instancePage.instances.length === 0) {
-      t.diagnostic(`no governance instances returned for namespace ${targetNamespace}`);
-      return;
-    }
-    instancePage.instances.forEach((instance, index) => {
-      assert.equal(
-        typeof instance.contract_id,
-        "string",
-        `governance instance ${index} contract_id must be a string`,
-      );
-      assert.notEqual(
-        instance.contract_id.length,
-        0,
-        `governance instance ${index} contract_id must not be empty`,
-      );
-      assertHexString(instance.code_hash_hex, `governance instance ${index} code_hash_hex`);
-    });
-    const firstInstance = instancePage.instances[0];
-    const iteratorHit = await iteratorIncludes(
-      client.iterateGovernanceInstances(targetNamespace, { pageSize: 2, maxItems: 10 }),
-      (entry) => entry?.contract_id === firstInstance.contract_id,
-    );
-    assert.ok(
-      iteratorHit,
-      "governance instance iterator should surface the listed contract id at least once",
-    );
-  },
-);
-
-test(
-  "contract instances listing responds for protected namespace",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 60_000,
-  },
-  async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-
-    let namespacesResponse;
-    try {
-      namespacesResponse = await client.getProtectedNamespaces();
-    } catch (error) {
-      t.diagnostic(
-        `protected namespaces endpoint unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return;
-    }
-
-    const targetNamespace = namespacesResponse.namespaces?.[0];
-    if (!targetNamespace) {
-      t.diagnostic("protected namespaces list is empty; skipping contract instance assertions");
-      return;
-    }
-
-    let instancePage;
-    try {
-      instancePage = await client.listContractInstances(targetNamespace, { limit: 5 });
-    } catch (error) {
-      t.diagnostic(
-        `contract instances endpoint unavailable for namespace ${targetNamespace}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return;
-    }
-
-    assertContractInstanceListResponse(instancePage, targetNamespace);
-
-    if (instancePage.instances.length === 0) {
-      t.diagnostic(`no contract instances returned for namespace ${targetNamespace}`);
-      return;
-    }
-
-    const firstInstance = instancePage.instances[0];
-    const iteratorHit = await iteratorIncludes(
-      client.iterateContractInstances(targetNamespace, { pageSize: 2, maxItems: 10 }),
-      (entry) => entry?.contract_id === firstInstance.contract_id,
-    );
-    assert.ok(
-      iteratorHit,
-      "contract instance iterator should surface the listed contract id at least once",
-    );
-  },
-);
-
-test(
   "governance plain ballot submission (optional)",
   {
     skip: !!SKIP_REASON,
@@ -5187,12 +4974,12 @@ test(
     assert.match(
       xml,
       new RegExp(`<MsgId>${instructionId}</MsgId>`),
-      "MsgId should fall back to instruction id",
+      "MsgId should use instruction id when omitted",
     );
     assert.match(
       xml,
       new RegExp(`<BizMsgIdr>${instructionId}</BizMsgIdr>`),
-      "BizMsgIdr should fall back to instruction id",
+      "BizMsgIdr should use instruction id when omitted",
     );
     assert.match(
       xml,
@@ -5398,7 +5185,7 @@ test(
   },
   async (t) => {
     if (!ISO_ENABLED) {
-      t.diagnostic("set IROHA_TORII_INTEGRATION_ISO_ENABLED=1 to exercise alias fallback coverage");
+      t.diagnostic("set IROHA_TORII_INTEGRATION_ISO_ENABLED=1 to exercise alias-missing coverage");
       return;
     }
     const client = new ToriiClient(BASE_URL, {
@@ -5488,20 +5275,22 @@ function randomAccountId(domainId) {
     .createHash("sha256")
     .update(`${domainId}:${label}`)
     .digest();
-  return AccountAddress.fromAccount({ domain: domainId, publicKey }).toI105();
+  return AccountAddress.fromAccount({ publicKey }).toI105();
 }
 
 function randomAssetDefinitionId(domainId) {
-  const assetName = randomIdentifier("jsasset");
-  return `${assetName}#${domainId}`;
+  void domainId;
+  const value =
+    INTEGRATION_ASSET_DEFINITION_IDS[
+      randomAssetDefinitionCounter % INTEGRATION_ASSET_DEFINITION_IDS.length
+    ];
+  randomAssetDefinitionCounter += 1;
+  return value;
 }
 
-function randomEncodedAssetId(label) {
-  const payload = crypto
-    .createHash("sha256")
-    .update(randomIdentifier(label))
-    .digest("hex");
-  return `norito:${payload}`;
+function composeAssetId(assetDefinitionId, accountId, dataspaceId = null) {
+  const base = `${assetDefinitionId}#${accountId}`;
+  return dataspaceId === null ? base : `${base}#dataspace:${dataspaceId}`;
 }
 
 function randomTriggerId(namespace = "apps") {
@@ -5801,7 +5590,7 @@ async function iteratorIncludes(iterator, predicate) {
   return false;
 }
 
-function i105DefaultLiteralForAccount(accountId) {
+function i105LiteralForAccount(accountId) {
   const literal = String(accountId);
   const separator = literal.lastIndexOf("@");
   if (separator === -1) {
@@ -6125,9 +5914,9 @@ function parseJsonEnv(rawValue) {
   }
 }
 
-function parsePositiveIntegerEnv(rawValue, fallback) {
+function parsePositiveIntegerEnv(rawValue, defaultValue) {
   if (!rawValue) {
-    return fallback;
+    return defaultValue;
   }
   const parsed = Number.parseInt(rawValue, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -6323,191 +6112,6 @@ function assertExplorerAccountQrSnapshot(snapshot, label) {
   assert.equal(typeof snapshot.svg, "string", `${label}.svg must be a string`);
   assert.ok(snapshot.svg.startsWith("<svg"), `${label}.svg must contain an <svg> payload`);
 }
-
-async function fetchOfflineListPage(t, label, fetcher) {
-  try {
-    return await fetcher();
-  } catch (error) {
-    if (isOfflineApiUnavailableError(error)) {
-      t.diagnostic(`${label} unavailable on target node: ${error.message}`);
-      return null;
-    }
-    throw error;
-  }
-}
-
-function assertOfflineAllowanceResponse(page) {
-  assertNonNegativeInteger(page.total, "offline allowances total");
-  assert.ok(Array.isArray(page.items), "offline allowances must expose items array");
-  if (page.items.length === 0) {
-    return;
-  }
-  const entry = page.items[0];
-  assert.equal(typeof entry.certificate_id_hex, "string", "allowance certificate_id_hex must be a string");
-  assert.equal(typeof entry.controller_id, "string", "allowance controller_id must be a string");
-  assert.equal(typeof entry.asset_id, "string", "allowance asset_id must be a string");
-  assertNonNegativeInteger(entry.registered_at_ms, "allowance registered_at_ms");
-  assertNonNegativeInteger(entry.expires_at_ms, "allowance expires_at_ms");
-  assert.ok(
-    Object.prototype.hasOwnProperty.call(entry, "integrity_metadata"),
-    "allowance entries must expose integrity_metadata",
-  );
-  if (entry.integrity_metadata !== null) {
-    assert.equal(
-      typeof entry.integrity_metadata.policy,
-      "string",
-      "allowance integrity_metadata.policy must be a string",
-    );
-    if (entry.integrity_metadata.provisioned) {
-      const provisioned = entry.integrity_metadata.provisioned;
-      assert.equal(
-        typeof provisioned.manifest_schema,
-        "string",
-        "allowance provisioned manifest_schema must be a string",
-      );
-    }
-  }
-}
-
-function assertOfflineSummaryResponse(page) {
-  assertNonNegativeInteger(page.total, "offline summaries total");
-  assert.ok(Array.isArray(page.items), "offline summaries must expose items array");
-  if (page.items.length === 0) {
-    return;
-  }
-  const entry = page.items[0];
-  assert.equal(
-    typeof entry.certificate_id_hex,
-    "string",
-    "summary certificate_id_hex must be a string",
-  );
-  assert.equal(typeof entry.controller_id, "string", "summary controller_id must be a string");
-  assert.equal(
-    typeof entry.summary_hash_hex,
-    "string",
-    "summary summary_hash_hex must be a string",
-  );
-  assertCounterMap(entry.apple_key_counters, "summary apple_key_counters");
-  assertCounterMap(entry.android_series_counters, "summary android_series_counters");
-  assertCounterMap(entry.policy_key_counters, "summary policy_key_counters");
-  assertOfflineCounterTotals(entry.counter_totals);
-  if (entry.metadata !== null && entry.metadata !== undefined) {
-    assert.ok(isPlainObject(entry.metadata), "summary metadata must be a plain object");
-  }
-}
-
-function assertCounterMap(map, label) {
-  assert.ok(isPlainObject(map), `${label} must be a plain object`);
-  for (const [key, value] of Object.entries(map)) {
-    assert.ok(typeof key === "string" && key.length > 0, `${label} keys must be non-empty strings`);
-    assertNonNegativeInteger(value, `${label}.${key}`);
-  }
-}
-
-function assertOfflineCounterTotals(totals) {
-  if (totals === null || totals === undefined) {
-    return;
-  }
-  assert.ok(isPlainObject(totals), "summary counter_totals must be an object when present");
-  assertNonNegativeInteger(totals.total_counters, "summary counter_totals.total_counters");
-  assertNonNegativeInteger(totals.total_weight, "summary counter_totals.total_weight");
-  assertNonNegativeInteger(totals.apple, "summary counter_totals.apple");
-  assertNonNegativeInteger(totals.android, "summary counter_totals.android");
-  assertNonNegativeInteger(totals.policy, "summary counter_totals.policy");
-}
-
-function assertOfflineTransferResponse(page) {
-  assertNonNegativeInteger(page.total, "offline transfers total");
-  assert.ok(Array.isArray(page.items), "offline transfers must expose items array");
-  if (page.items.length === 0) {
-    return;
-  }
-  const entry = page.items[0];
-  assert.equal(typeof entry.bundle_id_hex, "string", "transfer bundle_id_hex must be a string");
-  assert.equal(typeof entry.controller_id, "string", "transfer controller_id must be a string");
-  assert.equal(typeof entry.receiver_id, "string", "transfer receiver_id must be a string");
-  assert.ok(typeof entry.total_amount === "string", "transfer total_amount must be a string");
-  assert.equal(typeof entry.status, "string", "transfer status must be a string");
-  assertNonNegativeInteger(entry.recorded_at_ms, "transfer recorded_at_ms");
-  assert.ok(
-    Object.prototype.hasOwnProperty.call(entry, "integrity_metadata"),
-    "transfer entries must expose integrity_metadata",
-  );
-  if (entry.integrity_metadata !== null) {
-    assert.equal(
-      typeof entry.integrity_metadata.policy,
-      "string",
-      "transfer integrity_metadata.policy must be a string",
-    );
-  }
-  assert.ok(
-    Array.isArray(entry.status_transitions),
-    "transfer entries must expose status_transitions",
-  );
-  if (entry.status_transitions.length > 0) {
-    const transition = entry.status_transitions[0];
-    assert.equal(typeof transition.status, "string", "status transition status must be a string");
-    assertNonNegativeInteger(
-      transition.transitioned_at_ms,
-      "status transition transitioned_at_ms",
-    );
-    if (transition.verdict_snapshot !== null) {
-      assert.equal(
-        typeof transition.verdict_snapshot.certificate_id,
-        "string",
-        "status transition verdict_snapshot.certificate_id must be a string",
-      );
-    }
-  }
-  assert.ok(
-    Object.prototype.hasOwnProperty.call(entry, "verdict_snapshot"),
-    "transfer entries must expose verdict_snapshot",
-  );
-  if (entry.verdict_snapshot !== null) {
-    assert.equal(
-      typeof entry.verdict_snapshot.certificate_id,
-      "string",
-      "transfer verdict_snapshot.certificate_id must be a string",
-    );
-  }
-}
-
-function assertOfflineRevocationResponse(page) {
-  assertNonNegativeInteger(page.total, "offline revocations total");
-  assert.ok(Array.isArray(page.items), "offline revocations must expose items array");
-  if (page.items.length === 0) {
-    return;
-  }
-  const entry = page.items[0];
-  assert.equal(typeof entry.verdict_id_hex, "string", "revocation verdict_id_hex must be a string");
-  assert.equal(typeof entry.issuer_id, "string", "revocation issuer_id must be a string");
-  assert.equal(typeof entry.issuer_display, "string", "revocation issuer_display must be a string");
-  assertNonNegativeInteger(entry.revoked_at_ms, "revocation revoked_at_ms");
-  assert.equal(typeof entry.reason, "string", "revocation reason must be a string");
-  if (entry.note !== null) {
-    assert.equal(typeof entry.note, "string", "revocation note must be a string when present");
-  }
-  if (entry.metadata !== null) {
-    assert.ok(
-      isPlainObject(entry.metadata),
-      "revocation metadata must be a plain object when present",
-    );
-  }
-  assert.ok(isPlainObject(entry.record), "revocation record must be a plain object");
-}
-
-function assertOfflineRejectionStatsResponse(page) {
-  assertNonNegativeInteger(page.total, "offline rejection stats total");
-  assert.ok(Array.isArray(page.items), "offline rejection stats must expose items array");
-  if (page.items.length === 0) {
-    return;
-  }
-  const entry = page.items[0];
-  assert.equal(typeof entry.platform, "string", "rejection stats platform must be a string");
-  assert.equal(typeof entry.reason, "string", "rejection stats reason must be a string");
-  assertNonNegativeInteger(entry.count, "rejection stats entry count");
-}
-
 function assertKaigiRelaySummaryList(list) {
   assertNonNegativeInteger(list.total, "kaigi relay list total");
   assert.ok(Array.isArray(list.items), "kaigi relay list items must be an array");
@@ -6741,8 +6345,16 @@ function assertContractInstanceListResponse(page, expectedNamespace = null) {
 
 function assertContractInstanceRecord(record, label = "contract instance record") {
   assert.ok(record && typeof record === "object", `${label} must be an object`);
-  assert.equal(typeof record.contract_id, "string", `${label}.contract_id must be a string`);
-  assert.notEqual(record.contract_id.length, 0, `${label}.contract_id must not be empty`);
+  assert.equal(
+    typeof record.contract_address,
+    "string",
+    `${label}.contract_address must be a string`,
+  );
+  assert.notEqual(
+    record.contract_address.length,
+    0,
+    `${label}.contract_address must not be empty`,
+  );
   assertHexString(record.code_hash_hex, `${label}.code_hash_hex`);
 }
 

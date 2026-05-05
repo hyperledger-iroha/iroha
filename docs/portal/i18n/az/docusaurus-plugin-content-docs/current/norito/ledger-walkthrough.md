@@ -32,8 +32,8 @@ istifadə etməyi planlaşdırdığınız hesab identifikatorları. Defolt paket
 demo açarlarından əldə edilmişdir:
 
 ```sh
-export ADMIN_ACCOUNT="i105..."
-export RECEIVER_ACCOUNT="i105..."
+export ADMIN_ACCOUNT="<i105-account-id>"
+export RECEIVER_ACCOUNT="<i105-account-id>"
 ```
 
 İlk bir neçə hesabı sadalayaraq dəyərləri təsdiqləyin:
@@ -52,7 +52,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts inside wonderland (replace --limit with a higher number if needed)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions that already exist
@@ -69,7 +69,7 @@ domen:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
-  --id coffee#wonderland
+  --id 7Sp2j6zDvJFnMoscAiMaWbWHRDBZ
 ```
 
 CLI təqdim edilmiş əməliyyat hashını çap edir (məsələn,
@@ -78,7 +78,7 @@ CLI təqdim edilmiş əməliyyat hashını çap edir (məsələn,
 ## 3. Vahidləri operator hesabına köçürün
 
 Aktiv kəmiyyətləri `(asset definition, account)` cütü altında yaşayır. Nanə 250
-`coffee#wonderland` vahidləri `$ADMIN_ACCOUNT`-ə:
+`7Sp2j6zDvJFnMoscAiMaWbWHRDBZ` vahidləri `$ADMIN_ACCOUNT`-ə:
 
 ```sh
 iroha --config defaults/client.toml asset mint \

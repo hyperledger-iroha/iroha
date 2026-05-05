@@ -5,12 +5,11 @@ use ivm::{IVM, PointerType, ProgramMetadata};
 mod common;
 
 fn valid_account_id_literal() -> Vec<u8> {
-    let domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("valid domain");
     let public_key: PublicKey =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("valid public key");
-    ivm::mock_wsv::ScopedAccountId::new(domain, public_key)
+    ivm::mock_wsv::AccountId::new(public_key)
         .to_string()
         .into_bytes()
 }
@@ -52,7 +51,7 @@ fn tlv_unknown_type_is_rejected() {
     let mut vm = IVM::new(0);
     let meta = ProgramMetadata::default().encode();
     vm.load_program(&meta).unwrap();
-    let payload = b"rose#wonderland";
+    let payload = b"62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let tlv = build_tlv(0xDEAD, 1, payload, false);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     let addr = ivm::Memory::INPUT_START;

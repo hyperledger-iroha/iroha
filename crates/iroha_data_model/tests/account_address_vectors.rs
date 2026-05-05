@@ -82,8 +82,6 @@ struct Member {
 struct Encodings {
     canonical_hex: String,
     i105: I105Encoding,
-    i105_default: String,
-    i105_default_fullwidth: String,
 }
 
 #[allow(dead_code)]
@@ -178,36 +176,6 @@ fn validate_positive_case(case: &PositiveCase, default_prefix: u16) {
     assert_eq!(
         case.encodings.i105.prefix, default_prefix,
         "{} i105 uses unexpected prefix",
-        case.case_id
-    );
-
-    // Secondary I105 decoding (half-width sentinel)
-    let compressed_addr =
-        AccountAddress::from_i105(&case.encodings.i105_default).expect("half-width i105 decode");
-    assert_eq!(
-        compressed_addr, canonical_address,
-        "{} i105_default payload mismatch",
-        case.case_id
-    );
-    assert_eq!(
-        canonical_bytes_from_address(&compressed_addr),
-        canonical_bytes,
-        "{} i105_default canonical mismatch",
-        case.case_id
-    );
-
-    // Secondary I105 decoding (full-width sentinel)
-    let compressed_full = AccountAddress::from_i105(&case.encodings.i105_default_fullwidth)
-        .expect("fullwidth i105 decode");
-    assert_eq!(
-        compressed_full, canonical_address,
-        "{} i105_default full payload mismatch",
-        case.case_id
-    );
-    assert_eq!(
-        canonical_bytes_from_address(&compressed_full),
-        canonical_bytes,
-        "{} i105_default full canonical mismatch",
         case.case_id
     );
 
@@ -363,10 +331,6 @@ fn validate_negative_case(case: &NegativeCase, default_prefix: u16) {
                     .expect_err("i105 case should fail");
             assert_error(&err, &case.expected_error, &case.case_id);
         }
-        "i105_default" => {
-            let err = AccountAddress::from_i105(&case.input).expect_err("i105 case should fail");
-            assert_error(&err, &case.expected_error, &case.case_id);
-        }
         "canonical_hex" => {
             let err = AccountAddress::parse_encoded(&case.input, None)
                 .expect_err("canonical case should fail");
@@ -403,12 +367,6 @@ fn assert_error(err: &AccountAddressError, expected: &ExpectedError, case_id: &s
             } else {
                 panic!("{case_id}: expected UnexpectedNetworkPrefix, got {err}");
             }
-        }
-        "MissingI105Sentinel" => {
-            assert!(
-                matches!(err, AccountAddressError::MissingI105Sentinel),
-                "{case_id}: expected MissingI105Sentinel, got {err}"
-            );
         }
         "InvalidCompressedChar" | "InvalidI105Char" => {
             if let AccountAddressError::InvalidI105Char(ch) = err {
