@@ -1368,7 +1368,6 @@ impl Executor {
         if fee <= Numeric::zero() {
             return Ok(());
         }
-
         let payer_kind = if sponsor.is_some() {
             NexusFeePayer::Sponsor
         } else {
@@ -6256,6 +6255,7 @@ mod tests {
         nexus.fees.sponsorship_enabled = false;
         nexus.fees.fee_asset_id = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
+        nexus.fees.burn_from_unix_timestamp_ms = 0;
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         metadata.insert(
@@ -6303,6 +6303,7 @@ mod tests {
         nexus.fees.sponsorship_enabled = true;
         nexus.fees.fee_asset_id = "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_string();
         nexus.fees.fee_sink_account_id = sink_id.to_string();
+        nexus.fees.burn_from_unix_timestamp_ms = 0;
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
         metadata.insert(
@@ -6992,6 +6993,7 @@ mod tests {
             nexus.fees.per_instruction_fee = Numeric::from(1_u32);
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
             nexus
                 .fees
                 .successful_claim_fee_exempt_authorities
@@ -7053,6 +7055,7 @@ mod tests {
             nexus.fees.per_instruction_fee = Numeric::from(1_u32);
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let mut metadata = Metadata::default();
@@ -7114,6 +7117,7 @@ mod tests {
             nexus.fees.base_fee = Numeric::from(1_u32);
             nexus.fees.fee_asset_id = asset_def_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
 
         let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(

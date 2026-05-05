@@ -1,5 +1,6 @@
 //! This module contains [`State`] snapshot actor service.
 use std::{
+    collections::BTreeSet,
     io::Write,
     num::NonZeroUsize,
     path::{Path, PathBuf},
@@ -14,7 +15,19 @@ use iroha_config::{
 };
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, KeyPair, MerkleTree, PublicKey, Signature};
 use iroha_data_model::{
-    ChainId, account::AccountId, asset::AssetId, block::BlockHeader, nexus::LaneId,
+    ChainId,
+    account::AccountId,
+    asset::AssetId,
+    block::BlockHeader,
+    isi::{
+        InstructionBox,
+        space_directory::{
+            ExpireSpaceDirectoryManifest, PublishSpaceDirectoryManifest,
+            RevokeSpaceDirectoryManifest,
+        },
+    },
+    nexus::{DataSpaceId, LaneId, UniversalAccountId},
+    transaction::Executable,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
@@ -27,110 +40,138 @@ use sha2::{Digest, Sha256};
 use crate::telemetry::StateTelemetry;
 use crate::{
     kura::{BlockCount, Kura},
+    nexus::space_directory::SpaceDirectoryManifestRecord,
     query::store::LiveQueryStoreHandle,
     state::{
-        SnapshotNoritoBlob, SnapshotPublicLaneRewardClaim, State, deserialize::KuraSeed,
-        storage_transactions::TransactionsBlockError,
+        SnapshotNoritoBlob, SnapshotPublicLaneRewardClaim, SnapshotSpaceDirectoryManifestSet,
+        State, deserialize::KuraSeed, storage_transactions::TransactionsBlockError,
     },
 };
+
+fn serialize_state_snapshot(
+    state: &State,
+    out: &mut String,
+    include_space_directory_manifests: bool,
+) {
+    let view = state.view();
+    let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
+    let commit_topology = view.commit_topology.to_vec();
+    let prev_commit_topology = view.prev_commit_topology.to_vec();
+    let public_lane_validators: Vec<_> = view
+        .world
+        .public_lane_validators
+        .iter()
+        .map(|(_key, value)| SnapshotNoritoBlob {
+            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        })
+        .collect();
+    let public_lane_stake_shares: Vec<_> = view
+        .world
+        .public_lane_stake_shares
+        .iter()
+        .map(|(_key, value)| SnapshotNoritoBlob {
+            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        })
+        .collect();
+    let public_lane_rewards: Vec<_> = view
+        .world
+        .public_lane_rewards
+        .iter()
+        .map(|(_key, value)| SnapshotNoritoBlob {
+            encoded_hex: hex::encode(NoritoEncode::encode(value)),
+        })
+        .collect();
+    let public_lane_reward_claims: Vec<_> = view
+        .world
+        .public_lane_reward_claims
+        .iter()
+        .map(
+            |(key, last_claimed_epoch): (&(LaneId, AccountId, AssetId), &u64)| {
+                let (lane_id, account, asset) = key;
+                SnapshotPublicLaneRewardClaim {
+                    lane_id: *lane_id,
+                    account: account.clone(),
+                    asset: asset.clone(),
+                    last_claimed_epoch: *last_claimed_epoch,
+                }
+            },
+        )
+        .collect();
+    let space_directory_manifests: Vec<_> = if include_space_directory_manifests {
+        view.world
+            .space_directory_manifests
+            .iter()
+            .map(|(uaid, value)| SnapshotSpaceDirectoryManifestSet {
+                uaid: *uaid,
+                encoded_hex: hex::encode(NoritoEncode::encode(value)),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    out.push('{');
+    json::write_json_string("chain_id", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&state.chain_id, out);
+    out.push(',');
+    json::write_json_string("world", out);
+    out.push(':');
+    state.world.json_serialize(out);
+    out.push(',');
+
+    json::write_json_string("block_hashes", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&block_hashes, out);
+    out.push(',');
+
+    json::write_json_string("transactions", out);
+    out.push(':');
+    state.transactions.json_serialize(out);
+    out.push(',');
+
+    json::write_json_string("public_lane_validators", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&public_lane_validators, out);
+    out.push(',');
+
+    json::write_json_string("public_lane_stake_shares", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&public_lane_stake_shares, out);
+    out.push(',');
+
+    json::write_json_string("public_lane_rewards", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&public_lane_rewards, out);
+    out.push(',');
+
+    json::write_json_string("public_lane_reward_claims", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&public_lane_reward_claims, out);
+
+    if include_space_directory_manifests {
+        out.push(',');
+        json::write_json_string("space_directory_manifests", out);
+        out.push(':');
+        json::JsonSerialize::json_serialize(&space_directory_manifests, out);
+    }
+
+    out.push(',');
+    json::write_json_string("commit_topology", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&commit_topology, out);
+    out.push(',');
+
+    json::write_json_string("prev_commit_topology", out);
+    out.push(':');
+    json::JsonSerialize::json_serialize(&prev_commit_topology, out);
+    out.push('}');
+}
 
 // Serialize State as a minimal snapshot wrapper using Norito JSON writer.
 impl JsonSerializeTrait for State {
     fn json_serialize(&self, out: &mut String) {
-        let view = self.view();
-        let block_hashes: Vec<HashOf<BlockHeader>> = view.block_hashes.iter().copied().collect();
-        let commit_topology = view.commit_topology.to_vec();
-        let prev_commit_topology = view.prev_commit_topology.to_vec();
-        let public_lane_validators: Vec<_> = view
-            .world
-            .public_lane_validators
-            .iter()
-            .map(|(_key, value)| SnapshotNoritoBlob {
-                encoded_hex: hex::encode(NoritoEncode::encode(value)),
-            })
-            .collect();
-        let public_lane_stake_shares: Vec<_> = view
-            .world
-            .public_lane_stake_shares
-            .iter()
-            .map(|(_key, value)| SnapshotNoritoBlob {
-                encoded_hex: hex::encode(NoritoEncode::encode(value)),
-            })
-            .collect();
-        let public_lane_rewards: Vec<_> = view
-            .world
-            .public_lane_rewards
-            .iter()
-            .map(|(_key, value)| SnapshotNoritoBlob {
-                encoded_hex: hex::encode(NoritoEncode::encode(value)),
-            })
-            .collect();
-        let public_lane_reward_claims: Vec<_> = view
-            .world
-            .public_lane_reward_claims
-            .iter()
-            .map(
-                |(key, last_claimed_epoch): (&(LaneId, AccountId, AssetId), &u64)| {
-                    let (lane_id, account, asset) = key;
-                    SnapshotPublicLaneRewardClaim {
-                        lane_id: *lane_id,
-                        account: account.clone(),
-                        asset: asset.clone(),
-                        last_claimed_epoch: *last_claimed_epoch,
-                    }
-                },
-            )
-            .collect();
-
-        out.push('{');
-        json::write_json_string("chain_id", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&self.chain_id, out);
-        out.push(',');
-        json::write_json_string("world", out);
-        out.push(':');
-        self.world.json_serialize(out);
-        out.push(',');
-
-        json::write_json_string("block_hashes", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&block_hashes, out);
-        out.push(',');
-
-        json::write_json_string("transactions", out);
-        out.push(':');
-        self.transactions.json_serialize(out);
-        out.push(',');
-
-        json::write_json_string("public_lane_validators", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&public_lane_validators, out);
-        out.push(',');
-
-        json::write_json_string("public_lane_stake_shares", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&public_lane_stake_shares, out);
-        out.push(',');
-
-        json::write_json_string("public_lane_rewards", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&public_lane_rewards, out);
-        out.push(',');
-
-        json::write_json_string("public_lane_reward_claims", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&public_lane_reward_claims, out);
-        out.push(',');
-
-        json::write_json_string("commit_topology", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&commit_topology, out);
-        out.push(',');
-
-        json::write_json_string("prev_commit_topology", out);
-        out.push(':');
-        json::JsonSerialize::json_serialize(&prev_commit_topology, out);
-        out.push('}');
+        serialize_state_snapshot(self, out, true);
     }
 }
 
@@ -792,6 +833,148 @@ fn snapshot_payload_preview(bytes: &[u8]) -> String {
     preview
 }
 
+fn snapshot_has_space_directory_manifest_section(value: &json::Value) -> bool {
+    matches!(
+        value,
+        json::Value::Object(map) if map.contains_key("space_directory_manifests")
+    )
+}
+
+fn restore_space_directory_manifest_instruction(
+    state: &mut State,
+    instruction: &InstructionBox,
+    touched_uaids: &mut BTreeSet<UniversalAccountId>,
+) -> bool {
+    let any = instruction.as_any();
+    if let Some(instruction) = any.downcast_ref::<PublishSpaceDirectoryManifest>() {
+        let manifest = instruction.manifest.clone();
+        let uaid = manifest.uaid;
+        let mut record = SpaceDirectoryManifestRecord::new(manifest);
+        record
+            .lifecycle
+            .mark_activated(record.manifest.activation_epoch);
+        let mut set = {
+            let view = state.world.space_directory_manifests.view();
+            view.get(&uaid).cloned().unwrap_or_default()
+        };
+        set.upsert(record);
+        state.world.space_directory_manifests.insert(uaid, set);
+        touched_uaids.insert(uaid);
+        return true;
+    }
+
+    if let Some(instruction) = any.downcast_ref::<ExpireSpaceDirectoryManifest>() {
+        if update_space_directory_manifest_record(
+            state,
+            instruction.uaid,
+            instruction.dataspace,
+            touched_uaids,
+            |record| record.lifecycle.mark_expired(instruction.expired_epoch),
+        ) {
+            return true;
+        }
+    }
+
+    if let Some(instruction) = any.downcast_ref::<RevokeSpaceDirectoryManifest>() {
+        if update_space_directory_manifest_record(
+            state,
+            instruction.uaid,
+            instruction.dataspace,
+            touched_uaids,
+            |record| {
+                record
+                    .lifecycle
+                    .mark_revoked(instruction.revoked_epoch, instruction.reason.clone());
+            },
+        ) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn update_space_directory_manifest_record(
+    state: &mut State,
+    uaid: UniversalAccountId,
+    dataspace: DataSpaceId,
+    touched_uaids: &mut BTreeSet<UniversalAccountId>,
+    mutator: impl FnOnce(&mut SpaceDirectoryManifestRecord),
+) -> bool {
+    let Some(mut set) = ({
+        let view = state.world.space_directory_manifests.view();
+        view.get(&uaid).cloned()
+    }) else {
+        warn!(
+            %uaid,
+            dataspace_id = dataspace.as_u64(),
+            "Skipping legacy snapshot Space Directory lifecycle restore because UAID has no manifest"
+        );
+        return false;
+    };
+    let Some(mut record) = set.get(&dataspace).cloned() else {
+        warn!(
+            %uaid,
+            dataspace_id = dataspace.as_u64(),
+            "Skipping legacy snapshot Space Directory lifecycle restore because dataspace has no manifest"
+        );
+        return false;
+    };
+    mutator(&mut record);
+    set.upsert(record);
+    state.world.space_directory_manifests.insert(uaid, set);
+    touched_uaids.insert(uaid);
+    true
+}
+
+fn restore_space_directory_manifests_from_executable(
+    state: &mut State,
+    executable: &Executable,
+    touched_uaids: &mut BTreeSet<UniversalAccountId>,
+) -> usize {
+    match executable {
+        Executable::Instructions(instructions) => instructions
+            .iter()
+            .filter(|instruction| {
+                restore_space_directory_manifest_instruction(state, instruction, touched_uaids)
+            })
+            .count(),
+        Executable::IvmProved(proved) => proved
+            .overlay
+            .iter()
+            .filter(|instruction| {
+                restore_space_directory_manifest_instruction(state, instruction, touched_uaids)
+            })
+            .count(),
+        Executable::ContractCall(_) | Executable::Ivm(_) => 0,
+    }
+}
+
+fn restore_space_directory_manifests_from_kura(
+    state: &mut State,
+    kura: &Kura,
+    snapshot_height: usize,
+) -> Result<usize, TryReadError> {
+    let mut restored = 0usize;
+    let mut touched_uaids = BTreeSet::new();
+    for height in 1..=snapshot_height {
+        let block = kura
+            .get_block(NonZeroUsize::new(height).expect("iterating from 1"))
+            .ok_or(TryReadError::MissingBlock { height })?;
+        for transaction in block.as_ref().transactions_vec() {
+            restored += restore_space_directory_manifests_from_executable(
+                state,
+                transaction.instructions(),
+                &mut touched_uaids,
+            );
+        }
+    }
+    if !touched_uaids.is_empty() {
+        state.run_storage_migrations();
+    }
+    Ok(restored)
+}
+
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn try_read_snapshot_bundle(
@@ -840,13 +1023,15 @@ fn try_read_snapshot_bundle(
             return Err(TryReadError::Serialization(err));
         }
     };
+    let has_space_directory_manifest_section =
+        snapshot_has_space_directory_manifest_section(&value);
     let seed = KuraSeed {
         kura: Arc::clone(kura),
         query_handle: live_query_store.clone(),
         #[cfg(feature = "telemetry")]
         telemetry,
     };
-    let state = seed.into_state_from_json(value).map_err(|err| {
+    let mut state = seed.into_state_from_json(value).map_err(|err| {
         iroha_logger::warn!(
             ?err,
             data_used_tmp,
@@ -892,6 +1077,17 @@ fn try_read_snapshot_bundle(
                     kura_block_hash: kura_block.hash(),
                 });
             }
+        }
+    }
+    if !has_space_directory_manifest_section && snapshot_height > 0 {
+        let restored =
+            restore_space_directory_manifests_from_kura(&mut state, kura, snapshot_height)?;
+        if restored > 0 {
+            warn!(
+                snapshot_height,
+                restored,
+                "Restored Space Directory manifests from Kura for a legacy snapshot missing the durable manifest section"
+            );
         }
     }
 
@@ -1181,9 +1377,16 @@ fn ensure_state_is_backed_by_kura(state: &State) -> Result<(), TryWriteError> {
 
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
 pub(crate) fn canonical_state_snapshot_bytes(state: &State) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    json::to_writer(&mut bytes, state).expect("state snapshot serialization must succeed");
-    bytes
+    canonical_state_snapshot_bytes_with_options(state, true)
+}
+
+fn canonical_state_snapshot_bytes_with_options(
+    state: &State,
+    include_space_directory_manifests: bool,
+) -> Vec<u8> {
+    let mut json = String::new();
+    serialize_state_snapshot(state, &mut json, include_space_directory_manifests);
+    json.into_bytes()
 }
 
 /// Canonical hash for the committed WSV surface.
@@ -1191,8 +1394,17 @@ pub(crate) fn canonical_state_snapshot_hash(state: &State) -> iroha_crypto::Hash
     iroha_crypto::Hash::new(canonical_state_snapshot_bytes(state))
 }
 
+/// Canonical hash for the legacy checkpoint surface used before Space Directory manifests
+/// were included in durable snapshots.
+pub(crate) fn legacy_state_snapshot_hash_without_space_directory_manifests(
+    state: &State,
+) -> iroha_crypto::Hash {
+    iroha_crypto::Hash::new(canonical_state_snapshot_bytes_with_options(state, false))
+}
+
 /// Canonical bytes for the committed WSV surface used by replay parity tests.
 #[cfg(any(test, feature = "iroha-core-tests"))]
+#[allow(dead_code)]
 pub(crate) fn canonical_state_snapshot_bytes_for_tests(state: &State) -> Vec<u8> {
     canonical_state_snapshot_bytes(state)
 }
@@ -1302,6 +1514,11 @@ pub enum TryReadError {
         /// Height of the missing block in [`Kura`].
         height: usize,
     },
+    /// Snapshot at height `{snapshot_height}` is missing the durable Space Directory manifest section
+    MissingSpaceDirectoryManifestSection {
+        /// Height recorded by the legacy snapshot.
+        snapshot_height: usize,
+    },
     /// Failed to reconcile snapshot state with Kura while committing a block revert
     StateCommit(TransactionsBlockError),
 }
@@ -1380,7 +1597,13 @@ mod tests {
     use std::{fs::File, io::Write, num::NonZeroUsize, sync::Arc};
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-    use iroha_data_model::{ChainId, peer::PeerId};
+    use iroha_data_model::{
+        ChainId,
+        account::{AccountDetails, AccountId, AccountValue},
+        metadata::Metadata,
+        nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
+        peer::PeerId,
+    };
     use nonzero_ext::nonzero;
     use tempfile::tempdir;
     use tokio::test;
@@ -1406,6 +1629,36 @@ mod tests {
 
     fn state_factory() -> State {
         state_factory_with_kura(Kura::blank_kura_for_testing())
+    }
+
+    fn install_active_space_directory_manifest(
+        state: &mut State,
+    ) -> (UniversalAccountId, DataSpaceId, AccountId) {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"snapshot-space-directory"));
+        let dataspace = DataSpaceId::new(7);
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
+        state
+            .world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 1,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
+        set.upsert(record);
+        state.world.space_directory_manifests.insert(uaid, set);
+
+        (uaid, dataspace, account_id)
     }
 
     #[test]
@@ -1457,6 +1710,58 @@ mod tests {
             canonical_state_snapshot_bytes_for_tests(&snapshot_state),
             canonical_state_snapshot_bytes_for_tests(&state),
             "snapshot roundtrip must preserve canonical WSV bytes"
+        );
+    }
+
+    #[test]
+    async fn snapshot_roundtrip_preserves_space_directory_manifests_and_rebuilds_bindings() {
+        let tmp_root = tempdir().unwrap();
+        let store_dir = tmp_root.path().join("snapshot");
+        let mut state = state_factory();
+        let (uaid, dataspace, account_id) = install_active_space_directory_manifest(&mut state);
+        let key_pair = KeyPair::random();
+
+        try_write_snapshot(&state, &store_dir, &key_pair, TEST_CHUNK_SIZE).unwrap();
+
+        let snapshot_bytes =
+            std::fs::read(store_dir.join(SNAPSHOT_FILE_NAME)).expect("snapshot bytes");
+        let snapshot_value: json::Value =
+            json::from_slice(&snapshot_bytes).expect("snapshot JSON should parse");
+        assert!(
+            snapshot_has_space_directory_manifest_section(&snapshot_value),
+            "new snapshots must carry a Space Directory manifest section"
+        );
+
+        let snapshot_state = try_read_snapshot(
+            &store_dir,
+            &Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test,
+            BlockCount(state.view().height()),
+            TEST_CHUNK_SIZE,
+            key_pair.public_key(),
+            &state.chain_id,
+            #[cfg(feature = "telemetry")]
+            StateTelemetry::new(<_>::default(), true),
+        )
+        .expect("snapshot read");
+
+        let manifests = snapshot_state.world.space_directory_manifests.view();
+        let manifest_set = manifests
+            .get(&uaid)
+            .expect("manifest set should survive snapshot restore");
+        assert!(
+            manifest_set.get(&dataspace).is_some(),
+            "dataspace manifest should survive snapshot restore"
+        );
+        drop(manifests);
+
+        let bindings = snapshot_state.world.uaid_dataspaces.view();
+        let uaid_bindings = bindings
+            .get(&uaid)
+            .expect("UAID bindings should be rebuilt after snapshot restore");
+        assert!(
+            uaid_bindings.is_bound_to(dataspace, &account_id),
+            "restored active manifest should bind the account to the dataspace"
         );
     }
 

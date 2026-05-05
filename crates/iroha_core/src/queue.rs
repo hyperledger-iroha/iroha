@@ -7028,6 +7028,7 @@ pub mod tests {
             nexus.fees.sponsor_max_fee = Numeric::zero();
             nexus.fees.fee_asset_id = fee_asset_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
         NexusFeeFixture {
             state,

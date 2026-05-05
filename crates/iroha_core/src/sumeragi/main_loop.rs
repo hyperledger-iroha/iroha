@@ -5155,6 +5155,133 @@ impl Actor {
             .is_some()
     }
 
+    fn proposal_highest_qc_for_slot(
+        &self,
+        height: u64,
+        view: u64,
+    ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
+        self.subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .map(|proposal| proposal.header.highest_qc)
+            .or_else(|| {
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .get_hint(height, view)
+                    .map(|hint| hint.highest_qc)
+            })
+    }
+
+    fn same_height_block_has_recoverable_qc(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        self.pending_block_has_qc(block_hash, height, view)
+            || self
+                .pending
+                .pending_blocks
+                .get(&block_hash)
+                .filter(|pending| pending.height == height && pending.view == view)
+                .is_some_and(PendingBlock::commit_qc_observed)
+    }
+
+    fn same_height_has_recoverable_qc(&self, height: u64) -> bool {
+        let expected_epoch = self.epoch_for_height(height);
+        self.qc_cache.values().any(|qc| {
+            matches!(
+                qc.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && qc.height == height
+                && qc.epoch == expected_epoch
+        }) || self
+            .pending
+            .pending_blocks
+            .values()
+            .any(|pending| pending.height == height && pending.commit_qc_observed())
+    }
+
+    fn cached_new_view_qc_extends_committed_frontier(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+    ) -> Option<crate::sumeragi::consensus::Qc> {
+        if highest_qc.phase != crate::sumeragi::consensus::Phase::Commit {
+            return None;
+        }
+        if highest_qc.height.saturating_add(1) != proposal_height {
+            return None;
+        }
+        if self.latest_committed_qc()? != highest_qc {
+            return None;
+        }
+
+        let proposal_epoch = self.epoch_for_height(proposal_height);
+        let qc = cached_qc_for(
+            &self.qc_cache,
+            crate::sumeragi::consensus::Phase::NewView,
+            highest_qc.subject_block_hash,
+            proposal_height,
+            proposal_view,
+            proposal_epoch,
+        )?;
+        (qc.highest_qc == Some(highest_qc)).then_some(qc)
+    }
+
+    fn new_view_qc_supersedes_same_height_vote_conflict(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+        conflicting_block_hash: HashOf<BlockHeader>,
+        conflicting_view: u64,
+    ) -> bool {
+        if proposal_view <= conflicting_view {
+            return false;
+        }
+        if self
+            .locked_qc
+            .is_some_and(|locked| locked.height >= proposal_height)
+        {
+            return false;
+        }
+        if self.same_height_block_has_recoverable_qc(
+            conflicting_block_hash,
+            proposal_height,
+            conflicting_view,
+        ) || self.same_height_has_recoverable_qc(proposal_height)
+        {
+            return false;
+        }
+        self.cached_new_view_qc_extends_committed_frontier(
+            proposal_height,
+            proposal_view,
+            highest_qc,
+        )
+        .is_some()
+    }
+
+    fn new_view_qc_supersedes_same_height_vote_lock(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+        lock: &SameHeightVoteLock,
+    ) -> bool {
+        self.new_view_qc_supersedes_same_height_vote_conflict(
+            proposal_height,
+            proposal_view,
+            highest_qc,
+            lock.block_hash,
+            lock.view,
+        )
+    }
+
     fn pending_block_has_delivered_rbc(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -5291,6 +5418,10 @@ impl Actor {
             return None;
         }
 
+        // A fresh branch is non-viable whenever all conflicting same-height voters together
+        // leave fewer remaining validators than the commit quorum. The strongest old branch may
+        // be below near-quorum in split-vote cases, but proposing a new hash would still be
+        // uncommittable under the local double-vote rule.
         branch_voters
             .into_iter()
             .map(
@@ -5306,7 +5437,6 @@ impl Actor {
                 },
             )
             .max_by_key(|lock| (lock.vote_count, lock.commit_vote_observed, lock.view))
-            .filter(|lock| lock.vote_count.saturating_add(1) >= required)
     }
 
     fn slot_has_locally_known_vote_backed_consensus_evidence(
@@ -7240,8 +7370,13 @@ impl Actor {
             slot.view,
         );
 
-        vote_status.vote_count > 0
-            && total_validators.saturating_sub(vote_status.vote_count) < min_votes_for_commit
+        let direct_slot_lock = vote_status.vote_count > 0
+            && total_validators.saturating_sub(vote_status.vote_count) < min_votes_for_commit;
+        let aggregate_same_height_lock = vote_status.vote_count > 0
+            && self
+                .same_height_vote_lock_blocking_candidate(slot.height, requested_view, None)
+                .is_some();
+        direct_slot_lock || aggregate_same_height_lock
     }
 
     fn frontier_slot_live_local_owner_for_round(
@@ -24427,7 +24562,11 @@ impl Actor {
             return false;
         }
         let topology = super::network_topology::Topology::new(roster);
-        let required = topology.min_votes_for_view_change();
+        // A view-change quorum (f + 1) is enough to trigger local timeout recovery, but it is
+        // not enough to make the replacement view actionable: proposal selection still requires
+        // the full commit quorum. Keep known-block commit-QC repair alive until the higher view
+        // has enough NEW_VIEW support to actually supersede the old commit path.
+        let required = topology.min_votes_for_commit().max(1);
         self.subsystems
             .propose
             .new_view_tracker
