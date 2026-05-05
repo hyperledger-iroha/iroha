@@ -4,6 +4,7 @@ use std::{
 };
 
 use iroha_crypto::Hash;
+use ivm::analysis::{ProgramAnalysis, ProgramAnalysisError};
 use ivm::runtime::IvmConfig;
 use ivm::{ProgramMetadata, SyscallPolicy};
 
@@ -88,6 +89,10 @@ pub struct CacheStats {
     pub runtime_hits: u64,
     /// Runtime template misses.
     pub runtime_misses: u64,
+    /// Static analysis cache hits.
+    pub analysis_hits: u64,
+    /// Static analysis cache misses.
+    pub analysis_misses: u64,
     /// Evictions triggered by capacity limits.
     pub evictions: u64,
 }
@@ -96,6 +101,7 @@ pub struct CacheStats {
 pub struct IvmCache {
     summaries: BTreeMap<SummaryKey, ProgramSummary>,
     runtime_templates: BTreeMap<RuntimeKey, ivm::IVM>,
+    analyses: BTreeMap<SummaryKey, ProgramAnalysis>,
     summary_order: VecDeque<SummaryKey>,
     runtime_order: VecDeque<RuntimeKey>,
     capacity: usize,
@@ -121,6 +127,7 @@ impl IvmCache {
         Self {
             summaries: BTreeMap::new(),
             runtime_templates: BTreeMap::new(),
+            analyses: BTreeMap::new(),
             summary_order: VecDeque::new(),
             runtime_order: VecDeque::new(),
             capacity,
@@ -162,6 +169,32 @@ impl IvmCache {
         self.insert_summary(key, summary.clone());
         self.stats.metadata_misses = self.stats.metadata_misses.saturating_add(1);
         Ok(summary)
+    }
+
+    /// Analyze a program once per cached summary and return a reusable static AMX summary.
+    ///
+    /// # Errors
+    /// Returns [`ProgramAnalysisError`] when metadata parsing or instruction decoding fails.
+    pub fn analyze_program(
+        &mut self,
+        summary: &ProgramSummary,
+        bytecode: &[u8],
+    ) -> Result<ProgramAnalysis, ProgramAnalysisError> {
+        let key = SummaryKey::new(summary.code_hash, summary.meta_hash);
+        if let Some(hit) = self.analyses.get(&key).cloned() {
+            self.stats.analysis_hits = self.stats.analysis_hits.saturating_add(1);
+            self.touch_summary(key);
+            return Ok(hit);
+        }
+
+        self.stats.analysis_misses = self.stats.analysis_misses.saturating_add(1);
+        let analysis = ivm::analysis::analyze_program(bytecode)?;
+        if self.capacity != 0 {
+            self.analyses.insert(key, analysis.clone());
+            self.touch_summary(key);
+            self.evict_summaries_if_needed();
+        }
+        Ok(analysis)
     }
 
     /// Obtain a cloned runtime template for `summary.code_hash`, warming the cache if needed.
@@ -291,6 +324,7 @@ impl IvmCache {
         while self.capacity != 0 && self.summary_order.len() > self.capacity {
             if let Some(old) = self.summary_order.pop_front() {
                 self.summaries.remove(&old);
+                self.analyses.remove(&old);
                 self.prune_runtime_for_summary(old);
                 self.stats.evictions = self.stats.evictions.saturating_add(1);
             }
@@ -360,6 +394,26 @@ mod tests {
         assert_eq!(stats.metadata_hits, 1);
         assert_eq!(stats.runtime_hits, 1);
         assert_eq!(stats.runtime_misses, 1);
+    }
+
+    #[test]
+    fn analysis_is_reused_across_transactions() {
+        let program = minimal_program();
+        let mut cache = IvmCache::with_capacity(2);
+
+        let summary = cache.summarize_program(&program).expect("summary");
+        let first = cache
+            .analyze_program(&summary, &program)
+            .expect("first analysis");
+        let second = cache
+            .analyze_program(&summary, &program)
+            .expect("second analysis");
+
+        assert_eq!(first.instruction_count, second.instruction_count);
+        assert_eq!(first.metadata.max_cycles, second.metadata.max_cycles);
+        let stats = cache.stats();
+        assert_eq!(stats.analysis_misses, 1);
+        assert_eq!(stats.analysis_hits, 1);
     }
 
     #[test]

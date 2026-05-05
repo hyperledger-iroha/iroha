@@ -1210,6 +1210,7 @@ fn minimal_config_snapshot() {
                 },
                 block: SumeragiBlock {
                     max_transactions: None,
+                    max_ivm_transactions: None,
                     fast_gas_limit_per_block: None,
                     max_payload_bytes: None,
                     proposal_queue_scan_multiplier: 4,
@@ -3745,6 +3746,34 @@ fn taira_config_enables_untrusted_cid_hosting() {
     let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
     let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
 
+    let block = doc
+        .get("sumeragi")
+        .and_then(TomlValue::as_table)
+        .and_then(|sumeragi| sumeragi.get("block"))
+        .and_then(TomlValue::as_table)
+        .expect("sumeragi.block should be configured");
+    assert_eq!(
+        block
+            .get("max_transactions")
+            .and_then(TomlValue::as_integer),
+        Some(96),
+        "Taira profile should cap total proposal size"
+    );
+    assert_eq!(
+        block
+            .get("max_ivm_transactions")
+            .and_then(TomlValue::as_integer),
+        Some(32),
+        "Taira profile should cap IVM-heavy proposal size"
+    );
+    assert_eq!(
+        block
+            .get("proposal_queue_scan_multiplier")
+            .and_then(TomlValue::as_integer),
+        Some(4),
+        "Taira profile should keep enough scan budget for cheap txs"
+    );
+
     let untrusted = doc
         .get("sorafs")
         .and_then(TomlValue::as_table)
@@ -3980,6 +4009,30 @@ fn pipeline_workers_env_parses() {
         .parse()
         .expect("parse actual config with env");
     assert_eq!(cfg2.pipeline.workers, 7);
+}
+
+#[test]
+fn sumeragi_block_max_ivm_transactions_env_parses() {
+    use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
+    use iroha_config_base::{env::MockEnv, read::ConfigReader};
+
+    let env = MockEnv::new().set("SUMERAGI_BLOCK_MAX_IVM_TRANSACTIONS", "32");
+    let cfg: Actual = ConfigReader::new()
+        .with_env(env)
+        .read_toml_with_extends(fixtures_dir().join("base.toml"))
+        .expect("base file should be valid")
+        .read_and_complete::<User>()
+        .expect("read user config with env")
+        .parse()
+        .expect("actual config with IVM block cap env");
+
+    assert_eq!(
+        cfg.sumeragi
+            .block
+            .max_ivm_transactions
+            .map(std::num::NonZeroUsize::get),
+        Some(32)
+    );
 }
 
 #[test]

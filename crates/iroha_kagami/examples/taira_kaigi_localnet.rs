@@ -25,7 +25,7 @@ use iroha_executor_data_model::permission::{
     nexus::CanPublishSpaceDirectoryManifest,
 };
 use iroha_genesis::RawGenesisTransaction;
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_test_samples::REAL_GENESIS_ACCOUNT_KEYPAIR;
 
 const LOCALNET_GENESIS_SEED_SUFFIX: &[u8] = b"genesis";
@@ -83,7 +83,7 @@ struct Args {
     #[arg(long)]
     bootstrap_authority_fee_asset_id: Option<String>,
     /// Amount of the local fee asset minted to the seeded authority account.
-    #[arg(long, default_value_t = 250_000_000u64)]
+    #[arg(long, default_value_t = 1_000_000_000u64)]
     bootstrap_authority_fee_amount: u64,
 }
 
@@ -240,11 +240,12 @@ fn append_bootstrap_authority_overlay(
         dataspace: DataSpaceId::UNIVERSAL,
     }
     .into();
+    let required_fee_funding = Numeric::from(authority.fee_amount);
     let authority_account = Account::new(authority.account_id.clone());
     let authority_fee_asset =
         AssetId::new(authority.fee_asset_id.clone(), authority.account_id.clone());
     let mut has_account_registration = false;
-    let mut has_fee_funding = false;
+    let mut existing_fee_funding = Numeric::zero();
     let mut has_manage_soracloud = false;
     let mut has_manage_alias = false;
     let mut has_publish_manifest = false;
@@ -259,7 +260,9 @@ fn append_bootstrap_authority_overlay(
         if let Some(MintBox::Asset(mint_asset)) = instruction.as_any().downcast_ref::<MintBox>()
             && mint_asset.destination() == &authority_fee_asset
         {
-            has_fee_funding = true;
+            existing_fee_funding = existing_fee_funding
+                .checked_add(mint_asset.object().clone())
+                .unwrap_or(required_fee_funding.clone());
         }
         let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
             continue;
@@ -284,11 +287,13 @@ fn append_bootstrap_authority_overlay(
     if !has_account_registration {
         builder = builder.append_instruction(Register::account(authority_account));
     }
-    if !has_fee_funding {
-        builder = builder.append_instruction(Mint::asset_numeric(
-            authority.fee_amount,
-            authority_fee_asset,
-        ));
+    if existing_fee_funding < required_fee_funding {
+        let funding_delta = required_fee_funding
+            .clone()
+            .checked_sub(existing_fee_funding)
+            .expect("existing fee funding is known to be below required funding");
+        builder =
+            builder.append_instruction(Mint::asset_numeric(funding_delta, authority_fee_asset));
     }
     if !has_manage_soracloud {
         builder = builder.append_instruction(Grant::account_permission(
@@ -613,6 +618,89 @@ mod tests {
             overlaid.instructions().count(),
             seeded_instruction_count,
             "overlay should skip bootstrap instructions that are already present in the manifest"
+        );
+    }
+
+    #[test]
+    fn bootstrap_authority_overlay_tops_up_existing_low_funding() {
+        let manifest = GenesisBuilder::new_without_executor(
+            "iroha:test:bootstrap-taira".parse().expect("chain id"),
+            PathBuf::from("."),
+        )
+        .build_raw()
+        .with_chain_discriminant(369);
+        let _chain_discriminant = ChainDiscriminantGuard::enter(manifest.chain_discriminant());
+        let bootstrap = BootstrapAuthority {
+            account_id: AccountId::parse_encoded(
+                "testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",
+            )
+            .map(ParsedAccountId::into_account_id)
+            .expect("bootstrap account"),
+            linked_domain: DomainId::try_new("nexus", "universal").expect("domain"),
+            fee_asset_id: AssetDefinitionId::from_str("5PeSrQmLNwwKtruJvDZrbrm9RuMw")
+                .expect("asset id"),
+            fee_amount: 1_000_000,
+        };
+        let manage_soracloud = Permission::new("CanManageSoracloud".into(), Json::new(()));
+        let manage_alias: Permission = CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+        }
+        .into();
+        let publish_manifest: Permission = CanPublishSpaceDirectoryManifest {
+            dataspace: DataSpaceId::UNIVERSAL,
+        }
+        .into();
+        let authority_fee_asset =
+            AssetId::new(bootstrap.fee_asset_id.clone(), bootstrap.account_id.clone());
+
+        let seeded = manifest
+            .into_builder()
+            .next_transaction()
+            .append_instruction(Register::account(Account::new(
+                bootstrap.account_id.clone(),
+            )))
+            .append_instruction(Mint::asset_numeric(25_000_u64, authority_fee_asset.clone()))
+            .append_instruction(Grant::account_permission(
+                manage_soracloud,
+                bootstrap.account_id.clone(),
+            ))
+            .append_instruction(Grant::account_permission(
+                manage_alias,
+                bootstrap.account_id.clone(),
+            ))
+            .append_instruction(Grant::account_permission(
+                publish_manifest,
+                bootstrap.account_id.clone(),
+            ))
+            .build_raw();
+        let seeded_instruction_count = seeded.instructions().count();
+
+        let overlaid = append_bootstrap_authority_overlay(seeded, &bootstrap);
+        assert_eq!(
+            overlaid.instructions().count(),
+            seeded_instruction_count + 1,
+            "overlay should append only the missing bootstrap authority funding"
+        );
+        let top_up_count = overlaid
+            .instructions()
+            .filter(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<MintBox>()
+                    .and_then(|mint| match mint {
+                        MintBox::Asset(mint_asset)
+                            if mint_asset.destination() == &authority_fee_asset =>
+                        {
+                            Some(mint_asset)
+                        }
+                        _ => None,
+                    })
+                    .is_some_and(|mint_asset| mint_asset.object() == &Numeric::from(975_000_u64))
+            })
+            .count();
+        assert_eq!(
+            top_up_count, 1,
+            "overlay should top up the old low seed mint to the requested amount"
         );
     }
 

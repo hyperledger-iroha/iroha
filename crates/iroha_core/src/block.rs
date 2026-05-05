@@ -6188,7 +6188,6 @@ pub(crate) mod valid {
                 u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
             };
             let mut timings = timings;
-            let _ivm_cache = IvmCache::new();
             if block.has_results() {
                 if let Some(snapshot) = block.axt_policy_snapshot() {
                     state_block.install_axt_policy_snapshot(snapshot);
@@ -7217,6 +7216,16 @@ pub(crate) mod valid {
 
             // Snapshot accounts for overlay building (prepass) — reused across txs
             let accounts_snapshot = state_block.accounts_snapshot();
+            let overlay_cache_count = workers.max(1);
+            let overlay_caches: Vec<_> = (0..overlay_cache_count)
+                .map(|_| {
+                    parking_lot::Mutex::new(IvmCache::with_capacity(
+                        state_block.pipeline.cache_size,
+                    ))
+                })
+                .collect();
+            #[cfg(feature = "telemetry")]
+            let overlay_aggregate_lane = state_block.nexus.routing_policy.default_lane;
 
             // Parallel overlay construction from configuration
             let build_parallel = state_block.pipeline.parallel_overlay;
@@ -7239,14 +7248,26 @@ pub(crate) mod valid {
                                     state_block,
                                     tx.authority(),
                                 );
+                                let cache_idx = rayon::current_thread_index().unwrap_or(i)
+                                    % overlay_caches.len();
+                                #[cfg(feature = "telemetry")]
+                                let cache_wait_start = Instant::now();
+                                let mut ivm_cache = overlay_caches[cache_idx].lock();
+                                #[cfg(feature = "telemetry")]
+                                state_block.metrics().observe_pipeline_stage_ms(
+                                    overlay_aggregate_lane,
+                                    "overlay_cache_wait",
+                                    cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
+                                );
                                 *slot = build_overlay_for_transaction_with_accounts_zk(
                                     tx,
-                                    accounts_snapshot.as_ref(),
+                                    Arc::clone(&accounts_snapshot),
                                     state_block,
                                     state_block.zk().halo2.enabled
                                         || state_block.zk().stark.enabled,
                                     &block.header(),
                                     metadata,
+                                    &mut ivm_cache,
                                 )
                                 .map(Arc::new);
                             }
@@ -7260,13 +7281,25 @@ pub(crate) mod valid {
                                 state_block,
                                 tx.authority(),
                             );
+                            let cache_idx =
+                                rayon::current_thread_index().unwrap_or(i) % overlay_caches.len();
+                            #[cfg(feature = "telemetry")]
+                            let cache_wait_start = Instant::now();
+                            let mut ivm_cache = overlay_caches[cache_idx].lock();
+                            #[cfg(feature = "telemetry")]
+                            state_block.metrics().observe_pipeline_stage_ms(
+                                overlay_aggregate_lane,
+                                "overlay_cache_wait",
+                                cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
+                            );
                             *slot = build_overlay_for_transaction_with_accounts_zk(
                                 tx,
-                                accounts_snapshot.as_ref(),
+                                Arc::clone(&accounts_snapshot),
                                 state_block,
                                 state_block.zk().halo2.enabled || state_block.zk().stark.enabled,
                                 &block.header(),
                                 metadata,
+                                &mut ivm_cache,
                             )
                             .map(Arc::new);
                         }
@@ -7279,13 +7312,23 @@ pub(crate) mod valid {
                             state_block,
                             tx.authority(),
                         );
+                        #[cfg(feature = "telemetry")]
+                        let cache_wait_start = Instant::now();
+                        let mut ivm_cache = overlay_caches[0].lock();
+                        #[cfg(feature = "telemetry")]
+                        state_block.metrics().observe_pipeline_stage_ms(
+                            overlay_aggregate_lane,
+                            "overlay_cache_wait",
+                            cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
+                        );
                         overlays[i] = build_overlay_for_transaction_with_accounts_zk(
                             tx,
-                            accounts_snapshot.as_ref(),
+                            Arc::clone(&accounts_snapshot),
                             state_block,
                             state_block.zk().halo2.enabled || state_block.zk().stark.enabled,
                             &block.header(),
                             metadata,
+                            &mut ivm_cache,
                         )
                         .map(Arc::new);
                     }
@@ -7302,15 +7345,25 @@ pub(crate) mod valid {
                             state_block,
                             tx.authority(),
                         );
+                        #[cfg(feature = "telemetry")]
+                        let cache_wait_start = Instant::now();
+                        let mut ivm_cache = overlay_caches[0].lock();
+                        #[cfg(feature = "telemetry")]
+                        state_block.metrics().observe_pipeline_stage_ms(
+                            overlay_aggregate_lane,
+                            "overlay_cache_wait",
+                            cache_wait_start.elapsed().as_secs_f64() * 1_000.0,
+                        );
                         overlays[i] =
                             crate::pipeline::overlay::build_overlay_for_transaction_quarantine(
                                 tx,
-                                accounts_snapshot.as_ref(),
+                                Arc::clone(&accounts_snapshot),
                                 state_block,
                                 q_cycle_cap,
                                 q_time_cap,
                                 upper_cycle_cap,
                                 metadata,
+                                &mut ivm_cache,
                             )
                             .map(Arc::new);
                     }

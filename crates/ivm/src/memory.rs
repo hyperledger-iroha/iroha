@@ -17,6 +17,7 @@ use std::{
         LazyLock,
         atomic::{AtomicU64, Ordering},
     },
+    time::Instant,
 };
 
 use iroha_crypto::{CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree};
@@ -145,24 +146,53 @@ impl Memory {
 
     /// Update only the modified Merkle leaves and recompute the root.
     fn recompute_dirty(&mut self) {
+        let started_at = Instant::now();
         let indices: Vec<_> = self.dirty_chunks.drain().collect();
         // Heuristic: if more than half the leaves are dirty, prefer a full GPU recompute path
         // (leaves + reducer) when available to avoid serial CPU reductions.
-        let total_leaves = (self.data.len() / 32).max(1);
+        let total_leaves = self.data.len().div_ceil(32).max(1);
         let large_update = indices.len() * 2 >= total_leaves;
+        let dirty_count = indices.len() as f64;
+        let mut commit_path = "incremental";
         if large_update && self.tree.recompute_all_leaves_accel(&self.data) {
             // Compute root using accelerated reducer to avoid CPU rebuild.
             let root_bytes =
                 crate::byte_merkle_tree::ByteMerkleTree::root_from_bytes_accel(&self.data, 32);
             self.root = HashOf::from_untyped_unchecked(Hash::prehashed(root_bytes));
             self.dirty = false;
+            commit_path = "accel";
+            let metrics = iroha_telemetry::metrics::global_or_default();
+            metrics
+                .ivm_memory_commit_ms
+                .with_label_values(&[commit_path])
+                .observe(started_at.elapsed().as_secs_f64() * 1_000.0);
+            metrics
+                .ivm_memory_commit_dirty_chunks
+                .with_label_values(&[commit_path])
+                .observe(dirty_count);
             return;
         }
-        // CPU path: rehash dirty leaves and rebuild root lazily once.
-        self.tree
-            .update_leaves_from_bytes_parallel(&self.data, &indices);
+        if large_update {
+            self.tree = ByteMerkleTree::from_bytes_parallel(&self.data, 32);
+            commit_path = "full_rebuild";
+            iroha_telemetry::metrics::global_or_default()
+                .ivm_merkle_rebuild_total
+                .inc();
+        } else {
+            self.tree
+                .update_leaves_from_bytes_parallel(&self.data, &indices);
+        }
         self.root = self.tree.root_hash();
         self.dirty = false;
+        let metrics = iroha_telemetry::metrics::global_or_default();
+        metrics
+            .ivm_memory_commit_ms
+            .with_label_values(&[commit_path])
+            .observe(started_at.elapsed().as_secs_f64() * 1_000.0);
+        metrics
+            .ivm_memory_commit_dirty_chunks
+            .with_label_values(&[commit_path])
+            .observe(dirty_count);
     }
 
     /// Commit pending writes by hashing only the dirty chunks if the memory has
@@ -915,6 +945,70 @@ mod tests {
         let mut worker_clone = worker.clone();
         let mut base_clone = base.clone();
         assert_eq!(worker_clone.root(), base_clone.root());
+    }
+
+    #[test]
+    fn commit_small_dirty_set_uses_incremental_merkle_update() {
+        let mut mem = Memory::new(0);
+        let baseline = mem.root();
+        let (_, updates_before) = crate::byte_merkle_tree::merkle_update_counters();
+
+        mem.store_u8(Memory::HEAP_START, 0xAA)
+            .expect("store in heap");
+        mem.store_u8(Memory::HEAP_START + 1, 0x55)
+            .expect("store in same chunk");
+        let updated = mem.root();
+
+        assert_ne!(updated, baseline, "memory root should change after writes");
+        let (_, updates_after) = crate::byte_merkle_tree::merkle_update_counters();
+        assert!(
+            updates_after >= updates_before.saturating_add(1),
+            "same-chunk writes should produce one incremental leaf update"
+        );
+        assert_eq!(
+            mem.dirty_chunks.len(),
+            0,
+            "commit should drain dirty chunks"
+        );
+    }
+
+    #[test]
+    fn commit_large_dirty_set_matches_full_rebuild_root() {
+        let data = vec![0u8; 32 * 8];
+        let tree = ByteMerkleTree::from_bytes(&data, 32);
+        let root = tree.root_hash();
+        let mut mem = Memory {
+            data,
+            stack_limit: Memory::STACK_ALIGNMENT,
+            heap_alloc: 0,
+            heap_limit: Memory::HEAP_SIZE,
+            code_length: 0,
+            output_cursor: 0,
+            root,
+            tree,
+            dirty: false,
+            dirty_chunks: HashSet::new(),
+            read_log: Mutex::new(Vec::new()),
+            write_log: Mutex::new(Vec::new()),
+        };
+
+        mem.data[0..32].fill(0xAA);
+        mem.data[32..64].fill(0x55);
+        mem.data[64..96].fill(0x11);
+        mem.data[96..128].fill(0x22);
+        mem.dirty_chunks.extend([0, 1, 2, 3]);
+        mem.dirty = true;
+        let updated = mem.root();
+
+        let expected = MerkleTree::<[u8; 32]>::from_byte_chunks(&mem.data, 32)
+            .expect("canonical tree")
+            .root()
+            .expect("root");
+        assert_eq!(updated, expected);
+        assert!(
+            mem.dirty_chunks.is_empty(),
+            "large commit should drain dirty chunks"
+        );
     }
 
     #[test]

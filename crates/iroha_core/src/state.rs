@@ -29657,7 +29657,7 @@ impl StateTransaction<'_, '_> {
                         crate::sumeragi::status::NexusFeePayer::Payer => "payer",
                         crate::sumeragi::status::NexusFeePayer::Sponsor => "sponsor",
                     };
-                    info!(
+                    debug!(
                         target: "economics",
                         payer_kind = payer_kind_label,
                         payer = %payer_id,

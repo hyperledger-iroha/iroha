@@ -122,6 +122,11 @@ allowed_hosts = []
 rate_per_minute = 600
 max_bytes_per_minute = 104857600
 
+[sumeragi.block]
+max_transactions = 96
+max_ivm_transactions = 32
+proposal_queue_scan_multiplier = 4
+
 [sumeragi.da]
 enabled = true
 

@@ -743,6 +743,11 @@ away from the shipped MCP-enabled config:
    - `sudo cp dist/taira-validators/taira-validator-1/config.toml /etc/iroha/taira-validator-1/config.toml`
 4. Install the newly built binaries plus the sample systemd unit from
    `configs/soranexus/taira/taira-irohad.service`:
+   - install native Inrou prerequisites before enabling the unit, for example
+     on Debian/Ubuntu:
+     `sudo apt-get update && sudo apt-get install -y qemu-system-x86 qemu-system-arm qemu-utils e2fsprogs iproute2 iptables`
+   - verify the host will advertise real Inrou capacity:
+     `bash configs/soranexus/taira/check_inrou_host_prereqs.sh`
    - `sudo install -m 0755 dist/taira-rollout/<bundle>/bin/irohad /usr/local/bin/irohad`
    - `sudo install -m 0755 dist/taira-rollout/<bundle>/bin/iroha /usr/local/bin/iroha`
    - `sudo cp configs/soranexus/taira/taira-irohad.service /etc/systemd/system/`

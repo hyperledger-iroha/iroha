@@ -22435,7 +22435,7 @@ exec python3 /tmp/inrou-health.py
         assert!(
             temp_dir
                 .path()
-                .join("service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk/rootfs.ext4")
+                .join("service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk/rootfs.qcow2")
                 .exists()
         );
         assert!(

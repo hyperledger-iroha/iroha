@@ -67,7 +67,8 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::ManifestDigest,
     transaction::{
-        SignedTransaction, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
+        Executable, IvmBytecode, SignedTransaction, TransactionSubmissionReceipt,
+        TransactionSubmissionReceiptPayload,
         signed::{ExecutionStep, TransactionResultInner},
     },
     trigger::DataTriggerSequence,
@@ -1881,6 +1882,8 @@ fn test_sumeragi_config() -> SumeragiConfig {
         },
         block: SumeragiBlock {
             max_transactions: None,
+            max_ivm_transactions:
+                iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_IVM_TRANSACTIONS,
             fast_gas_limit_per_block:
                 iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_GAS_LIMIT_PER_BLOCK,
             max_payload_bytes: None,
@@ -100861,6 +100864,8 @@ async fn proposal_queue_scan_budget_limits_fetch() {
         nonzero!(5_usize),
         2,
         None,
+        None,
+        false,
         &mut tx_guards,
         1,
         0,
@@ -100907,6 +100912,8 @@ async fn proposal_filter_drops_committed_transactions_after_queue_scan() {
         nonzero!(2_usize),
         2,
         None,
+        None,
+        false,
         &mut tx_guards,
         height,
         view,
@@ -101009,6 +101016,8 @@ async fn proposal_gas_budget_limits_fetch() {
         nonzero!(5_usize),
         5,
         Some(gas_cap),
+        None,
+        false,
         &mut tx_guards,
         1,
         0,
@@ -101031,6 +101040,70 @@ async fn proposal_gas_budget_limits_fetch() {
         1,
         "deferred tx should remain queued"
     );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proposal_ivm_budget_defers_extra_ivm_and_keeps_cheap_slots() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let ivm_a = sample_ivm_transaction();
+    let ivm_b = sample_ivm_transaction();
+    let cheap = sample_transaction();
+    let cheap_hash = cheap.hash();
+    for tx in [ivm_a, ivm_b, cheap] {
+        actor
+            .queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+                actor.state.view(),
+            )
+            .expect("push tx");
+    }
+
+    let mut tx_guards = Vec::new();
+    let deferred = actor.pull_transactions_for_proposal(
+        actor.state.as_ref(),
+        nonzero!(3_usize),
+        3,
+        None,
+        NonZeroUsize::new(1),
+        false,
+        &mut tx_guards,
+        1,
+        0,
+    );
+
+    assert_eq!(tx_guards.len(), 2, "one IVM and one cheap tx should fit");
+    assert_eq!(deferred.len(), 1, "second IVM tx should be deferred");
+    assert!(
+        tx_guards
+            .iter()
+            .any(|guard| guard.as_accepted().hash() == cheap_hash),
+        "cheap transaction should fill a remaining proposal slot"
+    );
+    assert!(
+        tx_guards
+            .iter()
+            .filter(|guard| Actor::is_ivm_heavy_transaction(guard.as_accepted(), false))
+            .count()
+            <= 1,
+        "proposal should respect IVM-heavy cap"
+    );
+
+    drop(tx_guards);
+    for (tx, routing) in deferred {
+        actor
+            .queue
+            .push_requeued_with_routing(tx, routing, actor.state.as_ref())
+            .expect("requeue deferred tx");
+    }
+    assert_eq!(actor.queue.queued_len(), 1, "deferred IVM tx stays queued");
 
     harness.shutdown.send();
 }
@@ -139174,6 +139247,29 @@ fn sample_transaction() -> SignedTransaction {
     TransactionBuilder::new(chain, authority)
         .with_instructions([register])
         .sign(&private_key)
+}
+
+fn sample_ivm_transaction() -> SignedTransaction {
+    let chain: ChainId = "test-chain".parse().expect("chain id");
+    let key_pair = KeyPair::random();
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let mut program = ivm::ProgramMetadata {
+        max_cycles: 1,
+        abi_version: 1,
+        ..ivm::ProgramMetadata::default()
+    }
+    .encode();
+    program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let mut metadata = iroha_data_model::metadata::Metadata::default();
+    metadata.insert(
+        "gas_limit".parse().expect("gas_limit key"),
+        iroha_primitives::json::Json::new(crate::smartcontracts::ivm::gas_limit_for_cycles(1)),
+    );
+
+    TransactionBuilder::new(chain, authority)
+        .with_metadata(metadata)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+        .sign(key_pair.private_key())
 }
 
 fn sample_log_transaction_with_message_len(message_len: usize) -> SignedTransaction {
