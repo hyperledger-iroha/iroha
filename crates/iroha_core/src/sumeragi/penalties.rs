@@ -7,8 +7,8 @@ use iroha_config::parameters::actual::{ConsensusMode, Sumeragi as SumeragiConfig
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     block::consensus::{Evidence, EvidencePayload, EvidenceRecord},
-    consensus::{Qc, ValidatorSetCheckpoint, VrfEpochRecord},
-    nexus::{LaneId, PublicLaneValidatorStatus},
+    consensus::{NposConsensusEffects, NposPenaltyAction, Qc, ValidatorSetCheckpoint, VrfEpochRecord},
+    nexus::{DataSpaceCatalog, LaneId, PublicLaneValidatorStatus},
     prelude::{AccountId, PeerId},
     transaction::TransactionSubmissionReceipt,
 };
@@ -90,6 +90,221 @@ impl<'a> PenaltyApplier<'a> {
         result
     }
 
+    pub(crate) fn derive_npos_consensus_effects(
+        &self,
+        current_height: u64,
+        vrf_epoch_seals: impl IntoIterator<Item = VrfEpochRecord>,
+    ) -> Result<NposConsensusEffects> {
+        let mut effects = NposConsensusEffects {
+            vrf_epoch_seals: vrf_epoch_seals.into_iter().collect(),
+            penalty_actions: Vec::new(),
+        };
+        effects.vrf_epoch_seals.sort_by_key(|record| record.epoch);
+        effects
+            .vrf_epoch_seals
+            .dedup_by_key(|record| record.epoch);
+        effects
+            .penalty_actions
+            .extend(self.derive_vrf_penalty_actions(current_height));
+        effects
+            .penalty_actions
+            .extend(self.derive_consensus_penalty_actions(current_height)?);
+        effects.penalty_actions.sort();
+        effects.penalty_actions.dedup();
+        Ok(effects)
+    }
+
+    fn derive_vrf_penalty_actions(&self, current_height: u64) -> Vec<NposPenaltyAction> {
+        let activation_lag = {
+            let world = self.state.world_view();
+            crate::sumeragi::resolve_npos_activation_lag_blocks_from_world(
+                &world,
+                &self.config.npos,
+            )
+        };
+        let view = self.state.world.vrf_epochs.view();
+        let mut due_records: Vec<VrfEpochRecord> = Vec::new();
+        for (_epoch, record) in view.iter() {
+            if !record.finalized || record.penalties_applied {
+                continue;
+            }
+            if record.updated_at_height.saturating_add(activation_lag) > current_height {
+                continue;
+            }
+            due_records.push(record.clone());
+        }
+        drop(view);
+
+        if due_records.is_empty() {
+            return Vec::new();
+        }
+
+        let validator_map = self.build_validator_locator_map();
+        let commit_topology = self.state.commit_topology_snapshot();
+        let mut actions = Vec::new();
+        for record in due_records {
+            let offenders: BTreeSet<u32> = record
+                .committed_no_reveal
+                .iter()
+                .chain(record.no_participation.iter())
+                .copied()
+                .collect();
+            let mut all_offenders_mapped = true;
+            for signer in offenders.iter().copied() {
+                let Some((peer_id, locator)) =
+                    Self::locate_validator_cached(signer, &commit_topology, &validator_map)
+                else {
+                    all_offenders_mapped = false;
+                    continue;
+                };
+                actions.push(NposPenaltyAction::VrfJail {
+                    epoch: record.epoch,
+                    signer,
+                    peer_id,
+                    lane_id: locator.lane_id,
+                    validator: locator.validator,
+                    reason: format!("vrf_penalty_epoch_{}", record.epoch),
+                });
+            }
+            if offenders.is_empty() || all_offenders_mapped {
+                actions.push(NposPenaltyAction::MarkVrfPenaltiesApplied {
+                    epoch: record.epoch,
+                    height: current_height,
+                });
+            }
+        }
+        actions
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn derive_consensus_penalty_actions(
+        &self,
+        current_height: u64,
+    ) -> Result<Vec<NposPenaltyAction>> {
+        let slashing_delay = {
+            let world = self.state.world_view();
+            crate::sumeragi::resolve_npos_slashing_delay_blocks_from_world(
+                &world,
+                &self.config.npos,
+            )
+        };
+        let evidence_view = self.state.world.consensus_evidence.view();
+        let mut pending: Vec<(Vec<u8>, EvidenceRecord)> = Vec::new();
+        for (key, record) in evidence_view.iter() {
+            if record.penalty_applied || record.penalty_cancelled {
+                continue;
+            }
+            if record.recorded_at_height.saturating_add(slashing_delay) > current_height {
+                continue;
+            }
+            pending.push((key.clone(), record.clone()));
+        }
+        drop(evidence_view);
+
+        if pending.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let epoch_seeds = {
+            let view = self.state.world.vrf_epochs.view();
+            let mut map = BTreeMap::new();
+            for (epoch, record) in view.iter() {
+                map.insert(*epoch, record.seed);
+            }
+            map
+        };
+        let epoch_schedule = {
+            let world = self.state.world_view();
+            let epoch_params =
+                crate::sumeragi::load_npos_epoch_params_from_world(&world, &self.config.npos);
+            EpochScheduleSnapshot::from_world_with_fallback(
+                &world,
+                epoch_params.epoch_length_blocks,
+            )
+        };
+
+        let validator_map = self.build_validator_locator_map();
+        let commit_certs = crate::sumeragi::status::commit_qc_history();
+        let checkpoints = crate::sumeragi::status::validator_checkpoint_history();
+        let mut actions = Vec::new();
+        for (key, record) in pending {
+            let consensus_mode = consensus_mode_for_evidence(
+                self.state,
+                &record.evidence,
+                record.recorded_at_height,
+                self.config.consensus_mode,
+            );
+            let is_censorship =
+                matches!(record.evidence.payload, EvidencePayload::Censorship { .. });
+            let evidence_epoch =
+                evidence_epoch(&record.evidence, record.recorded_at_height, &epoch_schedule);
+            let prf_seed = match consensus_mode {
+                ConsensusMode::Permissioned => None,
+                ConsensusMode::Npos => epoch_seeds.get(&evidence_epoch).copied(),
+            };
+            let evidence_roster =
+                roster_for_evidence(self.state, &record.evidence, &commit_certs, &checkpoints)
+                    .filter(|roster| !roster.is_empty());
+            let Some(roster) = evidence_roster.as_ref() else {
+                continue;
+            };
+            if matches!(consensus_mode, ConsensusMode::Npos) && prf_seed.is_none() {
+                continue;
+            }
+            let roster = roster.as_slice();
+            let offenders = offender_indices(
+                &record.evidence,
+                record.recorded_at_height,
+                roster.len(),
+                consensus_mode,
+                prf_seed,
+            );
+            if offenders.is_empty() {
+                if !is_censorship && evidence_has_legitimate_empty_offenders(&record.evidence) {
+                    actions.push(NposPenaltyAction::MarkConsensusEvidenceApplied {
+                        evidence_key: key,
+                        height: current_height,
+                    });
+                }
+                continue;
+            }
+            let slash_id = Hash::new(key.clone());
+            let mut slashes = 0_u64;
+            for signer in offenders {
+                let Some((peer_id, locator)) =
+                    self.locate_validator_in_roster_cached(signer, roster, &validator_map)
+                else {
+                    continue;
+                };
+                let Some(amount) = max_slash_amount_for_validator_from_state(
+                    self.state,
+                    &locator,
+                    self.state.nexus_snapshot().staking.max_slash_bps,
+                )?
+                else {
+                    continue;
+                };
+                actions.push(NposPenaltyAction::ConsensusSlash {
+                    evidence_key: key.clone(),
+                    signer,
+                    peer_id,
+                    lane_id: locator.lane_id,
+                    validator: locator.validator,
+                    slash_id,
+                    amount,
+                });
+                slashes = slashes.saturating_add(1);
+            }
+            if slashes > 0 {
+                actions.push(NposPenaltyAction::MarkConsensusEvidenceApplied {
+                    evidence_key: key,
+                    height: current_height,
+                });
+            }
+        }
+        Ok(actions)
+    }
+
     pub(crate) fn apply_vrf_penalties(&self, current_height: u64) -> PenaltyOutcome {
         let mut outcome = PenaltyOutcome::default();
         let activation_lag = {
@@ -133,7 +348,7 @@ impl<'a> PenaltyApplier<'a> {
             let mut unmapped_offenders = false;
             let mut locators = Vec::new();
             for signer in offenders {
-                if let Some(locator) =
+                if let Some((_peer_id, locator)) =
                     Self::locate_validator_cached(signer, &commit_topology, &validator_map)
                 {
                     locators.push(locator);
@@ -285,7 +500,7 @@ impl<'a> PenaltyApplier<'a> {
             }
             let mut locators = Vec::new();
             for signer in offenders {
-                if let Some(locator) =
+                if let Some((_peer_id, locator)) =
                     self.locate_validator_in_roster_cached(signer, roster, &validator_map)
                 {
                     locators.push(locator);
@@ -346,10 +561,12 @@ impl<'a> PenaltyApplier<'a> {
         signer: ValidatorIndex,
         commit_topology: &[PeerId],
         map: &BTreeMap<PublicKey, ValidatorLocator>,
-    ) -> Option<ValidatorLocator> {
+    ) -> Option<(PeerId, ValidatorLocator)> {
         let signer_idx = usize::try_from(signer).ok()?;
         let peer = commit_topology.get(signer_idx)?;
-        map.get(peer.public_key()).cloned()
+        map.get(peer.public_key())
+            .cloned()
+            .map(|locator| (peer.clone(), locator))
     }
 
     #[allow(clippy::unused_self)]
@@ -358,11 +575,99 @@ impl<'a> PenaltyApplier<'a> {
         signer: ValidatorIndex,
         roster: &[PeerId],
         map: &BTreeMap<PublicKey, ValidatorLocator>,
-    ) -> Option<ValidatorLocator> {
+    ) -> Option<(PeerId, ValidatorLocator)> {
         let signer_idx = usize::try_from(signer).ok()?;
         let peer = roster.get(signer_idx)?;
-        map.get(peer.public_key()).cloned()
+        map.get(peer.public_key())
+            .cloned()
+            .map(|locator| (peer.clone(), locator))
     }
+}
+
+pub(crate) fn apply_npos_consensus_effects_to_transaction(
+    tx: &mut WorldTransaction<'_, '_>,
+    effects: &NposConsensusEffects,
+    dataspace_catalog: &DataSpaceCatalog,
+    staking_cfg: &iroha_config::parameters::actual::NexusStaking,
+    current_height: u64,
+    now_ms: u64,
+    #[cfg(feature = "telemetry")] telemetry: Option<&StateTelemetry>,
+    #[cfg(not(feature = "telemetry"))] telemetry: Option<&crate::telemetry::StateTelemetry>,
+) -> Result<PenaltyOutcome> {
+    let mut outcome = PenaltyOutcome::default();
+    for record in &effects.vrf_epoch_seals {
+        tx.vrf_epochs.insert(record.epoch, record.clone());
+    }
+    for action in &effects.penalty_actions {
+        match action {
+            NposPenaltyAction::VrfJail {
+                lane_id,
+                validator,
+                reason,
+                ..
+            } => {
+                let locator = ValidatorLocator {
+                    lane_id: *lane_id,
+                    validator: validator.clone(),
+                };
+                if jail_in_transaction(
+                    tx,
+                    &locator,
+                    reason,
+                    #[cfg(feature = "telemetry")]
+                    telemetry,
+                    #[cfg(not(feature = "telemetry"))]
+                    None,
+                ) {
+                    outcome.applied = outcome.applied.saturating_add(1);
+                    outcome.jailed = outcome.jailed.saturating_add(1);
+                }
+            }
+            NposPenaltyAction::ConsensusSlash {
+                lane_id,
+                validator,
+                slash_id,
+                amount,
+                ..
+            } => {
+                apply_slash_to_validator(
+                    tx,
+                    dataspace_catalog,
+                    staking_cfg,
+                    *lane_id,
+                    validator,
+                    *slash_id,
+                    amount,
+                    now_ms,
+                    telemetry,
+                )?;
+                outcome.applied = outcome.applied.saturating_add(1);
+                outcome.slashed = outcome.slashed.saturating_add(1);
+            }
+            NposPenaltyAction::MarkVrfPenaltiesApplied { epoch, height } => {
+                let mut record = tx.vrf_epochs.get(epoch).cloned();
+                if let Some(record) = record.as_mut() {
+                    record.penalties_applied = true;
+                    record.penalties_applied_at_height = Some(*height);
+                    tx.vrf_epochs.insert(*epoch, record.clone());
+                }
+            }
+            NposPenaltyAction::MarkConsensusEvidenceApplied {
+                evidence_key,
+                height,
+            } => {
+                let mut record = tx.consensus_evidence.get(evidence_key).cloned();
+                if let Some(record) = record.as_mut() {
+                    record.penalty_applied = true;
+                    record.penalty_applied_at_height = Some(*height);
+                    tx.consensus_evidence
+                        .insert(evidence_key.clone(), record.clone());
+                }
+            }
+        }
+    }
+    let _ = current_height;
+    Ok(outcome)
 }
 
 fn roster_for_evidence(
@@ -593,6 +898,26 @@ fn max_slash_amount_for_validator(
     let Some(record) = tx
         .public_lane_validators
         .get(&(locator.lane_id, locator.validator.clone()))
+    else {
+        return Ok(None);
+    };
+    let amount = max_slash_amount(&record.total_stake, max_bps)?;
+    if amount.is_zero() {
+        return Ok(None);
+    }
+    Ok(Some(amount))
+}
+
+fn max_slash_amount_for_validator_from_state(
+    state: &State,
+    locator: &ValidatorLocator,
+    max_bps: u16,
+) -> Result<Option<Numeric>> {
+    let world = state.world_view();
+    let Some(record) = world
+        .public_lane_validators()
+        .get(&(locator.lane_id, locator.validator.clone()))
+        .cloned()
     else {
         return Ok(None);
     };

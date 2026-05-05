@@ -2268,17 +2268,33 @@ impl Queue {
 
         let publishes_space_directory_manifest =
             Self::publishes_only_space_directory_manifests(&checked);
+        let lane_identity = if publishes_space_directory_manifest {
+            (None, Vec::new())
+        } else {
+            checked
+                .as_ref()
+                .authority_opt()
+                .map(|authority| {
+                    state_access.extract_lane_identity_metadata(
+                        authority,
+                        dataspace_id,
+                        &lane_alias,
+                    )
+                })
+                .transpose()
+                .map_err(|err| Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err,
+                })?
+                .unwrap_or((None, Vec::new()))
+        };
+
         let lane_compliance = self.lane_compliance.read().clone();
         if !publishes_space_directory_manifest
             && let (Some(engine), Some(authority)) =
                 (lane_compliance.as_ref(), checked.as_ref().authority_opt())
         {
-            let (uaid_value, capability_tags) = state_access
-                .extract_lane_identity_metadata(authority, dataspace_id, &lane_alias)
-                .map_err(|err| Failure {
-                    tx: Box::new(checked.as_accepted().clone()),
-                    err,
-                })?;
+            let (uaid_value, capability_tags) = lane_identity;
             let authority_domains = state_access
                 .extract_lane_authority_domains(authority, &lane_alias)
                 .map_err(|err| Failure {

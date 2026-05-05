@@ -6917,7 +6917,7 @@ impl Actor {
                 );
             }
         }
-        if let Some(block) = committed_block {
+        if let Some(block) = committed_block.as_ref() {
             let qc_header = crate::sumeragi::consensus::QcHeaderRef {
                 phase: crate::sumeragi::consensus::Phase::Commit,
                 subject_block_hash: block.hash(),
@@ -7002,16 +7002,22 @@ impl Actor {
             let no_participation = snapshot.no_participation.clone();
             let late_reveals_total = snapshot.late_reveals.len();
 
-            self.persist_vrf_snapshot(snapshot, true, election_outcome.clone())?;
+            let finalized_record =
+                self.snapshot_to_vrf_record(snapshot, true, election_outcome.clone());
+            self.pending_npos_vrf_records
+                .insert(finalized_record.epoch, finalized_record);
             if let Some(manager) = self.epoch_manager.as_ref() {
                 let new_epoch = manager.epoch();
                 let record_exists = {
                     let world = self.state.world_view();
                     world.vrf_epochs().get(&new_epoch).is_some()
+                        || self.pending_npos_vrf_records.contains_key(&new_epoch)
                 };
                 if !record_exists {
                     let seed_snapshot = manager.snapshot_current_epoch(roster_len_hint, height);
-                    self.persist_vrf_snapshot(seed_snapshot, false, None)?;
+                    let seed_record = self.snapshot_to_vrf_record(seed_snapshot, false, None);
+                    self.pending_npos_vrf_records
+                        .insert(seed_record.epoch, seed_record);
                 }
             }
 
@@ -7065,9 +7071,83 @@ impl Actor {
             let _ = self.subsystems.vrf.state_mut(self.consensus_mode, epoch);
         }
 
-        self.apply_penalties(height)?;
+        self.note_committed_npos_effects(height, committed_block.as_deref());
 
         Ok(())
+    }
+
+    pub(super) fn build_npos_consensus_effects_for_proposal(
+        &self,
+        proposal_height: u64,
+    ) -> Result<Option<NposConsensusEffects>> {
+        if !matches!(self.consensus_mode, ConsensusMode::Npos) {
+            return Ok(None);
+        }
+        let telemetry = {
+            #[cfg(feature = "telemetry")]
+            {
+                Some(self.state.metrics())
+            }
+            #[cfg(not(feature = "telemetry"))]
+            {
+                None
+            }
+        };
+        let applier = PenaltyApplier::new(
+            self.state.as_ref(),
+            &self.config,
+            #[cfg(feature = "telemetry")]
+            telemetry,
+            #[cfg(not(feature = "telemetry"))]
+            telemetry,
+        );
+        let effects = applier.derive_npos_consensus_effects(
+            proposal_height,
+            self.pending_npos_vrf_records.values().cloned(),
+        )?;
+        Ok((!effects.is_empty()).then_some(effects))
+    }
+
+    fn note_committed_npos_effects(&mut self, height: u64, committed_block: Option<&SignedBlock>) {
+        let Some(effects) = committed_block.and_then(SignedBlock::npos_consensus_effects) else {
+            return;
+        };
+        for record in &effects.vrf_epoch_seals {
+            self.pending_npos_vrf_records.remove(&record.epoch);
+            if let Some((activate_at, roster, apply_now)) =
+                Self::activation_plan_from_vrf_record(height, record)
+            {
+                if apply_now {
+                    if let Err(err) = self.install_elected_roster(&roster) {
+                        warn!(
+                            ?err,
+                            epoch = record.epoch,
+                            "failed to install committed elected roster"
+                        );
+                    }
+                } else {
+                    self.pending_roster_activation = Some((activate_at, roster));
+                }
+            }
+        }
+        let mut vrf_applied = 0_u64;
+        let mut consensus_applied = 0_u64;
+        for action in &effects.penalty_actions {
+            match action {
+                iroha_data_model::consensus::NposPenaltyAction::VrfJail { .. } => {
+                    vrf_applied = vrf_applied.saturating_add(1);
+                }
+                iroha_data_model::consensus::NposPenaltyAction::ConsensusSlash { .. } => {
+                    consensus_applied = consensus_applied.saturating_add(1);
+                }
+                iroha_data_model::consensus::NposPenaltyAction::MarkVrfPenaltiesApplied { .. }
+                | iroha_data_model::consensus::NposPenaltyAction::MarkConsensusEvidenceApplied {
+                    ..
+                } => {}
+            }
+        }
+        super::status::inc_vrf_penalties_applied(vrf_applied);
+        super::status::inc_consensus_penalties_applied(consensus_applied);
     }
 
     fn apply_penalties(&mut self, current_height: u64) -> Result<()> {
@@ -8687,6 +8767,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            npos_effects_hash: None,
             execution_context_hash: None,
             sccp_commitment_root: None,
             creation_time_ms: 0,

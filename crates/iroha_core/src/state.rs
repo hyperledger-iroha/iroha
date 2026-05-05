@@ -23971,6 +23971,27 @@ impl<'state> StateBlock<'state> {
                 self.apply_replayed_axt_envelopes(envelopes, current_slot);
             }
         }
+        if let Some(effects) = signed_block.npos_consensus_effects() {
+            let dataspace_catalog = self.nexus.dataspace_catalog.clone();
+            let staking_cfg = self.nexus.staking.clone();
+            let now_ms = signed_block.header().creation_time_ms;
+            #[cfg(feature = "telemetry")]
+            let telemetry = Some(self.telemetry);
+            #[cfg(not(feature = "telemetry"))]
+            let telemetry = None;
+            let mut transaction = self.transaction();
+            crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
+                &mut transaction.world,
+                effects,
+                &dataspace_catalog,
+                &staking_cfg,
+                signed_block.header().height().get(),
+                now_ms,
+                telemetry,
+            )
+            .expect("committed NPoS consensus effects must be applicable");
+            transaction.apply();
+        }
 
         self.block_hashes.push(block_hash);
         self.refresh_merge_metadata_from_latest_entry();

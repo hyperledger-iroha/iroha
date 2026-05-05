@@ -34,8 +34,8 @@ use iroha_data_model::{
         consensus::{RbcEncoding, RbcReadySignature, SumeragiMembershipStatus},
     },
     consensus::{
-        VALIDATOR_SET_HASH_VERSION_V1, ValidatorElectionOutcome, ValidatorSetCheckpoint,
-        VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord,
+        NposConsensusEffects, VALIDATOR_SET_HASH_VERSION_V1, ValidatorElectionOutcome,
+        ValidatorSetCheckpoint, VrfEpochRecord, VrfLateRevealRecord, VrfParticipantRecord,
     },
     da::{
         commitment::DaCommitmentRecord,
@@ -10408,6 +10408,7 @@ pub(super) struct Actor {
     qc_cache: BTreeMap<QcVoteKey, crate::sumeragi::consensus::Qc>,
     qc_signer_tally: BTreeMap<QcVoteKey, QcSignerTally>,
     epoch_manager: Option<EpochManager>,
+    pending_npos_vrf_records: BTreeMap<u64, VrfEpochRecord>,
     npos_collectors: Option<NposCollectorConfig>,
     pending: PendingBlockState,
     slot_tracker: SlotTrackerState,
@@ -17969,6 +17970,7 @@ impl Actor {
             qc_cache: BTreeMap::new(),
             qc_signer_tally: BTreeMap::new(),
             epoch_manager,
+            pending_npos_vrf_records: BTreeMap::new(),
             npos_collectors,
             pending: PendingBlockState {
                 pending_blocks: BTreeMap::new(),

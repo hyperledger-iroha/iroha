@@ -128,6 +128,7 @@ impl SignedBlock {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         }
@@ -160,6 +161,7 @@ impl SignedBlock {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         }
@@ -472,6 +474,7 @@ impl SignedBlock {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            npos_effects_hash: None,
             execution_context_hash: None,
             creation_time_ms,
             view_change_index: 0,
@@ -494,6 +497,7 @@ impl SignedBlock {
             da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
             previous_roster_evidence: None,
+                npos_consensus_effects: None,
         };
 
         let result = BlockResult {
@@ -737,6 +741,8 @@ pub mod error {
             DaProofPolicyMismatch,
             /// DA shard cursor was missing or regressed.
             DaShardCursorViolation,
+            /// Deterministic NPoS effects did not match the signed block header or local validation.
+            NposEffectsMismatch,
         }
     }
 
@@ -810,6 +816,9 @@ pub mod error {
                 BlockRejectionReason::DaShardCursorViolation => {
                     norito::json::write_json_string("DaShardCursorViolation", out);
                 }
+                BlockRejectionReason::NposEffectsMismatch => {
+                    norito::json::write_json_string("NposEffectsMismatch", out);
+                }
             }
         }
     }
@@ -851,6 +860,7 @@ pub mod error {
                 }
                 "DaProofPolicyMismatch" => Ok(BlockRejectionReason::DaProofPolicyMismatch),
                 "DaShardCursorViolation" => Ok(BlockRejectionReason::DaShardCursorViolation),
+                "NposEffectsMismatch" => Ok(BlockRejectionReason::NposEffectsMismatch),
                 other => Err(norito::json::Error::unknown_field(other)),
             }
         }
@@ -923,6 +933,9 @@ impl fmt::Display for error::BlockRejectionReason {
             }
             error::BlockRejectionReason::DaShardCursorViolation => {
                 f.write_str("DA shard cursor regression or unknown lane")
+            }
+            error::BlockRejectionReason::NposEffectsMismatch => {
+                f.write_str("NPoS consensus effects mismatch")
             }
         }
     }
@@ -1326,6 +1339,7 @@ mod tests {
             da_proof_policies: None,
             da_pin_intents: None,
             previous_roster_evidence: None,
+            npos_consensus_effects: None,
         };
         let mut with_context = payload.clone();
         with_context.execution_context = Some(BlockExecutionContextBundle::new(vec![
@@ -1356,6 +1370,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -1383,6 +1398,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: Some(BlockResult {
                 external_entrypoints: vec![entrypoint.clone()],
@@ -1463,6 +1479,7 @@ mod tests {
             da_proof_policies: None,
             da_pin_intents: None,
             previous_roster_evidence: None,
+                npos_consensus_effects: None,
         };
         let key_pair =
             iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
@@ -1528,6 +1545,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: Some(result),
         };
@@ -1549,6 +1567,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -1572,6 +1591,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -1610,6 +1630,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             prev_roster_evidence_hash: None,
+            npos_effects_hash: None,
             execution_context_hash: None,
             sccp_commitment_root: None,
             creation_time_ms: 123_456_789_000,
@@ -1666,6 +1687,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -1722,6 +1744,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -1766,6 +1789,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -1812,6 +1836,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -1851,6 +1876,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -1887,6 +1913,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -1952,6 +1979,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -2037,6 +2065,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -2070,6 +2099,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -2101,6 +2131,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -2136,6 +2167,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
@@ -2213,6 +2245,7 @@ mod tests {
                 da_proof_policies: None,
                 da_pin_intents: None,
                 previous_roster_evidence: None,
+                npos_consensus_effects: None,
             },
             result: None,
         };
