@@ -2101,7 +2101,37 @@ impl Actor {
                         crate::sumeragi::status::record_precommit_signers(record);
                     }
                 }
-                self.persist_roster_sidecar_for_commit(committed_block.as_ref(), &commit_topology);
+                if let Some(qc) = committed_cached_qc_tail.as_ref() {
+                    let checkpoint = ValidatorSetCheckpoint::new(
+                        qc.height,
+                        qc.view,
+                        qc.subject_block_hash,
+                        qc.parent_state_root,
+                        qc.post_state_root,
+                        qc.validator_set.clone(),
+                        qc.aggregate.signers_bitmap.clone(),
+                        qc.aggregate.bls_aggregate_signature.clone(),
+                        qc.validator_set_hash_version,
+                        None,
+                    );
+                    if self.state.record_commit_roster_with_sidecar(
+                        qc,
+                        &checkpoint,
+                        post_apply_snapshot.stake_snapshot.clone(),
+                    ) {
+                        debug!(
+                            height = qc.height,
+                            view = qc.view,
+                            block = %qc.subject_block_hash,
+                            "persisted commit roster sidecar from commit certificate"
+                        );
+                    }
+                } else {
+                    self.persist_roster_sidecar_for_commit(
+                        committed_block.as_ref(),
+                        &commit_topology,
+                    );
+                }
                 self.flush_pending_fetch_requests_if_ready(committed_block.as_ref());
                 self.flush_pending_block_body_requests_if_ready(committed_block.as_ref());
                 if pending_height == 1 {
@@ -4501,18 +4531,43 @@ impl Actor {
         }
         let conflicting_vote = self.local_conflicting_slot_vote(height, epoch, block_hash);
         if let Some(conflict) = conflicting_vote {
-            warn!(
-                height,
-                view,
-                epoch,
-                block = ?block_hash,
-                previous_view = conflict.view,
-                previous_phase = ?conflict.phase,
-                previous_block = ?conflict.block_hash,
-                signer = local_idx,
-                "skipping precommit: local validator already voted for a different same-height block"
-            );
-            return false;
+            let new_view_qc_supersedes = self
+                .proposal_highest_qc_for_slot(height, view)
+                .is_some_and(|highest_qc| {
+                    self.new_view_qc_supersedes_same_height_vote_conflict(
+                        height,
+                        view,
+                        highest_qc,
+                        conflict.block_hash,
+                        conflict.view,
+                    )
+                });
+            if new_view_qc_supersedes {
+                info!(
+                    height,
+                    view,
+                    epoch,
+                    block = ?block_hash,
+                    previous_view = conflict.view,
+                    previous_phase = ?conflict.phase,
+                    previous_block = ?conflict.block_hash,
+                    signer = local_idx,
+                    "allowing precommit: NEW_VIEW QC supersedes raw same-height local vote"
+                );
+            } else {
+                warn!(
+                    height,
+                    view,
+                    epoch,
+                    block = ?block_hash,
+                    previous_view = conflict.view,
+                    previous_phase = ?conflict.phase,
+                    previous_block = ?conflict.block_hash,
+                    signer = local_idx,
+                    "skipping precommit: local validator already voted for a different same-height block"
+                );
+                return false;
+            }
         }
         if let Some(lock) = self.locked_qc {
             let candidate = crate::sumeragi::consensus::QcHeaderRef {

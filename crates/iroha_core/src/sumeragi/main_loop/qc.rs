@@ -6450,6 +6450,18 @@ impl Actor {
             }
         };
         if !accepted {
+            if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit)
+                && let Some(pending) = self.pending.pending_blocks.get_mut(&qc.subject_block_hash)
+                && pending.commit_qc_epoch == Some(qc.epoch)
+            {
+                pending.reset_commit_stage();
+                debug!(
+                    height = qc.height,
+                    view = qc.view,
+                    block = %qc.subject_block_hash,
+                    "cleared pending commit-QC marker after rejecting precommit QC"
+                );
+            }
             return Ok(());
         }
         if qc.height == self.committed_height_snapshot().saturating_add(1)

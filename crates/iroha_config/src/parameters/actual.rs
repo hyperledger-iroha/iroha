@@ -2538,6 +2538,8 @@ pub struct NexusFees {
     pub canonical_sponsor_account_id: Option<String>,
     /// First block height whose lane commitments include Nexus fee receipts.
     pub fee_receipts_activation_height: u64,
+    /// Whether sponsored fees are settled by an external public-Nexus reconciler instead of local WSV asset debits.
+    pub external_settlement_enabled: bool,
     /// Burn fees at or after this block timestamp; earlier blocks use legacy fee transfer semantics.
     pub burn_from_unix_timestamp_ms: u64,
     /// How fees are settled after they are computed.
@@ -2580,6 +2582,7 @@ impl Default for NexusFees {
             canonical_sponsor_account_id: defaults::nexus::fees::CANONICAL_SPONSOR_ACCOUNT_ID
                 .map(str::to_owned),
             fee_receipts_activation_height: defaults::nexus::fees::FEE_RECEIPTS_ACTIVATION_HEIGHT,
+            external_settlement_enabled: defaults::nexus::fees::EXTERNAL_SETTLEMENT_ENABLED,
             burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
             settlement_mode: NexusFeeSettlementMode::Direct,
             successful_claim_fee_exempt_authorities: Vec::new(),

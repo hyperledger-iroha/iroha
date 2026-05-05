@@ -1520,6 +1520,7 @@ fn minimal_config_snapshot() {
                     },
                     canonical_sponsor_account_id: None,
                     fee_receipts_activation_height: 18446744073709551615,
+                    external_settlement_enabled: false,
                     burn_from_unix_timestamp_ms: 18446744073709551615,
                     settlement_mode: Direct,
                     successful_claim_fee_exempt_authorities: [],

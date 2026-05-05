@@ -2305,6 +2305,8 @@ pub mod nexus {
         pub const FEE_SINK_ACCOUNT_ID: &str = super::pipeline::GAS_TECH_ACCOUNT_ID;
         /// Whether fee sponsorship is allowed.
         pub const SPONSORSHIP_ENABLED: bool = false;
+        /// Whether sponsored fee settlement is performed outside this chain.
+        pub const EXTERNAL_SETTLEMENT_ENABLED: bool = false;
         /// Base fee charged per transaction.
         pub fn base_fee() -> Numeric {
             Numeric::from(0_u64)

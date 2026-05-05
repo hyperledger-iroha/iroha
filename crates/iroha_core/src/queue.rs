@@ -816,6 +816,25 @@ impl Queue {
             .collect()
     }
 
+    fn publishes_only_space_directory_manifests(tx: &CheckedTransaction<'_>) -> bool {
+        let Some(signed) = tx.external() else {
+            return false;
+        };
+        match signed.instructions() {
+            Executable::Instructions(instructions) if !instructions.is_empty() => {
+                instructions.iter().all(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<
+                            iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest,
+                        >()
+                        .is_some()
+                })
+            }
+            _ => false,
+        }
+    }
+
     fn compute_tx_encoded_len(tx: &AcceptedTransaction<'_>) -> usize {
         tx.encoded_len()
     }
@@ -2247,9 +2266,12 @@ impl Queue {
             Some(lane_privacy_registry_handle)
         };
 
+        let publishes_space_directory_manifest =
+            Self::publishes_only_space_directory_manifests(&checked);
         let lane_compliance = self.lane_compliance.read().clone();
-        if let (Some(engine), Some(authority)) =
-            (lane_compliance.as_ref(), checked.as_ref().authority_opt())
+        if !publishes_space_directory_manifest
+            && let (Some(engine), Some(authority)) =
+                (lane_compliance.as_ref(), checked.as_ref().authority_opt())
         {
             let (uaid_value, capability_tags) = state_access
                 .extract_lane_identity_metadata(authority, dataspace_id, &lane_alias)
@@ -6619,6 +6641,51 @@ pub mod tests {
     }
 
     #[test]
+    fn push_with_lane_with_state_accepts_external_settled_sponsor_without_local_fee_asset() {
+        let mut fixture = nexus_fee_fixture(None, None);
+        fixture
+            .state
+            .nexus
+            .get_mut()
+            .fees
+            .external_settlement_enabled = true;
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(header);
+        let mut stx = block.transaction();
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: fixture.sponsor_id.clone(),
+            },
+            fixture.authority_id.clone(),
+        )
+        .execute(&fixture.sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+        stx.apply();
+        block.commit().expect("commit sponsor permission grant");
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fee_sponsor".parse().expect("fee sponsor key"),
+            Json::new(fixture.sponsor_id.to_string()),
+        );
+        let tx = accepted_tx_with(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            vec![sample_unregister_instruction()],
+            metadata,
+        );
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("external-settled sponsor should not require local fee asset");
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
     fn read_only_fee_sponsor_check_accepts_granted_permission() {
         let fixture = nexus_fee_fixture(None, Some(Numeric::from(10_u32)));
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -6989,6 +7056,50 @@ pub mod tests {
             ),
             other => panic!("expected missing dataspace binding rejection, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn space_directory_manifest_publish_bypasses_uaid_binding_admission() {
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::manifest-publish"));
+        let manifest_dataspace = DataSpaceId::new(10);
+        let (world, account_id, key_pair) =
+            world_with_uaid_account(uaid, manifest_dataspace, false);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = Arc::new(State::new(world, kura, query_handle));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Queue::test_with_router(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+        );
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace: manifest_dataspace,
+            issued_ms: 1,
+            activation_epoch: 0,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let tx = accepted_tx_with(
+            account_id,
+            &key_pair,
+            &time_source,
+            vec![
+                iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest { manifest }
+                    .into(),
+            ],
+            Metadata::default(),
+        );
+
+        queue
+            .push(tx, state.view())
+            .expect("manifest publication creates the UAID dataspace binding");
     }
 
     #[tokio::test]
@@ -7436,6 +7547,7 @@ pub mod tests {
             nexus.fees.sponsor_max_fee = Numeric::zero();
             nexus.fees.fee_asset_id = fee_asset_id.to_string();
             nexus.fees.fee_sink_account_id = sink_id.to_string();
+            nexus.fees.burn_from_unix_timestamp_ms = 0;
         }
         NexusFeeFixture {
             state,

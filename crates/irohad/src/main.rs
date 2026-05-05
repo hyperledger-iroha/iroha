@@ -3607,6 +3607,10 @@ mod snapshot_read_error_tests {
         ));
 
         assert!(snapshot_read_error_is_recoverable(
+            &TryReadSnapshotError::MissingSpaceDirectoryManifestSection { snapshot_height: 608 }
+        ));
+
+        assert!(snapshot_read_error_is_recoverable(
             &TryReadSnapshotError::MismatchedHash {
                 height: 1,
                 snapshot_block_hash: dummy_block_hash(1),

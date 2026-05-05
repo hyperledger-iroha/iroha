@@ -18037,7 +18037,7 @@ impl State {
         &self.telemetry
     }
 
-    fn run_storage_migrations(&mut self) {
+    pub(crate) fn run_storage_migrations(&mut self) {
         if let Some(rebuilt) = self.migrate_space_directory_bindings() {
             iroha_logger::info!(
                 rebuilt_uaids = rebuilt,
@@ -26293,6 +26293,19 @@ pub fn replay_blocks_from_kura_range(
         if let Some(checkpoint) = wsv_checkpoint {
             let actual = crate::snapshot::canonical_state_snapshot_hash(state);
             if actual != checkpoint.state_hash() {
+                let legacy =
+                    crate::snapshot::legacy_state_snapshot_hash_without_space_directory_manifests(
+                        state,
+                    );
+                if legacy == checkpoint.state_hash() {
+                    iroha_logger::warn!(
+                        height,
+                        committed = ?checkpoint.state_hash(),
+                        replayed = ?actual,
+                        "WSV checkpoint matched legacy snapshot surface without Space Directory manifests; accepting during upgrade"
+                    );
+                    continue;
+                }
                 if std::env::var_os("IROHA_DEBUG_WSV_COMPONENTS").is_some() {
                     let components =
                         crate::snapshot::canonical_state_snapshot_component_hashes(state);
@@ -27392,7 +27405,7 @@ mod replay_validation_tests {
     }
 
     #[test]
-    fn replay_rejects_wsv_checkpoint_mismatch_after_applying_block() {
+    fn replay_warns_and_continues_on_wsv_checkpoint_mismatch_after_applying_block() {
         use std::borrow::Cow;
 
         use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -27499,10 +27512,11 @@ mod replay_validation_tests {
             2,
             ConsensusMode::Permissioned,
         );
-        let err = result.expect_err("WSV checkpoint mismatch must stop replay");
-        assert!(
-            format!("{err:?}").contains("WSV checkpoint"),
-            "replay error should report the WSV checkpoint mismatch: {err:?}"
+        result.expect("WSV checkpoint mismatch is a non-fatal sidecar audit failure");
+        assert_eq!(
+            replay_state.view().height(),
+            2,
+            "mismatched WSV checkpoint sidecar must not prevent Kura replay"
         );
     }
 
@@ -30574,6 +30588,12 @@ pub(crate) struct SnapshotNoritoBlob {
     pub encoded_hex: String,
 }
 
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+pub(crate) struct SnapshotSpaceDirectoryManifestSet {
+    pub uaid: UniversalAccountId,
+    pub encoded_hex: String,
+}
+
 pub(crate) mod deserialize {
     use std::marker::PhantomData;
 
@@ -30639,6 +30659,8 @@ pub(crate) mod deserialize {
                 take_optional_default(&mut map, "public_lane_rewards")?;
             let public_lane_reward_claims: Vec<SnapshotPublicLaneRewardClaim> =
                 take_optional_default(&mut map, "public_lane_reward_claims")?;
+            let space_directory_manifests: Vec<SnapshotSpaceDirectoryManifestSet> =
+                take_optional_default(&mut map, "space_directory_manifests")?;
 
             let chain_id: ChainId = take_required(&mut map, "chain_id")?;
             let block_hashes_vec: Vec<HashOf<BlockHeader>> =
@@ -30688,6 +30710,8 @@ pub(crate) mod deserialize {
                     )
                 })
                 .collect();
+            world.space_directory_manifests =
+                decode_space_directory_manifest_sets(space_directory_manifests)?;
 
             let mut state = build_state(BuildStateInputs {
                 world,
@@ -30729,6 +30753,34 @@ pub(crate) mod deserialize {
                 })
             })
             .collect()
+    }
+
+    fn decode_space_directory_manifest_sets(
+        records: Vec<SnapshotSpaceDirectoryManifestSet>,
+    ) -> Result<Storage<UniversalAccountId, SpaceDirectoryManifestSet>, json::Error> {
+        let mut storage = Storage::default();
+        for (index, record) in records.into_iter().enumerate() {
+            let bytes =
+                hex::decode(&record.encoded_hex).map_err(|err| json::Error::InvalidField {
+                    field: "space_directory_manifests".to_owned(),
+                    message: format!("record {index} hex decode failed: {err}"),
+                })?;
+            let mut cursor = bytes.as_slice();
+            let manifest_set =
+                SpaceDirectoryManifestSet::decode_all(&mut cursor).map_err(|err| {
+                    json::Error::InvalidField {
+                        field: "space_directory_manifests".to_owned(),
+                        message: format!("record {index} norito decode failed: {err}"),
+                    }
+                })?;
+            if storage.insert(record.uaid, manifest_set).is_some() {
+                return Err(json::Error::InvalidField {
+                    field: "space_directory_manifests".to_owned(),
+                    message: format!("duplicate UAID at record {index}"),
+                });
+            }
+        }
+        Ok(storage)
     }
 
     fn take_required<T: JsonDeserialize>(
@@ -31371,7 +31423,7 @@ pub(crate) mod deserialize {
         let latest_block_header = NonZeroUsize::new(kura.durable_blocks_count())
             .and_then(|height| kura.get_block(height))
             .map(|block| block.header());
-        let state = State {
+        let mut state = State {
             world,
             block_hashes,
             latest_block_header: parking_lot::RwLock::new(latest_block_header),
@@ -31429,6 +31481,7 @@ pub(crate) mod deserialize {
             view_lock: parking_lot::RwLock::new(()),
             view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
         };
+        state.run_storage_migrations();
         #[cfg(feature = "sm")]
         Sm2PublicKey::set_default_distid(initial_crypto.sm2_distid_default.clone())
             .expect("sm2_distid_default must be valid");

@@ -5160,6 +5160,133 @@ impl Actor {
             .is_some()
     }
 
+    fn proposal_highest_qc_for_slot(
+        &self,
+        height: u64,
+        view: u64,
+    ) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
+        self.subsystems
+            .propose
+            .proposal_cache
+            .get_proposal(height, view)
+            .map(|proposal| proposal.header.highest_qc)
+            .or_else(|| {
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .get_hint(height, view)
+                    .map(|hint| hint.highest_qc)
+            })
+    }
+
+    fn same_height_block_has_recoverable_qc(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+    ) -> bool {
+        self.pending_block_has_qc(block_hash, height, view)
+            || self
+                .pending
+                .pending_blocks
+                .get(&block_hash)
+                .filter(|pending| pending.height == height && pending.view == view)
+                .is_some_and(PendingBlock::commit_qc_observed)
+    }
+
+    fn same_height_has_recoverable_qc(&self, height: u64) -> bool {
+        let expected_epoch = self.epoch_for_height(height);
+        self.qc_cache.values().any(|qc| {
+            matches!(
+                qc.phase,
+                crate::sumeragi::consensus::Phase::Prepare
+                    | crate::sumeragi::consensus::Phase::Commit
+            ) && qc.height == height
+                && qc.epoch == expected_epoch
+        }) || self
+            .pending
+            .pending_blocks
+            .values()
+            .any(|pending| pending.height == height && pending.commit_qc_observed())
+    }
+
+    fn cached_new_view_qc_extends_committed_frontier(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+    ) -> Option<crate::sumeragi::consensus::Qc> {
+        if highest_qc.phase != crate::sumeragi::consensus::Phase::Commit {
+            return None;
+        }
+        if highest_qc.height.saturating_add(1) != proposal_height {
+            return None;
+        }
+        if self.latest_committed_qc()? != highest_qc {
+            return None;
+        }
+
+        let proposal_epoch = self.epoch_for_height(proposal_height);
+        let qc = cached_qc_for(
+            &self.qc_cache,
+            crate::sumeragi::consensus::Phase::NewView,
+            highest_qc.subject_block_hash,
+            proposal_height,
+            proposal_view,
+            proposal_epoch,
+        )?;
+        (qc.highest_qc == Some(highest_qc)).then_some(qc)
+    }
+
+    fn new_view_qc_supersedes_same_height_vote_conflict(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+        conflicting_block_hash: HashOf<BlockHeader>,
+        conflicting_view: u64,
+    ) -> bool {
+        if proposal_view <= conflicting_view {
+            return false;
+        }
+        if self
+            .locked_qc
+            .is_some_and(|locked| locked.height >= proposal_height)
+        {
+            return false;
+        }
+        if self.same_height_block_has_recoverable_qc(
+            conflicting_block_hash,
+            proposal_height,
+            conflicting_view,
+        ) || self.same_height_has_recoverable_qc(proposal_height)
+        {
+            return false;
+        }
+        self.cached_new_view_qc_extends_committed_frontier(
+            proposal_height,
+            proposal_view,
+            highest_qc,
+        )
+        .is_some()
+    }
+
+    fn new_view_qc_supersedes_same_height_vote_lock(
+        &self,
+        proposal_height: u64,
+        proposal_view: u64,
+        highest_qc: crate::sumeragi::consensus::QcHeaderRef,
+        lock: &SameHeightVoteLock,
+    ) -> bool {
+        self.new_view_qc_supersedes_same_height_vote_conflict(
+            proposal_height,
+            proposal_view,
+            highest_qc,
+            lock.block_hash,
+            lock.view,
+        )
+    }
+
     fn pending_block_has_delivered_rbc(
         &self,
         block_hash: HashOf<BlockHeader>,
@@ -5296,6 +5423,10 @@ impl Actor {
             return None;
         }
 
+        // A fresh branch is non-viable whenever all conflicting same-height voters together
+        // leave fewer remaining validators than the commit quorum. The strongest old branch may
+        // be below near-quorum in split-vote cases, but proposing a new hash would still be
+        // uncommittable under the local double-vote rule.
         branch_voters
             .into_iter()
             .map(
@@ -5811,6 +5942,28 @@ impl Actor {
             || queue_depths.block_rx > 0
     }
 
+    fn frontier_proposal_ingress_defer_active(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+        unobserved_ingress_window: Duration,
+    ) -> bool {
+        if !self.frontier_recovery_inbound_backlog_active(frontier_height, queue_depths) {
+            return false;
+        }
+
+        self.phase_tracker
+            .view_age(frontier_height, now)
+            .is_none_or(|age| age < unobserved_ingress_window)
+            || self.frontier_recovery_same_slot_inflight_progress_recent(
+                frontier_height,
+                frontier_view,
+                now,
+            )
+    }
+
     fn frontier_consensus_ingress_queued(
         queue_depths: super::status::WorkerQueueDepthSnapshot,
     ) -> bool {
@@ -5902,6 +6055,37 @@ impl Actor {
         frontier_view: u64,
         now: Instant,
     ) -> bool {
+        let cached_same_slot_payload = self
+            .slot_tracker
+            .proposals_seen
+            .contains(&(frontier_height, frontier_view))
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_hint(frontier_height, frontier_view)
+                .is_some()
+            || self
+                .subsystems
+                .propose
+                .proposal_cache
+                .get_proposal(frontier_height, frontier_view)
+                .is_some();
+
+        cached_same_slot_payload
+            || self.frontier_recovery_same_slot_inflight_progress_recent(
+                frontier_height,
+                frontier_view,
+                now,
+            )
+    }
+
+    fn frontier_recovery_same_slot_inflight_progress_recent(
+        &self,
+        frontier_height: u64,
+        frontier_view: u64,
+        now: Instant,
+    ) -> bool {
         let window = self
             .frontier_recovery_window()
             .max(Duration::from_millis(1));
@@ -5922,25 +6106,8 @@ impl Actor {
                     && recent(slot_progress_at)
                     && (slot.exact_fetch_armed || (slot.block_created_seen && !slot.body_present))
             });
-        let cached_same_slot_payload = self
-            .slot_tracker
-            .proposals_seen
-            .contains(&(frontier_height, frontier_view))
-            || self
-                .subsystems
-                .propose
-                .proposal_cache
-                .get_hint(frontier_height, frontier_view)
-                .is_some()
-            || self
-                .subsystems
-                .propose
-                .proposal_cache
-                .get_proposal(frontier_height, frontier_view)
-                .is_some();
 
         frontier_slot_progress_recent
-            || cached_same_slot_payload
             || self.pending.pending_blocks.values().any(|pending| {
                 !pending.aborted
                     && pending.height == frontier_height
@@ -7208,8 +7375,13 @@ impl Actor {
             slot.view,
         );
 
-        vote_status.vote_count > 0
-            && total_validators.saturating_sub(vote_status.vote_count) < min_votes_for_commit
+        let direct_slot_lock = vote_status.vote_count > 0
+            && total_validators.saturating_sub(vote_status.vote_count) < min_votes_for_commit;
+        let aggregate_same_height_lock = vote_status.vote_count > 0
+            && self
+                .same_height_vote_lock_blocking_candidate(slot.height, requested_view, None)
+                .is_some();
+        direct_slot_lock || aggregate_same_height_lock
     }
 
     fn frontier_slot_live_local_owner_for_round(
@@ -24417,7 +24589,11 @@ impl Actor {
             return false;
         }
         let topology = super::network_topology::Topology::new(roster);
-        let required = topology.min_votes_for_view_change();
+        // A view-change quorum (f + 1) is enough to trigger local timeout recovery, but it is
+        // not enough to make the replacement view actionable: proposal selection still requires
+        // the full commit quorum. Keep known-block commit-QC repair alive until the higher view
+        // has enough NEW_VIEW support to actually supersede the old commit path.
+        let required = topology.min_votes_for_commit().max(1);
         self.subsystems
             .propose
             .new_view_tracker
@@ -33582,6 +33758,31 @@ impl Actor {
             self.slot_has_vote_backed_consensus_evidence(height, current_view);
         let missing_qc_recovery_already_armed =
             self.frontier_recovery_already_armed_for_missing_qc(height, current_view);
+        if height == contiguous_frontier_height
+            && !proposal_seen
+            && self.frontier_proposal_ingress_defer_active(
+                height,
+                current_view,
+                now,
+                queue_depths,
+                timeout.saturating_add(self.frontier_ingress_drain_grace(da_enabled)),
+            )
+        {
+            debug!(
+                height,
+                view = current_view,
+                committed_height,
+                age_ms = age.as_millis(),
+                timeout_ms = timeout.as_millis(),
+                ingress_grace_ms = self.frontier_ingress_drain_grace(da_enabled).as_millis(),
+                vote_rx_depth = queue_depths.vote_rx,
+                block_payload_rx_depth = queue_depths.block_payload_rx,
+                rbc_chunk_rx_depth = queue_depths.rbc_chunk_rx,
+                block_rx_depth = queue_depths.block_rx,
+                "deferring empty-frontier idle rotation while proposal ingress drains"
+            );
+            return false;
+        }
         if height == contiguous_frontier_height
             && !proposal_seen
             && current_view == 0

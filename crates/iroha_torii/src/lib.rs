@@ -23617,6 +23617,156 @@ async fn handler_get_contract_state(
 }
 
 #[cfg(feature = "app_api")]
+const DEFAULT_MINT_REQUEST_CONTRACT_ALIAS: &str = "apps_mint_request::bpng";
+#[cfg(feature = "app_api")]
+const MINT_REQUEST_CONTRACT_STATE_PREFIX: &str = "Requests";
+
+#[cfg(feature = "app_api")]
+#[derive(JsonDeserialize)]
+struct MintRequestsQuery {
+    #[norito(default)]
+    contract_address: Option<String>,
+    #[norito(default)]
+    contract_alias: Option<String>,
+    #[norito(default)]
+    request_id: Option<String>,
+    #[norito(default)]
+    operation_id: Option<String>,
+    #[norito(default)]
+    cursor: Option<String>,
+    #[norito(default)]
+    limit: Option<u64>,
+    #[norito(default)]
+    status: Option<String>,
+    #[norito(default)]
+    requires_my_signature: Option<bool>,
+    #[norito(default)]
+    include_signing_payload: Option<bool>,
+}
+
+#[cfg(feature = "app_api")]
+fn non_empty_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn mint_requests_contract_state_query(
+    query: MintRequestsQuery,
+    path_request_id: Option<String>,
+) -> crate::routing::ContractStateQuery {
+    let contract_address = non_empty_string(query.contract_address);
+    let contract_alias = if contract_address.is_some() {
+        non_empty_string(query.contract_alias)
+    } else {
+        Some(
+            non_empty_string(query.contract_alias)
+                .unwrap_or_else(|| DEFAULT_MINT_REQUEST_CONTRACT_ALIAS.to_owned()),
+        )
+    };
+    let request_id = non_empty_string(path_request_id)
+        .or_else(|| non_empty_string(query.request_id))
+        .or_else(|| non_empty_string(query.operation_id));
+    let offset = query
+        .cursor
+        .as_deref()
+        .and_then(|cursor| cursor.trim().parse::<u64>().ok());
+
+    crate::routing::ContractStateQuery {
+        contract_address,
+        contract_alias,
+        path: request_id
+            .as_deref()
+            .map(|request_id| format!("{MINT_REQUEST_CONTRACT_STATE_PREFIX}/{request_id}")),
+        paths: None,
+        prefix: request_id
+            .is_none()
+            .then(|| MINT_REQUEST_CONTRACT_STATE_PREFIX.to_owned()),
+        include_value: Some(true),
+        offset,
+        limit: query.limit,
+        decode: Some("json".to_owned()),
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_mint_requests_contract_state_read(
+    app: &SharedAppState,
+    query: crate::routing::ContractStateQuery,
+) -> Result<AxResponse, Error> {
+    let contract_address = query
+        .contract_address
+        .as_deref()
+        .and_then(|raw| raw.parse::<ContractAddress>().ok());
+    let contract_alias = query
+        .contract_alias
+        .as_deref()
+        .and_then(|raw| raw.parse::<ContractAlias>().ok());
+    if let Some(route) = torii_contract_target_read_route(
+        app.as_ref(),
+        contract_address.as_ref(),
+        contract_alias.as_ref(),
+    ) {
+        let query_string = encode_torii_proxy_query(&query)?;
+        return Ok(execute_torii_single_route_read(
+            app,
+            route,
+            ToriiReadEndpointV1::ContractStateGet,
+            Vec::new(),
+            query_string,
+            Vec::new(),
+        )
+        .await
+        .into_response());
+    }
+
+    crate::routing::handle_get_contract_state(app.state.clone(), crate::NoritoQuery(query))
+        .await
+        .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_get_mint_requests(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(query): AxQuery<MintRequestsQuery>,
+) -> Result<AxResponse, Error> {
+    check_public_contract_route_rate_limit(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/mint-requests",
+        "state",
+    )
+    .await?;
+    let state_query = mint_requests_contract_state_query(query, None);
+    execute_mint_requests_contract_state_read(&app, state_query).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_get_mint_request(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxPath(request_id): AxPath<String>,
+    AxQuery(query): AxQuery<MintRequestsQuery>,
+) -> Result<AxResponse, Error> {
+    check_public_contract_route_rate_limit(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/mint-requests/{request_id}",
+        "state",
+    )
+    .await?;
+    let state_query = mint_requests_contract_state_query(query, Some(request_id));
+    execute_mint_requests_contract_state_read(&app, state_query).await
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_get_vk_by_backend_name(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -33103,6 +33253,11 @@ impl Torii {
                     post(handler_post_contract_call_multisig_approve),
                 )
                 .route("/v1/contracts/state", get(handler_get_contract_state))
+                .route("/v1/mint-requests", get(handler_get_mint_requests))
+                .route(
+                    "/v1/mint-requests/{request_id}",
+                    get(handler_get_mint_request),
+                )
                 .layer(contracts_body_limit);
             #[cfg(not(feature = "app_api"))]
             let group = group;

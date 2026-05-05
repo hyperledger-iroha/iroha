@@ -4861,6 +4861,22 @@ fn extract_lane_authority_domains(
     })
 }
 
+fn publishes_only_space_directory_manifests(tx: &SignedTransaction) -> bool {
+    match tx.instructions() {
+        Executable::Instructions(instructions) if !instructions.is_empty() => {
+            instructions.iter().all(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<
+                        iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest,
+                    >()
+                    .is_some()
+            })
+        }
+        _ => false,
+    }
+}
+
 fn enforce_lane_policies(
     tx: &SignedTransaction,
     state_transaction: &StateTransaction<'_, '_>,
@@ -4958,14 +4974,21 @@ fn enforce_lane_policies(
         Some(state_transaction.lane_privacy_registry.clone())
     };
 
-    let lane_identity = extract_lane_identity_metadata(
-        &state_transaction.world,
-        tx.authority(),
-        dataspace_id,
-        &lane_alias,
-    )?;
+    let publishes_space_directory_manifest = publishes_only_space_directory_manifests(tx);
+    let lane_identity = if publishes_space_directory_manifest {
+        (None, Vec::new())
+    } else {
+        extract_lane_identity_metadata(
+            &state_transaction.world,
+            tx.authority(),
+            dataspace_id,
+            &lane_alias,
+        )?
+    };
 
-    if let Some(engine) = state_transaction.lane_compliance.as_ref() {
+    if !publishes_space_directory_manifest
+        && let Some(engine) = state_transaction.lane_compliance.as_ref()
+    {
         let (uaid_value, capability_tags) = lane_identity;
         let authority_domains =
             extract_lane_authority_domains(&state_transaction.world, tx.authority(), &lane_alias)?;
@@ -5988,6 +6011,71 @@ pub mod tests {
             }
             other => panic!("expected NotPermitted rejection, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn lane_policy_allows_space_directory_manifest_publish_before_uaid_binding_exists() {
+        let chain: ChainId = "space-directory-publish".parse().unwrap();
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"tx::publish-manifest"));
+        let dataspace = TestDataSpaceId::new(10);
+        let (authority, keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority);
+        let account = new_account_in_domain(&authority, &domain_id)
+            .with_uaid(Some(uaid))
+            .build(&authority);
+        let world = World::with([domain], [account], []);
+        let state = State::new_with_chain(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            chain.clone(),
+        );
+        let policy = LaneCompliancePolicy {
+            id: LaneCompliancePolicyId::new(Hash::prehashed([0xBC; 32])),
+            version: 1,
+            lane_id: TestLaneId::SINGLE,
+            dataspace_id: dataspace,
+            jurisdiction: JurisdictionSet::default(),
+            deny: vec![LaneComplianceRule {
+                selector: ParticipantSelector {
+                    account: Some(authority.clone()),
+                    ..ParticipantSelector::default()
+                },
+                reason_code: Some("unbound uaid".to_string()),
+                jurisdiction_override: JurisdictionSet::default(),
+            }],
+            allow: Vec::new(),
+            transfer_limits: Vec::new(),
+            audit_controls: AuditControls::default(),
+            metadata: Metadata::default(),
+        };
+        let engine = LaneComplianceEngine::from_policies(vec![policy], false).expect("engine");
+        state.install_lane_compliance_engine(Some(Arc::new(engine)));
+
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 1,
+            activation_epoch: 0,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let tx = TransactionBuilder::new(chain, authority.clone())
+            .with_instructions([PublishSpaceDirectoryManifest { manifest }])
+            .sign(keypair.private_key());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let stx = block.transaction();
+        let assignment = super::LaneAssignment {
+            lane_id: TestLaneId::SINGLE,
+            dataspace_id: TestDataSpaceId::UNIVERSAL,
+            dataspace_catalog: &stx.nexus.dataspace_catalog,
+        };
+
+        super::enforce_lane_policies(&tx, &stx, &assignment)
+            .expect("manifest publication creates the UAID dataspace binding");
     }
 
     #[test]

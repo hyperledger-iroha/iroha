@@ -2805,6 +2805,7 @@ impl LaneRouter for ConfigLaneRouter {
         if policy_needs_state(self.policy.as_ref())
             || dataspace_scoped_permission_routing_requires_state(tx)
             || transaction_target_routing_requires_state(tx)
+            || account_permission_holder_routing_target(tx).is_some()
         {
             return None;
         }
@@ -2914,6 +2915,7 @@ impl LaneRouter for ConfigLaneRouter {
         if policy_needs_state(self.policy.as_ref())
             || dataspace_scoped_permission_routing_requires_state(tx)
             || transaction_target_routing_requires_state(tx)
+            || account_permission_holder_routing_target(tx).is_some()
             || self.authority_scope_routing_requires_state(tx)?
         {
             return Ok(None);

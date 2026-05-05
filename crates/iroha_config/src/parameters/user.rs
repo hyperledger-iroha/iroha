@@ -884,6 +884,24 @@ impl AccountAddressParseScope {
 }
 
 impl Root {
+    fn derive_default_snapshot_store_dir(snapshot: &mut Snapshot, kura: &actual::Kura) {
+        if !matches!(snapshot.store_dir.origin(), ParameterOrigin::Default { .. }) {
+            return;
+        }
+
+        let derived_store_dir = kura.store_dir.resolve_relative_path().join("snapshot");
+        if derived_store_dir == snapshot.store_dir.resolve_relative_path() {
+            return;
+        }
+
+        snapshot.store_dir = WithOrigin::new(
+            derived_store_dir,
+            ParameterOrigin::custom(
+                "derived from kura.store_dir because snapshot.store_dir was default".to_owned(),
+            ),
+        );
+    }
+
     fn parse_trusted_peer_pops(
         entries: &[TrustedPeerPop],
         emitter: &mut Emitter<ParseError>,
@@ -1022,7 +1040,8 @@ impl Root {
 
         let logger = self.logger;
         let queue = self.queue;
-        let snapshot = self.snapshot;
+        let mut snapshot = self.snapshot;
+        Self::derive_default_snapshot_store_dir(&mut snapshot, &kura);
         let dev_telemetry = self.dev_telemetry;
         let (
             sorafs_storage,
@@ -11761,6 +11780,9 @@ pub struct NexusFees {
     /// First block height whose lane commitments include Nexus fee receipts.
     #[config(default = "defaults::nexus::fees::FEE_RECEIPTS_ACTIVATION_HEIGHT")]
     pub fee_receipts_activation_height: u64,
+    /// Whether sponsored fees are settled by an external public-Nexus reconciler instead of local WSV asset debits.
+    #[config(default = "defaults::nexus::fees::EXTERNAL_SETTLEMENT_ENABLED")]
+    pub external_settlement_enabled: bool,
     /// Burn fees at or after this block timestamp; earlier blocks use legacy fee transfer semantics.
     #[config(default = "defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS")]
     pub burn_from_unix_timestamp_ms: u64,
@@ -11960,6 +11982,7 @@ impl Default for NexusFees {
             canonical_sponsor_account_id: defaults::nexus::fees::CANONICAL_SPONSOR_ACCOUNT_ID
                 .map(str::to_owned),
             fee_receipts_activation_height: defaults::nexus::fees::FEE_RECEIPTS_ACTIVATION_HEIGHT,
+            external_settlement_enabled: defaults::nexus::fees::EXTERNAL_SETTLEMENT_ENABLED,
             burn_from_unix_timestamp_ms: defaults::nexus::fees::BURN_FROM_UNIX_TIMESTAMP_MS,
             settlement_mode: defaults::nexus::fees::SETTLEMENT_MODE.to_string(),
             successful_claim_fee_exempt_authorities: Vec::new(),
@@ -12029,6 +12052,7 @@ impl NexusFees {
             sponsor_verified_balance_safety_floor: self.sponsor_verified_balance_safety_floor,
             canonical_sponsor_account_id,
             fee_receipts_activation_height: self.fee_receipts_activation_height,
+            external_settlement_enabled: self.external_settlement_enabled,
             burn_from_unix_timestamp_ms: self.burn_from_unix_timestamp_ms,
             settlement_mode,
             successful_claim_fee_exempt_authorities: self
@@ -19648,6 +19672,57 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
         assert_eq!(
             actual.transaction_gossiper.gossip_resend_ticks,
             defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS
+        );
+    }
+
+    #[test]
+    fn default_snapshot_store_dir_follows_explicit_kura_store_dir() {
+        let mut table = base_table();
+        let kura = table
+            .entry("kura")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("kura table");
+        kura.insert(
+            "store_dir".into(),
+            Value::String("/var/lib/iroha/peer0".into()),
+        );
+
+        let actual = load_root(table);
+
+        assert_eq!(
+            actual.snapshot.store_dir.value(),
+            &PathBuf::from("/var/lib/iroha/peer0/snapshot")
+        );
+    }
+
+    #[test]
+    fn explicit_snapshot_store_dir_is_preserved() {
+        let mut table = base_table();
+        let kura = table
+            .entry("kura")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("kura table");
+        kura.insert(
+            "store_dir".into(),
+            Value::String("/var/lib/iroha/peer0".into()),
+        );
+        let snapshot = table
+            .entry("snapshot")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("snapshot table");
+        snapshot.insert(
+            "store_dir".into(),
+            Value::String("/snapshots/bpng-1".into()),
+        );
+
+        let actual = load_root(table);
+
+        assert_eq!(
+            actual.snapshot.store_dir.value(),
+            &PathBuf::from("/snapshots/bpng-1")
         );
     }
 
