@@ -159,24 +159,10 @@ fn insert_gas_asset_id(metadata: &mut Metadata, gas_asset_id: Option<&str>) -> R
     Ok(())
 }
 
-fn ivm_transaction_metadata(
-    gas_asset_id: Option<&str>,
-    gas_limit: u64,
-    contract_address: &iroha::data_model::smart_contract::ContractAddress,
-) -> Result<Metadata> {
+fn ivm_transaction_metadata(gas_asset_id: Option<&str>, gas_limit: u64) -> Result<Metadata> {
     let mut metadata = Metadata::default();
     insert_gas_asset_id(&mut metadata, gas_asset_id)?;
     iroha::data_model::transaction::insert_transaction_gas_limit(&mut metadata, gas_limit);
-    insert_string_metadata(
-        &mut metadata,
-        "gov_contract_address",
-        contract_address.to_string(),
-    )?;
-    insert_string_metadata(
-        &mut metadata,
-        "contract_address",
-        contract_address.to_string(),
-    )?;
     Ok(metadata)
 }
 
@@ -319,11 +305,14 @@ fn assemble_program_with_literals(code: &[u8], literal_data: &[u8]) -> Vec<u8> {
     program.extend_from_slice(&DEFAULT_MAX_CYCLES.to_le_bytes());
     program.push(1);
     if !literal_data.is_empty() {
+        let unpadded_literal_len = 16 + literal_data.len();
+        let post_pad = (4 - (unpadded_literal_len % 4)) % 4;
         program.extend_from_slice(b"LTLB");
         program.extend_from_slice(&0u32.to_le_bytes());
-        program.extend_from_slice(&0u32.to_le_bytes());
+        program.extend_from_slice(&(post_pad as u32).to_le_bytes());
         program.extend_from_slice(&(literal_data.len() as u32).to_le_bytes());
         program.extend_from_slice(literal_data);
+        program.extend(std::iter::repeat_n(0u8, post_pad));
     }
     program.extend_from_slice(code);
     program
@@ -745,11 +734,7 @@ fn main() -> Result<()> {
         .map_err(|err| eyre!("verify contract artifact: {err}"))?;
     let manifest = verified.manifest.signed(&key_pair);
     let code_hash = verified.code_hash;
-    let tx_metadata = ivm_transaction_metadata(
-        args.gas_asset_id.as_deref(),
-        args.gas_limit,
-        &contract_address,
-    )?;
+    let tx_metadata = ivm_transaction_metadata(args.gas_asset_id.as_deref(), args.gas_limit)?;
     let register_request = RegisterSmartContractBytes {
         code_hash,
         code: code.clone(),

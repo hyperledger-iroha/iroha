@@ -14196,13 +14196,13 @@ fn execute_contract_view(
     let query_view = state.query_view();
     let mut vm = query_view.ivm.clone();
     let mut host = if let Some(args) = payload {
-        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+        iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
             authority.clone(),
             query_view.accounts_snapshot(),
             args,
         )
     } else {
-        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts(
+        iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
             authority.clone(),
             query_view.accounts_snapshot(),
         )
@@ -14211,9 +14211,9 @@ fn execute_contract_view(
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
     host.set_axt_timing(query_view.nexus.axt);
-    host.set_durable_state_snapshot_from_world(&query_view.world);
     host.set_public_inputs_from_parameters(query_view.world.parameters());
     host.set_vrf_epoch_seeds_from_world(&query_view.world);
+    host.set_query_state(&query_view);
     host.bind_contract_runtime_context(
         contract_address.clone(),
         contract_alias.cloned(),
@@ -14293,13 +14293,13 @@ fn execute_contract_call_simulation(
     let query_view = state.query_view();
     let mut vm = query_view.ivm.clone();
     let mut host = if let Some(args) = payload {
-        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+        iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
             authority.clone(),
             query_view.accounts_snapshot(),
             args,
         )
     } else {
-        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts(
+        iroha_core::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
             authority.clone(),
             query_view.accounts_snapshot(),
         )
@@ -14308,9 +14308,9 @@ fn execute_contract_call_simulation(
     host.set_halo2_config(&query_view.zk.halo2);
     host.set_chain_id(&query_view.chain_id);
     host.set_axt_timing(query_view.nexus.axt);
-    host.set_durable_state_snapshot_from_world(&query_view.world);
     host.set_public_inputs_from_parameters(query_view.world.parameters());
     host.set_vrf_epoch_seeds_from_world(&query_view.world);
+    host.set_query_state(&query_view);
 
     vm.load_program(code_bytes)
         .map_err(|err| ContractCallSimulationError {

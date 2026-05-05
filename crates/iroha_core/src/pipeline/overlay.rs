@@ -1139,13 +1139,7 @@ where
                     .expect("contract invocation parser must set entrypoint"),
             });
 
-            let accounts = Arc::new(
-                state_ro
-                    .world()
-                    .accounts_iter()
-                    .map(|e| e.id.clone())
-                    .collect::<Vec<_>>(),
-            );
+            let accounts = state_ro.accounts_snapshot();
             let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
             let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                 tx.authority().clone(),
@@ -1167,7 +1161,6 @@ where
             host.set_amx_limits(amx_limits);
             host.set_axt_timing(state_ro.nexus().axt);
             host.hydrate_axt_replay_ledger(state_ro);
-            host.set_durable_state_snapshot_from_world(state_ro.world());
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
@@ -1259,13 +1252,7 @@ where
 
             // Run CoreHost to collect queued ISIs
             // Snapshot of accounts for deterministic helpers
-            let accounts = Arc::new(
-                state_ro
-                    .world()
-                    .accounts_iter()
-                    .map(|e| e.id.clone())
-                    .collect::<Vec<_>>(),
-            );
+            let accounts = state_ro.accounts_snapshot();
             let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
             let mut host = if let Some(context) = contract_call_context.as_ref() {
                 crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
@@ -1293,7 +1280,6 @@ where
             host.set_amx_limits(amx_limits);
             host.set_axt_timing(state_ro.nexus().axt);
             host.hydrate_axt_replay_ledger(state_ro);
-            host.set_durable_state_snapshot_from_world(state_ro.world());
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
@@ -1574,7 +1560,6 @@ where
             host.set_amx_limits(amx_limits);
             host.set_axt_timing(state_ro.nexus().axt);
             host.hydrate_axt_replay_ledger(state_ro);
-            host.set_durable_state_snapshot_from_world(state_ro.world());
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
@@ -1681,7 +1666,6 @@ where
             host.set_amx_limits(amx_limits);
             host.set_axt_timing(state_ro.nexus().axt);
             host.hydrate_axt_replay_ledger(state_ro);
-            host.set_durable_state_snapshot_from_world(state_ro.world());
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
@@ -1886,7 +1870,6 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             host.set_amx_limits(amx_limits);
             host.set_axt_timing(state_ro.nexus().axt);
             host.hydrate_axt_replay_ledger(state_ro);
-            host.set_durable_state_snapshot_from_world(state_ro.world());
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_bound_contract_records_by_subject_snapshot(
@@ -5000,14 +4983,7 @@ where
     R: StateReadOnly + QueryStateSource,
 {
     let mut vm = ivm::IVM::new(gas_limit);
-    let accounts = Arc::new(
-        state_ro
-            .world()
-            .accounts()
-            .iter()
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>(),
-    );
+    let accounts = state_ro.accounts_snapshot();
     let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
         tx.authority().clone(),
         Arc::clone(&accounts),
@@ -5023,7 +4999,6 @@ where
     host.set_amx_limits(amx_limits);
     host.set_axt_timing(state_ro.nexus().axt);
     host.hydrate_axt_replay_ledger(state_ro);
-    host.set_durable_state_snapshot_from_world(state_ro.world());
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
     host.set_vrf_epoch_seeds_from_world(state_ro.world());
     host.set_query_state(state_ro);
@@ -5468,13 +5443,7 @@ where
         .clone_runtime(&summary, bytecode.as_ref(), gas_limit)
         .map_err(OverlayBuildError::IvmLoad)?;
 
-    let accounts = Arc::new(
-        state_ro
-            .world()
-            .accounts_iter()
-            .map(|entry| entry.id.clone())
-            .collect::<Vec<_>>(),
-    );
+    let accounts = state_ro.accounts_snapshot();
     let streaming_meta = resolve_streaming_metadata(state_ro, tx.authority());
     let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts(
         tx.authority().clone(),
@@ -5491,7 +5460,6 @@ where
     host.set_amx_limits(amx_limits);
     host.set_axt_timing(state_ro.nexus().axt);
     host.hydrate_axt_replay_ledger(state_ro);
-    host.set_durable_state_snapshot_from_world(state_ro.world());
     host.set_public_inputs_from_parameters(state_ro.world().parameters());
     host.set_vrf_epoch_seeds_from_world(state_ro.world());
     host.set_query_state(state_ro);

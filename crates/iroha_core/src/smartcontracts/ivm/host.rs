@@ -10,6 +10,7 @@
 
 use std::{
     any::Any,
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet, VecDeque},
     mem,
     num::{NonZeroU16, NonZeroU64, NonZeroUsize},
@@ -383,7 +384,7 @@ pub type CoreHost = CoreHostImpl<NoQueryState>;
 pub struct NoQueryState;
 
 /// Slot storing a live queryable state reference for a host run.
-pub(crate) struct QueryStateSlot<QRef> {
+pub struct QueryStateSlot<QRef> {
     state: Option<QRef>,
 }
 
@@ -851,6 +852,10 @@ pub trait QueryStateRefOps {
         &self,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
     ) -> Option<crate::smartcontracts::code::BoundContractRecord>;
+    /// Load durable smart-contract state by canonical key.
+    fn durable_state_get(&self, key: &Name) -> Option<Vec<u8>>;
+    /// List durable smart-contract state keys.
+    fn durable_state_keys(&self) -> Vec<Name>;
 }
 
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
@@ -1107,6 +1112,44 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             QueryStateRef::Transaction(tx) => {
                 crate::smartcontracts::code::fetch_bound_contract_record(tx, contract_address)
             }
+        }
+    }
+
+    fn durable_state_get(&self, key: &Name) -> Option<Vec<u8>> {
+        match *self {
+            QueryStateRef::View(view) => view.world().smart_contract_state().get(key).cloned(),
+            QueryStateRef::QueryView(view) => view.world().smart_contract_state().get(key).cloned(),
+            QueryStateRef::Block(block) => block.world().smart_contract_state().get(key).cloned(),
+            QueryStateRef::Transaction(tx) => tx.world().smart_contract_state().get(key).cloned(),
+        }
+    }
+
+    fn durable_state_keys(&self) -> Vec<Name> {
+        match *self {
+            QueryStateRef::View(view) => view
+                .world()
+                .smart_contract_state()
+                .iter()
+                .map(|(key, _)| key.clone())
+                .collect(),
+            QueryStateRef::QueryView(view) => view
+                .world()
+                .smart_contract_state()
+                .iter()
+                .map(|(key, _)| key.clone())
+                .collect(),
+            QueryStateRef::Block(block) => block
+                .world()
+                .smart_contract_state()
+                .iter()
+                .map(|(key, _)| key.clone())
+                .collect(),
+            QueryStateRef::Transaction(tx) => tx
+                .world()
+                .smart_contract_state()
+                .iter()
+                .map(|(key, _)| key.clone())
+                .collect(),
         }
     }
 }
@@ -2960,14 +3003,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             if let Some(entry) = self.durable_state_overlay.get(&scoped_path) {
                 return Ok(entry.is_some());
             }
-            if self.durable_state_base.contains_key(&scoped_path) {
+            if self.durable_state_base_or_live_get(&scoped_path).is_some() {
                 return Ok(true);
             }
         }
         if let Some(entry) = self.durable_state_overlay.get(key) {
             return Ok(entry.is_some());
         }
-        Ok(self.durable_state_base.contains_key(key))
+        Ok(self.durable_state_base_or_live_get(key).is_some())
     }
 
     fn durable_state_value_payload_len(stored: &[u8]) -> Result<usize, ivm::VMError> {
@@ -2986,8 +3029,8 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                     .map(Self::durable_state_value_payload_len)
                     .transpose();
             }
-            if let Some(stored) = self.durable_state_base.get(&scoped_path) {
-                return Self::durable_state_value_payload_len(stored).map(Some);
+            if let Some(stored) = self.durable_state_base_or_live_get(&scoped_path) {
+                return Self::durable_state_value_payload_len(stored.as_ref()).map(Some);
             }
         }
         if let Some(entry) = self.durable_state_overlay.get(key) {
@@ -2996,10 +3039,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 .map(Self::durable_state_value_payload_len)
                 .transpose();
         }
-        self.durable_state_base
-            .get(key)
-            .map(|stored| Self::durable_state_value_payload_len(stored).map(Some))
-            .unwrap_or(Ok(None))
+        self.durable_state_base_or_live_get(key)
+            .map_or(Ok(None), |stored| {
+                Self::durable_state_value_payload_len(stored.as_ref()).map(Some)
+            })
+    }
+
+    fn durable_state_base_or_live_get<'a>(&'a self, key: &Name) -> Option<Cow<'a, [u8]>> {
+        if let Some(stored) = self.durable_state_base.get(key) {
+            return Some(Cow::Borrowed(stored.as_slice()));
+        }
+        self.query_state
+            .get()
+            .and_then(|state| state.durable_state_get(key))
+            .map(Cow::Owned)
     }
 
     fn state_query_gas(payload_len: usize) -> u64 {
@@ -3074,6 +3127,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
         for key in self.durable_state_base.keys() {
             consider_key(key)?;
+        }
+        if let Some(state) = self.query_state.get() {
+            for key in state.durable_state_keys() {
+                consider_key(&key)?;
+            }
         }
         for key in self.durable_state_overlay.keys() {
             consider_key(key)?;
@@ -6268,7 +6326,7 @@ where
     QRef: Copy + QueryStateExecute,
 {
     /// Attach a read-only state view for query execution during this VM run.
-    pub(crate) fn set_query_state<'block, S>(&mut self, state: &'block S)
+    pub fn set_query_state<'block, S>(&mut self, state: &'block S)
     where
         S: QueryStateSource<Ref<'block> = QRef>,
     {
@@ -7592,9 +7650,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                             }
                         }
                     }
-                    if let Some(stored) = self.durable_state_base.get(&scoped_path) {
-                        let len = Self::durable_state_value_payload_len(stored)?;
-                        Self::load_state_value(vm, stored)?;
+                    if let Some(stored) = self.durable_state_base_or_live_get(&scoped_path) {
+                        let len = Self::durable_state_value_payload_len(stored.as_ref())?;
+                        Self::load_state_value(vm, stored.as_ref())?;
                         return Ok(Self::state_query_gas(len));
                     }
                 }
@@ -7611,9 +7669,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                         }
                     }
                 }
-                if let Some(stored) = self.durable_state_base.get(&path) {
-                    let len = Self::durable_state_value_payload_len(stored)?;
-                    Self::load_state_value(vm, stored)?;
+                if let Some(stored) = self.durable_state_base_or_live_get(&path) {
+                    let len = Self::durable_state_value_payload_len(stored.as_ref())?;
+                    Self::load_state_value(vm, stored.as_ref())?;
                     Ok(Self::state_query_gas(len))
                 } else {
                     vm.set_register(10, 0);
@@ -16958,6 +17016,56 @@ seiyaku Vault {
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
         let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
         assert_eq!(value, 1);
+    }
+
+    #[test]
+    fn state_syscall_reads_live_query_state_without_eager_snapshot() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+        let path: Name = "counter".parse().unwrap();
+        let value_bytes = norito::to_bytes(&7_u64).expect("encode state value");
+        world
+            .smart_contract_state
+            .insert(path.clone(), value_bytes.clone());
+        world.smart_contract_state.insert(
+            "unrelated/key".parse().unwrap(),
+            norito::to_bytes(&9_u64).expect("encode unrelated value"),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let view = state.view();
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHostImpl::new(authority);
+        host.set_query_state(&view);
+        let mut vm = IVM::new(10_000);
+
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm),
+            Ok(CoreHost::state_query_gas(value_bytes.len())),
+            "STATE_GET should read from live query state without cloning the durable map"
+        );
+        assert!(
+            host.durable_state_base.is_empty(),
+            "live contract-call hosts should not eagerly clone smart_contract_state"
+        );
+        let out_ptr = vm.register(10);
+        let tlv = vm.memory.validate_tlv(out_ptr).expect("live state tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
+        assert_eq!(value, 7);
+
+        let prefix: Name = "counter".parse().unwrap();
+        let prefix_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&prefix));
+        vm.set_register(10, prefix_ptr);
+        vm.set_register(11, 0);
+        vm.set_register(12, 0);
+        host.syscall(ivm_sys::SYSCALL_STATE_KEYS, &mut vm)
+            .expect("STATE_KEYS should read live query-state keys");
+        assert_eq!(vm.register(11), 1);
+        assert_eq!(vm.register(12), 1);
     }
 
     #[test]

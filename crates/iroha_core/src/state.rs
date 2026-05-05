@@ -30237,7 +30237,6 @@ impl StateTransaction<'_, '_> {
                 host.set_crypto_config(self.crypto());
                 host.set_halo2_config(&self.zk.halo2);
                 host.set_chain_id(self.chain_id());
-                host.set_durable_state_snapshot_from_world(&self.world);
                 host.set_public_inputs_from_parameters(self.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&self.world);
                 host.set_query_state(self);
@@ -30370,7 +30369,6 @@ impl StateTransaction<'_, '_> {
                     host.set_crypto_config(self.crypto());
                     host.set_halo2_config(&self.zk.halo2);
                     host.set_chain_id(self.chain_id());
-                    host.set_durable_state_snapshot_from_world(&self.world);
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
                     host.set_vrf_epoch_seeds_from_world(&self.world);
                     host.set_query_state(self);
