@@ -256,7 +256,7 @@ jobs:
         working-directory: pytests/iroha_cli_tests
         run: poetry install --no-root
       - name: Run client pytests
-        uses: nick-fields/retry@v3
+        uses: nick-fields/retry@v4
         env:
           # created by test_env.py
           TMP_DIR: ../../test
